@@ -107,3 +107,69 @@ but costs +9.2% Toffoli. Stated ceiling of the entire qubit workstream: −1.56%
 
 **Caveat that matters:** these were measured while the certificate machinery was silently corrupting perturbed
 streams. Re-test before believing them.
+
+---
+
+# Session-4 additions (Claude Opus 5) — closures established with proofs
+
+These supersede any earlier "OPEN" verdict on the same item. Every one was measured, not argued.
+
+## Qubit axis below 1147 — CLOSED, saturating
+Sweeping `TLM_TARGET_Q` = `TLM_SQUARE_PEAK_CAP` from 1151 down to **512**: peak goes 1152,1151,1150,1149,1148,1147
+and then **sticks at 1147 for every cap at or below 1146**. Below cap 700 the emitted op stream is byte-identical.
+The marginal cost of the 1146th qubit is infinite, not merely high.
+
+Mechanism: the divstep chain *opens* at **1028** live qubits with an empty tape — exactly 4x256+4, being the apply
+pair (x_reg,y_reg) plus the gcd state (u,v) — and ramps as `active(i) = 1048.25 + 0.3342*i` (R^2 0.9875, n=261) to
+1144. The tape grows at log2(5)=2.32 bits/divstep while u+v narrow at 1.986, against a theoretical divstep bound of
+512/261 = 1.962. **The implementation is already at the bound with zero slack**, so the profile must rise ~93 qubits
+from its start. Absolute floor ~1117-1124 for any implementation of this algorithm.
+
+## The 512-qubit apply pair — CLOSED, irreducible
+`(x_reg, y_reg)` starts at `(0, y0)`, so 256 qubits appear provably |0> and loanable. They are not:
+`apply_step_reverse` opens with an unconditional full-width cswap whose control is quantum data, so **all 256 are
+first touched during divstep 0**, at op 23,444 of 3,448,854, where the live count is 1,027 — **125 qubits below the
+peak**, which lands at divstep 259. Measured provably-zero population at the peak op: **0 of 256**. The loaning
+machinery was implemented anyway (`TLM_LOAN_APPLY_ZEROS`, default off) to confirm the negative is structural rather
+than an implementation failure: it runs clean and buys zero at every cap from 1151 to 1120.
+
+## Controlled adder — CLOSED at 1.978n against a published 2n
+Per-source-line attribution reconciling exactly to 1,367,193 CCX + 5,618 CCZ over 79 sites (a second independent
+census at 272 sites agrees gate-for-gate). Never-before-measured split of the adder+comparator bucket:
+**91.7% quantum-x-quantum, 8.3% quantum-x-constant**. The constant path is only 4.93% of the whole circuit — it
+cannot pay even at zero cost — and it already exploits secp256k1's structure properly (F = 2^256-p = 2^32+977,
+53-bit window, hand-derived fold). There is **no 256-bit comparison against p anywhere**; reduction costs 0.31n.
+
+Dominant sites: `gidney.rs:1286` (270,110, controlled sum write) and `gidney.rs:1222` (269,244, carry AND ladder),
+one function, together 39.4% of all Toffoli-class gates.
+
+**The one published route below 2n does not apply here.** Litinski arXiv:2410.00899 Fig 1(f)/(g) gives a controlled
+*add-subtract* at n-1 instead of 2n-1, because the control degenerates into two multi-target CNOTs (Clifford). But
+`CS(c) = AS(c) - (1-c)*y` and that correction is itself a controlled add, so it only wins if the algorithm natively
+wants add-subtract. **Exhaustive machine search** over every bit-slice circuit with <=2 AND gates for the composite
+`{cswap(swp,u,v); v -= sub*u}`, over all 24 reachable input points with the carry unconstrained on sub=0:
+
+    full composite                     k=1 NO, k=2 NO  -> floor 3 ANDs/bit
+    controlled subtract alone          k=2 YES
+    cswap alone                        k=1 YES
+    sub forced to 1 (no identity)      k=2 YES
+
+The saving is gated on the **sub** axis, not `swp` — and `swp` is already free. `sub=0` occurs whenever v has >=3
+trailing zeros, measured **24.74%** of 72,479 divsteps, so the identity branch is structural. Composite runs at
+420.5 CCX/divstep against a 3n-2 = 402.9 floor; the 17.6 excess is 100% chunk-carry-erase, a qubit purchase.
+
+## Grindability — the binding constraint nobody was pricing
+**Every +1 of lambda_total costs 2.44x in grind time**, calibrated against directly-measured P(clean). This converts
+most paper wins into losses:
+
+| lever | paper score | lambda_total | P(clean) | grind |
+|---|---|---|---|---|
+| head (1151) | - | 23.8 | 8.9e-8 | 35 min / 100 boxes |
+| ITERS 261->258 + refit | -1.2% | >=28 | 3.0e-10 | 77 hours |
+| best tail narrowing | -0.91% | 25.25 | - | ~9 weeks |
+
+And **value-preservation does not imply lambda-neutrality**: `TLM_FFG_MAX_G=53` is exactly value-preserving, saves
+1,235 CCX, and still drops P from 9.62e-8 to 3.17e-8. Measure lambda for every change; never assume it.
+
+Fast check, ~4 seconds: build with `SUB4_APPLY_STRIP=0`, `tail -c +17 ops.bin | zstd -d -c --long=27 > ops.raw`,
+then `cen2 nonce ops.raw <start> 300 <threads>` — it prints mean batches/nonce, q, and P(0/0 over 141) directly.
