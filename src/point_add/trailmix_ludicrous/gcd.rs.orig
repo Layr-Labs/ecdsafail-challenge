@@ -1055,39 +1055,8 @@ fn gcd_shift_has_structurally_dead_gate(tag: u8, call_index: usize, bit: usize) 
         })
 }
 
-/// One Fredkin at the top of every controlled-shift ladder is structurally dead.
-///
-/// The ladder realises a `w`-wire cyclic rotation as `w-1` Fredkins; the last one to be
-/// emitted exchanges the bit rotated out of the register with the bit sitting at the far
-/// end. Conditioned on the control being 1, both of those bits are known zero:
-///   * `v[0] == 0`, because the control is `!v[0]` - we only ever halve an even `v`; and
-///   * `v[w-1] == 0`, because the *unconditional* first halving of the same step already
-///     rotated that (also zero) `v[0]` into the top position.
-/// Exchanging two zeros is the identity, so the Fredkin is exactly removable: no census,
-/// no magnitude assumption, no added failure probability.
-///
-/// The sole exception is the step-0 `t1` shift, which *is* the first halving: nothing has
-/// zeroed the top bit yet and `v[w-1]` is a live bit of the raw 256-bit input. That call is
-/// the first right-shift of a forward walk and the last left-shift of a reverse walk.
-/// `TLM_GCD_SKIP_TOP_ZERO_SHIFT_EDGE=0` puts the redundant gates back for A/B measurement.
-fn skip_top_zero_controlled_shift_edge(tag: u8, call_index: usize) -> bool {
-    if std::env::var("TLM_GCD_SKIP_TOP_ZERO_SHIFT_EDGE").ok().as_deref() == Some("0") {
-        return false;
-    }
-    const CALLS_PER_WALK: usize = ITERS + 1;
-    let rel = call_index % CALLS_PER_WALK;
-    let step0_t1 = if tag == 11 { rel == 0 } else { rel == CALLS_PER_WALK - 1 };
-    !step0_t1
-}
-
-/// Diagnostic: of the 1176 shift Fredkins suppressed by the two census tables
-/// (`GCD_*_SHIFT_REMAINDER_KEYS` + `GCD_SHIFT_DEAD_RANGES`), 964 coincide with the
-/// provably-dead top-zero edge above. The other 212 rest only on "never observed to fire"
-/// and cluster at walk iterations 249..257, i.e. exactly where the walk is *assumed* to
-/// have converged (v == 0). They are therefore candidate contributors to the intrinsic
-/// mismatch rate. `TLM_GCD_SHIFT_PROVEN_ONLY=1` re-emits just those 212 for A/B.
-fn gcd_shift_census_enabled() -> bool {
-    std::env::var("TLM_GCD_SHIFT_PROVEN_ONLY").ok().as_deref() != Some("1")
+fn skip_top_zero_controlled_shift_edge() -> bool {
+    std::env::var_os("TLM_GCD_SKIP_TOP_ZERO_SHIFT_EDGE").is_some()
 }
 
 fn controlled_right_shift(circ: &mut B, ctrl: &QubitId, v: &[QubitId]) {
@@ -1096,12 +1065,8 @@ fn controlled_right_shift(circ: &mut B, ctrl: &QubitId, v: &[QubitId]) {
         let old_context = crate::point_add::set_op_trace_context(
             0x0b00_0000 | (((call_index as u32) & 0xffff) << 8) | (i as u32 & 0xff),
         );
-        let top_zero_edge =
-            i + 2 == v.len() && skip_top_zero_controlled_shift_edge(11, call_index);
-        if !top_zero_edge
-            && !(gcd_shift_census_enabled()
-                && gcd_shift_has_structurally_dead_gate(11, call_index, i))
-        {
+        let top_zero_edge = skip_top_zero_controlled_shift_edge() && i + 2 == v.len();
+        if !top_zero_edge && !gcd_shift_has_structurally_dead_gate(11, call_index, i) {
             circ.cswap(*ctrl, v[i], v[i + 1]);
         }
         crate::point_add::restore_op_trace_context(old_context);
@@ -1114,12 +1079,8 @@ fn controlled_left_shift(circ: &mut B, ctrl: &QubitId, v: &[QubitId]) {
         let old_context = crate::point_add::set_op_trace_context(
             0x0c00_0000 | (((call_index as u32) & 0xffff) << 8) | ((i - 1) as u32 & 0xff),
         );
-        let top_zero_edge =
-            i + 1 == v.len() && skip_top_zero_controlled_shift_edge(12, call_index);
-        if !top_zero_edge
-            && !(gcd_shift_census_enabled()
-                && gcd_shift_has_structurally_dead_gate(12, call_index, i - 1))
-        {
+        let top_zero_edge = skip_top_zero_controlled_shift_edge() && i + 1 == v.len();
+        if !top_zero_edge && !gcd_shift_has_structurally_dead_gate(12, call_index, i - 1) {
             circ.cswap(*ctrl, v[i], v[i - 1]);
         }
         crate::point_add::restore_op_trace_context(old_context);
@@ -1212,12 +1173,6 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
     let mut tail4_prefix_encoded = false;
     for i in 0..iters {
         let trace_region_start = circ.phase_active_regions.len();
-        // DIAGNOSTIC (TRACE_OP_SITES): stamp every op emitted by this divstep with
-        // its pass and iteration index so a dirty `free` can be attributed to a
-        // specific i. Overwritten and restored by the inner cswap tags.
-        crate::point_add::set_op_trace_context(
-            0xa000_0000 | (u32::from(apply_inv.is_none()) << 24) | ((i as u32) & 0xffff),
-        );
         circ.set_phase(if apply_inv.is_some() {
             "tlm_inverse_gcd_forward_shift"
         } else {
@@ -1464,9 +1419,6 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
 
     for i in (0..iters).rev() {
         let trace_region_start = circ.phase_active_regions.len();
-        crate::point_add::set_op_trace_context(
-            0xa200_0000 | (u32::from(apply_fwd.is_none()) << 24) | ((i as u32) & 0xffff),
-        );
         circ.set_phase(if apply_fwd.is_some() {
             "tlm_multiply_gcd_reverse_decode"
         } else {

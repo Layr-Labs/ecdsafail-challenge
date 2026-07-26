@@ -15,7 +15,6 @@ pub use schedule::PAD;
 
 use super::B;
 use crate::circuit::{BitId, Op, OperationType, QubitId};
-use schedule::BAKED_ITERS;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
@@ -205,13 +204,6 @@ fn reset_schedule_fit_call_indices() {
 /// vars: each tests `var_os(..).is_none()` and `set_default_env` only sets when absent,
 /// so `NAME=0` leaves them active.
 pub(crate) fn drops_off_family(fam: &str) -> bool {
-    // Raising `schedule::ITERS` adds whole divsteps to each of the four gcd walk
-    // passes, which renumbers every per-helper call counter these tables are keyed
-    // by, so a key that named a dead gate now names a LIVE one. Retire the family
-    // automatically rather than relying on an env var nobody remembers to set.
-    if !schedule::baked_artifacts_valid() {
-        return true;
-    }
     if std::env::var_os("TLM_DROPS_OFF").is_some() {
         return true;
     }
@@ -284,70 +276,6 @@ fn take_cout_fit(selected: usize) -> ScheduleFit {
 }
 fn next_sqrow_k() -> usize { SCHED.with(|s| step(&mut s.borrow_mut().sqrow_k, usize::MAX)) }
 
-/// A baked vector is a concatenation of one contiguous block per gcd walk pass,
-/// each block being `len` entries long; `forward` says whether the pass walks
-/// the divstep index UP from the start of its block (forward walks) or DOWN
-/// from it (reverse walks, which are indexed from the top and are therefore
-/// anchored to the constant `BAKED_ITERS - 1`).
-type SchedBlocks = [(usize, bool)];
-
-const BLOCKS_4: &SchedBlocks = &[
-    (BAKED_ITERS, true),
-    (BAKED_ITERS, false),
-    (BAKED_ITERS, true),
-    (BAKED_ITERS, false),
-];
-const BLOCKS_2: &SchedBlocks = &[(BAKED_ITERS, true), (BAKED_ITERS, false)];
-const BLOCKS_4_SHORT: &SchedBlocks = &[
-    (BAKED_ITERS - 1, true),
-    (BAKED_ITERS - 1, false),
-    (BAKED_ITERS - 1, true),
-    (BAKED_ITERS - 1, false),
-];
-const BLOCKS_2_SHORT: &SchedBlocks = &[(BAKED_ITERS - 1, true), (BAKED_ITERS - 1, false)];
-const BLOCKS_FFG: &SchedBlocks = &[(BAKED_ITERS - 1, true), (BAKED_ITERS, false)];
-
-/// Re-fit a baked vector to the current `ITERS`.
-///
-/// The vectors are read through a single sequential cursor per vector, so the
-/// start of every pass's block is implicitly `sum of earlier block lengths`.
-/// Those lengths are `BAKED_ITERS`(-1), and a reverse pass additionally indexes
-/// its block from the top. Both anchors are hard-wired to the fitted schedule.
-/// Raising `ITERS` therefore slides every block boundary: pass 0 overruns its
-/// block into pass 1's, pass 1 starts mid-block, and each pass ends up reading
-/// values fitted for a *different* divstep, so the reverse walk stops being the
-/// exact inverse of the forward walk it has to undo.
-///
-/// Widening each block in place restores the (pass, divstep) keying. The added
-/// divsteps run at the terminal register width (`SCHED_J2` holds at 11), so they
-/// take the terminal entry of their block: the last for a forward block, the
-/// first for a reverse block -- which is the same divstep's value from either
-/// end. Measured worth 2 qubits of peak (1155 -> 1153) for 214 CCX at
-/// `ITERS = 261`. With `ITERS == BAKED_ITERS` it is the identity, so the
-/// shipped op stream stays byte-identical.
-fn widen_sched_blocks<T: Copy>(base: &[T], blocks: &SchedBlocks) -> Vec<T> {
-    let extra = schedule::ITERS.saturating_sub(BAKED_ITERS);
-    if extra == 0 {
-        return base.to_vec();
-    }
-    let mut out = Vec::with_capacity(base.len() + extra * blocks.len());
-    let mut at = 0usize;
-    for &(len, forward) in blocks {
-        let block = &base[at..at + len];
-        let fill = if forward { block[len - 1] } else { block[0] };
-        if !forward {
-            out.extend(std::iter::repeat_n(fill, extra));
-        }
-        out.extend_from_slice(block);
-        if forward {
-            out.extend(std::iter::repeat_n(fill, extra));
-        }
-        at += len;
-    }
-    // Trailing entries no pass reads (FFG_G carries one spare).
-    out.extend_from_slice(&base[at..]);
-    out
-}
 fn load_schedule() {
     reset_schedule_fit_call_indices();
     arith::reset_ffg_call_index();
@@ -384,14 +312,12 @@ fn load_schedule() {
                 })
                 .collect()
         };
-        s.gcd_k.0 = widen_sched_blocks(&schedule::GCD_SUB_K, BLOCKS_4);
-        s.gcd_branch.0 = widen_sched_blocks(&schedule::GCD_BRANCH, BLOCKS_4);
-        s.cout_k.0 = widen_sched_blocks(&schedule::APPLY_COUT_K, BLOCKS_2);
-        s.fold.0 = widen_sched_blocks(&schedule::FOLD_SCHED, BLOCKS_2_SHORT);
-        s.cmp_k.0 = widen_sched_blocks(schedule::CMP_K, BLOCKS_4_SHORT);
-        s.ffg.0 = widen_sched_blocks(&fold_g(schedule::FFG_G), BLOCKS_FFG);
-        // HYB_V is consumed only for divsteps i <= 201, so both of its blocks are
-        // 585 entries at any ITERS > 202 and its boundary does not move.
+        s.gcd_k.0 = schedule::GCD_SUB_K.to_vec();
+        s.gcd_branch.0 = schedule::GCD_BRANCH.to_vec();
+        s.cout_k.0 = schedule::APPLY_COUT_K.to_vec();
+        s.fold.0 = schedule::FOLD_SCHED.to_vec();
+        s.cmp_k.0 = schedule::CMP_K.to_vec();
+        s.ffg.0 = fold_g(schedule::FFG_G);
         s.hyb_v.0 = schedule::HYB_V.to_vec();
         s.sqrow_k.0 = schedule::SQ_ROW_K.to_vec();
     });
@@ -585,88 +511,7 @@ pub fn build_trailmix_ludicrous_ops() -> Vec<Op> {
         eprintln!("TLM_CCX_TOTAL {grand} phases={}", v.len());
     }
 
-    if std::env::var("TRACE_TLM_TOF").is_ok() {
-        use std::collections::BTreeMap;
-        let mut bounds = circ.phase_transitions.clone();
-        bounds.sort_by_key(|(i, _)| *i);
-        let total = circ.ops.len();
-        let mut phase_of: Vec<&'static str> = Vec::with_capacity(total);
-        for w in 0..bounds.len() {
-            let s = bounds[w].0.min(total);
-            let e = if w + 1 < bounds.len() { bounds[w + 1].0.min(total) } else { total };
-            while phase_of.len() < s {
-                phase_of.push("<pre>");
-            }
-            for _ in s..e {
-                phase_of.push(bounds[w].1);
-            }
-        }
-        while phase_of.len() < total {
-            phase_of.push("<post>");
-        }
-        // p1[bit] = P(bit == 1). hmr/r -> 1/2, store0 -> 0, store1 -> 1, invert -> 1-p.
-        let mut p1: std::collections::HashMap<u64, f64> = std::collections::HashMap::new();
-        let mut stack: Vec<f64> = Vec::new();
-        let mut cur = 1.0f64;
-        // (emitted, expected_executed)
-        let mut by: BTreeMap<&'static str, (usize, f64)> = BTreeMap::new();
-        for (i, op) in circ.ops.iter().enumerate() {
-            let k = op.kind as u32;
-            let local = if op.c_condition == crate::circuit::NO_BIT {
-                cur
-            } else {
-                cur * p1.get(&op.c_condition.0).copied().unwrap_or(1.0)
-            };
-            match k {
-                12 => {
-                    p1.insert(op.c_target.0, 0.5 * local + p1.get(&op.c_target.0).copied().unwrap_or(0.0) * (1.0 - local));
-                }
-                4 => {
-                    let prev = p1.get(&op.c_target.0).copied().unwrap_or(0.0);
-                    p1.insert(op.c_target.0, prev * (1.0 - local));
-                }
-                5 => {
-                    let prev = p1.get(&op.c_target.0).copied().unwrap_or(0.0);
-                    p1.insert(op.c_target.0, local + prev * (1.0 - local));
-                }
-                3 => {
-                    let prev = p1.get(&op.c_target.0).copied().unwrap_or(0.0);
-                    p1.insert(op.c_target.0, local * (1.0 - prev) + (1.0 - local) * prev);
-                }
-                15 => {
-                    stack.push(cur);
-                    cur = local;
-                }
-                16 => {
-                    cur = stack.pop().unwrap_or(1.0);
-                }
-                13 | 14 => {
-                    let e = by.entry(phase_of[i]).or_insert((0, 0.0));
-                    e.0 += 1;
-                    e.1 += local;
-                }
-                _ => {}
-            }
-        }
-        let ge: usize = by.values().map(|v| v.0).sum();
-        let gx: f64 = by.values().map(|v| v.1).sum();
-        let mut v: Vec<_> = by.into_iter().collect();
-        v.sort_by(|a, b| b.1 .1.partial_cmp(&a.1 .1).unwrap());
-        for (phase, (em, ex)) in v.iter() {
-            eprintln!(
-                "TLM_TOF phase={phase} emitted={em} expected={:.1} discount={:.3}",
-                ex,
-                1.0 - ex / *em as f64
-            );
-        }
-        eprintln!("TLM_TOF_TOTAL emitted={ge} expected={gx:.1} discount={:.4}", 1.0 - gx / ge as f64);
-    }
-
     let ops = std::mem::take(&mut circ.ops);
-
-    if std::env::var_os("TLM_DIRTY_SCAN").is_some() {
-        crate::point_add::dirtyscan::scan(&ops, &circ.phase_transitions);
-    }
 
     if std::env::var("CONSTPROP_DISABLE").ok().as_deref() == Some("1") {
         return ops;

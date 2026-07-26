@@ -25,6 +25,7 @@ mod single_ccx_fanout;
 mod m60_dead_t10;
 mod d2_deep_strip;
 mod deep_strip_keys;
+mod dirtyscan;
 
 thread_local! {
     static D1_PHASE_CORRECTED_PRODUCT_CORE_SCOPE: std::cell::Cell<bool> =
@@ -1676,34 +1677,108 @@ fn apply_d2_deep_strip(ops: Vec<Op>) -> Vec<Op> {
 /// (kind, q_control2, q_control1, q_target, c_condition) plus the k-th-occurrence ordinal
 /// of that tuple in stream order. Derived once from a 1e8 fire-census; re-applies to any
 /// edited stream that does not relabel the dead region, with no re-census.
+///
+/// Two keyed transforms share the single ordinal pass:
+///   DEAD_KEYS      -- the gate never fires on any reachable input; delete it.
+///   DOWNGRADE_KEYS -- the gate fires, but one control is redundant *as a value*:
+///                     either it is 1 on every shot the classical condition admits, or
+///                     the two controls are always equal. Either way CCX(c2,c1,t)
+///                     reduces exactly to CX(surviving,t) and CCZ to CZ, which the
+///                     cost model does not charge for. Zero qubits moved.
+/// Neither transform touches branch selection, `step()` consumption or call counts:
+/// this runs on the finished `Vec<Op>`, after every emission decision has been made.
 fn apply_deep_strip_identity(ops: Vec<Op>) -> Vec<Op> {
-    use std::collections::{HashMap, HashSet};
-    let dead: HashSet<(u8, u64, u64, u64, u64, u32)> =
-        deep_strip_keys::DEAD_KEYS.iter().copied().collect();
-    if dead.is_empty() {
+    use std::collections::HashMap;
+    type Tup = (u8, u64, u64, u64, u64);
+
+    // Pass 1: how many times does each operand tuple occur in THIS stream?
+    // The ordinal in a key is only meaningful if that occupancy still matches
+    // the stream the census was taken on. If an unrelated edit adds or removes
+    // a gate with the same operands, every later ordinal for that tuple slides
+    // and the key silently names a different, live gate -- which deletes or
+    // downgrades a load-bearing Toffoli and corrupts the circuit. Measured
+    // consequence when this happened for real: 7535/9024 classical mismatches.
+    // So the census-time occupancy travels with every key as a tripwire, and a
+    // key whose tuple has moved is DISCARDED rather than applied.
+    let mut occ: HashMap<Tup, u32> = HashMap::new();
+    for op in &ops {
+        let kb = op.kind as u8;
+        if kb == 13 || kb == 14 {
+            *occ.entry((kb, op.q_control2.0, op.q_control1.0, op.q_target.0, op.c_condition.0))
+                .or_insert(0) += 1;
+        }
+    }
+    let mut stale = 0usize;
+    let mut dead: HashMap<(Tup, u32), ()> = HashMap::new();
+    for &(k, c2, c1, t, cc, o, tot) in deep_strip_keys::DEAD_KEYS {
+        let tup = (k, c2, c1, t, cc);
+        if occ.get(&tup).copied() == Some(tot) {
+            dead.insert(((tup), o), ());
+        } else {
+            stale += 1;
+        }
+    }
+    let mut down: HashMap<(Tup, u32), u8> = HashMap::new();
+    for &(k, c2, c1, t, cc, o, tot, act) in deep_strip_keys::DOWNGRADE_KEYS {
+        let tup = (k, c2, c1, t, cc);
+        if occ.get(&tup).copied() == Some(tot) {
+            down.insert(((tup), o), act);
+        } else {
+            stale += 1;
+        }
+    }
+    if stale > 0 {
+        eprintln!(
+            "  [deep-strip-identity] WARNING: {} keys discarded -- their operand tuple's \
+             occupancy changed since the census, so their ordinals no longer address the \
+             censused gate. Re-run the census against this op stream to recover them.",
+            stale
+        );
+    }
+    if dead.is_empty() && down.is_empty() {
         return ops;
     }
-    let mut ord: HashMap<(u8, u64, u64, u64, u64), u32> = HashMap::new();
+
+    // Pass 2: apply, assigning ordinals in the same stream order the census used.
+    let mut ord: HashMap<Tup, u32> = HashMap::new();
     let mut out = Vec::with_capacity(ops.len());
     let mut removed = 0usize;
+    let mut downgraded = 0usize;
     for op in ops {
         let kb = op.kind as u8; // CCX=13, CCZ=14 in the serialized stream
         if kb == 13 || kb == 14 {
             let tup = (kb, op.q_control2.0, op.q_control1.0, op.q_target.0, op.c_condition.0);
             let o = ord.entry(tup).or_insert(0);
-            let key = (tup.0, tup.1, tup.2, tup.3, tup.4, *o);
+            let key = (tup, *o);
             *o += 1;
-            if dead.contains(&key) {
+            if dead.contains_key(&key) {
                 removed += 1;
+                continue;
+            }
+            if let Some(&act) = down.get(&key) {
+                let mut nop = op;
+                nop.kind = if kb == 13 { OperationType::CX } else { OperationType::CZ };
+                // act==1: q_control1 is the redundant one, q_control2 survives.
+                // act==2: q_control2 is redundant (implied by q_control1).
+                if act == 1 {
+                    nop.q_control1 = op.q_control2;
+                }
+                nop.q_control2 = crate::circuit::NO_QUBIT;
+                nop.validate();
+                downgraded += 1;
+                out.push(nop);
                 continue;
             }
         }
         out.push(op);
     }
     eprintln!(
-        "[deep-strip-identity] removed {} / {} dead keys matched",
+        "[deep-strip-identity] removed {} / {} dead; downgraded {} / {} to CX/CZ; {} stale keys skipped",
         removed,
-        deep_strip_keys::DEAD_KEYS.len()
+        deep_strip_keys::DEAD_KEYS.len(),
+        downgraded,
+        deep_strip_keys::DOWNGRADE_KEYS.len(),
+        stale
     );
     out
 }
@@ -2165,6 +2240,19 @@ pub fn build() -> Vec<Op> {
     set_default_env("TLM_COUT_LAYOUT_SEARCH", "1");
     set_default_env("TLM_COUT_LAYOUT_MARGIN", "0");
     set_default_env("TLM_COUT_LAYOUT_FORCE_M1_KS", "129");
+
+    // Per-chunk carry-erase comparison width. The chunked cout adder pays `chunked_len` emitted CCX
+    // (half that executed, it sits under push_condition) purely to re-derive each chunk carry-out
+    // from the finished sum. Restricting that comparison to the top 22 bits of the chunk is wrong
+    // only when those 22 bits tie and the low part borrows.
+    //
+    // The first 24 erase calls are exempt: at the start of the walk the Bezout pair still holds
+    // small values, so a chunk's information lives in its LOW bits and a top-window comparison
+    // carries no signal at all. Measured: capping those calls saturates phase-garbage at 141/141
+    // batches, exempting them puts it back on the intrinsic baseline.
+    // Set TLM_COUT_ERASE_CAP=0 to disable; that restores a byte-identical op stream.
+    set_default_env("TLM_COUT_ERASE_CAP", "22");
+    set_default_env("TLM_COUT_ERASE_CAP_CALLS", "24:9999");
     set_default_env("TLM_GCD_ADAPTIVE_LAYOUT_SEARCH", "1");
     set_default_env("TLM_GCD_ADAPTIVE_LAYOUT_MARGIN", "0");
 
@@ -2276,17 +2364,27 @@ pub fn build() -> Vec<Op> {
     // stream separately. Disable it for the pure bit-exact-wins circuit unless explicitly re-enabled.
     // Identity-keyed deep strip (1442 census-dead gates, zero-error) on by default;
     // SUB4_APPLY_STRIP=0 disables for A/B measurement.
+    // The strip keys its gates by `(kind, operands, k-th occurrence ordinal)`, so like
+    // the census certificates it is only valid at the baked divstep count.
+    // Identity-keyed deep strip, re-mined at 1e9 against THIS stream. Keys carry the
+    // census-time tuple occupancy, a self-check strictly stronger than gating on
+    // baked_artifacts_valid(): it catches ANY ordinal-moving edit and discards only
+    // the affected keys, loudly, instead of disabling the table.
     let ops = if std::env::var("SUB4_APPLY_STRIP").ok().as_deref() == Some("0") {
         ops
-    } else if std::env::var("SUB4_APPLY_D2_STRIP").ok().as_deref() == Some("1") {
-        apply_d2_deep_strip(ops)
     } else {
         apply_deep_strip_identity(ops)
     };
     // The tail nonce ground for this composed stream (verified PASS 0/0/0, score 1,517,633,280).
     // SUB4_TAIL_NONCE overrides for re-grinding/seam-export.
-    let nonce: u64 = std::env::var("SUB4_TAIL_NONCE").ok().and_then(|s| s.parse().ok()).unwrap_or(4001397000397);
-    apply_tail_nonce(ops, nonce)
+    let nonce: u64 = std::env::var("SUB4_TAIL_NONCE").ok().and_then(|s| s.parse().ok()).unwrap_or(5150000095);
+    let ops = apply_tail_nonce(ops, nonce);
+    // `TLM_DIRTY_SCAN_FINAL=1` runs the reset/phase audit on the stream `eval_circuit`
+    // will actually see, i.e. after every rewrite pass. Default off.
+    if std::env::var_os("TLM_DIRTY_SCAN_FINAL").is_some() {
+        dirtyscan::scan(&ops, &[]);
+    }
+    ops
 }
 
 pub fn square_window_selftest() -> Result<(), String> {
