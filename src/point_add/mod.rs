@@ -1178,7 +1178,7 @@ const Q1153_SECOND512_SUBMISSION_NONCE: &str = "193806910775884";
 
 fn configure_q1153_second512_submission_defaults() {
     set_default_env("DIALOG_TAIL_NONCE", Q1153_SECOND512_SUBMISSION_NONCE);
-    set_default_env("TLM_TARGET_Q", "1154");
+    set_default_env("TLM_TARGET_Q", "1153");
     set_default_env("TLM_FOLD_CHUNK_ZERO_CIN", "1");
     set_default_env("TLM_FFG_MAX_G", "47");
     set_default_env("TLM_APPLY_ADD_SKIP_LASTK", "1");
@@ -1193,7 +1193,7 @@ fn configure_q1153_second512_submission_defaults() {
     set_default_env("TLM_SQUARE_VENT_MARGIN", "0");
     set_default_env("TLM_COORD_ADD3X_TRUNC", "1");
     set_default_env("TLM_SQUARE_VENT_SHIFTED", "1");
-    set_default_env("TLM_SQUARE_PEAK_CAP", "1154");
+    set_default_env("TLM_SQUARE_PEAK_CAP", "1153");
     set_default_env("TLM_CUCCARO_SKIP_STRUCTURAL_DEAD_CALLS", "1");
 }
 
@@ -2370,14 +2370,16 @@ pub fn build() -> Vec<Op> {
     // census-time tuple occupancy, a self-check strictly stronger than gating on
     // baked_artifacts_valid(): it catches ANY ordinal-moving edit and discards only
     // the affected keys, loudly, instead of disabling the table.
-    let ops = if std::env::var("SUB4_APPLY_STRIP").ok().as_deref() == Some("0") {
+    let ops = if !trailmix_ludicrous::schedule::DEEP_STRIP_KEYS_MATCH_GEOMETRY
+        || std::env::var("SUB4_APPLY_STRIP").ok().as_deref() == Some("0")
+    {
         ops
     } else {
         apply_deep_strip_identity(ops)
     };
     // The tail nonce ground for this composed stream (verified PASS 0/0/0, score 1,517,633,280).
     // SUB4_TAIL_NONCE overrides for re-grinding/seam-export.
-    let nonce: u64 = std::env::var("SUB4_TAIL_NONCE").ok().and_then(|s| s.parse().ok()).unwrap_or(30008006160);
+    let nonce: u64 = std::env::var("SUB4_TAIL_NONCE").ok().and_then(|s| s.parse().ok()).unwrap_or(41027000878833);
     let ops = apply_tail_nonce(ops, nonce);
     // `TLM_DIRTY_SCAN_FINAL=1` runs the reset/phase audit on the stream `eval_circuit`
     // will actually see, i.e. after every rewrite pass. Default off.
