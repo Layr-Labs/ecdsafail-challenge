@@ -1,5 +1,5 @@
 
-use super::comparator::{compare_geq_cin_middle, compare_geq_cin_middle_keyed};
+use super::comparator::compare_geq_cin_middle;
 use super::{B, BExt};
 use crate::circuit::QubitId;
 use std::cell::{Cell, RefCell};
@@ -1309,39 +1309,6 @@ fn deref(s: &[&QubitId]) -> Vec<QubitId> {
     s.iter().map(|q| **q).collect()
 }
 
-/// Width cap for the per-chunk carry-erase comparison, in top bits.
-///
-/// A chunk carry-out is uncomputed by measuring it in the X basis and then, on the ~50% of shots
-/// where the measurement comes back 1, re-deriving the carry predicate from the finished sum with a
-/// `compare_geq` over the chunk. That comparison is the entire excess cost of the chunked adder
-/// (`l` in the `2n + l + m + 1` objective at `searched_cout_layout`). Restricting it to the top `w`
-/// bits of the chunk costs `w` emitted CCX instead of the chunk width, and is wrong only when the
-/// top `w` bits of the sum and the addend coincide *and* the low part borrows: error ~2^-w, cost
-/// linear in w. The same trade is already made unconditionally by the final reduction compare
-/// (`controlled_lt_msbs_conditional`, MSBS = 19 of 256).
-fn cout_erase_cap() -> Option<usize> {
-    std::env::var("TLM_COUT_ERASE_CAP")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&w| w > 0)
-}
-
-/// Restricts the erase cap to a window of erase call indices, `TLM_COUT_ERASE_CAP_CALLS="lo:hi"`
-/// (half-open, unset = every call). The Bezout pair grows roughly one bit per divstep, so whether a
-/// given chunk's operands carry any information at all is a function of where in the walk the call
-/// sits; this is the dial that isolates that.
-fn cout_erase_cap_call_in_window(call_index: usize) -> bool {
-    match std::env::var("TLM_COUT_ERASE_CAP_CALLS") {
-        Ok(spec) => {
-            let mut parts = spec.split(':');
-            let lo = parts.next().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
-            let hi = parts.next().and_then(|v| v.parse::<usize>().ok()).unwrap_or(usize::MAX);
-            (lo..hi).contains(&call_index)
-        }
-        Err(_) => true,
-    }
-}
-
 fn controlled_erase_carry_gated_impl(
     circ: &mut B,
     ctrl: &QubitId,
@@ -1351,55 +1318,34 @@ fn controlled_erase_carry_gated_impl(
     carry: QubitId,
 ) {
     let call_index = next_erase_gated_call_index();
-    let s = a.len();
-    let cap = cout_erase_cap()
-        .filter(|&w| w < s)
-        .filter(|_| cout_erase_cap_call_in_window(call_index));
-
     let bit = circ.alloc_bit();
     circ.hmr(carry, bit);
     circ.push_condition(bit);
+    let (av, bv) = (deref(a), deref(b));
     let ctrl = *ctrl;
+    let cin = match cin {
+        Some(cin) => {
 
-    let deposit = |c: &mut B, ta: &QubitId, tb: &QubitId, c_prev: &QubitId| {
+            circ.loan_zero_qubit(carry);
+            *cin
+        }
+        None => carry,
+    };
+    compare_geq_cin_middle(circ, &av, &bv, &cin, |c, ta, tb, c_prev| {
+
         c.z(ctrl);
         let old_context = crate::point_add::set_op_trace_context(
             0x0900_0000 | (((call_index as u32) & 0xffff) << 8),
         );
-
-        if cap.is_some() || !gidney_erase_ccz_has_exact_dead_call(call_index) {
+        if !gidney_erase_ccz_has_exact_dead_call(call_index) {
             c.ccz(ctrl, *ta, *tb);
         }
         crate::point_add::restore_op_trace_context(old_context);
         c.cz(ctrl, *c_prev);
-    };
-    match cap {
-        Some(w) => {
-            let lo = s - w;
-            let (av, bv) = (deref(&a[lo..]), deref(&b[lo..]));
-
-            circ.loan_zero_qubit(carry);
-            let zcin = circ.alloc_qubit();
-            compare_geq_cin_middle_keyed(circ, &av, &bv, &zcin, deposit, None);
-            circ.pop_condition();
-            circ.zero_and_free(zcin);
-        }
-        None => {
-            let (av, bv) = (deref(a), deref(b));
-            let cin = match cin {
-                Some(cin) => {
-
-                    circ.loan_zero_qubit(carry);
-                    *cin
-                }
-                None => carry,
-            };
-            compare_geq_cin_middle(circ, &av, &bv, &cin, deposit);
-            circ.pop_condition();
-            if cin == carry {
-                circ.zero_and_free(carry);
-            }
-        }
+    });
+    circ.pop_condition();
+    if cin == carry {
+        circ.zero_and_free(carry);
     }
 }
 

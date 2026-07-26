@@ -876,11 +876,19 @@ const FUSED_BOUNDARY_ZERO_REMAINDER_KEYS: &[u32] = &[
 ];
 
 fn fused_boundary_zero_has_structurally_dead_carry(call_index: usize, bit: usize) -> bool {
+    if super::drops_off_family("FUSEDBZ") {
+        return false;
+    }
+
     std::env::var_os("TLM_FUSED_SKIP_EXACT_BOUNDARY_ZERO").is_some()
         && fused_key_contains(FUSED_BOUNDARY_ZERO_REMAINDER_KEYS, call_index, bit)
 }
 
 fn fused_clean_fold_has_structurally_dead_carry(call_index: usize, bit: usize) -> bool {
+    if super::drops_off_family("FUSEDCF") {
+        return false;
+    }
+
     fused_range_contains(FUSED_CLEAN_FOLD_DEAD_RANGES, call_index, bit)
         || (skip_fused_clean_fold_top31() && bit == 31)
         || (skip_exact_fused_clean_fold()
@@ -888,12 +896,20 @@ fn fused_clean_fold_has_structurally_dead_carry(call_index: usize, bit: usize) -
 }
 
 fn fused_chunk_fold_has_structurally_dead_carry(call_index: usize, bit: usize) -> bool {
+    if super::drops_off_family("FUSEDKF") {
+        return false;
+    }
+
     fused_range_contains(FUSED_CHUNK_FOLD_DEAD_RANGES, call_index, bit)
         || (skip_exact_fused_chunk_fold()
             && fused_key_contains(FUSED_CHUNK_FOLD_REMAINDER_KEYS, call_index, bit))
 }
 
 fn fused_dirty_fold_has_structurally_dead_carry(call_index: usize, bit: usize) -> bool {
+    if super::drops_off_family("FUSEDDF") {
+        return false;
+    }
+
     skip_structural_dead_fused_dirty_fold()
         && FUSED_DIRTY_FOLD_DEAD_RANGES
             .iter()
@@ -901,6 +917,10 @@ fn fused_dirty_fold_has_structurally_dead_carry(call_index: usize, bit: usize) -
 }
 
 fn fused_clean_window_has_structurally_dead_carry(call_index: usize, bit: usize) -> bool {
+    if super::drops_off_family("FUSEDCW") {
+        return false;
+    }
+
     skip_structural_dead_fused_clean_window()
         && FUSED_CLEAN_WINDOW_DEAD_RANGES
             .iter()
