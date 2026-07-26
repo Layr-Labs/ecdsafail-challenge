@@ -429,7 +429,7 @@ fn route_swaps(src: &[QubitId], dst: &[QubitId]) -> Vec<(QubitId, QubitId)> {
 
 fn install_q1153_submission_defaults() {
     for (name, value) in [
-        ("TLM_TARGET_Q", "1152"),
+        ("TLM_TARGET_Q", "1151"),
         ("TLM_FOLD_CHUNK_ZERO_CIN", "1"),
         ("TLM_FFG_MAX_G", "47"),
         ("TLM_APPLY_ADD_SKIP_LASTK", "1"),
