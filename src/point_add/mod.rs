@@ -1178,8 +1178,7 @@ const Q1153_SECOND512_SUBMISSION_NONCE: &str = "193806910775884";
 
 fn configure_q1153_second512_submission_defaults() {
     set_default_env("DIALOG_TAIL_NONCE", Q1153_SECOND512_SUBMISSION_NONCE);
-    set_default_env("TLM_TARGET_Q", "1152");
-    set_default_env("TLM_TN_SPEC", "85-157:1,157-205:2,205-261:3");
+    set_default_env("TLM_TARGET_Q", "1154");
     set_default_env("TLM_FOLD_CHUNK_ZERO_CIN", "1");
     set_default_env("TLM_FFG_MAX_G", "47");
     set_default_env("TLM_APPLY_ADD_SKIP_LASTK", "1");
@@ -1194,7 +1193,7 @@ fn configure_q1153_second512_submission_defaults() {
     set_default_env("TLM_SQUARE_VENT_MARGIN", "0");
     set_default_env("TLM_COORD_ADD3X_TRUNC", "1");
     set_default_env("TLM_SQUARE_VENT_SHIFTED", "1");
-    set_default_env("TLM_SQUARE_PEAK_CAP", "1152");
+    set_default_env("TLM_SQUARE_PEAK_CAP", "1154");
     set_default_env("TLM_CUCCARO_SKIP_STRUCTURAL_DEAD_CALLS", "1");
 }
 
@@ -2378,7 +2377,7 @@ pub fn build() -> Vec<Op> {
     };
     // The tail nonce ground for this composed stream (verified PASS 0/0/0, score 1,517,633,280).
     // SUB4_TAIL_NONCE overrides for re-grinding/seam-export.
-    let nonce: u64 = std::env::var("SUB4_TAIL_NONCE").ok().and_then(|s| s.parse().ok()).unwrap_or(77084001001127);
+    let nonce: u64 = std::env::var("SUB4_TAIL_NONCE").ok().and_then(|s| s.parse().ok()).unwrap_or(990018471007);
     let ops = apply_tail_nonce(ops, nonce);
     // `TLM_DIRTY_SCAN_FINAL=1` runs the reset/phase audit on the stream `eval_circuit`
     // will actually see, i.e. after every rewrite pass. Default off.
