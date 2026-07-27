@@ -13,67 +13,12 @@ fn gap_j2_mask_trunc_only() -> bool {
     std::env::var("TLM_GAP_J2_TRUNC_ONLY").ok().as_deref() == Some("1")
 }
 
-/// Tail narrowing, as a runtime profile.
-///
-/// Shaves `depth(i)` bits off the live gcd register width for the last
-/// `TLM_TN_E` divsteps. `SCHED_J2[i]` (the width) and `GAP_J2[i]` (the
-/// comparator window) MUST move by the same amount: the divstep error depends
-/// only on `s = SCHED_J2[i] - cmp_window(i)`, and moving one alone takes the
-/// channel from ~8 mismatches to ~4,600.
-///
-/// `TLM_TN_MODE` shapes `depth` across the window (`p = 0` at the window
-/// start, `p = e-1` at the last divstep):
-///   `flat` (default)  depth = d everywhere
-///   `up`              depth ramps 1 -> d toward the tail
-///   `down`            depth ramps d -> 1 toward the tail
-/// Depth is clamped so no register is narrowed below 4 bits.
-/// `TLM_TN_SPEC` overrides both and takes a fully general per-divstep profile
-/// as `lo-hi:depth` segments over half-open divstep ranges, e.g.
-/// `"0-64:1,192-261:3"`. Later segments win.
-fn tail_narrow_at(i: usize) -> usize {
-    if let Ok(spec) = std::env::var("TLM_TN_SPEC") {
-        let mut depth = 0usize;
-        for seg in spec.split(',').filter(|s| !s.is_empty()) {
-            let (range, d) = seg.split_once(':').expect("TLM_TN_SPEC segment is lo-hi:depth");
-            let (lo, hi) = range.split_once('-').expect("TLM_TN_SPEC range is lo-hi");
-            let lo: usize = lo.parse().expect("TLM_TN_SPEC lo");
-            let hi: usize = hi.parse().expect("TLM_TN_SPEC hi");
-            if i >= lo && i < hi {
-                depth = d.parse().expect("TLM_TN_SPEC depth");
-            }
-        }
-        return depth.min((SCHED_J2[i] as usize).saturating_sub(4));
-    }
-    let d = env_usize("TLM_TN_D", 0);
-    let e = env_usize("TLM_TN_E", 0);
-    if d == 0 || e == 0 || i + e < ITERS {
-        return 0;
-    }
-    let p = i - (ITERS - e);
-    let raw = if d <= 1 || e <= 1 {
-        d
-    } else {
-        match std::env::var("TLM_TN_MODE").ok().as_deref() {
-            Some("up") => 1 + (p * (d - 1)).div_ceil(e - 1),
-            Some("down") => d - (p * (d - 1)) / (e - 1),
-            _ => d,
-        }
-    };
-    raw.min((SCHED_J2[i] as usize).saturating_sub(4))
-}
-
-
-/// Live gcd register width at divstep `i`, after tail narrowing.
-fn sched_j2_at(i: usize) -> usize {
-    (SCHED_J2[i] as usize).saturating_sub(tail_narrow_at(i)).max(1)
-}
-
 // cmp window for step i: baseline is min(GAP_J2[i], current_n).
 // Delta narrows it; TRUNC_ONLY restricts narrowing to steps where the
 // baseline window is ALREADY a strict truncation (GAP_J2[i] < current_n),
 // leaving the exact-comparison tail steps untouched.
 fn cmp_window(i: usize, current_n: usize) -> usize {
-    let g = (GAP_J2[i] as usize).saturating_sub(tail_narrow_at(i));
+    let g = GAP_J2[i] as usize;
     let base = g.min(current_n).max(1);
     let d = gap_j2_delta();
     if d == 0 {
@@ -1278,7 +1223,7 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
         } else {
             "tlm_multiply_gcd_forward_shift"
         });
-        let current_n = sched_j2_at(i);
+        let current_n = (SCHED_J2[i] as usize).max(1);
         while u.len() > current_n {
             let q = u.pop().expect("u nonempty");
             circ.zero_and_free(q);
@@ -1527,7 +1472,7 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
         } else {
             "tlm_inverse_gcd_reverse_decode"
         });
-        let current_n = sched_j2_at(i);
+        let current_n = (SCHED_J2[i] as usize).max(1);
         while u.len() < current_n {
             u.push(circ.alloc_qubit());
         }
