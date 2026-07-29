@@ -10,6 +10,7 @@ Durable notes for this circuit, mirrored from the repo-root `notes/` folder so t
 | `03-proven-floors.md` | where the headroom is NOT, with proofs (rank bound, multiplicative complexity, exact codec enumeration) |
 | `04-traps.md` | four ways an env knob silently no-ops, positional addressing, validation gates |
 | `05-qubit-reduction.md` | the measured qubit programme, including the exchange-rate trap |
+| `06-circuit-floor-confirmation.md` | confirmed circuit is at proven floor — no improvements found from census re-mining or tail narrowing |
 
 The single most important operational fact: **a persistent-set reduction only pays if you lower `TLM_TARGET_Q` by the
 same amount**, because the vent pool expands to fill whatever you free. The second most important: **only a
