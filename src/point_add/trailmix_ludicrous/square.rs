@@ -418,6 +418,8 @@ fn apply_shifted_128_tagged(circ: &mut B, value: &[QubitId], output_reg: &[Qubit
     assert!(value.len() <= N + 2, "128-shifted half product must be at most 258 bits");
     let low_len = value.len().min(128);
     if env_tag_enabled("TLM_SQUARE_SHIFTED128_LOW_TAGS", tag) {
+        // Preserve the full-width allocator/free-pool schedule for the downstream
+        // identity-keyed strip. Removing these unused pads makes 4,486 keys stale.
         let low_pads = alloc_zeroes(circ, 128);
         let high_pads = alloc_zeroes(circ, 128 - low_len);
         let mut operand = Vec::with_capacity(128);
@@ -641,6 +643,30 @@ pub fn shifted128_low_miter() -> Result<usize, String> {
         Ok(outputs)
     }
 
+    struct RestoreSquareMiterEnv {
+        no_vent_reduce: Option<std::ffi::OsString>,
+        vent_shifted: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for RestoreSquareMiterEnv {
+        fn drop(&mut self) {
+            unsafe {
+                match self.no_vent_reduce.take() {
+                    Some(value) => std::env::set_var("TLM_SQUARE_NO_VENT_REDUCE", value),
+                    None => std::env::remove_var("TLM_SQUARE_NO_VENT_REDUCE"),
+                }
+                match self.vent_shifted.take() {
+                    Some(value) => std::env::set_var("TLM_SQUARE_VENT_SHIFTED", value),
+                    None => std::env::remove_var("TLM_SQUARE_VENT_SHIFTED"),
+                }
+            }
+        }
+    }
+
+    let _restore_env = RestoreSquareMiterEnv {
+        no_vent_reduce: std::env::var_os("TLM_SQUARE_NO_VENT_REDUCE"),
+        vent_shifted: std::env::var_os("TLM_SQUARE_VENT_SHIFTED"),
+    };
     unsafe {
         std::env::set_var("TLM_SQUARE_NO_VENT_REDUCE", "1");
         std::env::remove_var("TLM_SQUARE_VENT_SHIFTED");
