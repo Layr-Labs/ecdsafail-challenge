@@ -23,6 +23,7 @@ pub(crate) use rounds::*;
 pub mod trailmix_ludicrous;
 mod single_ccx_fanout;
 mod m60_dead_t10;
+mod census;
 mod d2_deep_strip;
 mod deep_strip_keys;
 mod dirtyscan;
@@ -2373,6 +2374,12 @@ pub fn build() -> Vec<Op> {
     // census-time tuple occupancy, a self-check strictly stronger than gating on
     // baked_artifacts_valid(): it catches ANY ordinal-moving edit and discards only
     // the affected keys, loudly, instead of disabling the table.
+    // `TLM_CENSUS=1` re-mines the deep-strip tables against THIS stream. It must see the
+    // stream the strip itself keys against, i.e. before `apply_deep_strip_identity`, so
+    // run it with SUB4_APPLY_STRIP=0. Diagnostic only; never on in a scoring build.
+    if std::env::var("TLM_CENSUS").ok().as_deref() == Some("1") {
+        census::run(&ops);
+    }
     let ops = if std::env::var("SUB4_APPLY_STRIP").ok().as_deref() == Some("0") {
         ops
     } else {
@@ -2390,6 +2397,12 @@ pub fn build() -> Vec<Op> {
     // will actually see, i.e. after every rewrite pass. Default off.
     if std::env::var_os("TLM_DIRTY_SCAN_FINAL").is_some() {
         dirtyscan::scan(&ops, &[]);
+    }
+    // `TLM_CENSUS_FINAL=1` censuses the stream `eval_circuit` actually sees, i.e. after the
+    // strip and the tail nonce. That is the only place lambda -- the per-shot fault rate
+    // that sets the nonce-grind cost -- can be measured for the shipped circuit.
+    if std::env::var("TLM_CENSUS_FINAL").ok().as_deref() == Some("1") {
+        census::run(&ops);
     }
     ops
 }
