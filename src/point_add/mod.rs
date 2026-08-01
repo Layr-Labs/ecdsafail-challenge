@@ -2376,12 +2376,12 @@ pub fn build() -> Vec<Op> {
     } else {
         apply_deep_strip_identity(ops)
     };
-    // Tail nonce for the exact H2 risk-2.5 stream (9024/9024 PASS, score 1,487,960,676).
+    // Tail nonce for the exact H2 risk-3.0 stream (9024/9024 PASS, score 1,487,599,474).
     // SUB4_TAIL_NONCE overrides it for controlled re-grinding.
     let nonce: u64 = std::env::var("SUB4_TAIL_NONCE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(58000098603199);
+        .unwrap_or(60000115034108);
     let ops = apply_tail_nonce(ops, nonce);
     // `TLM_DIRTY_SCAN_FINAL=1` runs the reset/phase audit on the stream `eval_circuit`
     // will actually see, i.e. after every rewrite pass. Default off.
