@@ -1,7 +1,7 @@
 
 use super::arith::{
-    mod_add, mod_add_exact, mod_neg, mod_rsub_vented_loaded, mod_sub_classical_low3,
-    mod_sub_shifted_low, mod_sub_vented,
+    mod_add, mod_add_exact, mod_add_with_cleanup, mod_neg, mod_rsub_vented_loaded_with_cleanup,
+    mod_sub_classical_low3, mod_sub_shifted_low, mod_sub_vented, mod_sub_vented_with_cleanup,
 };
 use super::gcd::{mod_mul_inverse_in_place, Direction};
 use super::square::mod_square_sub_pm_secp256k1_symmetric;
@@ -11,7 +11,25 @@ use crate::circuit::{BitId, QubitId};
 
 const N: usize = 256;
 
-fn coord_addsub(circ: &mut B, dst: &[QubitId], coord: &[BitId], subtract: bool) {
+fn coord_cleanup_bits(setting: &str) -> usize {
+    std::env::var(setting)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .or_else(|| {
+            std::env::var("TLM_COORD_MSBS")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+        })
+        .unwrap_or_else(super::arith::msbs)
+}
+
+fn coord_addsub(
+    circ: &mut B,
+    dst: &[QubitId],
+    coord: &[BitId],
+    subtract: bool,
+    cleanup_bits: usize,
+) {
     debug_assert_eq!(dst.len(), N);
     debug_assert_eq!(coord.len(), N);
     let split_low3 = subtract
@@ -41,9 +59,9 @@ fn coord_addsub(circ: &mut B, dst: &[QubitId], coord: &[BitId], subtract: bool) 
     }
 
     if subtract {
-        mod_sub_vented(circ, &temp, dst);
+        mod_sub_vented_with_cleanup(circ, &temp, dst, cleanup_bits);
     } else {
-        mod_add(circ, &temp, dst);
+        mod_add_with_cleanup(circ, &temp, dst, cleanup_bits);
     }
     for i in 0..N {
         circ.x_if_bit(temp[i], coord[i]);
@@ -65,7 +83,12 @@ fn coord_add3x(circ: &mut B, dst: &[QubitId], coord: &[BitId]) {
     }
 
     if std::env::var("TLM_COORD_ADD3X_TRUNC").ok().as_deref() == Some("1") {
-        mod_add(circ, &temp, dst);
+        mod_add_with_cleanup(
+            circ,
+            &temp,
+            dst,
+            coord_cleanup_bits("TLM_COORD_ADD3X_MSBS"),
+        );
     } else {
         mod_add_exact(circ, &temp, dst);
     }
@@ -238,7 +261,12 @@ fn coord_rsub(circ: &mut B, x: &[QubitId], coord: &[BitId]) {
         for i in 0..N {
             circ.x_if_bit(t[i], coord_p1[i]);
         }
-        mod_rsub_vented_loaded(circ, &t, x);
+        mod_rsub_vented_loaded_with_cleanup(
+            circ,
+            &t,
+            x,
+            coord_cleanup_bits("TLM_COORD_RSUB_MSBS"),
+        );
         for i in 0..N {
             circ.x_if_bit(t[i], coord_p1[i]);
         }
@@ -285,9 +313,21 @@ pub fn ec_add(
     assert_eq!(oy.len(), N, "oy is 256 classical bits");
 
     circ.set_phase("tlm_coord_x_sub");
-    coord_addsub(circ, x2, ox, true);
+    coord_addsub(
+        circ,
+        x2,
+        ox,
+        true,
+        coord_cleanup_bits("TLM_COORD_X_SUB_MSBS"),
+    );
     circ.set_phase("tlm_coord_y_sub");
-    coord_addsub(circ, &y2[..N], oy, true);
+    coord_addsub(
+        circ,
+        &y2[..N],
+        oy,
+        true,
+        coord_cleanup_bits("TLM_COORD_Y_SUB_MSBS"),
+    );
 
     circ.set_phase("tlm_inverse");
     let xv = std::mem::take(x2);
@@ -304,7 +344,13 @@ pub fn ec_add(
     *x2 = mod_mul_inverse_in_place(circ, xv, y2, Direction::Forward);
 
     circ.set_phase("tlm_coord_y_sub_final");
-    coord_addsub(circ, &y2[..N], oy, true);
+    coord_addsub(
+        circ,
+        &y2[..N],
+        oy,
+        true,
+        coord_cleanup_bits("TLM_COORD_Y_SUB_FINAL_MSBS"),
+    );
     circ.set_phase("tlm_coord_rsub_final");
     coord_rsub(circ, x2, ox);
 }

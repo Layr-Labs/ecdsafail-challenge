@@ -1576,6 +1576,15 @@ fn add_cout_vented_unctrl(circ: &mut B, x: &[QubitId], y: &[QubitId], cout: &Qub
 }
 
 pub fn mod_rsub_vented_loaded(circ: &mut B, t1: &[QubitId], y: &[QubitId]) {
+    mod_rsub_vented_loaded_with_cleanup(circ, t1, y, msbs());
+}
+
+pub fn mod_rsub_vented_loaded_with_cleanup(
+    circ: &mut B,
+    t1: &[QubitId],
+    y: &[QubitId],
+    cleanup_bits: usize,
+) {
     let n = y.len();
     assert_eq!(t1.len(), n, "mod_rsub_vented_loaded: t1,y must both be n=256 bits");
     assert_eq!(n, 256, "secp256k1 mod_rsub_vented_loaded expects n=256");
@@ -1594,7 +1603,7 @@ pub fn mod_rsub_vented_loaded(circ: &mut B, t1: &[QubitId], y: &[QubitId]) {
         circ.x(*q);
     }
     circ.x(anc);
-    controlled_lt_msbs_conditional(circ, None, &y[..n], &t1[..n], msbs(), anc);
+    controlled_lt_msbs_conditional(circ, None, &y[..n], &t1[..n], cleanup_bits, anc);
 }
 
 fn add_cout_vented_skip_dead(circ: &mut B, x: &[QubitId], y: &[QubitId], cout: &QubitId, call_index: usize) {
@@ -1693,6 +1702,10 @@ fn square_peak_hard_cap() -> usize {
 }
 
 pub fn mod_add(circ: &mut B, x: &[QubitId], y: &[QubitId]) {
+    mod_add_with_cleanup(circ, x, y, msbs());
+}
+
+pub fn mod_add_with_cleanup(circ: &mut B, x: &[QubitId], y: &[QubitId], cleanup_bits: usize) {
     let n = x.len();
     assert_eq!(y.len(), n, "mod_add: x,y must both be n=256 bits");
     assert_eq!(n, 256, "secp256k1 mod_add expects n=256");
@@ -1702,7 +1715,7 @@ pub fn mod_add(circ: &mut B, x: &[QubitId], y: &[QubitId]) {
 
     add_f_window(circ, &anc, y, LSBS, &f_bytes, Some(LSBS - 1));
 
-    controlled_lt_msbs_conditional(circ, None, &y[..n], &x[..n], msbs(), anc);
+    controlled_lt_msbs_conditional(circ, None, &y[..n], &x[..n], cleanup_bits, anc);
 }
 
 pub fn mod_add_exact(circ: &mut B, x: &[QubitId], y: &[QubitId]) {
@@ -1757,6 +1770,15 @@ pub fn mod_add_shifted_low(circ: &mut B, x: &[QubitId], y: &[QubitId], shift: us
 }
 
 pub fn mod_sub_vented(circ: &mut B, x: &[QubitId], y: &[QubitId]) {
+    mod_sub_vented_with_cleanup(circ, x, y, msbs());
+}
+
+pub fn mod_sub_vented_with_cleanup(
+    circ: &mut B,
+    x: &[QubitId],
+    y: &[QubitId],
+    cleanup_bits: usize,
+) {
     let n = x.len();
     assert_eq!(y.len(), n, "mod_sub_vented: x,y must both be n=256 bits");
     assert_eq!(n, 256, "secp256k1 mod_sub_vented expects n=256");
@@ -1777,7 +1799,7 @@ pub fn mod_sub_vented(circ: &mut B, x: &[QubitId], y: &[QubitId]) {
     for q in &y[..LSBS] {
         circ.x(*q);
     }
-    controlled_add_carry_msbs_conditional(circ, None, &y[..n], &x[..n], msbs(), &anc);
+    controlled_add_carry_msbs_conditional(circ, None, &y[..n], &x[..n], cleanup_bits, &anc);
     circ.zero_and_free(anc);
 }
 
