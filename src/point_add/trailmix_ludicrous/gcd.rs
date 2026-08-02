@@ -1,5 +1,6 @@
 
 use super::arith::{self, F_SECP256K1};
+use super::precision::{self, ApplyPass};
 use super::schedule::{GAP_J2, ITERS, JUMP, SCHED_J2};
 
 fn gap_j2_delta() -> usize {
@@ -17,8 +18,11 @@ fn gap_j2_mask_trunc_only() -> bool {
 // Delta narrows it; TRUNC_ONLY restricts narrowing to steps where the
 // baseline window is ALREADY a strict truncation (GAP_J2[i] < current_n),
 // leaving the exact-comparison tail steps untouched.
-fn cmp_window(i: usize, current_n: usize) -> usize {
-    let g = GAP_J2[i] as usize;
+fn cmp_window(i: usize, current_n: usize, margin: usize) -> usize {
+    // When the register schedule is widened, include the retained high bits in
+    // the comparison too. Keeping k fixed would shift the top-k slice upward,
+    // silently dropping bits that the baked circuit compared.
+    let g = (GAP_J2[i] as usize).saturating_add(margin);
     let base = g.min(current_n).max(1);
     let d = gap_j2_delta();
     if d == 0 {
@@ -1138,7 +1142,7 @@ fn left_shift(circ: &mut B, v: &[QubitId]) {
     }
 }
 
-fn controlled_mod_double(circ: &mut B, ctrl: &QubitId, a: &[QubitId]) {
+fn controlled_mod_double(circ: &mut B, ctrl: &QubitId, a: &[QubitId], lsbs: usize) {
     let n = a.len();
     assert_eq!(n, 256, "controlled_mod_double expects 256-bit a");
     let f_bytes = F_SECP256K1.to_le_bytes();
@@ -1149,13 +1153,13 @@ fn controlled_mod_double(circ: &mut B, ctrl: &QubitId, a: &[QubitId]) {
         circ.cswap(*ctrl, *w[i], *w[i + 1]);
     }
 
-    arith::add_f_window_pub(circ, &ovf, a, arith::LSBS, &f_bytes, None);
+    arith::add_f_window_pub(circ, &ovf, a, lsbs, &f_bytes, None);
 
     clear_and(circ, &ovf, ctrl, &a[0]);
     circ.zero_and_free(ovf);
 }
 
-fn controlled_mod_double_reverse(circ: &mut B, ctrl: &QubitId, a: &[QubitId]) {
+fn controlled_mod_double_reverse(circ: &mut B, ctrl: &QubitId, a: &[QubitId], lsbs: usize) {
     let n = a.len();
     assert_eq!(n, 256, "controlled_mod_double_reverse expects 256-bit a");
     let f_bytes = F_SECP256K1.to_le_bytes();
@@ -1163,11 +1167,11 @@ fn controlled_mod_double_reverse(circ: &mut B, ctrl: &QubitId, a: &[QubitId]) {
 
     circ.ccx(*ctrl, a[0], ovf);
 
-    for q in &a[..arith::LSBS] {
+    for q in &a[..lsbs] {
         circ.x(*q);
     }
-    arith::add_f_window_pub(circ, &ovf, a, arith::LSBS, &f_bytes, None);
-    for q in &a[..arith::LSBS] {
+    arith::add_f_window_pub(circ, &ovf, a, lsbs, &f_bytes, None);
+    for q in &a[..lsbs] {
         circ.x(*q);
     }
 
@@ -1223,7 +1227,8 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
         } else {
             "tlm_multiply_gcd_forward_shift"
         });
-        let current_n = (SCHED_J2[i] as usize).max(1);
+        let margin = precision::sched_margin(i);
+        let current_n = ((SCHED_J2[i] as usize) + margin).min(256).max(1);
         while u.len() > current_n {
             let q = u.pop().expect("u nonempty");
             circ.zero_and_free(q);
@@ -1233,7 +1238,7 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
             circ.zero_and_free(q);
         }
 
-        let cmp_eff = cmp_window(i, current_n);
+        let cmp_eff = cmp_window(i, current_n, margin);
 
         if i == 0 {
             circ.cx(v[0], t1);
@@ -1472,14 +1477,15 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
         } else {
             "tlm_inverse_gcd_reverse_decode"
         });
-        let current_n = (SCHED_J2[i] as usize).max(1);
+        let margin = precision::sched_margin(i);
+        let current_n = ((SCHED_J2[i] as usize) + margin).min(256).max(1);
         while u.len() < current_n {
             u.push(circ.alloc_qubit());
         }
         while v.len() < current_n {
             v.push(circ.alloc_qubit());
         }
-        let cmp_eff = cmp_window(i, current_n);
+        let cmp_eff = cmp_window(i, current_n, margin);
 
         if pending.is_empty() {
             win_idx -= 1;
@@ -1747,6 +1753,7 @@ fn apply_step_forward(
     dirty_vents: &[QubitId],
 ) {
     let n = 256usize;
+    let lsbs = precision::apply_lsbs(ApplyPass::MultiplyReverse, i);
     let s2_known_zero = i != 0 && apply_fwd_s2_zero(i);
 
     circ.set_phase("tlm_apply_forward_mod_add");
@@ -1761,6 +1768,7 @@ fn apply_step_forward(
                 &y_reg[..n],
                 Some(k),
                 Some(ffg),
+                lsbs,
             );
         });
     }
@@ -1774,12 +1782,12 @@ fn apply_step_forward(
 
     circ.set_phase("tlm_apply_forward_fold");
     if i == 0 {
-        controlled_mod_double(circ, t1, y_reg);
-        controlled_mod_double(circ, s2, y_reg);
+        controlled_mod_double(circ, t1, y_reg, lsbs);
+        controlled_mod_double(circ, s2, y_reg, lsbs);
     } else if s2_known_zero {
-        super::fused::fused_double_only(circ, y_reg);
+        super::fused::fused_double_only(circ, y_reg, lsbs);
     } else {
-        super::fused::fused_double_cdouble(circ, s2, y_reg);
+        super::fused::fused_double_cdouble(circ, s2, y_reg, lsbs);
     }
 }
 
@@ -1795,16 +1803,17 @@ fn apply_step_reverse(
     dirty_vents: &[QubitId],
 ) {
     let n = 256usize;
+    let lsbs = precision::apply_lsbs(ApplyPass::InverseForward, i);
     let s2_known_zero = i != 0 && apply_inv_s2_zero(i);
 
     circ.set_phase("tlm_apply_inverse_fold");
     if i == 0 {
-        controlled_mod_double_reverse(circ, s2, y_reg);
-        controlled_mod_double_reverse(circ, t1, y_reg);
+        controlled_mod_double_reverse(circ, s2, y_reg, lsbs);
+        controlled_mod_double_reverse(circ, t1, y_reg, lsbs);
     } else if s2_known_zero {
-        super::fused::fused_double_only_reverse(circ, y_reg);
+        super::fused::fused_double_only_reverse(circ, y_reg, lsbs);
     } else {
-        super::fused::fused_double_cdouble_reverse(circ, s2, y_reg);
+        super::fused::fused_double_cdouble_reverse(circ, s2, y_reg, lsbs);
     }
 
     circ.set_phase("tlm_apply_inverse_swap");
@@ -1818,12 +1827,12 @@ fn apply_step_reverse(
     let k = super::next_cout_k();
     if !apply_add_skip(i, false) {
         super::gidney::with_dirty_vent_pool(dirty_vents, || {
-            controlled_mod_sub_vented(circ, sub, &x_reg[..n], &y_reg[..n], Some(k));
+            controlled_mod_sub_vented(circ, sub, &x_reg[..n], &y_reg[..n], Some(k), lsbs);
         });
     }
 }
 
-fn controlled_mod_sub_vented(circ: &mut B, ctrl: &QubitId, x: &[QubitId], y: &[QubitId], sched_k: Option<usize>) {
+fn controlled_mod_sub_vented(circ: &mut B, ctrl: &QubitId, x: &[QubitId], y: &[QubitId], sched_k: Option<usize>, lsbs: usize) {
     let n = x.len();
     assert_eq!(y.len(), n, "x,y equal width");
     let f_bytes = F_SECP256K1.to_le_bytes();
@@ -1839,12 +1848,12 @@ fn controlled_mod_sub_vented(circ: &mut B, ctrl: &QubitId, x: &[QubitId], y: &[Q
     }
 
     circ.set_phase("tlm_apply_inverse_mod_sub_fold");
-    for q in &y[..arith::LSBS] {
+    for q in &y[..lsbs] {
         circ.x(*q);
     }
     let ffg = super::next_ffg();
-    arith::add_f_window_pub(circ, &anc, y, arith::LSBS, &f_bytes, Some(ffg));
-    for q in &y[..arith::LSBS] {
+    arith::add_f_window_pub(circ, &anc, y, lsbs, &f_bytes, Some(ffg));
+    for q in &y[..lsbs] {
         circ.x(*q);
     }
 
@@ -1904,8 +1913,12 @@ pub fn mod_mul_inverse_in_place(
                 circ.swap(y[j], tmp[j]);
             }
             let mut tape = forward_gcd_jump(circ, &mut xv, Some((y, &tmp)));
-            for q in tmp {
+            for (j, q) in tmp.into_iter().enumerate() {
+                let old_context = crate::point_add::set_op_trace_context(
+                    0xa400_0000 | ((j as u32) & 0xffff),
+                );
                 circ.zero_and_free(q);
+                crate::point_add::restore_op_trace_context(old_context);
             }
             reverse_gcd_jump(circ, &mut xv, &mut tape, None);
             xv
@@ -1919,8 +1932,12 @@ pub fn mod_mul_inverse_in_place(
             }
             reverse_gcd_jump(circ, &mut xv, &mut tape, Some((&tmp, y)));
             clear_zeroed_drift(circ, &tmp[..n]);
-            for q in tmp {
+            for (j, q) in tmp.into_iter().enumerate() {
+                let old_context = crate::point_add::set_op_trace_context(
+                    0xa500_0000 | ((j as u32) & 0xffff),
+                );
                 circ.zero_and_free(q);
+                crate::point_add::restore_op_trace_context(old_context);
             }
             xv
         }
@@ -1932,6 +1949,60 @@ fn clear_zeroed_drift(circ: &mut B, reg: &[QubitId]) {
     for (i, qb) in reg.iter().enumerate() {
         if (q_bytes.get(i / 8).copied().unwrap_or(0) >> (i % 8)) & 1 == 1 {
             circ.x(*qb);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Exercises the actual `cmp_window` implementation (not just the algebra it is meant
+    /// to satisfy -- see `precision::tests::schedule_margin_keeps_the_original_compared_bits`
+    /// for that pure-algebra restatement) to confirm the two call sites' coupled
+    /// computation --
+    ///   let margin = precision::sched_margin(i);
+    ///   let current_n = ((SCHED_J2[i] as usize) + margin).min(256).max(1);
+    ///   let cmp_eff = cmp_window(i, current_n, margin);
+    /// -- really does preserve the top-slice invariant
+    /// `(current_n - cmp_eff) == (SCHED_J2[i] - GAP_J2[i])` for every uncapped row, run with
+    /// every diagnostic gap-narrowing env var absent (the ordinary-build state).
+    #[test]
+    fn cmp_window_preserves_top_slice_invariant_for_real_margins() {
+        // Guard against cross-test env pollution: these are the only vars `cmp_window`
+        // reads besides its explicit `margin` argument, and the invariant only holds on
+        // the undiagnosed path (delta == 0).
+        for var in ["TLM_GAP_J2_DELTA", "TLM_GAP_J2_TRUNC_ONLY", "TLM_GAP_J2_LO", "TLM_GAP_J2_HI"] {
+            assert!(
+                std::env::var(var).is_err(),
+                "{var} must be unset for this test to exercise the undiagnosed path"
+            );
+        }
+        for i in 0..ITERS {
+            let old_n = SCHED_J2[i] as usize;
+            let old_g = GAP_J2[i] as usize;
+            if old_g > old_n {
+                // GAP_J2[i] is already capped at margin 0; the exact-difference formula's
+                // precondition ("neither value is capped") never holds for this row.
+                continue;
+            }
+            for margin in 0..=8usize {
+                if old_n + margin > 256 {
+                    continue; // current_n itself would be capped by .min(256).
+                }
+                if old_g + margin > old_n + margin {
+                    continue; // unreachable given the old_g <= old_n guard above, kept
+                              // for symmetry with the capped-row skip in the algebra test.
+                }
+                let current_n = (old_n + margin).min(256).max(1);
+                let cmp_eff = cmp_window(i, current_n, margin);
+                assert_eq!(
+                    current_n - cmp_eff,
+                    old_n - old_g,
+                    "i={i} margin={margin}: top-slice invariant broken \
+                     (current_n={current_n} cmp_eff={cmp_eff})"
+                );
+            }
         }
     }
 }

@@ -827,7 +827,35 @@ fn find_inverse_pairs(
 /// sound. Intended to run on the FINAL post-`apply_m60_dead_t10` stream, so it never
 /// perturbs the dead_t10 absolute-index skip-set.
 pub(crate) fn ccz_straddle_cancel(ops: Vec<Op>) -> Vec<Op> {
-    let (num_q, num_b) = dims(&ops);
+    let (killed, total_ccz, candidates, cancelled) = ccz_straddle_kill_mask(&ops);
+    let n_before = ops.len();
+    let kept: Vec<Op> = ops
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, op)| if killed[i] { None } else { Some(op) })
+        .collect();
+    eprintln!(
+        "  [W018 CCZ straddle] total_ccz={} same_triple_candidates={} cancelled_pairs={} removed_ccz={} -> {} ops",
+        total_ccz,
+        candidates,
+        cancelled,
+        n_before - kept.len(),
+        kept.len()
+    );
+    kept
+}
+
+/// task-7 (`OpSite` propagation, Step 3): the identical kill mask `ccz_straddle_cancel`
+/// applies, exposed so `point_add::mod.rs` can filter a parallel `sites` vector with the
+/// SAME mask instead of re-deriving straddle-cancellation logic (and risking divergence).
+/// Pure function of `ops`; `ccz_straddle_cancel` above is now a thin wrapper around this
+/// plus the actual `Vec<Op>` filter -- zero behavior change to its own output.
+pub(crate) fn ccz_straddle_kill_mask_pub(ops: &[Op]) -> Vec<bool> {
+    ccz_straddle_kill_mask(ops).0
+}
+
+fn ccz_straddle_kill_mask(ops: &[Op]) -> (Vec<bool>, usize, usize, usize) {
+    let (num_q, num_b) = dims(ops);
     const OPAQUE: u32 = u32::MAX;
 
     let mut wev_q: Vec<Vec<WEvent>> = vec![Vec::new(); num_q];
@@ -974,21 +1002,7 @@ pub(crate) fn ccz_straddle_cancel(ops: Vec<Op>) -> Vec<Op> {
         }
     }
 
-    let n_before = ops.len();
-    let kept: Vec<Op> = ops
-        .into_iter()
-        .enumerate()
-        .filter_map(|(i, op)| if killed[i] { None } else { Some(op) })
-        .collect();
-    eprintln!(
-        "  [W018 CCZ straddle] total_ccz={} same_triple_candidates={} cancelled_pairs={} removed_ccz={} -> {} ops",
-        total_ccz,
-        candidates,
-        cancelled,
-        n_before - kept.len(),
-        kept.len()
-    );
-    kept
+    (killed, total_ccz, candidates, cancelled)
 }
 
 /// DIRECT MEASUREMENT (corpus-independent): run the shipped, sound CCX self-inverse
@@ -1027,6 +1041,30 @@ pub(crate) fn ccx_final_cancel(ops: Vec<Op>) -> Vec<Op> {
         kept.len()
     );
     kept
+}
+
+/// task-7 (`OpSite` propagation, Step 3): mirrors `ccx_final_cancel`'s own enable-check
+/// and kill-mask derivation exactly (same `TLM_CCX_FINAL_CANCEL`/`TLM_CCX_FINAL_STRADDLE`
+/// checks, same `find_inverse_pairs` call), so `point_add::mod.rs` can filter a parallel
+/// `sites` vector with the identical mask when `TRACE_OP_SITES` diagnostics are enabled.
+/// Returns `None` when the pass itself is disabled (the only path a scoring build ever
+/// takes -- `TLM_CCX_FINAL_CANCEL` is never set by `build()`), matching
+/// `ccx_final_cancel`'s own early return of `ops` unchanged; callers should treat `None`
+/// as "every op kept, sites unchanged" rather than "nothing killed" to preserve that
+/// distinction.
+pub(crate) fn ccx_final_cancel_kill_mask(ops: &[Op]) -> Option<Vec<bool>> {
+    if std::env::var("TLM_CCX_FINAL_CANCEL").ok().as_deref() != Some("1") {
+        return None;
+    }
+    let (nq, nb) = dims(ops);
+    let straddle = std::env::var("TLM_CCX_FINAL_STRADDLE").ok().as_deref() == Some("1");
+    let (pairs, _straddle_extra) = find_inverse_pairs(ops, nq, nb, straddle);
+    let mut killed = vec![false; ops.len()];
+    for p in &pairs {
+        killed[p.first] = true;
+        killed[p.second] = true;
+    }
+    Some(killed)
 }
 
 pub fn run(ops: Vec<Op>, input_qubits: &[QubitId]) -> Vec<Op> {

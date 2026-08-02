@@ -1510,10 +1510,11 @@ fn controlled_add_carry_msbs_conditional(circ: &mut B, ctrl: Option<&QubitId>, a
     circ.pop_condition();
 }
 
-pub fn controlled_mod_add_k(circ: &mut B, ctrl: &QubitId, x: &[QubitId], y: &[QubitId], sched_k: Option<usize>, ffg_g: Option<usize>) {
+pub fn controlled_mod_add_k(circ: &mut B, ctrl: &QubitId, x: &[QubitId], y: &[QubitId], sched_k: Option<usize>, ffg_g: Option<usize>, lsbs: usize) {
     let n = x.len();
     assert_eq!(y.len(), n, "x,y must both be n=256 bits");
     assert_eq!(n, 256, "secp256k1 controlled_mod_add expects n=256");
+    assert!(F_BITLEN <= lsbs && lsbs < 128, "controlled_mod_add_k: lsbs {lsbs} out of range");
     let f_bytes = F_SECP256K1.to_le_bytes();
     let anc = circ.alloc_qubit();
 
@@ -1528,7 +1529,7 @@ pub fn controlled_mod_add_k(circ: &mut B, ctrl: &QubitId, x: &[QubitId], y: &[Qu
     }
 
     circ.set_phase("tlm_apply_forward_mod_add_fold");
-    add_f_window(circ, &anc, y, LSBS, &f_bytes, ffg_g);
+    add_f_window(circ, &anc, y, lsbs, &f_bytes, ffg_g);
 
 
     circ.set_phase("tlm_apply_forward_mod_add_clean");

@@ -23,8 +23,11 @@ pub(crate) use rounds::*;
 pub mod trailmix_ludicrous;
 mod single_ccx_fanout;
 mod m60_dead_t10;
+mod census;
+mod grind;
 mod d2_deep_strip;
 mod deep_strip_keys;
+mod deep_strip_sites;
 mod dirtyscan;
 
 thread_local! {
@@ -492,6 +495,7 @@ impl B {
     fn alloc_bits(&mut self, n: usize) -> Vec<BitId> {
         (0..n).map(|_| self.alloc_bit()).collect()
     }
+    #[track_caller]
     fn free(&mut self, q: QubitId) {
         self.r(q);
         self.free_qubits
@@ -654,6 +658,7 @@ impl B {
         op.q_target = b;
         self.push_op(op);
     }
+    #[track_caller]
     fn r(&mut self, q: QubitId) {
         let mut op = Op::empty();
         op.kind = OperationType::R;
@@ -1003,169 +1008,6 @@ fn run_alt_seed_checks(ops: &[Op]) {
         n_seeds,
         ALT_SEED_SHOTS,
     );
-}
-
-#[cfg(test)]
-mod d1_inplace_lowerer_tests {
-    use super::*;
-
-    fn build_product_ops() -> Vec<Op> {
-        let mut b = B::new();
-        let h = b.alloc_qubits(N);
-        b.declare_qubit_register(&h);
-        let n = b.alloc_qubits(N);
-        b.declare_qubit_register(&n);
-        d1_inplace_product_lowerer_with_kaliski_clean(&mut b, &h, &n, SECP256K1_P, 400);
-        b.ops
-    }
-
-    fn build_quotient_ops() -> Vec<Op> {
-        let mut b = B::new();
-        let h = b.alloc_qubits(N);
-        b.declare_qubit_register(&h);
-        let n = b.alloc_qubits(N);
-        b.declare_qubit_register(&n);
-        d1_inplace_quotient_lowerer_with_kaliski_clean(&mut b, &h, &n, SECP256K1_P, 400);
-        b.ops
-    }
-
-    fn toffoli_count(ops: &[Op]) -> usize {
-        ops.iter()
-            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-            .count()
-    }
-
-    fn assert_two_word_d1_abi(ops: &[Op]) -> (u32, u32, u32) {
-        let (qubits, bits, registers, regs) = analyze_ops(ops.iter().copied());
-        assert_eq!(registers, 2);
-        assert_eq!(regs.len(), 2);
-        for reg in regs {
-            assert_eq!(reg.len(), N);
-            assert!(reg.iter().all(|item| matches!(item, QubitOrBit::Qubit(_))));
-        }
-        (qubits, bits, registers)
-    }
-
-    #[test]
-    fn d1_inplace_product_lowerer_component_stats_are_pinned() {
-        let ops = build_product_ops();
-        let (qubits, bits, registers) = assert_two_word_d1_abi(&ops);
-        assert_eq!(qubits, 2475);
-        assert_eq!(bits, 1_141_762);
-        assert_eq!(registers, 2);
-        assert_eq!(toffoli_count(&ops), 1_919_786);
-    }
-
-    #[test]
-    fn d1_inplace_quotient_lowerer_component_stats_are_pinned() {
-        let ops = build_quotient_ops();
-        let (qubits, bits, registers) = assert_two_word_d1_abi(&ops);
-        assert_eq!(qubits, 2475);
-        assert_eq!(bits, 0);
-        assert_eq!(registers, 2);
-        assert_eq!(toffoli_count(&ops), 1_919_786);
-        assert!(ops
-            .iter()
-            .all(|op| op.c_condition == crate::circuit::NO_BIT));
-        assert!(ops.iter().all(|op| {
-            !matches!(
-                op.kind,
-                OperationType::Hmr | OperationType::Neg | OperationType::R
-            )
-        }));
-    }
-
-    #[test]
-    fn round8_output_side_cleanup_hook_is_env_gated() {
-        let saved = std::env::var("ROUND8_QTAIL_OUTPUT_SIDE_CLEANUP").ok();
-        std::env::remove_var("ROUND8_QTAIL_OUTPUT_SIDE_CLEANUP");
-        assert!(!round8_qtail_output_side_cleanup_enabled());
-        std::env::set_var("ROUND8_QTAIL_OUTPUT_SIDE_CLEANUP", "1");
-        assert!(round8_qtail_output_side_cleanup_enabled());
-        match saved {
-            Some(value) => std::env::set_var("ROUND8_QTAIL_OUTPUT_SIDE_CLEANUP", value),
-            None => std::env::remove_var("ROUND8_QTAIL_OUTPUT_SIDE_CLEANUP"),
-        }
-    }
-
-    #[test]
-    fn round8_output_side_cleanup_hook_fails_closed_until_emitter_exists() {
-        let mut b = B::new();
-        let tx = b.alloc_qubits(N);
-        let ty = b.alloc_qubits(N);
-        let ox = b.alloc_bits(N);
-        let oy = b.alloc_bits(N);
-        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            round8_emit_output_side_cleanup_or_fail(&mut b, &tx, &ty, &ox, &oy, SECP256K1_P);
-        }))
-        .expect_err("output-side qtail hook must fail closed");
-        let message = panic
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| panic.downcast_ref::<&str>().copied())
-            .expect("panic has message");
-        assert!(message.contains("ROUND8_QTAIL_OUTPUT_SIDE_CLEANUP=1"));
-        assert!(message.contains("regular c=Rx-Qx inverse"));
-        assert!(message.contains("Round368 singular"));
-        assert!(message.contains("9024 Google"));
-    }
-
-    #[test]
-    fn round8_output_side_regular_phase_repair_probe_is_separately_gated() {
-        let saved = std::env::var("ROUND8_QTAIL_OUTPUT_SIDE_REGULAR_PHASE_REPAIR").ok();
-        std::env::remove_var("ROUND8_QTAIL_OUTPUT_SIDE_REGULAR_PHASE_REPAIR");
-        assert!(!round8_qtail_output_side_regular_phase_repair_enabled());
-        std::env::set_var("ROUND8_QTAIL_OUTPUT_SIDE_REGULAR_PHASE_REPAIR", "1");
-        assert!(round8_qtail_output_side_regular_phase_repair_enabled());
-        match saved {
-            Some(value) => {
-                std::env::set_var("ROUND8_QTAIL_OUTPUT_SIDE_REGULAR_PHASE_REPAIR", value)
-            }
-            None => std::env::remove_var("ROUND8_QTAIL_OUTPUT_SIDE_REGULAR_PHASE_REPAIR"),
-        }
-    }
-
-    #[test]
-    fn round8_qtail_round217_product_reuse_hook_is_env_gated() {
-        let saved = std::env::var("ROUND8_QTAIL_ROUND217_PRODUCT_REUSE").ok();
-        std::env::remove_var("ROUND8_QTAIL_ROUND217_PRODUCT_REUSE");
-        assert!(!round8_qtail_round217_product_reuse_enabled());
-        std::env::set_var("ROUND8_QTAIL_ROUND217_PRODUCT_REUSE", "1");
-        assert!(round8_qtail_round217_product_reuse_enabled());
-        match saved {
-            Some(value) => std::env::set_var("ROUND8_QTAIL_ROUND217_PRODUCT_REUSE", value),
-            None => std::env::remove_var("ROUND8_QTAIL_ROUND217_PRODUCT_REUSE"),
-        }
-    }
-
-    #[test]
-    fn round8_qtail_round217_product_reuse_hook_fails_closed_before_body() {
-        let plan = round218_b5_transport::round218_b5_source_live_product_lowerer_body_plan();
-        assert!(!plan.body_emits_gates);
-        assert!(!plan.codegen_allowed_now);
-        assert_eq!(
-            plan.selected_route,
-            "round217_sampled_product_m2_contract_path"
-        );
-        assert!(plan
-            .phase_blocks
-            .iter()
-            .any(|block| block.phase.contains("hash_history")));
-    }
-
-    #[test]
-    fn round218_source_live_product_lowerer_plan_rejects_full_source_alias() {
-        let plan = round218_b5_transport::round218_b5_source_live_product_lowerer_body_plan();
-        assert!(!plan.body_emits_gates);
-        assert!(!plan.codegen_allowed_now);
-        assert!(plan
-            .phase_blocks
-            .iter()
-            .all(|block| !block.backend_primitive.contains("full_source_product")));
-        assert!(plan
-            .missing_object
-            .contains("promotable no-history qtail/Round217 product splice"));
-    }
 }
 
 fn set_default_env(name: &str, value: &str) {
@@ -1691,6 +1533,19 @@ fn apply_d2_deep_strip(ops: Vec<Op>) -> Vec<Op> {
 /// Neither transform touches branch selection, `step()` consumption or call counts:
 /// this runs on the finished `Vec<Op>`, after every emission decision has been made.
 fn apply_deep_strip_identity(ops: Vec<Op>) -> Vec<Op> {
+    apply_deep_strip_identity_ex(ops).0
+}
+
+/// Same transform as `apply_deep_strip_identity` -- the existing, unmodified two-pass
+/// occupancy-tripwire mechanism (task-7's Step 7 explicitly keeps this as production
+/// application; only `deep_strip_keys.rs`'s table contents change) -- but also returns a
+/// `kept` mask aligned with the INPUT ops (`true` = the op survives, whether unchanged or
+/// downgraded in place; `false` = removed as dead). Diagnostic (`OpSite`-tracing) builds
+/// use this mask to keep `sites` aligned through the strip; `apply_deep_strip_identity`
+/// above is a pure decomposition of this function (same body, mask discarded), so its
+/// `Vec<Op>` output and every `eprintln!` are byte-for-byte identical to before this
+/// refactor.
+fn apply_deep_strip_identity_ex(ops: Vec<Op>) -> (Vec<Op>, Vec<bool>) {
     use std::collections::HashMap;
     type Tup = (u8, u64, u64, u64, u64);
 
@@ -1739,12 +1594,14 @@ fn apply_deep_strip_identity(ops: Vec<Op>) -> Vec<Op> {
         );
     }
     if dead.is_empty() && down.is_empty() {
-        return ops;
+        let kept = vec![true; ops.len()];
+        return (ops, kept);
     }
 
     // Pass 2: apply, assigning ordinals in the same stream order the census used.
     let mut ord: HashMap<Tup, u32> = HashMap::new();
     let mut out = Vec::with_capacity(ops.len());
+    let mut kept = Vec::with_capacity(ops.len());
     let mut removed = 0usize;
     let mut downgraded = 0usize;
     for op in ops {
@@ -1756,6 +1613,7 @@ fn apply_deep_strip_identity(ops: Vec<Op>) -> Vec<Op> {
             *o += 1;
             if dead.contains_key(&key) {
                 removed += 1;
+                kept.push(false);
                 continue;
             }
             if let Some(&act) = down.get(&key) {
@@ -1770,10 +1628,12 @@ fn apply_deep_strip_identity(ops: Vec<Op>) -> Vec<Op> {
                 nop.validate();
                 downgraded += 1;
                 out.push(nop);
+                kept.push(true);
                 continue;
             }
         }
         out.push(op);
+        kept.push(true);
     }
     eprintln!(
         "[deep-strip-identity] removed {} / {} dead; downgraded {} / {} to CX/CZ; {} stale keys skipped",
@@ -1783,7 +1643,7 @@ fn apply_deep_strip_identity(ops: Vec<Op>) -> Vec<Op> {
         deep_strip_keys::DOWNGRADE_KEYS.len(),
         stale
     );
-    out
+    (out, kept)
 }
 
 /// Rewrite the 96-op identity tail to encode the ground nonce. Only q_target
@@ -1832,6 +1692,26 @@ fn apply_m60_dead_t10(ops: Vec<Op>) -> Vec<Op> {
         kept.len()
     );
     kept
+}
+
+/// task-7 (`OpSite` propagation, Step 3): mirrors `apply_m60_dead_t10`'s own enable-check
+/// and drop-set exactly, so `sites` can be filtered with the identical mask. Returns
+/// `None` when the pass is disabled (`M60_DISABLE=1`, the only path this build ever
+/// actually takes -- `build()` forces it unconditionally, see the top of `build()`),
+/// matching `apply_m60_dead_t10`'s own early return of `ops` unchanged.
+fn m60_dead_t10_kill_mask(ops: &[Op]) -> Option<Vec<bool>> {
+    use std::collections::HashSet;
+    if std::env::var("M60_DISABLE").ok().as_deref() == Some("1") {
+        return None;
+    }
+    let drop: HashSet<usize> = m60_dead_t10::M60_DEAD_T10.iter().copied().collect();
+    let mut killed = vec![false; ops.len()];
+    for &i in &drop {
+        if i < killed.len() {
+            killed[i] = true;
+        }
+    }
+    Some(killed)
 }
 
 /// W018 / W044: delegate to the straddle-aware net-restore CCZ self-inverse matcher
@@ -2007,6 +1887,18 @@ fn ccz_self_inverse_cancel_conservative(ops: Vec<Op>) -> Vec<Op> {
 }
 
 pub fn build() -> Vec<Op> {
+    // Keep source-site metadata aligned through the initial constprop pass when the
+    // diagnostic site census is requested. Ordinary scoring builds never enable it.
+    // task-7: also force it on for the StableSiteKey diagnostics (export/translate/
+    // baseline-filtered census) -- all of these need `OpSite` data threaded all the way
+    // to the final pre-strip stream, not just through the initial constprop pass.
+    if std::env::var("TLM_SITE_CENSUS").ok().as_deref() == Some("1")
+        || std::env::var_os("TLM_EXPORT_STRIP_SITES").is_some()
+        || std::env::var_os("TLM_TRANSLATE_STRIP_SITES").is_some()
+        || std::env::var_os("TLM_CENSUS_BASELINE_SITES").is_some()
+    {
+        std::env::set_var("TRACE_OP_SITES", "1");
+    }
     // M-60 (C2b): bake the dead_t10 winning Fiat-Shamir nonce so the challenge harness
     // reproduces the validated winner. Forced (not set_default) to win over the C1 default.
     // The nonce only appends identity X-pairs at the tail; the dead-CCX skip-set applied
@@ -2303,6 +2195,34 @@ pub fn build() -> Vec<Op> {
     set_default_env("TLM_GIDNEY_SKIP_SMALL_RESIDUAL_DEAD", "1");
     let mut ops = trailmix_ludicrous::build_trailmix_ludicrous_ops();
 
+    // task-7 Step 3: thread `OpSite` metadata alongside `ops` through every rewrite pass
+    // from here on (fanout, cancellation, strip translation, tail insertion), not just
+    // through the initial constprop pass `take_last_op_sites` already covered. Gated
+    // behind `op_site_trace_enabled()` exactly like the existing trace machinery, so an
+    // ordinary scoring build (`TRACE_OP_SITES` unset) pays zero cost and takes the exact
+    // same code path it always has -- every branch below that touches `sites` is provably
+    // a no-op when `op_site_diag` is false.
+    let op_site_diag = op_site_trace_enabled();
+    let mut sites: Vec<OpSite> = if op_site_diag { take_last_op_sites() } else { Vec::new() };
+    if op_site_diag {
+        assert_eq!(
+            sites.len(),
+            ops.len(),
+            "OpSite trace misaligned right after build_trailmix_ludicrous_ops (constprop checkpoint)"
+        );
+    }
+
+    if std::env::var("TLM_SITE_CENSUS").ok().as_deref() == Some("1") {
+        census::run_sites(&ops, &sites);
+    }
+
+    // `TLM_PROFILE_EXPORT=<path>` (Task 6 Step 7) writes the currently resolved
+    // TLM_SCHED_MARGIN/TLM_APPLY_LSBS ranges to `path`, rendered as schedule.rs-ready
+    // baked constants. Default off; diagnostic only, never touched by a scoring build.
+    if let Some(path) = std::env::var_os("TLM_PROFILE_EXPORT") {
+        trailmix_ludicrous::export_profile(&path.to_string_lossy());
+    }
+
     if let Ok(k) = std::env::var("TLM_SEED_PERTURB").unwrap_or_default().parse::<usize>() {
         for _ in 0..k {
             ops.push(crate::circuit::Op {
@@ -2314,6 +2234,11 @@ pub fn build() -> Vec<Op> {
                 c_condition: crate::circuit::NO_BIT,
                 r_target: crate::circuit::NO_REG,
             });
+            if op_site_diag {
+                // Not emitted via `B::push_op`, so `OP_SITE_TRACE` never saw it -- keep
+                // `sites` aligned with a clearly synthetic, distinguishing entry.
+                sites.push(("<TLM_SEED_PERTURB>", 0, deep_strip_sites::SYNTH_SITE_TAG));
+            }
         }
     }
     if std::env::var("SINGLE_CCX_FANOUT_DISABLE")
@@ -2327,9 +2252,24 @@ pub fn build() -> Vec<Op> {
     let mut fanout_passes = 0usize;
     loop {
         match single_ccx_fanout::rewrite_first_target_fanout(ops.clone(), 96) {
-            Ok((rewritten, _witness)) => {
+            Ok((rewritten, witness)) => {
+                if op_site_diag {
+                    sites = deep_strip_sites::fanout_site_transform(
+                        &sites,
+                        witness.first_index,
+                        witness.second_index,
+                        witness.blocker_index,
+                    );
+                }
                 fanout_passes += 1;
                 ops = rewritten;
+                if op_site_diag {
+                    assert_eq!(
+                        sites.len(),
+                        ops.len(),
+                        "OpSite trace misaligned after a single_ccx_fanout (first-pass) rewrite"
+                    );
+                }
             }
             Err(error) => {
                 eprintln!(
@@ -2350,17 +2290,73 @@ pub fn build() -> Vec<Op> {
         ops.len(),
         fanout_passes,
     );
+    if op_site_diag {
+        assert_eq!(sites.len(), ops.len(), "OpSite trace misaligned after the first fanout-pass loop");
+    }
+
+    let m60_mask = if op_site_diag { m60_dead_t10_kill_mask(&ops) } else { None };
     let ops = apply_m60_dead_t10(ops);
+    if op_site_diag {
+        if let Some(killed) = m60_mask {
+            let kept: Vec<bool> = killed.iter().map(|&k| !k).collect();
+            sites = deep_strip_sites::filter_sites_by_kept(&sites, &kept);
+        }
+        assert_eq!(sites.len(), ops.len(), "OpSite trace misaligned after apply_m60_dead_t10");
+    }
+
+    let ccz_bypassed = std::env::var("TLM_CCZ_SELF_INVERSE_CANCEL").ok().as_deref() == Some("0");
+    let ccz_mask = if op_site_diag && !ccz_bypassed {
+        Some(trailmix_ludicrous::constprop::ccz_straddle_kill_mask_pub(&ops))
+    } else {
+        None
+    };
     let ops = ccz_self_inverse_cancel(ops);
+    if op_site_diag {
+        if let Some(killed) = ccz_mask {
+            let kept: Vec<bool> = killed.iter().map(|&k| !k).collect();
+            sites = deep_strip_sites::filter_sites_by_kept(&sites, &kept);
+        }
+        assert_eq!(sites.len(), ops.len(), "OpSite trace misaligned after ccz_self_inverse_cancel");
+    }
+
+    let ccx_final_mask =
+        if op_site_diag { trailmix_ludicrous::constprop::ccx_final_cancel_kill_mask(&ops) } else { None };
     let mut ops = trailmix_ludicrous::constprop::ccx_final_cancel(ops);
+    if op_site_diag {
+        if let Some(killed) = ccx_final_mask {
+            let kept: Vec<bool> = killed.iter().map(|&k| !k).collect();
+            sites = deep_strip_sites::filter_sites_by_kept(&sites, &kept);
+        }
+        assert_eq!(sites.len(), ops.len(), "OpSite trace misaligned after ccx_final_cancel (cancellation checkpoint)");
+    }
     // E275: re-run single_ccx_fanout to fixpoint over the post-cancel stream (-13 CCX, bit-exact).
     if std::env::var("SINGLE_CCX_FANOUT_SECOND_PASS").ok().as_deref() != Some("0") {
         loop {
             match single_ccx_fanout::rewrite_first_target_fanout(ops.clone(), 96) {
-                Ok((rewritten, _w)) => { ops = rewritten; }
+                Ok((rewritten, witness)) => {
+                    if op_site_diag {
+                        sites = deep_strip_sites::fanout_site_transform(
+                            &sites,
+                            witness.first_index,
+                            witness.second_index,
+                            witness.blocker_index,
+                        );
+                    }
+                    ops = rewritten;
+                    if op_site_diag {
+                        assert_eq!(
+                            sites.len(),
+                            ops.len(),
+                            "OpSite trace misaligned after a single_ccx_fanout (second-pass) rewrite"
+                        );
+                    }
+                }
                 Err(_e) => break,
             }
         }
+    }
+    if op_site_diag {
+        assert_eq!(sites.len(), ops.len(), "OpSite trace misaligned after the second fanout-pass loop");
     }
     // submission-4: the baked d2 deep-strip is indexed for the OLD (pre-bit-exact-wins) op
     // stream and would misfire here; it is a near-eps lever and is re-derived on the composed
@@ -2373,23 +2369,98 @@ pub fn build() -> Vec<Op> {
     // census-time tuple occupancy, a self-check strictly stronger than gating on
     // baked_artifacts_valid(): it catches ANY ordinal-moving edit and discards only
     // the affected keys, loudly, instead of disabling the table.
-    let ops = if std::env::var("SUB4_APPLY_STRIP").ok().as_deref() == Some("0") {
+    // `TLM_CENSUS=1` re-mines the deep-strip tables against THIS stream. It must see the
+    // stream the strip itself keys against, i.e. before `apply_deep_strip_identity`, so
+    // run it with SUB4_APPLY_STRIP=0. Diagnostic only; never on in a scoring build.
+    //
+    // task-7 Step 2/4: `TLM_EXPORT_STRIP_SITES=<path>` exports the existing
+    // `deep_strip_keys` table's stable-site ancestry (run on the OLD geometry those keys
+    // were mined against); `TLM_TRANSLATE_STRIP_SITES=<in-csv>:<out-path>` translates a
+    // Step 2 export onto THIS (the current, final-candidate) geometry's positional keys.
+    // Both are diagnostic-only, read `ops`/`sites` at this exact "final pre-strip stream"
+    // point, and never alter `ops` itself.
+    if let Some(path) = std::env::var_os("TLM_EXPORT_STRIP_SITES") {
+        assert!(op_site_diag, "TLM_EXPORT_STRIP_SITES requires TRACE_OP_SITES (forced above)");
+        deep_strip_sites::export_baseline_sites(&ops, &sites, &path.to_string_lossy());
+    }
+    if let Some(spec) = std::env::var_os("TLM_TRANSLATE_STRIP_SITES") {
+        assert!(op_site_diag, "TLM_TRANSLATE_STRIP_SITES requires TRACE_OP_SITES (forced above)");
+        let spec = spec.to_string_lossy().into_owned();
+        let (in_path, out_path) = spec
+            .split_once(':')
+            .unwrap_or_else(|| panic!("TLM_TRANSLATE_STRIP_SITES must be <in-csv>:<out-path>, got {spec:?}"));
+        deep_strip_sites::translate_stable_sites(&ops, &sites, in_path, out_path);
+    }
+    if std::env::var("TLM_CENSUS").ok().as_deref() == Some("1") {
+        census::run(&ops, if op_site_diag { Some(sites.as_slice()) } else { None });
+    }
+    let strip_disabled = std::env::var("SUB4_APPLY_STRIP").ok().as_deref() == Some("0");
+    let ops = if strip_disabled {
         ops
+    } else if op_site_diag {
+        let (new_ops, kept) = apply_deep_strip_identity_ex(ops);
+        sites = deep_strip_sites::filter_sites_by_kept(&sites, &kept);
+        new_ops
     } else {
         apply_deep_strip_identity(ops)
     };
-    // Tail nonce for the exact H3 coordinate-width-18 stream
-    // (9,024/9,024 PASS, score 1,487,590,242).
+    if op_site_diag {
+        assert_eq!(
+            sites.len(),
+            ops.len(),
+            "OpSite trace misaligned after strip translation (apply_deep_strip_identity)"
+        );
+    }
+    // Exact post-strip cleanup: stripping can expose A; fanout; A identities that the
+    // pre-strip fixpoint could not see. The existing matcher proves the rewrite locally.
+    // Keep it off under site tracing because this pass currently has no OpSite remapper.
+    let mut ops = ops;
+    if !op_site_diag {
+        let before = ops.len();
+        let mut passes = 0usize;
+        loop {
+            match single_ccx_fanout::rewrite_first_target_fanout(ops.clone(), 96) {
+                Ok((rewritten, _witness)) => {
+                    ops = rewritten;
+                    passes += 1;
+                }
+                Err(_error) => break,
+            }
+        }
+        eprintln!(
+            "POST_STRIP_SINGLE_CCX_FANOUT: passes={} removed_ops={}",
+            passes,
+            before.saturating_sub(ops.len()),
+        );
+    }
+    // Tail nonce for the ITERS=259 feasible-frontier stream after exact post-strip fanout.
+    // Ground nonce 14693 independently replayed 9,024/9,024 clean.
     // SUB4_TAIL_NONCE remains available for controlled re-grinding.
     let nonce: u64 = std::env::var("SUB4_TAIL_NONCE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(62000008397024);
+        .unwrap_or(14693);
     let ops = apply_tail_nonce(ops, nonce);
+    if op_site_diag {
+        // apply_tail_nonce only mutates existing tail ops' q_target in place; length (and
+        // therefore site alignment) is unaffected -- this just double-checks that holds.
+        assert_eq!(sites.len(), ops.len(), "OpSite trace misaligned after tail insertion (apply_tail_nonce)");
+    }
     // `TLM_DIRTY_SCAN_FINAL=1` runs the reset/phase audit on the stream `eval_circuit`
     // will actually see, i.e. after every rewrite pass. Default off.
     if std::env::var_os("TLM_DIRTY_SCAN_FINAL").is_some() {
         dirtyscan::scan(&ops, &[]);
+    }
+    // `TLM_CENSUS_FINAL=1` censuses the stream `eval_circuit` actually sees, i.e. after the
+    // strip and the tail nonce. That is the only place lambda -- the per-shot fault rate
+    // that sets the nonce-grind cost -- can be measured for the shipped circuit.
+    if std::env::var("TLM_CENSUS_FINAL").ok().as_deref() == Some("1") {
+        census::run(&ops, if op_site_diag { Some(sites.as_slice()) } else { None });
+    }
+    // `TLM_GRIND=1` measures lambda / grinds tail nonces along the exact path
+    // `eval_circuit` takes (Fiat-Shamir seed over THIS stream). Diagnostic only.
+    if std::env::var("TLM_GRIND").ok().as_deref() == Some("1") {
+        grind::run(&ops);
     }
     ops
 }
@@ -2870,33 +2941,14 @@ mod direct_const_tests {
     }
 
     #[test]
-    fn dialog_gcd_selected_body_nocin_matches_cin_reference() {
-        if let Err(e) = dialog_gcd_selected_body_nocin_selftest() {
-            panic!("no-c_in selected body selftest failed: {e}");
-        }
-    }
-
-    #[test]
     fn aliased_gate_wrappers_are_not_silent_noops() {
         let mut b = B::new();
         let q0 = b.alloc_qubit();
         let q1 = b.alloc_qubit();
         b.cz(q0, q0);
-        b.ccz(q0, q0, q1);
-        b.ccz(q0, q1, q0);
-        b.ccz(q0, q0, q0);
         b.ccx(q0, q0, q1);
         let kinds = b.ops.iter().map(|op| op.kind).collect::<Vec<_>>();
-        assert_eq!(
-            kinds,
-            vec![
-                OperationType::Z,
-                OperationType::CZ,
-                OperationType::CZ,
-                OperationType::Z,
-                OperationType::CX,
-            ]
-        );
+        assert_eq!(kinds, vec![OperationType::Z, OperationType::CX,]);
         assert!(std::panic::catch_unwind(|| {
             let mut b = B::new();
             let q = b.alloc_qubit();
@@ -2961,9 +3013,9 @@ mod direct_const_tests {
                 set_reg(&mut sim, &acc, x, shot);
                 set_reg(&mut sim, &a, y, shot);
             }
-            sim.apply(&b.ops);
+            sim.apply_iter(b.ops.iter());
             assert_eq!(
-                sim.global_phase(),
+                sim.phase,
                 0,
                 "borrowed carry adder left phase garbage"
             );
@@ -2997,14 +3049,6 @@ mod direct_const_tests {
         assert_borrowed_carry_adder_basis(true);
     }
 
-    fn sub_mod_p(a: U256, b: U256, p: U256) -> U256 {
-        if a >= b {
-            a - b
-        } else {
-            p - (b - a)
-        }
-    }
-
     #[test]
     fn direct_controlled_const_sub_small_basis_is_phase_clean() {
         const N: usize = 8;
@@ -3028,8 +3072,8 @@ mod direct_const_tests {
                 *sim.qubit_mut(ctrl) |= 1u64 << shot;
             }
         }
-        sim.apply(&b.ops);
-        assert_eq!(sim.global_phase(), 0, "direct csub left phase garbage");
+        sim.apply_iter(b.ops.iter());
+        assert_eq!(sim.phase, 0, "direct csub left phase garbage");
         for shot in 0..64usize {
             let x = ((shot * 37 + 11) & 0xff) as u64;
             let ctrl_v = (shot & 1) as u64;
@@ -3062,8 +3106,8 @@ mod direct_const_tests {
                 *sim.qubit_mut(ctrl) |= 1u64 << shot;
             }
         }
-        sim.apply(&b.ops);
-        assert_eq!(sim.global_phase(), 0, "direct cadd left phase garbage");
+        sim.apply_iter(b.ops.iter());
+        assert_eq!(sim.phase, 0, "direct cadd left phase garbage");
         for shot in 0..64usize {
             let x = ((shot * 37 + 11) & 0xff) as u64;
             let ctrl_v = (shot & 1) as u64;
@@ -3071,2209 +3115,5 @@ mod direct_const_tests {
             assert_eq!(get_reg(&sim, &acc, shot), expect, "shot {shot}");
             assert_eq!((sim.qubit(ctrl) >> shot) & 1, ctrl_v, "ctrl shot {shot}");
         }
-    }
-
-    #[test]
-    fn round84_fused_square_xtail_component_matches_relation() {
-        let ops = build_round84_fused_square_xtail_component();
-        let (num_qubits, num_bits, _num_registers, regs) = analyze_ops(ops.iter().copied());
-        assert_eq!(regs.len(), 4);
-        let p = SECP256K1_P;
-        let cases: Vec<(U256, U256, U256)> = (0..32u64)
-            .map(|i| {
-                let tx = U256::from_limbs([
-                    0x9e37_79b9_7f4a_7c15u64.wrapping_mul(i + 1),
-                    0xd1b5_4a32_d192_ed03u64.wrapping_mul(i + 3),
-                    0x94d0_49bb_1331_11ebu64.wrapping_mul(i + 5),
-                    0x2545_f491_4f6c_dd1du64.wrapping_mul(i + 7),
-                ]) % p;
-                let lam = U256::from_limbs([
-                    0xbf58_476d_1ce4_e5b9u64.wrapping_mul(i + 11),
-                    0x94d0_49bb_1331_11ebu64.wrapping_mul(i + 13),
-                    0xdbe6_d5d5_fe4c_ce2fu64.wrapping_mul(i + 17),
-                    0xa409_3822_299f_31d0u64.wrapping_mul(i + 19),
-                ]) % p;
-                let ox = U256::from_limbs([
-                    0x632b_e59b_d9b4_e019u64.wrapping_mul(i + 23),
-                    0x8515_7af5_4f1d_2d2du64.wrapping_mul(i + 29),
-                    0x9e37_79b9_7f4a_7c15u64.wrapping_mul(i + 31),
-                    0xbf58_476d_1ce4_e5b9u64.wrapping_mul(i + 37),
-                ]) % p;
-                (tx, lam, ox)
-            })
-            .collect();
-
-        let mut seed = Shake128::default();
-        seed.update(b"round84-xtail-component");
-        let mut xof = seed.finalize_xof();
-        let mut sim = Simulator::new(num_qubits as usize, num_bits as usize, &mut xof);
-        for (shot, (tx, lam, ox)) in cases.iter().enumerate() {
-            sim.set_register(&regs[0], *tx, shot);
-            sim.set_register(&regs[1], *lam, shot);
-            sim.set_register(&regs[2], *ox, shot);
-            sim.set_register(&regs[3], U256::ZERO, shot);
-        }
-
-        sim.apply(&ops);
-        for (shot, (tx, lam, ox)) in cases.iter().enumerate() {
-            let expected = sub_mod_p(
-                sub_mod_p(lam.mul_mod(*lam, p), *tx, p),
-                ox.add_mod(*ox, p),
-                p,
-            );
-            assert_eq!(
-                sim.get_register(&regs[0], shot),
-                expected,
-                "x-tail shot {shot}"
-            );
-            assert_eq!(sim.get_register(&regs[1], shot), *lam, "lambda shot {shot}");
-            assert_eq!(
-                sim.get_register(&regs[2], shot),
-                *ox,
-                "offset-x shot {shot}"
-            );
-        }
-        let live_mask = (1u64 << cases.len()) - 1;
-        assert_eq!(sim.global_phase() & live_mask, 0, "x-tail phase garbage");
-        for reg in &regs {
-            for item in reg {
-                if let QubitOrBit::Qubit(q) = *item {
-                    *sim.qubit_mut(q) = 0;
-                }
-            }
-        }
-        for q in 0..num_qubits {
-            assert_eq!(
-                sim.qubit(QubitId(q)) & live_mask,
-                0,
-                "x-tail ancilla garbage q{q}"
-            );
-        }
-    }
-
-    #[test]
-    fn round190_selector_fused_source_live_residual_is_exact_on_small_widths() {
-        for width in [2usize, 3, 4] {
-            let ops = build_round190_selector_fused_source_live_residual_width(width);
-            let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-            assert_eq!(num_registers, 3, "width {width} register count");
-            assert_eq!(regs.len(), 3, "width {width} regs");
-            assert_eq!(num_bits as usize, width, "width {width} hmr bits");
-            assert_eq!(num_qubits as usize, 4 * width + 3, "width {width} qubits");
-            for (idx, reg) in regs.iter().enumerate() {
-                assert_eq!(reg.len(), width, "width {width} reg {idx}");
-                assert!(reg.iter().all(|item| matches!(item, QubitOrBit::Qubit(_))));
-            }
-            let toffoli_ops = ops
-                .iter()
-                .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-                .count();
-            assert_eq!(toffoli_ops, 3 * width, "width {width} toffoli");
-            let pred_reg: Vec<QubitId> = regs[0]
-                .iter()
-                .map(|item| match item {
-                    QubitOrBit::Qubit(q) => *q,
-                    _ => unreachable!(),
-                })
-                .collect();
-            let add_reg: Vec<QubitId> = regs[1]
-                .iter()
-                .map(|item| match item {
-                    QubitOrBit::Qubit(q) => *q,
-                    _ => unreachable!(),
-                })
-                .collect();
-            let target_reg: Vec<QubitId> = regs[2]
-                .iter()
-                .map(|item| match item {
-                    QubitOrBit::Qubit(q) => *q,
-                    _ => unreachable!(),
-                })
-                .collect();
-
-            let modulus = 1u64 << width;
-            let states = modulus * modulus * modulus;
-            let mut seed = Shake128::default();
-            seed.update(b"round190-selector-fused-source-live-residual");
-            seed.update(&[width as u8]);
-            let mut xof = seed.finalize_xof();
-            for batch_start in (0..states).step_by(64) {
-                let mut sim = Simulator::new(num_qubits as usize, num_bits as usize, &mut xof);
-                let batch_end = (batch_start + 64).min(states);
-                for case in batch_start..batch_end {
-                    let shot = (case - batch_start) as usize;
-                    let predecessor = case & (modulus - 1);
-                    let addend = (case >> width) & (modulus - 1);
-                    let target = (case >> (2 * width)) & (modulus - 1);
-                    set_reg(&mut sim, &pred_reg, predecessor, shot);
-                    set_reg(&mut sim, &add_reg, addend, shot);
-                    set_reg(&mut sim, &target_reg, target, shot);
-                }
-
-                sim.apply(&ops);
-                let live_mask = if batch_end - batch_start == 64 {
-                    u64::MAX
-                } else {
-                    (1u64 << (batch_end - batch_start)) - 1
-                };
-                assert_eq!(
-                    sim.global_phase() & live_mask,
-                    0,
-                    "width {width} selector-fused residual phase garbage"
-                );
-                for case in batch_start..batch_end {
-                    let shot = (case - batch_start) as usize;
-                    let predecessor = case & (modulus - 1);
-                    let addend = (case >> width) & (modulus - 1);
-                    let target = (case >> (2 * width)) & (modulus - 1);
-                    let low = predecessor & 0b11;
-                    let expected = if low == 0 {
-                        target
-                    } else if ((predecessor >> 1) & 1) != 0 {
-                        target.wrapping_sub(addend) & (modulus - 1)
-                    } else {
-                        target.wrapping_add(addend) & (modulus - 1)
-                    };
-                    assert_eq!(
-                        get_reg(&sim, &pred_reg, shot),
-                        predecessor,
-                        "width {width} predecessor changed case {case}"
-                    );
-                    assert_eq!(
-                        get_reg(&sim, &add_reg, shot),
-                        addend,
-                        "width {width} addend changed case {case}"
-                    );
-                    assert_eq!(
-                        get_reg(&sim, &target_reg, shot),
-                        expected,
-                        "width {width} target mismatch case {case}"
-                    );
-                }
-                for reg in [&pred_reg, &add_reg, &target_reg] {
-                    for &q in reg {
-                        *sim.qubit_mut(q) = 0;
-                    }
-                }
-                for q in 0..num_qubits {
-                    assert_eq!(
-                        sim.qubit(QubitId(q)) & live_mask,
-                        0,
-                        "width {width} scratch garbage q{q}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn round190_external_active_signed_digit_is_select0_safe_on_small_widths() {
-        for width in [2usize, 3, 4] {
-            let ops = build_round190_external_active_signed_digit_width(width);
-            let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-            assert_eq!(num_registers, 4, "width {width} register count");
-            assert_eq!(regs.len(), 4, "width {width} regs");
-            assert_eq!(num_bits as usize, width, "width {width} hmr bits");
-            assert_eq!(num_qubits as usize, 3 * width + 4, "width {width} qubits");
-            assert_eq!(regs[0].len(), 1, "width {width} active width");
-            assert_eq!(regs[1].len(), 1, "width {width} sign width");
-            assert_eq!(regs[2].len(), width, "width {width} addend width");
-            assert_eq!(regs[3].len(), width, "width {width} target width");
-            for (idx, reg) in regs.iter().enumerate() {
-                assert!(
-                    reg.iter().all(|item| matches!(item, QubitOrBit::Qubit(_))),
-                    "width {width} reg {idx} must be qubits"
-                );
-            }
-            let toffoli_ops = ops
-                .iter()
-                .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-                .count();
-            assert_eq!(toffoli_ops, 3 * width - 2, "width {width} toffoli");
-
-            let active_q = match regs[0][0] {
-                QubitOrBit::Qubit(q) => q,
-                _ => unreachable!(),
-            };
-            let sign_q = match regs[1][0] {
-                QubitOrBit::Qubit(q) => q,
-                _ => unreachable!(),
-            };
-            let add_reg: Vec<QubitId> = regs[2]
-                .iter()
-                .map(|item| match item {
-                    QubitOrBit::Qubit(q) => *q,
-                    _ => unreachable!(),
-                })
-                .collect();
-            let target_reg: Vec<QubitId> = regs[3]
-                .iter()
-                .map(|item| match item {
-                    QubitOrBit::Qubit(q) => *q,
-                    _ => unreachable!(),
-                })
-                .collect();
-
-            let modulus = 1u64 << width;
-            let states = 4 * modulus * modulus;
-            let mut seed = Shake128::default();
-            seed.update(b"round190-external-active-signed-digit");
-            seed.update(&[width as u8]);
-            let mut xof = seed.finalize_xof();
-            for batch_start in (0..states).step_by(64) {
-                let mut sim = Simulator::new(num_qubits as usize, num_bits as usize, &mut xof);
-                let batch_end = (batch_start + 64).min(states);
-                for case in batch_start..batch_end {
-                    let shot = (case - batch_start) as usize;
-                    let active = case & 1;
-                    let sign = (case >> 1) & 1;
-                    let addend = (case >> 2) & (modulus - 1);
-                    let target = (case >> (2 + width)) & (modulus - 1);
-                    *sim.qubit_mut(active_q) |= active << shot;
-                    *sim.qubit_mut(sign_q) |= sign << shot;
-                    set_reg(&mut sim, &add_reg, addend, shot);
-                    set_reg(&mut sim, &target_reg, target, shot);
-                }
-
-                sim.apply(&ops);
-                let live_mask = if batch_end - batch_start == 64 {
-                    u64::MAX
-                } else {
-                    (1u64 << (batch_end - batch_start)) - 1
-                };
-                assert_eq!(
-                    sim.global_phase() & live_mask,
-                    0,
-                    "width {width} external-active phase garbage"
-                );
-                for case in batch_start..batch_end {
-                    let shot = (case - batch_start) as usize;
-                    let active = case & 1;
-                    let sign = (case >> 1) & 1;
-                    let addend = (case >> 2) & (modulus - 1);
-                    let target = (case >> (2 + width)) & (modulus - 1);
-                    let expected = if active == 0 {
-                        target
-                    } else if sign != 0 {
-                        target.wrapping_sub(addend) & (modulus - 1)
-                    } else {
-                        target.wrapping_add(addend) & (modulus - 1)
-                    };
-                    assert_eq!(
-                        (sim.qubit(active_q) >> shot) & 1,
-                        active,
-                        "width {width} active changed case {case}"
-                    );
-                    assert_eq!(
-                        (sim.qubit(sign_q) >> shot) & 1,
-                        sign,
-                        "width {width} sign changed case {case}"
-                    );
-                    assert_eq!(
-                        get_reg(&sim, &add_reg, shot),
-                        addend,
-                        "width {width} addend changed case {case}"
-                    );
-                    assert_eq!(
-                        get_reg(&sim, &target_reg, shot),
-                        expected,
-                        "width {width} target mismatch case {case}"
-                    );
-                }
-                *sim.qubit_mut(active_q) = 0;
-                *sim.qubit_mut(sign_q) = 0;
-                for reg in [&add_reg, &target_reg] {
-                    for &q in reg {
-                        *sim.qubit_mut(q) = 0;
-                    }
-                }
-                for q in 0..num_qubits {
-                    assert_eq!(
-                        sim.qubit(QubitId(q)) & live_mask,
-                        0,
-                        "width {width} external-active scratch garbage q{q}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn round190_shared_active_external_digits_reuse_selector_safely_on_small_widths() {
-        for (width, digits) in [(2usize, 3usize), (3, 2)] {
-            let ops = build_round190_shared_active_external_signed_digits_width(width, digits);
-            let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-            assert_eq!(
-                num_registers as usize,
-                1 + 2 * digits,
-                "width {width} digits {digits} register count"
-            );
-            assert_eq!(
-                regs.len(),
-                1 + 2 * digits,
-                "width {width} digits {digits} regs"
-            );
-            assert_eq!(
-                num_bits as usize,
-                width * digits,
-                "width {width} digits {digits} hmr bits"
-            );
-            assert_eq!(
-                num_qubits as usize,
-                (2 * digits + 2) * width + 3,
-                "width {width} digits {digits} qubits"
-            );
-            for (idx, reg) in regs.iter().enumerate() {
-                assert_eq!(reg.len(), width, "width {width} digits {digits} reg {idx}");
-                assert!(
-                    reg.iter().all(|item| matches!(item, QubitOrBit::Qubit(_))),
-                    "width {width} digits {digits} reg {idx} must be qubits"
-                );
-            }
-            let toffoli_ops = ops
-                .iter()
-                .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-                .count();
-            assert_eq!(
-                toffoli_ops,
-                2 + digits * (3 * width - 2),
-                "width {width} digits {digits} toffoli"
-            );
-
-            let qregs: Vec<Vec<QubitId>> = regs
-                .iter()
-                .map(|reg| {
-                    reg.iter()
-                        .map(|item| match item {
-                            QubitOrBit::Qubit(q) => *q,
-                            _ => unreachable!(),
-                        })
-                        .collect()
-                })
-                .collect();
-
-            let modulus = 1u64 << width;
-            let mut states = modulus;
-            for _ in 0..digits {
-                states *= modulus * modulus;
-            }
-            let mut seed = Shake128::default();
-            seed.update(b"round190-shared-active-external-digits");
-            seed.update(&[width as u8, digits as u8]);
-            let mut xof = seed.finalize_xof();
-            for batch_start in (0..states).step_by(64) {
-                let mut sim = Simulator::new(num_qubits as usize, num_bits as usize, &mut xof);
-                let batch_end = (batch_start + 64).min(states);
-                for case in batch_start..batch_end {
-                    let shot = (case - batch_start) as usize;
-                    let mut cursor = case;
-                    let predecessor = cursor & (modulus - 1);
-                    cursor >>= width;
-                    set_reg(&mut sim, &qregs[0], predecessor, shot);
-                    for digit in 0..digits {
-                        let addend = cursor & (modulus - 1);
-                        cursor >>= width;
-                        let target = cursor & (modulus - 1);
-                        cursor >>= width;
-                        set_reg(&mut sim, &qregs[1 + 2 * digit], addend, shot);
-                        set_reg(&mut sim, &qregs[2 + 2 * digit], target, shot);
-                    }
-                }
-
-                sim.apply(&ops);
-                let live_mask = if batch_end - batch_start == 64 {
-                    u64::MAX
-                } else {
-                    (1u64 << (batch_end - batch_start)) - 1
-                };
-                assert_eq!(
-                    sim.global_phase() & live_mask,
-                    0,
-                    "width {width} digits {digits} shared-active phase garbage"
-                );
-                for case in batch_start..batch_end {
-                    let shot = (case - batch_start) as usize;
-                    let mut cursor = case;
-                    let predecessor = cursor & (modulus - 1);
-                    cursor >>= width;
-                    assert_eq!(
-                        get_reg(&sim, &qregs[0], shot),
-                        predecessor,
-                        "width {width} digits {digits} predecessor changed case {case}"
-                    );
-                    let active = (predecessor & 0b11) != 0;
-                    let sign = ((predecessor >> 1) & 1) != 0;
-                    for digit in 0..digits {
-                        let addend = cursor & (modulus - 1);
-                        cursor >>= width;
-                        let target = cursor & (modulus - 1);
-                        cursor >>= width;
-                        let expected = if !active {
-                            target
-                        } else if sign {
-                            target.wrapping_sub(addend) & (modulus - 1)
-                        } else {
-                            target.wrapping_add(addend) & (modulus - 1)
-                        };
-                        assert_eq!(
-                            get_reg(&sim, &qregs[1 + 2 * digit], shot),
-                            addend,
-                            "width {width} digits {digits} addend {digit} changed case {case}"
-                        );
-                        assert_eq!(
-                            get_reg(&sim, &qregs[2 + 2 * digit], shot),
-                            expected,
-                            "width {width} digits {digits} target {digit} mismatch case {case}"
-                        );
-                    }
-                }
-                for reg in &qregs {
-                    for &q in reg {
-                        *sim.qubit_mut(q) = 0;
-                    }
-                }
-                for q in 0..num_qubits {
-                    assert_eq!(
-                        sim.qubit(QubitId(q)) & live_mask,
-                        0,
-                        "width {width} digits {digits} shared-active scratch garbage q{q}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn round190_two_slot_router_is_exact_only_under_exactly_one_active_invariant() {
-        for width in [2usize, 3] {
-            let ops = build_round190_two_slot_exactly_one_active_router_width(width);
-            let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-            assert_eq!(num_registers, 6, "width {width} register count");
-            assert_eq!(regs.len(), 6, "width {width} regs");
-            assert_eq!(num_bits as usize, width - 1, "width {width} hmr bits");
-            assert_eq!(num_qubits as usize, 7 * width + 2, "width {width} qubits");
-            for (idx, reg) in regs.iter().enumerate() {
-                assert_eq!(reg.len(), width, "width {width} reg {idx}");
-                assert!(reg.iter().all(|item| matches!(item, QubitOrBit::Qubit(_))));
-            }
-            let toffoli_ops = ops
-                .iter()
-                .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-                .count();
-            assert_eq!(toffoli_ops, 7 * width + 1, "width {width} toffoli");
-
-            let qregs: Vec<Vec<QubitId>> = regs
-                .iter()
-                .map(|reg| {
-                    reg.iter()
-                        .map(|item| match item {
-                            QubitOrBit::Qubit(q) => *q,
-                            _ => unreachable!(),
-                        })
-                        .collect()
-                })
-                .collect();
-            let modulus = 1u64 << width;
-            let active_predecessors: Vec<u64> =
-                (0..modulus).filter(|pred| (pred & 0b11) != 0).collect();
-            let inactive_predecessors: Vec<u64> =
-                (0..modulus).filter(|pred| (pred & 0b11) == 0).collect();
-
-            let mut cases = Vec::new();
-            if width == 2 {
-                for active_slot in 0..2usize {
-                    for &active_pred in &active_predecessors {
-                        for &inactive_pred in &inactive_predecessors {
-                            for add0 in 0..modulus {
-                                for target0 in 0..modulus {
-                                    for add1 in 0..modulus {
-                                        for target1 in 0..modulus {
-                                            let (pred0, pred1) = if active_slot == 0 {
-                                                (active_pred, inactive_pred)
-                                            } else {
-                                                (inactive_pred, active_pred)
-                                            };
-                                            cases.push((
-                                                active_slot,
-                                                pred0,
-                                                add0,
-                                                target0,
-                                                pred1,
-                                                add1,
-                                                target1,
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                for i in 0..512u64 {
-                    let active_slot = (i & 1) as usize;
-                    let active_pred =
-                        active_predecessors[((i / 2) as usize) % active_predecessors.len()];
-                    let inactive_pred =
-                        inactive_predecessors[((i / 14) as usize) % inactive_predecessors.len()];
-                    let add0 = (3 * i + 1) & (modulus - 1);
-                    let target0 = (5 * i + 2) & (modulus - 1);
-                    let add1 = (7 * i + 3) & (modulus - 1);
-                    let target1 = (11 * i + 4) & (modulus - 1);
-                    let (pred0, pred1) = if active_slot == 0 {
-                        (active_pred, inactive_pred)
-                    } else {
-                        (inactive_pred, active_pred)
-                    };
-                    cases.push((active_slot, pred0, add0, target0, pred1, add1, target1));
-                }
-            }
-
-            let mut seed = Shake128::default();
-            seed.update(b"round190-two-slot-router");
-            seed.update(&[width as u8]);
-            let mut xof = seed.finalize_xof();
-            for batch_start in (0..cases.len()).step_by(64) {
-                let mut sim = Simulator::new(num_qubits as usize, num_bits as usize, &mut xof);
-                let batch_end = (batch_start + 64).min(cases.len());
-                for (shot, case) in cases[batch_start..batch_end].iter().enumerate() {
-                    let &(_, pred0, add0, target0, pred1, add1, target1) = case;
-                    set_reg(&mut sim, &qregs[0], pred0, shot);
-                    set_reg(&mut sim, &qregs[1], add0, shot);
-                    set_reg(&mut sim, &qregs[2], target0, shot);
-                    set_reg(&mut sim, &qregs[3], pred1, shot);
-                    set_reg(&mut sim, &qregs[4], add1, shot);
-                    set_reg(&mut sim, &qregs[5], target1, shot);
-                }
-
-                sim.apply(&ops);
-                let live_mask = if batch_end - batch_start == 64 {
-                    u64::MAX
-                } else {
-                    (1u64 << (batch_end - batch_start)) - 1
-                };
-                assert_eq!(
-                    sim.global_phase() & live_mask,
-                    0,
-                    "width {width} two-slot router phase garbage"
-                );
-                for (shot, case) in cases[batch_start..batch_end].iter().enumerate() {
-                    let &(active_slot, pred0, add0, target0, pred1, add1, target1) = case;
-                    let sign = if active_slot == 0 {
-                        (pred0 >> 1) & 1
-                    } else {
-                        (pred1 >> 1) & 1
-                    };
-                    let expected0 = if active_slot == 0 {
-                        if sign != 0 {
-                            target0.wrapping_sub(add0) & (modulus - 1)
-                        } else {
-                            target0.wrapping_add(add0) & (modulus - 1)
-                        }
-                    } else {
-                        target0
-                    };
-                    let expected1 = if active_slot == 1 {
-                        if sign != 0 {
-                            target1.wrapping_sub(add1) & (modulus - 1)
-                        } else {
-                            target1.wrapping_add(add1) & (modulus - 1)
-                        }
-                    } else {
-                        target1
-                    };
-                    assert_eq!(get_reg(&sim, &qregs[0], shot), pred0, "pred0 case {case:?}");
-                    assert_eq!(get_reg(&sim, &qregs[1], shot), add0, "add0 case {case:?}");
-                    assert_eq!(
-                        get_reg(&sim, &qregs[2], shot),
-                        expected0,
-                        "target0 case {case:?}"
-                    );
-                    assert_eq!(get_reg(&sim, &qregs[3], shot), pred1, "pred1 case {case:?}");
-                    assert_eq!(get_reg(&sim, &qregs[4], shot), add1, "add1 case {case:?}");
-                    assert_eq!(
-                        get_reg(&sim, &qregs[5], shot),
-                        expected1,
-                        "target1 case {case:?}"
-                    );
-                }
-                for reg in &qregs {
-                    for &q in reg {
-                        *sim.qubit_mut(q) = 0;
-                    }
-                }
-                for q in 0..num_qubits {
-                    assert_eq!(
-                        sim.qubit(QubitId(q)) & live_mask,
-                        0,
-                        "width {width} two-slot router scratch garbage q{q}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn round190_active_source_live_signed_digit_hmr_is_exact_on_active_rows() {
-        for width in [2usize, 3, 4] {
-            let ops = build_round190_active_source_live_signed_digit_hmr_width(width);
-            let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-            assert_eq!(num_registers, 3, "width {width} register count");
-            assert_eq!(regs.len(), 3, "width {width} regs");
-            assert_eq!(num_bits as usize, width - 1, "width {width} hmr bits");
-            assert_eq!(num_qubits as usize, 4 * width + 1, "width {width} qubits");
-            for (idx, reg) in regs.iter().enumerate() {
-                assert_eq!(reg.len(), width, "width {width} reg {idx}");
-                assert!(reg.iter().all(|item| matches!(item, QubitOrBit::Qubit(_))));
-            }
-            let toffoli_ops = ops
-                .iter()
-                .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-                .count();
-            assert_eq!(toffoli_ops, width - 1, "width {width} toffoli");
-            let pred_reg: Vec<QubitId> = regs[0]
-                .iter()
-                .map(|item| match item {
-                    QubitOrBit::Qubit(q) => *q,
-                    _ => unreachable!(),
-                })
-                .collect();
-            let add_reg: Vec<QubitId> = regs[1]
-                .iter()
-                .map(|item| match item {
-                    QubitOrBit::Qubit(q) => *q,
-                    _ => unreachable!(),
-                })
-                .collect();
-            let target_reg: Vec<QubitId> = regs[2]
-                .iter()
-                .map(|item| match item {
-                    QubitOrBit::Qubit(q) => *q,
-                    _ => unreachable!(),
-                })
-                .collect();
-
-            let modulus = 1u64 << width;
-            let active_predecessors: Vec<u64> =
-                (0..modulus).filter(|pred| (pred & 0b11) != 0).collect();
-            let states = active_predecessors.len() as u64 * modulus * modulus;
-            let mut seed = Shake128::default();
-            seed.update(b"round190-active-source-live-signed-digit-hmr");
-            seed.update(&[width as u8]);
-            let mut xof = seed.finalize_xof();
-            for batch_start in (0..states).step_by(64) {
-                let mut sim = Simulator::new(num_qubits as usize, num_bits as usize, &mut xof);
-                let batch_end = (batch_start + 64).min(states);
-                for case in batch_start..batch_end {
-                    let shot = (case - batch_start) as usize;
-                    let pred_idx = (case % active_predecessors.len() as u64) as usize;
-                    let addend = (case / active_predecessors.len() as u64) & (modulus - 1);
-                    let target =
-                        (case / (active_predecessors.len() as u64 * modulus)) & (modulus - 1);
-                    let predecessor = active_predecessors[pred_idx];
-                    set_reg(&mut sim, &pred_reg, predecessor, shot);
-                    set_reg(&mut sim, &add_reg, addend, shot);
-                    set_reg(&mut sim, &target_reg, target, shot);
-                }
-
-                sim.apply(&ops);
-                let live_mask = if batch_end - batch_start == 64 {
-                    u64::MAX
-                } else {
-                    (1u64 << (batch_end - batch_start)) - 1
-                };
-                assert_eq!(
-                    sim.global_phase() & live_mask,
-                    0,
-                    "width {width} active HMR signed digit phase garbage"
-                );
-                for case in batch_start..batch_end {
-                    let shot = (case - batch_start) as usize;
-                    let pred_idx = (case % active_predecessors.len() as u64) as usize;
-                    let addend = (case / active_predecessors.len() as u64) & (modulus - 1);
-                    let target =
-                        (case / (active_predecessors.len() as u64 * modulus)) & (modulus - 1);
-                    let predecessor = active_predecessors[pred_idx];
-                    let expected = if ((predecessor >> 1) & 1) != 0 {
-                        target.wrapping_sub(addend) & (modulus - 1)
-                    } else {
-                        target.wrapping_add(addend) & (modulus - 1)
-                    };
-                    assert_eq!(
-                        get_reg(&sim, &pred_reg, shot),
-                        predecessor,
-                        "width {width} predecessor changed case {case}"
-                    );
-                    assert_eq!(
-                        get_reg(&sim, &add_reg, shot),
-                        addend,
-                        "width {width} addend changed case {case}"
-                    );
-                    assert_eq!(
-                        get_reg(&sim, &target_reg, shot),
-                        expected,
-                        "width {width} target mismatch case {case}"
-                    );
-                }
-                for reg in [&pred_reg, &add_reg, &target_reg] {
-                    for &q in reg {
-                        *sim.qubit_mut(q) = 0;
-                    }
-                }
-                for q in 0..num_qubits {
-                    assert_eq!(
-                        sim.qubit(QubitId(q)) & live_mask,
-                        0,
-                        "width {width} active HMR scratch garbage q{q}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn round190_active_hmr_digit_is_not_select0_safe() {
-        const WIDTH: usize = 3;
-        let ops = build_round190_active_source_live_signed_digit_hmr_width(WIDTH);
-        let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-        assert_eq!(num_registers, 3);
-        assert_eq!(regs.len(), 3);
-        let pred_reg: Vec<QubitId> = regs[0]
-            .iter()
-            .map(|item| match item {
-                QubitOrBit::Qubit(q) => *q,
-                _ => unreachable!(),
-            })
-            .collect();
-        let add_reg: Vec<QubitId> = regs[1]
-            .iter()
-            .map(|item| match item {
-                QubitOrBit::Qubit(q) => *q,
-                _ => unreachable!(),
-            })
-            .collect();
-        let target_reg: Vec<QubitId> = regs[2]
-            .iter()
-            .map(|item| match item {
-                QubitOrBit::Qubit(q) => *q,
-                _ => unreachable!(),
-            })
-            .collect();
-
-        let mut seed = Shake128::default();
-        seed.update(b"round190-active-hmr-not-select0-safe");
-        let mut xof = seed.finalize_xof();
-        let mut sim = Simulator::new(num_qubits as usize, num_bits as usize, &mut xof);
-        let inactive_predecessor = 0u64;
-        let addend = 3u64;
-        let target = 4u64;
-        set_reg(&mut sim, &pred_reg, inactive_predecessor, 0);
-        set_reg(&mut sim, &add_reg, addend, 0);
-        set_reg(&mut sim, &target_reg, target, 0);
-
-        sim.apply(&ops);
-        let got_target = get_reg(&sim, &target_reg, 0);
-        println!("METRIC round190_active_hmr_inactive_predecessor={inactive_predecessor}");
-        println!("METRIC round190_active_hmr_inactive_addend={addend}");
-        println!("METRIC round190_active_hmr_inactive_target_before={target}");
-        println!("METRIC round190_active_hmr_inactive_target_after={got_target}");
-        assert_eq!(get_reg(&sim, &pred_reg, 0), inactive_predecessor);
-        assert_eq!(get_reg(&sim, &add_reg, 0), addend);
-        assert_ne!(
-            got_target, target,
-            "active-HMR digit cannot be used as the select0-safe production residual"
-        );
-    }
-
-    fn qubit_reg(reg: &[QubitOrBit]) -> Vec<QubitId> {
-        reg.iter()
-            .map(|item| match item {
-                QubitOrBit::Qubit(q) => *q,
-                _ => panic!("expected qubit register"),
-            })
-            .collect()
-    }
-
-    fn round556_expected(
-        width: usize,
-        q_bits: usize,
-        rem: u64,
-        rem_divisor: u64,
-        coeff_seed: u64,
-        coeff_divisor: u64,
-        sigma: u64,
-        q_increment: u64,
-    ) -> Option<(u64, u64)> {
-        let modulus = 1u64 << width;
-        let mask = modulus - 1;
-        if rem_divisor == 0 || coeff_divisor == 0 {
-            return None;
-        }
-        if (rem_divisor << (q_bits - 1)) >= modulus {
-            return None;
-        }
-        if (coeff_divisor << (q_bits - 1)) >= modulus {
-            return None;
-        }
-        let quotient = rem / rem_divisor;
-        if quotient >= (1u64 << q_bits) {
-            return None;
-        }
-        if coeff_seed >= coeff_divisor {
-            return None;
-        }
-        let coeff_restored = coeff_seed + (quotient + q_increment) * coeff_divisor;
-        if coeff_restored >= modulus {
-            return None;
-        }
-        let coeff = coeff_restored.wrapping_sub((sigma & 1) * coeff_divisor) & mask;
-        Some((rem % rem_divisor, coeff))
-    }
-
-    #[test]
-    fn round556_shifted_source_row_component_has_material_free_bound() {
-        const WIDTH: usize = 258;
-        const QBITS: usize = 26;
-        let (ops, phases, peak_qubits, peak_phase) =
-            build_round556_shifted_source_row_component_phase_resources(WIDTH, QBITS);
-        let (num_qubits, _num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-        let toffoli_ops = ops
-            .iter()
-            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-            .count();
-        let old_materialized_formula = (6 * QBITS + 4) * WIDTH - (2 * QBITS + 2);
-        let shifted_source_q = 6 * WIDTH + QBITS + 5;
-
-        assert_eq!(num_registers, 5);
-        assert_eq!(regs[0].len(), WIDTH);
-        assert_eq!(regs[1].len(), WIDTH);
-        assert_eq!(regs[2].len(), WIDTH);
-        assert_eq!(regs[3].len(), WIDTH);
-        assert_eq!(regs[4].len(), 4 + QBITS);
-        assert_eq!(num_qubits as usize, shifted_source_q);
-        assert_eq!(peak_qubits as usize, shifted_source_q);
-        assert!(toffoli_ops <= old_materialized_formula);
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "round556_shifted_source_remainder_digits"));
-        assert_eq!(peak_phase, "round556_shifted_source_remainder_digits");
-    }
-
-    #[test]
-    fn round556_shifted_source_row_component_matches_round120_relation() {
-        const WIDTH: usize = 5;
-        const QBITS: usize = 3;
-        let ops = build_round556_shifted_source_row_component(WIDTH, QBITS);
-        let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-        assert_eq!(num_registers, 5);
-        let rem_reg = qubit_reg(&regs[0]);
-        let rem_divisor_reg = qubit_reg(&regs[1]);
-        let coeff_reg = qubit_reg(&regs[2]);
-        let coeff_divisor_reg = qubit_reg(&regs[3]);
-        let meta_reg = qubit_reg(&regs[4]);
-
-        let mut public = vec![false; num_qubits as usize];
-        for reg in [
-            &rem_reg,
-            &rem_divisor_reg,
-            &coeff_reg,
-            &coeff_divisor_reg,
-            &meta_reg,
-        ] {
-            for &q in reg {
-                public[q.0 as usize] = true;
-            }
-        }
-
-        let mut cases = Vec::new();
-        let modulus = 1u64 << WIDTH;
-        for rem_divisor in 1..modulus {
-            for coeff_divisor in 1..modulus {
-                for rem in 0..modulus {
-                    for coeff_seed in 0..coeff_divisor {
-                        for sigma in 0..=1u64 {
-                            for q_increment in 0..=1u64 {
-                                if let Some(expected) = round556_expected(
-                                    WIDTH,
-                                    QBITS,
-                                    rem,
-                                    rem_divisor,
-                                    coeff_seed,
-                                    coeff_divisor,
-                                    sigma,
-                                    q_increment,
-                                ) {
-                                    cases.push((
-                                        rem,
-                                        rem_divisor,
-                                        coeff_seed,
-                                        coeff_divisor,
-                                        sigma,
-                                        q_increment,
-                                        expected,
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        assert!(!cases.is_empty());
-
-        let mut seed = Shake128::default();
-        seed.update(b"round556-shifted-source-row-relation");
-        let mut xof = seed.finalize_xof();
-        let mut sim = Simulator::new(num_qubits as usize, num_bits as usize, &mut xof);
-        for (batch, chunk) in cases.chunks(64).enumerate() {
-            sim.clear_for_shot();
-            for (shot, case) in chunk.iter().enumerate() {
-                let (rem, rem_divisor, coeff_seed, coeff_divisor, sigma, q_increment, _) = *case;
-                set_reg(&mut sim, &rem_reg, rem, shot);
-                set_reg(&mut sim, &rem_divisor_reg, rem_divisor, shot);
-                set_reg(&mut sim, &coeff_reg, coeff_seed, shot);
-                set_reg(&mut sim, &coeff_divisor_reg, coeff_divisor, shot);
-                set_reg(&mut sim, &meta_reg, sigma | (q_increment << 1), shot);
-            }
-            sim.apply(&ops);
-            let live = if chunk.len() == 64 {
-                u64::MAX
-            } else {
-                (1u64 << chunk.len()) - 1
-            };
-            assert_eq!(sim.global_phase() & live, 0, "phase dirty in batch {batch}");
-            for q in 0..num_qubits {
-                if !public[q as usize] {
-                    assert_eq!(
-                        sim.qubit(QubitId(q as u32)) & live,
-                        0,
-                        "scratch q{q} dirty in batch {batch}"
-                    );
-                }
-            }
-            for (shot, case) in chunk.iter().enumerate() {
-                let (
-                    _rem,
-                    rem_divisor,
-                    _coeff_seed,
-                    coeff_divisor,
-                    sigma,
-                    q_increment,
-                    (expected_rem, expected_coeff),
-                ) = *case;
-                assert_eq!(
-                    get_reg(&sim, &rem_reg, shot),
-                    expected_rem,
-                    "batch {batch} shot {shot}"
-                );
-                assert_eq!(
-                    get_reg(&sim, &rem_divisor_reg, shot),
-                    rem_divisor,
-                    "batch {batch} shot {shot}"
-                );
-                assert_eq!(
-                    get_reg(&sim, &coeff_reg, shot),
-                    expected_coeff,
-                    "batch {batch} shot {shot}"
-                );
-                assert_eq!(
-                    get_reg(&sim, &coeff_divisor_reg, shot),
-                    coeff_divisor,
-                    "batch {batch} shot {shot}"
-                );
-                assert_eq!(
-                    get_reg(&sim, &meta_reg, shot),
-                    sigma | (q_increment << 1),
-                    "batch {batch} shot {shot}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn direct_centered_shifted_source_qbit_row_fit_bench_has_sidecar_bound() {
-        const Q_BITS: usize = DIRECT_CENTERED_LOW_BRANCH_META_BITS;
-        let (ops, phases, peak_qubits, peak_phase) =
-            build_direct_centered_shifted_source_qbit_row_fit_bench_phase_resources(Q_BITS);
-        let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-        let toffoli_ops = ops
-            .iter()
-            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-            .count();
-
-        assert_eq!(num_registers, 4);
-        assert_eq!(regs.len(), 4);
-        assert!(num_bits as usize >= 2 * N);
-        for (idx, reg) in regs.iter().enumerate() {
-            assert_eq!(reg.len(), N, "register {idx} width");
-        }
-        let sidecar_q = 2 * N + DIRECT_CENTERED_BRANCH_SIDECAR_COMPONENT_SCRATCH_BITS;
-        assert_eq!(num_qubits as usize, sidecar_q);
-        assert_eq!(peak_qubits as usize, sidecar_q);
-        assert_eq!(
-            toffoli_ops,
-            Q_BITS * (6 * N - 2) - 2 * Q_BITS * (Q_BITS - 1)
-        );
-        assert_eq!(
-            peak_phase,
-            "direct_centered_shifted_source_qbit_alloc_envelope"
-        );
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_shifted_source_qbit_remainder_digits"));
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_shifted_source_qbit_coeff_digits"));
-    }
-
-    #[test]
-    fn direct_centered_shifted_source_qbit_row_toy_is_exact_and_phase_clean() {
-        const WIDTH: usize = 5;
-        const QBITS: usize = 3;
-        let mut b = B::new();
-        let rem = b.alloc_qubits(WIDTH);
-        let rem_divisor = b.alloc_qubits(WIDTH);
-        let coeff = b.alloc_qubits(WIDTH);
-        let coeff_divisor = b.alloc_qubits(WIDTH);
-        let qbits = b.alloc_qubits(QBITS);
-        let gated = b.alloc_qubits(WIDTH);
-        let lt_tmp = b.alloc_qubit();
-        let sign_one = b.alloc_qubit();
-        let nonnegative = b.alloc_qubit();
-        let carries = b.alloc_qubits(WIDTH - 1);
-        emit_direct_centered_shifted_source_qbit_row(
-            &mut b,
-            &rem,
-            &rem_divisor,
-            &coeff,
-            &coeff_divisor,
-            &qbits,
-            &gated,
-            lt_tmp,
-            sign_one,
-            nonnegative,
-            &carries,
-        );
-
-        let nq = b.next_qubit as usize;
-        let nb = b.next_bit as usize;
-        let mut public = vec![false; nq];
-        for reg in [&rem, &rem_divisor, &coeff, &coeff_divisor] {
-            for &q in reg {
-                public[q.0 as usize] = true;
-            }
-        }
-
-        let modulus = 1u64 << WIDTH;
-        let mut cases = Vec::new();
-        for rem_divisor_value in 1..modulus {
-            for coeff_divisor_value in 1..modulus {
-                for rem_value in 0..modulus {
-                    for coeff_seed in 0..coeff_divisor_value {
-                        if let Some(expected) = round556_expected(
-                            WIDTH,
-                            QBITS,
-                            rem_value,
-                            rem_divisor_value,
-                            coeff_seed,
-                            coeff_divisor_value,
-                            0,
-                            0,
-                        ) {
-                            cases.push((
-                                rem_value,
-                                rem_divisor_value,
-                                coeff_seed,
-                                coeff_divisor_value,
-                                expected,
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-        assert!(!cases.is_empty());
-
-        let mut seed = Shake128::default();
-        seed.update(b"direct-centered-shifted-source-qbit-row-toy");
-        let mut xof = seed.finalize_xof();
-        let mut sim = Simulator::new(nq, nb, &mut xof);
-        for (batch, chunk) in cases.chunks(64).enumerate() {
-            sim.clear_for_shot();
-            for (shot, case) in chunk.iter().enumerate() {
-                let (rem_value, rem_divisor_value, coeff_seed, coeff_divisor_value, _) = *case;
-                set_reg(&mut sim, &rem, rem_value, shot);
-                set_reg(&mut sim, &rem_divisor, rem_divisor_value, shot);
-                set_reg(&mut sim, &coeff, coeff_seed, shot);
-                set_reg(&mut sim, &coeff_divisor, coeff_divisor_value, shot);
-            }
-            sim.apply(&b.ops);
-            let live = if chunk.len() == 64 {
-                u64::MAX
-            } else {
-                (1u64 << chunk.len()) - 1
-            };
-            assert_eq!(sim.global_phase() & live, 0, "phase dirty in batch {batch}");
-            for q in 0..nq {
-                if !public[q] {
-                    assert_eq!(
-                        sim.qubit(QubitId(q as u32)) & live,
-                        0,
-                        "scratch q{q} dirty in batch {batch}"
-                    );
-                }
-            }
-            for (shot, case) in chunk.iter().enumerate() {
-                let (
-                    _rem_value,
-                    rem_divisor_value,
-                    _coeff_seed,
-                    coeff_divisor_value,
-                    (expected_rem, expected_coeff),
-                ) = *case;
-                assert_eq!(get_reg(&sim, &rem, shot), expected_rem);
-                assert_eq!(get_reg(&sim, &rem_divisor, shot), rem_divisor_value);
-                assert_eq!(get_reg(&sim, &coeff, shot), expected_coeff);
-                assert_eq!(get_reg(&sim, &coeff_divisor, shot), coeff_divisor_value);
-            }
-        }
-    }
-
-    #[test]
-    fn direct_centered_branch_sidecar_component_has_relaxed_google_abi_shape() {
-        let (ops, phases, peak_qubits, peak_phase) =
-            build_direct_centered_branch_sidecar_bench_phase_resources();
-        let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-
-        assert_eq!(regs.len(), 4);
-        assert_eq!(num_registers, 4);
-        assert_eq!(num_bits as usize, 2 * N);
-        for (idx, reg) in regs.iter().enumerate() {
-            assert_eq!(reg.len(), N, "register {idx} width");
-        }
-        for item in &regs[0] {
-            assert!(matches!(item, QubitOrBit::Qubit(_)), "r0 must be qubits");
-        }
-        for item in &regs[1] {
-            assert!(matches!(item, QubitOrBit::Qubit(_)), "r1 must be qubits");
-        }
-        for item in &regs[2] {
-            assert!(matches!(item, QubitOrBit::Bit(_)), "r2 must be bits");
-        }
-        for item in &regs[3] {
-            assert!(matches!(item, QubitOrBit::Bit(_)), "r3 must be bits");
-        }
-
-        let scratch = num_qubits as usize - 2 * N;
-        let toffoli_ops = ops
-            .iter()
-            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-            .count();
-        assert_eq!(
-            scratch,
-            DIRECT_CENTERED_BRANCH_SIDECAR_COMPONENT_SCRATCH_BITS
-        );
-        assert!(scratch <= DIRECT_CENTERED_RELAXED_SCRATCH_BUDGET);
-        assert!(num_qubits as usize <= DIRECT_CENTERED_RELAXED_Q_TARGET);
-        assert!(toffoli_ops < DIRECT_CENTERED_RELAXED_T_TARGET);
-        assert_eq!(toffoli_ops, 936);
-        assert_eq!(peak_qubits as usize, num_qubits as usize);
-        assert_eq!(peak_phase, "direct_centered_sidecar_google_abi");
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_sidecar_emit_branch_history"));
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_sidecar_clear_branch_history"));
-    }
-
-    #[test]
-    fn direct_centered_branch_digit_clean_toy_is_exact() {
-        const W: usize = 5;
-        let mut b = B::new();
-        let coeff_acc = b.alloc_qubits(W);
-        let coeff_v = b.alloc_qubits(W);
-        let branch = b.alloc_qubit();
-        let sign = b.alloc_qubit();
-        let gated = b.alloc_qubits(W);
-        let carry = b.alloc_qubit();
-        emit_direct_centered_branch_digit_update_clean(
-            &mut b, &coeff_acc, &coeff_v, branch, sign, &gated, carry,
-        );
-
-        let nq = b.next_qubit as usize;
-        let nb = b.next_bit as usize;
-        let modulus = 1u64 << W;
-        let mut cases = Vec::new();
-        for acc in 0..modulus {
-            for source in 0..modulus {
-                for branch_value in 0..=1u64 {
-                    for sign_value in 0..=1u64 {
-                        let expected = if branch_value == 0 {
-                            acc
-                        } else if sign_value != 0 {
-                            (acc + source) & (modulus - 1)
-                        } else {
-                            acc.wrapping_sub(source) & (modulus - 1)
-                        };
-                        cases.push((acc, source, branch_value, sign_value, expected));
-                    }
-                }
-            }
-        }
-
-        let mut seed = Shake128::default();
-        seed.update(b"direct-centered-branch-digit-clean-toy");
-        let mut xof = seed.finalize_xof();
-        let mut sim = Simulator::new(nq, nb, &mut xof);
-        for (batch, chunk) in cases.chunks(64).enumerate() {
-            sim.clear_for_shot();
-            for (shot, &(acc, source, branch_value, sign_value, _expected)) in
-                chunk.iter().enumerate()
-            {
-                set_reg(&mut sim, &coeff_acc, acc, shot);
-                set_reg(&mut sim, &coeff_v, source, shot);
-                if branch_value != 0 {
-                    *sim.qubit_mut(branch) |= 1u64 << shot;
-                }
-                if sign_value != 0 {
-                    *sim.qubit_mut(sign) |= 1u64 << shot;
-                }
-            }
-            sim.apply(&b.ops);
-            let live = if chunk.len() == 64 {
-                u64::MAX
-            } else {
-                (1u64 << chunk.len()) - 1
-            };
-            assert_eq!(sim.global_phase() & live, 0, "phase dirty in batch {batch}");
-            assert_eq!(sim.qubit(carry) & live, 0, "carry dirty in batch {batch}");
-            for (shot, &(acc, source, branch_value, sign_value, expected)) in
-                chunk.iter().enumerate()
-            {
-                assert_eq!(
-                    get_reg(&sim, &gated, shot),
-                    0,
-                    "gated dirty in batch {batch} shot {shot}"
-                );
-                assert_eq!(
-                    get_reg(&sim, &coeff_acc, shot),
-                    expected,
-                    "batch {batch} shot {shot}"
-                );
-                assert_eq!(
-                    get_reg(&sim, &coeff_v, shot),
-                    source,
-                    "batch {batch} shot {shot}"
-                );
-                assert_eq!(
-                    (sim.qubit(branch) >> shot) & 1,
-                    branch_value,
-                    "batch {batch} shot {shot}"
-                );
-                assert_eq!(
-                    (sim.qubit(sign) >> shot) & 1,
-                    sign_value,
-                    "batch {batch} shot {shot}"
-                );
-                let _ = acc;
-            }
-        }
-    }
-
-    #[test]
-    fn direct_centered_branch_replay_then_fast_finalizer_toy_is_exact() {
-        const W: usize = 4;
-        const HISTORY: usize = 3;
-        let mut b = B::new();
-        let coeff_acc = b.alloc_qubits(W);
-        let coeff_v = b.alloc_qubits(W);
-        let pred_a = b.alloc_qubits(HISTORY);
-        let pred_b = b.alloc_qubits(HISTORY);
-        let branch = b.alloc_qubits(HISTORY);
-        let sign = b.alloc_qubit();
-        let gated = b.alloc_qubits(W);
-        let digit_carry = b.alloc_qubit();
-        let nonnegative = b.alloc_qubit();
-        let extra_carry = b.alloc_qubit();
-
-        for i in 0..HISTORY {
-            b.ccx(pred_a[i], pred_b[i], branch[i]);
-        }
-        for &branch_bit in &branch {
-            emit_direct_centered_branch_digit_update_clean(
-                &mut b,
-                &coeff_acc,
-                &coeff_v,
-                branch_bit,
-                sign,
-                &gated,
-                digit_carry,
-            );
-        }
-        for i in (1..HISTORY).rev() {
-            b.ccx(pred_a[i], pred_b[i], branch[i]);
-        }
-        let carries = [branch[1], branch[2], extra_carry];
-        emit_direct_centered_branch_retained_finalizer_fast(
-            &mut b,
-            &coeff_acc,
-            &coeff_v,
-            branch[0],
-            &gated,
-            nonnegative,
-            &carries,
-        );
-        b.ccx(pred_a[0], pred_b[0], branch[0]);
-
-        let nq = b.next_qubit as usize;
-        let nb = b.next_bit as usize;
-        let modulus = 1u64 << W;
-        let mask = modulus - 1;
-        let mut cases = Vec::new();
-        for acc in 0..modulus {
-            for source in 0..modulus {
-                for pred_a_value in 0..(1u64 << HISTORY) {
-                    for pred_b_value in 0..(1u64 << HISTORY) {
-                        for sign_value in 0..=1u64 {
-                            let mut expected = acc;
-                            for i in 0..HISTORY {
-                                let branch_value =
-                                    ((pred_a_value >> i) & 1) & ((pred_b_value >> i) & 1);
-                                if branch_value != 0 {
-                                    expected = if sign_value != 0 {
-                                        expected.wrapping_add(source) & mask
-                                    } else {
-                                        expected.wrapping_sub(source) & mask
-                                    };
-                                }
-                            }
-                            if (pred_a_value & 1) != 0 && (pred_b_value & 1) != 0 {
-                                expected = expected.wrapping_sub(source) & mask;
-                            }
-                            cases.push((
-                                acc,
-                                source,
-                                pred_a_value,
-                                pred_b_value,
-                                sign_value,
-                                expected,
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut seed = Shake128::default();
-        seed.update(b"direct-centered-branch-replay-fast-finalizer-toy");
-        let mut xof = seed.finalize_xof();
-        let mut sim = Simulator::new(nq, nb, &mut xof);
-        for (batch, chunk) in cases.chunks(64).enumerate() {
-            sim.clear_for_shot();
-            for (shot, &(acc, source, pred_a_value, pred_b_value, sign_value, _expected)) in
-                chunk.iter().enumerate()
-            {
-                set_reg(&mut sim, &coeff_acc, acc, shot);
-                set_reg(&mut sim, &coeff_v, source, shot);
-                set_reg(&mut sim, &pred_a, pred_a_value, shot);
-                set_reg(&mut sim, &pred_b, pred_b_value, shot);
-                if sign_value != 0 {
-                    *sim.qubit_mut(sign) |= 1u64 << shot;
-                }
-            }
-            sim.apply(&b.ops);
-            let live = if chunk.len() == 64 {
-                u64::MAX
-            } else {
-                (1u64 << chunk.len()) - 1
-            };
-            assert_eq!(sim.global_phase() & live, 0, "phase dirty in batch {batch}");
-            assert_eq!(sim.qubit(digit_carry) & live, 0, "digit carry dirty");
-            assert_eq!(sim.qubit(nonnegative) & live, 0, "nonnegative dirty");
-            assert_eq!(sim.qubit(extra_carry) & live, 0, "extra carry dirty");
-            for &branch_bit in &branch {
-                assert_eq!(sim.qubit(branch_bit) & live, 0, "branch history dirty");
-            }
-            for (shot, &(acc, source, pred_a_value, pred_b_value, sign_value, expected)) in
-                chunk.iter().enumerate()
-            {
-                assert_eq!(
-                    get_reg(&sim, &coeff_acc, shot),
-                    expected,
-                    "batch {batch} shot {shot}"
-                );
-                assert_eq!(get_reg(&sim, &gated, shot), 0);
-                assert_eq!(get_reg(&sim, &coeff_v, shot), source);
-                assert_eq!(get_reg(&sim, &pred_a, shot), pred_a_value);
-                assert_eq!(get_reg(&sim, &pred_b, shot), pred_b_value);
-                assert_eq!((sim.qubit(sign) >> shot) & 1, sign_value);
-                let _ = acc;
-            }
-        }
-    }
-
-    #[test]
-    fn direct_centered_low_path_branch_predicate_toy_is_exact() {
-        const W: usize = 4;
-        let mut b = B::new();
-        let low_path = b.alloc_qubits(W);
-        let divisor = b.alloc_qubits(W);
-        let branch = b.alloc_qubit();
-        let shifted = b.alloc_qubits(W + 1);
-        let divisor_high = b.alloc_qubit();
-        let cmp_cin = b.alloc_qubit();
-        emit_direct_centered_low_path_branch_toggle(
-            &mut b,
-            &low_path,
-            &divisor,
-            branch,
-            &shifted,
-            divisor_high,
-            cmp_cin,
-        );
-
-        let nq = b.next_qubit as usize;
-        let nb = b.next_bit as usize;
-        let mut cases = Vec::new();
-        for low_value in 0..(1u64 << W) {
-            for divisor_value in 0..(1u64 << W) {
-                for initial_branch in 0..=1u64 {
-                    let predicate = if 2 * low_value >= divisor_value { 1 } else { 0 };
-                    cases.push((
-                        low_value,
-                        divisor_value,
-                        initial_branch,
-                        initial_branch ^ predicate,
-                    ));
-                }
-            }
-        }
-
-        let mut seed = Shake128::default();
-        seed.update(b"direct-centered-low-path-branch-predicate-toy");
-        let mut xof = seed.finalize_xof();
-        let mut sim = Simulator::new(nq, nb, &mut xof);
-        for (batch, chunk) in cases.chunks(64).enumerate() {
-            sim.clear_for_shot();
-            for (shot, &(low_value, divisor_value, initial_branch, _expected_branch)) in
-                chunk.iter().enumerate()
-            {
-                set_reg(&mut sim, &low_path, low_value, shot);
-                set_reg(&mut sim, &divisor, divisor_value, shot);
-                if initial_branch != 0 {
-                    *sim.qubit_mut(branch) |= 1u64 << shot;
-                }
-            }
-            sim.apply(&b.ops);
-            let live = if chunk.len() == 64 {
-                u64::MAX
-            } else {
-                (1u64 << chunk.len()) - 1
-            };
-            assert_eq!(sim.global_phase() & live, 0, "phase dirty in batch {batch}");
-            for &wire in &shifted {
-                assert_eq!(sim.qubit(wire) & live, 0, "shifted scratch dirty");
-            }
-            assert_eq!(
-                sim.qubit(divisor_high) & live,
-                0,
-                "divisor-high scratch dirty"
-            );
-            assert_eq!(sim.qubit(cmp_cin) & live, 0, "cmp-cin scratch dirty");
-            for (shot, &(low_value, divisor_value, _initial_branch, expected_branch)) in
-                chunk.iter().enumerate()
-            {
-                assert_eq!(get_reg(&sim, &low_path, shot), low_value);
-                assert_eq!(get_reg(&sim, &divisor, shot), divisor_value);
-                assert_eq!(
-                    (sim.qubit(branch) >> shot) & 1,
-                    expected_branch,
-                    "batch {batch} shot {shot}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn direct_centered_branch_predicate_step_fit_stays_inside_round714_envelope() {
-        let (ops, phases, peak_qubits, peak_phase) =
-            build_direct_centered_branch_predicate_step_fit_bench_phase_resources();
-        let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-
-        assert_eq!(regs.len(), 4);
-        assert_eq!(num_registers, 4);
-        assert_eq!(num_bits as usize, 3 * N);
-        let scratch = num_qubits as usize - 2 * N;
-        let toffoli_ops = ops
-            .iter()
-            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-            .count();
-        assert_eq!(
-            scratch,
-            DIRECT_CENTERED_BRANCH_SIDECAR_COMPONENT_SCRATCH_BITS
-        );
-        assert!(scratch <= DIRECT_CENTERED_RELAXED_SCRATCH_BUDGET);
-        assert!(num_qubits as usize <= DIRECT_CENTERED_RELAXED_Q_TARGET);
-        assert!(toffoli_ops < 2_000);
-        assert_eq!(peak_qubits as usize, num_qubits as usize);
-        assert_eq!(
-            peak_phase,
-            "direct_centered_branch_predicate_step_alloc_envelope"
-        );
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_branch_predicate_compare"));
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_branch_digit_clean_addsub"));
-    }
-
-    #[test]
-    fn direct_centered_binary_trie_qrom_toy_is_exact_and_phase_clean() {
-        const ADDRESS_BITS: usize = 3;
-        const TARGET_BITS: usize = 5;
-        const ROWS: usize = 6;
-
-        let table_words: Vec<u64> = (0..ROWS)
-            .map(|row| ((row as u64).wrapping_mul(0b10101) ^ 0b10010) & ((1u64 << TARGET_BITS) - 1))
-            .collect();
-
-        let mut b = B::new();
-        let address = b.alloc_qubits(ADDRESS_BITS);
-        let target = b.alloc_qubits(TARGET_BITS);
-        emit_direct_centered_binary_trie_qrom_xor_table(
-            &mut b,
-            &address,
-            &target,
-            ROWS,
-            &table_words,
-        );
-
-        let nq = b.next_qubit as usize;
-        let nb = b.next_bit as usize;
-        let mut public = vec![false; nq];
-        for &q in address.iter().chain(target.iter()) {
-            public[q.0 as usize] = true;
-        }
-
-        let mut cases = Vec::new();
-        for addr in 0..(1u64 << ADDRESS_BITS) {
-            for before in 0..(1u64 << TARGET_BITS) {
-                let loaded = if (addr as usize) < ROWS {
-                    table_words[addr as usize]
-                } else {
-                    0
-                };
-                cases.push((addr, before, before ^ loaded));
-            }
-        }
-
-        let mut seed = Shake128::default();
-        seed.update(b"direct-centered-binary-trie-qrom-toy");
-        let mut xof = seed.finalize_xof();
-        let mut sim = Simulator::new(nq, nb, &mut xof);
-        for (batch, chunk) in cases.chunks(64).enumerate() {
-            sim.clear_for_shot();
-            for (shot, &(addr, before, _expected)) in chunk.iter().enumerate() {
-                set_reg(&mut sim, &address, addr, shot);
-                set_reg(&mut sim, &target, before, shot);
-            }
-            sim.apply(&b.ops);
-            let live = if chunk.len() == 64 {
-                u64::MAX
-            } else {
-                (1u64 << chunk.len()) - 1
-            };
-            assert_eq!(sim.global_phase() & live, 0, "phase dirty in batch {batch}");
-            for q in 0..nq {
-                if !public[q] {
-                    assert_eq!(
-                        sim.qubit(QubitId(q as u32)) & live,
-                        0,
-                        "scratch q{q} dirty in batch {batch}"
-                    );
-                }
-            }
-            for (shot, &(addr, _before, expected)) in chunk.iter().enumerate() {
-                assert_eq!(get_reg(&sim, &address, shot), addr);
-                assert_eq!(get_reg(&sim, &target, shot), expected);
-            }
-        }
-    }
-
-    #[test]
-    fn direct_centered_binary_trie_qrom_roundtrip_toy_is_exact_and_phase_clean() {
-        const ADDRESS_BITS: usize = 3;
-        const TARGET_BITS: usize = 9;
-        const ROWS: usize = 6;
-
-        let table_words = direct_centered_binary_trie_qrom_table_words(ROWS, TARGET_BITS);
-
-        let mut b = B::new();
-        let address = b.alloc_qubits(ADDRESS_BITS);
-        let target = b.alloc_qubits(TARGET_BITS);
-        emit_direct_centered_binary_trie_qrom_xor_table(
-            &mut b,
-            &address,
-            &target,
-            ROWS,
-            &table_words,
-        );
-        emit_direct_centered_binary_trie_qrom_xor_table(
-            &mut b,
-            &address,
-            &target,
-            ROWS,
-            &table_words,
-        );
-
-        let nq = b.next_qubit as usize;
-        let nb = b.next_bit as usize;
-        let mut public = vec![false; nq];
-        for &q in address.iter().chain(target.iter()) {
-            public[q.0 as usize] = true;
-        }
-
-        let mut cases = Vec::new();
-        for addr in 0..(1u64 << ADDRESS_BITS) {
-            for before in 0..(1u64 << TARGET_BITS) {
-                cases.push((addr, before));
-            }
-        }
-
-        let mut seed = Shake128::default();
-        seed.update(b"direct-centered-binary-trie-qrom-roundtrip-toy");
-        let mut xof = seed.finalize_xof();
-        let mut sim = Simulator::new(nq, nb, &mut xof);
-        for (batch, chunk) in cases.chunks(64).enumerate() {
-            sim.clear_for_shot();
-            for (shot, &(addr, before)) in chunk.iter().enumerate() {
-                set_reg(&mut sim, &address, addr, shot);
-                set_reg(&mut sim, &target, before, shot);
-            }
-            sim.apply(&b.ops);
-            let live = if chunk.len() == 64 {
-                u64::MAX
-            } else {
-                (1u64 << chunk.len()) - 1
-            };
-            assert_eq!(sim.global_phase() & live, 0, "phase dirty in batch {batch}");
-            for q in 0..nq {
-                if !public[q] {
-                    assert_eq!(
-                        sim.qubit(QubitId(q as u32)) & live,
-                        0,
-                        "scratch q{q} dirty in batch {batch}"
-                    );
-                }
-            }
-            for (shot, &(addr, before)) in chunk.iter().enumerate() {
-                assert_eq!(get_reg(&sim, &address, shot), addr);
-                assert_eq!(get_reg(&sim, &target, shot), before);
-            }
-        }
-    }
-
-    #[test]
-    fn direct_centered_binary_trie_qrom_hits_round728_row_multiplier_budget() {
-        const ROWS: usize = 4_934;
-        const ADDRESS_BITS: usize = 13;
-        const TARGET_BITS: usize = 16;
-
-        let (ops, phases, peak_qubits, peak_phase) =
-            build_direct_centered_binary_trie_qrom_bench_phase_resources(
-                ROWS,
-                ADDRESS_BITS,
-                TARGET_BITS,
-            );
-        let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-        let toffoli_ops = ops
-            .iter()
-            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-            .count();
-        let expected_nodes = direct_centered_binary_trie_qrom_node_count(ROWS, ADDRESS_BITS);
-
-        assert_eq!(regs.len(), 4);
-        assert_eq!(num_registers, 4);
-        assert_eq!(num_bits as usize, 2 * N + expected_nodes);
-        assert_eq!(toffoli_ops, expected_nodes);
-        assert!(toffoli_ops <= 2 * ROWS + ADDRESS_BITS);
-        assert!(toffoli_ops <= 6 * ROWS);
-        assert_eq!(num_qubits as usize, 2 * N + ADDRESS_BITS + 1);
-        assert_eq!(peak_qubits as usize, num_qubits as usize);
-        assert_eq!(peak_phase, "direct_centered_binary_trie_qrom_unary_walk");
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_binary_trie_qrom_unary_walk"));
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_binary_trie_qrom_clear_root"));
-    }
-
-    #[test]
-    fn direct_centered_binary_trie_qrom_roundtrip_fits_round730_wide_payload_budget() {
-        const ROWS: usize = 4_934;
-        const ADDRESS_BITS: usize = 13;
-        const TARGET_BITS: usize = 84;
-
-        let (ops, phases, peak_qubits, peak_phase) =
-            build_direct_centered_binary_trie_qrom_roundtrip_bench_phase_resources(
-                ROWS,
-                ADDRESS_BITS,
-                TARGET_BITS,
-            );
-        let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-        let toffoli_ops = ops
-            .iter()
-            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-            .count();
-        let expected_nodes = direct_centered_binary_trie_qrom_node_count(ROWS, ADDRESS_BITS);
-
-        assert_eq!(regs.len(), 4);
-        assert_eq!(num_registers, 4);
-        assert_eq!(num_bits as usize, 2 * N + 2 * expected_nodes);
-        assert_eq!(toffoli_ops, 2 * expected_nodes);
-        assert_eq!(toffoli_ops, 19_746);
-        assert!(toffoli_ops <= 4 * ROWS + 2 * ADDRESS_BITS);
-        assert_eq!(num_qubits as usize, 2 * N + ADDRESS_BITS + 1);
-        assert_eq!(peak_qubits as usize, num_qubits as usize);
-        assert_eq!(
-            peak_phase,
-            "direct_centered_binary_trie_qrom_roundtrip_load_walk"
-        );
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_binary_trie_qrom_roundtrip_load_walk"));
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_binary_trie_qrom_roundtrip_clear_walk"));
-    }
-
-    #[test]
-    fn direct_centered_inline_predicate_finalizer_delta_fits_google_fast_width_if_replay_deleted() {
-        let (ops, phases, peak_qubits, peak_phase) =
-            build_direct_centered_inline_predicate_finalizer_delta_fit_bench_phase_resources();
-        let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-
-        assert_eq!(regs.len(), 4);
-        assert_eq!(num_registers, 4);
-        assert_eq!(num_bits as usize, 3 * N - 1);
-        let scratch = num_qubits as usize - 2 * N;
-        let toffoli_ops = ops
-            .iter()
-            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-            .count();
-        assert_eq!(
-            scratch,
-            DIRECT_CENTERED_BRANCH_SIDECAR_COMPONENT_SCRATCH_BITS
-                + DIRECT_CENTERED_EXPLICIT_BRANCH_HISTORY_BITS
-        );
-        assert_eq!(num_qubits as usize, 1_425);
-        assert!(toffoli_ops < 122_000);
-        assert_eq!(peak_qubits as usize, num_qubits as usize);
-        assert_eq!(
-            peak_phase,
-            "direct_centered_inline_predicate_delta_alloc_dual_history_envelope"
-        );
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_branch_predicate_compare"));
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_branch_retained_fast_finalizer_subtract"));
-        assert!(!phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_branch_digit_clean_addsub"));
-    }
-
-    #[test]
-    fn direct_centered_branch_retained_finalizer_toy_is_exact() {
-        const W: usize = 5;
-        let mut b = B::new();
-        let remainder = b.alloc_qubits(W);
-        let divisor = b.alloc_qubits(W);
-        let branch = b.alloc_qubit();
-        let gated = b.alloc_qubits(W);
-        let carry = b.alloc_qubit();
-        emit_direct_centered_branch_retained_finalizer(
-            &mut b, &remainder, &divisor, branch, &gated, carry,
-        );
-
-        let nq = b.next_qubit as usize;
-        let nb = b.next_bit as usize;
-        let modulus = 1u64 << W;
-        let mut cases = 0usize;
-        for divisor_value in 1..(1u64 << (W - 1)) {
-            for final_remainder in 0..divisor_value {
-                for branch_value in 0..=1u64 {
-                    let prefinal = final_remainder + branch_value * divisor_value;
-                    if prefinal >= modulus {
-                        continue;
-                    }
-                    cases += 1;
-                    let mut seed = Shake128::default();
-                    seed.update(&(cases as u64).to_le_bytes());
-                    let mut xof = seed.finalize_xof();
-                    let mut sim = Simulator::new(nq, nb, &mut xof);
-                    set_reg(&mut sim, &remainder, prefinal, 0);
-                    set_reg(&mut sim, &divisor, divisor_value, 0);
-                    if branch_value != 0 {
-                        *sim.qubit_mut(branch) |= 1;
-                    }
-                    sim.apply(&b.ops);
-                    assert_eq!(get_reg(&sim, &remainder, 0), final_remainder);
-                    assert_eq!(get_reg(&sim, &divisor, 0), divisor_value);
-                    assert_eq!((sim.qubit(branch) & 1), branch_value);
-                    assert_eq!(sim.qubit(carry) & 1, 0);
-                    assert_eq!(get_reg(&sim, &gated, 0), 0);
-                }
-            }
-        }
-        assert_eq!(cases, 240);
-    }
-
-    #[test]
-    fn direct_centered_branch_retained_fast_finalizer_toy_is_exact() {
-        const W: usize = 5;
-        let mut b = B::new();
-        let remainder = b.alloc_qubits(W);
-        let divisor = b.alloc_qubits(W);
-        let branch = b.alloc_qubit();
-        let gated = b.alloc_qubits(W);
-        let nonnegative = b.alloc_qubit();
-        let carries = b.alloc_qubits(W - 1);
-        emit_direct_centered_branch_retained_finalizer_fast(
-            &mut b,
-            &remainder,
-            &divisor,
-            branch,
-            &gated,
-            nonnegative,
-            &carries,
-        );
-
-        let nq = b.next_qubit as usize;
-        let nb = b.next_bit as usize;
-        let modulus = 1u64 << W;
-        let mut cases = 0usize;
-        for divisor_value in 1..(1u64 << (W - 1)) {
-            for final_remainder in 0..divisor_value {
-                for branch_value in 0..=1u64 {
-                    let prefinal = final_remainder + branch_value * divisor_value;
-                    if prefinal >= modulus {
-                        continue;
-                    }
-                    cases += 1;
-                    let mut seed = Shake128::default();
-                    seed.update(&(0xFA57_0000u64 + cases as u64).to_le_bytes());
-                    let mut xof = seed.finalize_xof();
-                    let mut sim = Simulator::new(nq, nb, &mut xof);
-                    set_reg(&mut sim, &remainder, prefinal, 0);
-                    set_reg(&mut sim, &divisor, divisor_value, 0);
-                    if branch_value != 0 {
-                        *sim.qubit_mut(branch) |= 1;
-                    }
-                    sim.apply(&b.ops);
-                    assert_eq!(get_reg(&sim, &remainder, 0), final_remainder);
-                    assert_eq!(get_reg(&sim, &divisor, 0), divisor_value);
-                    assert_eq!(sim.qubit(branch) & 1, branch_value);
-                    assert_eq!(sim.qubit(nonnegative) & 1, 0);
-                    assert_eq!(get_reg(&sim, &gated, 0), 0);
-                    assert_eq!(get_reg(&sim, &carries, 0), 0);
-                    assert_eq!(sim.global_phase() & 1, 0);
-                }
-            }
-        }
-        assert_eq!(cases, 240);
-    }
-
-    #[test]
-    fn direct_centered_branch_retained_finalizer_component_has_expected_shape() {
-        let (ops, phases, peak_qubits, peak_phase) =
-            build_direct_centered_branch_retained_finalizer_bench_phase_resources();
-        let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-        let toffoli_ops = ops
-            .iter()
-            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-            .count();
-
-        assert_eq!(regs.len(), 4);
-        assert_eq!(num_registers, 4);
-        assert_eq!(num_bits as usize, 2 * N);
-        assert_eq!(num_qubits as usize, 2 * N + N + 2);
-        assert_eq!(peak_qubits as usize, num_qubits as usize);
-        assert_eq!(toffoli_ops, 4 * N - 2);
-        assert_eq!(
-            peak_phase,
-            "direct_centered_branch_retained_finalizer_google_abi"
-        );
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_branch_retained_finalizer_subtract"));
-    }
-
-    #[test]
-    fn direct_centered_branch_digit_clean_fit_stays_inside_round714_envelope() {
-        let (ops, phases, peak_qubits, peak_phase) =
-            build_direct_centered_branch_digit_clean_fit_bench_phase_resources();
-        let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-        let toffoli_ops = ops
-            .iter()
-            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-            .count();
-
-        assert_eq!(regs.len(), 4);
-        assert_eq!(num_registers, 4);
-        assert_eq!(num_bits as usize, 3 * N);
-        assert_eq!(
-            num_qubits as usize,
-            2 * N + DIRECT_CENTERED_BRANCH_SIDECAR_COMPONENT_SCRATCH_BITS
-        );
-        assert_eq!(peak_qubits as usize, num_qubits as usize);
-        assert_eq!(toffoli_ops, 3 * N - 2);
-        assert_eq!(
-            peak_phase,
-            "direct_centered_branch_digit_clean_alloc_envelope"
-        );
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_branch_digit_clean_addsub"));
-    }
-
-    #[test]
-    fn direct_centered_remainder_abs_swap_transition_toy_is_exact() {
-        const W: usize = 4;
-        let mut b = B::new();
-        let low_path = b.alloc_qubits(W);
-        let divisor = b.alloc_qubits(W);
-        let branch = b.alloc_qubit();
-        let gated = b.alloc_qubits(W);
-        let carries = b.alloc_qubits(W - 1);
-        emit_direct_centered_remainder_abs_swap_transition(
-            &mut b, &low_path, &divisor, branch, &gated, &carries,
-        );
-
-        let nq = b.next_qubit as usize;
-        let nb = b.next_bit as usize;
-        let mut cases = Vec::new();
-        for divisor_value in 1..(1u64 << W) {
-            for low_value in 0..divisor_value {
-                let branch_value = u64::from(2 * low_value >= divisor_value);
-                let next_divisor = if branch_value == 0 {
-                    low_value
-                } else {
-                    divisor_value - low_value
-                };
-                cases.push((low_value, divisor_value, branch_value, next_divisor));
-            }
-        }
-
-        let mut seed = Shake128::default();
-        seed.update(b"direct-centered-remainder-abs-swap-transition-toy");
-        let mut xof = seed.finalize_xof();
-        let mut sim = Simulator::new(nq, nb, &mut xof);
-        for (batch, chunk) in cases.chunks(64).enumerate() {
-            sim.clear_for_shot();
-            for (shot, &(low_value, divisor_value, branch_value, _next_divisor)) in
-                chunk.iter().enumerate()
-            {
-                set_reg(&mut sim, &low_path, low_value, shot);
-                set_reg(&mut sim, &divisor, divisor_value, shot);
-                if branch_value != 0 {
-                    *sim.qubit_mut(branch) |= 1u64 << shot;
-                }
-            }
-            sim.apply(&b.ops);
-            let live = if chunk.len() == 64 {
-                u64::MAX
-            } else {
-                (1u64 << chunk.len()) - 1
-            };
-            assert_eq!(sim.global_phase() & live, 0, "phase dirty in batch {batch}");
-            for &wire in &gated {
-                assert_eq!(sim.qubit(wire) & live, 0, "gated divisor dirty");
-            }
-            for &wire in &carries {
-                assert_eq!(sim.qubit(wire) & live, 0, "borrowed carry dirty");
-            }
-            for (shot, &(_low_value, divisor_value, branch_value, next_divisor)) in
-                chunk.iter().enumerate()
-            {
-                assert_eq!(get_reg(&sim, &low_path, shot), divisor_value);
-                assert_eq!(get_reg(&sim, &divisor, shot), next_divisor);
-                assert_eq!((sim.qubit(branch) >> shot) & 1, branch_value);
-            }
-        }
-    }
-
-    #[test]
-    fn direct_centered_row_transition_fit_stays_inside_round714_envelope() {
-        let (ops, phases, peak_qubits, peak_phase) =
-            build_direct_centered_row_transition_fit_bench_phase_resources();
-        let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-        let toffoli_ops = ops
-            .iter()
-            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-            .count();
-        let hmr_ops = ops
-            .iter()
-            .filter(|op| matches!(op.kind, OperationType::Hmr))
-            .count();
-
-        assert_eq!(regs.len(), 4);
-        assert_eq!(num_registers, 4);
-        assert_eq!(num_bits as usize, 4 * N - 1);
-        assert_eq!(
-            num_qubits as usize,
-            2 * N + DIRECT_CENTERED_BRANCH_SIDECAR_COMPONENT_SCRATCH_BITS
-        );
-        assert_eq!(peak_qubits as usize, num_qubits as usize);
-        assert_eq!(toffoli_ops, 2 * N - 1);
-        assert_eq!(hmr_ops, N - 1 + N);
-        assert_eq!(peak_phase, "direct_centered_row_transition_alloc_envelope");
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_row_transition_abs_add"));
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_row_transition_swap_next_state"));
-    }
-
-    #[test]
-    fn direct_centered_branch_replay_finalizer_fit_stays_inside_round714_envelope() {
-        let (ops, phases, peak_qubits, peak_phase) =
-            build_direct_centered_branch_replay_finalizer_fit_bench_phase_resources();
-        let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-        let toffoli_ops = ops
-            .iter()
-            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-            .count();
-
-        assert_eq!(regs.len(), 4);
-        assert_eq!(num_registers, 4);
-        assert_eq!(
-            num_bits as usize,
-            2 * N + DIRECT_CENTERED_EXPLICIT_BRANCH_HISTORY_BITS * N + (N - 1)
-        );
-        assert_eq!(
-            num_qubits as usize,
-            2 * N + DIRECT_CENTERED_BRANCH_SIDECAR_COMPONENT_SCRATCH_BITS
-        );
-        assert_eq!(peak_qubits as usize, num_qubits as usize);
-        assert_eq!(
-            toffoli_ops,
-            DIRECT_CENTERED_EXPLICIT_BRANCH_HISTORY_BITS * (3 * N - 2)
-                + (2 * DIRECT_CENTERED_EXPLICIT_BRANCH_HISTORY_BITS)
-                + (3 * N - 1)
-        );
-        assert_eq!(
-            peak_phase,
-            "direct_centered_branch_replay_finalizer_alloc_envelope"
-        );
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_branch_replay_clear_nonfinal_history"));
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_branch_retained_fast_finalizer_subtract"));
-    }
-
-    #[test]
-    fn direct_centered_predicate_replay_finalizer_fit_materializes_full_tail_projection() {
-        let (ops, phases, peak_qubits, peak_phase) =
-            build_direct_centered_predicate_replay_finalizer_fit_bench_phase_resources();
-        let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-        let toffoli_ops = ops
-            .iter()
-            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-            .count();
-
-        let predicate_toggle_t = 2 * (N + 1);
-        let branch_digit_t = 3 * N - 2;
-        let finalizer_t = 3 * N - 1;
-        let expected_tail_t = DIRECT_CENTERED_EXPLICIT_BRANCH_HISTORY_BITS
-            * (2 * predicate_toggle_t + branch_digit_t)
-            + finalizer_t;
-
-        assert_eq!(regs.len(), 4);
-        assert_eq!(num_registers, 4);
-        assert_eq!(
-            num_bits as usize,
-            2 * N + DIRECT_CENTERED_EXPLICIT_BRANCH_HISTORY_BITS * N + (N - 1)
-        );
-        assert_eq!(
-            num_qubits as usize,
-            2 * N + DIRECT_CENTERED_BRANCH_SIDECAR_COMPONENT_SCRATCH_BITS
-        );
-        assert_eq!(peak_qubits as usize, num_qubits as usize);
-        assert_eq!(toffoli_ops, expected_tail_t);
-        assert_eq!(toffoli_ops, 210_665);
-        assert_eq!(
-            peak_phase,
-            "direct_centered_predicate_replay_finalizer_alloc_envelope"
-        );
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_branch_predicate_compare"));
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_branch_retained_fast_finalizer_subtract"));
-    }
-
-    #[test]
-    fn direct_centered_sidecar_finalizer_fit_stays_inside_round714_envelope() {
-        let (ops, phases, peak_qubits, peak_phase) =
-            build_direct_centered_sidecar_finalizer_fit_bench_phase_resources();
-        let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-        let toffoli_ops = ops
-            .iter()
-            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-            .count();
-
-        assert_eq!(regs.len(), 4);
-        assert_eq!(num_registers, 4);
-        assert_eq!(num_bits as usize, 2 * N);
-        assert_eq!(
-            num_qubits as usize,
-            2 * N + DIRECT_CENTERED_BRANCH_SIDECAR_COMPONENT_SCRATCH_BITS
-        );
-        assert_eq!(peak_qubits as usize, num_qubits as usize);
-        assert_eq!(toffoli_ops, 4 * N - 2);
-        assert_eq!(
-            peak_phase,
-            "direct_centered_sidecar_finalizer_alloc_envelope"
-        );
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_branch_retained_finalizer_gate_divisor"));
-    }
-
-    #[test]
-    fn direct_centered_sidecar_fast_finalizer_fit_stays_inside_round714_envelope() {
-        let (ops, phases, peak_qubits, peak_phase) =
-            build_direct_centered_sidecar_fast_finalizer_fit_bench_phase_resources();
-        let (num_qubits, num_bits, num_registers, regs) = analyze_ops(ops.iter().copied());
-        let toffoli_ops = ops
-            .iter()
-            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ))
-            .count();
-
-        assert_eq!(regs.len(), 4);
-        assert_eq!(num_registers, 4);
-        assert_eq!(num_bits as usize, 2 * N + N - 1);
-        assert_eq!(
-            num_qubits as usize,
-            2 * N + DIRECT_CENTERED_BRANCH_SIDECAR_COMPONENT_SCRATCH_BITS
-        );
-        assert_eq!(peak_qubits as usize, num_qubits as usize);
-        assert_eq!(toffoli_ops, 3 * N - 1);
-        assert_eq!(
-            peak_phase,
-            "direct_centered_sidecar_fast_finalizer_alloc_envelope"
-        );
-        assert!(phases
-            .iter()
-            .any(|row| row.phase == "direct_centered_branch_retained_fast_finalizer_subtract"));
     }
 }

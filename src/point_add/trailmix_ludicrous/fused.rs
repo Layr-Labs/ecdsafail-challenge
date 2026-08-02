@@ -1,5 +1,5 @@
 
-use super::arith::{F_SECP256K1, LSBS};
+use super::arith::F_SECP256K1;
 use super::{B, BExt};
 use crate::circuit::{BitId, QubitId};
 use std::cell::Cell;
@@ -1810,7 +1810,7 @@ fn fused_fold(circ: &mut B, e: &QubitId, d: &QubitId, ylow: &[QubitId], dirty: &
     }
 }
 
-fn fused_fold_e_only(circ: &mut B, e: &QubitId, y: &[QubitId]) {
+fn fused_fold_e_only(circ: &mut B, e: &QubitId, y: &[QubitId], lsbs: usize) {
     let call_index = next_fold_call_index();
     let prior_fold_call_index = enter_fold_call_index(call_index);
     let timeline_start = circ.active_timeline.len();
@@ -1828,10 +1828,10 @@ fn fused_fold_e_only(circ: &mut B, e: &QubitId, y: &[QubitId]) {
             .map_or(code as usize, |headroom| {
                 (code as usize).min(headroom.saturating_sub(reserve))
             })
-            .min(LSBS - 1)
+            .min(lsbs - 1)
     };
     let f_bytes = F_SECP256K1.to_le_bytes();
-    super::arith::add_f_window_pub(circ, e, y, LSBS, &f_bytes, Some(g));
+    super::arith::add_f_window_pub(circ, e, y, lsbs, &f_bytes, Some(g));
     restore_fold_call_index(prior_fold_call_index);
     if std::env::var_os("TRACE_TLM_FOLD").is_some() {
         let local_peak = circ.active_timeline[timeline_start..]
@@ -1862,7 +1862,7 @@ fn trace_fold_alloc(circ: &B, name: &str, stage: &str, i: usize) {
     }
 }
 
-pub fn fused_double_cdouble(circ: &mut B, s2: &QubitId, y: &[QubitId]) {
+pub fn fused_double_cdouble(circ: &mut B, s2: &QubitId, y: &[QubitId], lsbs: usize) {
     let shift_call_index = next_fused_cdouble_fwd_shift_call_index();
     maybe_run_gradual_fold_nonlinear_control_hmr_selftest();
     let n = 256usize;
@@ -1893,8 +1893,8 @@ pub fn fused_double_cdouble(circ: &mut B, s2: &QubitId, y: &[QubitId]) {
         crate::point_add::restore_op_trace_context(old_context);
     }
 
-    let borrow: Vec<QubitId> = y[LSBS..2 * LSBS - 1].to_vec();
-    fused_fold(circ, &w[n], &w[n + 1], &y[..LSBS], &borrow);
+    let borrow: Vec<QubitId> = y[lsbs..2 * lsbs - 1].to_vec();
+    fused_fold(circ, &w[n], &w[n + 1], &y[..lsbs], &borrow);
 
     circ.cx(y[0], w[n]);
     clear_and(circ, &w[n + 1], s2, &y[1]);
@@ -1902,7 +1902,7 @@ pub fn fused_double_cdouble(circ: &mut B, s2: &QubitId, y: &[QubitId]) {
     circ.zero_and_free(hi2);
 }
 
-pub fn fused_double_only(circ: &mut B, y: &[QubitId]) {
+pub fn fused_double_only(circ: &mut B, y: &[QubitId], lsbs: usize) {
     let n = 256usize;
     assert_eq!(y.len(), n, "fused double expects 256-bit y");
     trace_fold_alloc(circ, "fwd_only", "entry", usize::MAX);
@@ -1913,12 +1913,12 @@ pub fn fused_double_only(circ: &mut B, y: &[QubitId]) {
     for i in (1..w.len()).rev() {
         circ.swap(w[i], w[i - 1]);
     }
-    fused_fold_e_only(circ, &w[n], y);
+    fused_fold_e_only(circ, &w[n], y, lsbs);
     circ.cx(y[0], w[n]);
     circ.zero_and_free(hi);
 }
 
-pub fn fused_double_cdouble_reverse(circ: &mut B, s2: &QubitId, y: &[QubitId]) {
+pub fn fused_double_cdouble_reverse(circ: &mut B, s2: &QubitId, y: &[QubitId], lsbs: usize) {
     let shift_call_index = next_fused_cdouble_rev_shift_call_index();
     maybe_run_gradual_fold_nonlinear_control_hmr_selftest();
     let n = 256usize;
@@ -1935,12 +1935,12 @@ pub fn fused_double_cdouble_reverse(circ: &mut B, s2: &QubitId, y: &[QubitId]) {
     circ.ccx(*s2, y[1], w[n + 1]);
     circ.cx(y[0], w[n]);
 
-    let borrow: Vec<QubitId> = y[LSBS..2 * LSBS - 1].to_vec();
-    for q in &y[..LSBS] {
+    let borrow: Vec<QubitId> = y[lsbs..2 * lsbs - 1].to_vec();
+    for q in &y[..lsbs] {
         circ.x(*q);
     }
-    fused_fold(circ, &w[n], &w[n + 1], &y[..LSBS], &borrow);
-    for q in &y[..LSBS] {
+    fused_fold(circ, &w[n], &w[n + 1], &y[..lsbs], &borrow);
+    for q in &y[..lsbs] {
         circ.x(*q);
     }
 
@@ -1961,7 +1961,7 @@ pub fn fused_double_cdouble_reverse(circ: &mut B, s2: &QubitId, y: &[QubitId]) {
     circ.zero_and_free(hi2);
 }
 
-pub fn fused_double_only_reverse(circ: &mut B, y: &[QubitId]) {
+pub fn fused_double_only_reverse(circ: &mut B, y: &[QubitId], lsbs: usize) {
     let n = 256usize;
     assert_eq!(y.len(), n, "fused halve expects 256-bit y");
     trace_fold_alloc(circ, "rev_only", "entry", usize::MAX);
@@ -1970,11 +1970,11 @@ pub fn fused_double_only_reverse(circ: &mut B, y: &[QubitId]) {
     let mut w: Vec<QubitId> = y.to_vec();
     w.push(hi);
     circ.cx(y[0], w[n]);
-    for q in &y[..LSBS] {
+    for q in &y[..lsbs] {
         circ.x(*q);
     }
-    fused_fold_e_only(circ, &w[n], y);
-    for q in &y[..LSBS] {
+    fused_fold_e_only(circ, &w[n], y, lsbs);
+    for q in &y[..lsbs] {
         circ.x(*q);
     }
     for i in 1..w.len() {

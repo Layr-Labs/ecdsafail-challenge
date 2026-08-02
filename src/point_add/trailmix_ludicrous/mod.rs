@@ -8,6 +8,7 @@ mod fused;
 mod gcd;
 mod gidney;
 mod mcx;
+mod precision;
 pub mod schedule;
 mod square;
 
@@ -34,6 +35,7 @@ pub(super) trait BExt {
     fn z_if_bit(&mut self, q: QubitId, c: BitId);
     fn cz_if_bit(&mut self, a: QubitId, b: QubitId, c: BitId);
 
+    #[track_caller]
     fn zero_and_free(&mut self, q: QubitId);
 }
 
@@ -93,6 +95,7 @@ impl BExt for B {
         self.cz(a, b);
         self.pop_condition();
     }
+    #[track_caller]
     fn zero_and_free(&mut self, q: QubitId) {
         self.free(q);
     }
@@ -218,6 +221,48 @@ pub(crate) fn drops_off_family(fam: &str) -> bool {
     match std::env::var("TLM_DROPS_OFF_ONLY") {
         Ok(list) => list.split(',').any(|t| t.trim() == fam),
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod drops_off_tests {
+    use super::*;
+
+    /// Every family name string passed to `drops_off_family(..)` anywhere in this crate
+    /// (`fused.rs` x5, `gidney.rs` x5, `gcd.rs` x3, `comparator.rs` x2, `arith.rs` x4 --
+    /// 19 call sites over 19 distinct names, confirmed by
+    /// `grep -rho 'drops_off_family("[A-Z0-9]*")' trailmix_ludicrous/*.rs | sort -u | wc -l`).
+    const ALL_DROP_CERT_FAMILIES: &[&str] = &[
+        "FUSEDBZ", "FUSEDCF", "FUSEDKF", "FUSEDDF", "FUSEDCW", "GIDERASE", "GIDERASEC",
+        "THRFWD", "THRBND", "THRSUM", "GCDRSW", "GCDFSW", "GCDSHIFT", "CMPCIN", "CMPTOP",
+        "FFG", "CONSTCHUNK", "CUCCARO", "ADDCONST",
+    ];
+
+    /// Step 4 of the task-5 brief, made executable rather than relying on a log grep that
+    /// would find nothing either way (these predicates never `eprintln!` when retired,
+    /// since they are diagnostic no-ops by construction): at `ITERS = 258`,
+    /// `schedule::baked_artifacts_valid()` is false purely because
+    /// `CURRENT_GEOMETRY_REV != DROP_CERT_GEOMETRY_REV` -- `ITERS == BAKED_ITERS` now
+    /// holds again (258 == 258), so this is the one test that would go RED if the
+    /// geometry-revision split were ever removed or the two revisions accidentally
+    /// re-synced without the 18 (here, 19) families being independently re-certified.
+    /// Every one of them must come back retired, with no per-family env var required.
+    #[test]
+    fn every_drop_certificate_family_is_retired_at_258_iterations() {
+        assert!(
+            !schedule::baked_artifacts_valid(),
+            "baked_artifacts_valid() must be false at ITERS=258 until the drop \
+             certificates are independently re-certified against CURRENT_GEOMETRY_REV"
+        );
+        for &fam in ALL_DROP_CERT_FAMILIES {
+            assert!(
+                drops_off_family(fam),
+                "drops_off_family({fam:?}) must be true (retired) at ITERS=258, \
+                 geometry_rev={} != DROP_CERT_GEOMETRY_REV={}",
+                schedule::CURRENT_GEOMETRY_REV,
+                schedule::DROP_CERT_GEOMETRY_REV,
+            );
+        }
     }
 }
 
@@ -674,4 +719,44 @@ pub fn build_trailmix_ludicrous_ops() -> Vec<Op> {
     let mut input_qubits = x2_init.clone();
     input_qubits.extend_from_slice(&y2);
     constprop::run(ops, &input_qubits)
+}
+
+/// Task 6 Step 7: `TLM_PROFILE_EXPORT=<path>` diagnostic hook, wired in from
+/// `point_add::build`. Writes the *currently resolved* `TLM_SCHED_MARGIN`/
+/// `TLM_APPLY_LSBS` ranges -- exactly what was active at build time, parsed the same way
+/// `precision::sched_margin`/`precision::apply_lsbs` parse them -- to `path`, rendered via
+/// `precision::render_profile` in a form directly usable as a `schedule.rs` constant
+/// (`pub static BAKED_..: &[RangeValue] = &[ .. ];`, one per table). This exports the RAW
+/// env-parsed ranges, not the env-plus-already-baked-default combination: at the moment
+/// this is used to mine a new baked profile, `schedule::BAKED_*` is expected to still be
+/// whatever the previous bake left it at (typically empty, pre-Step-7), so "currently
+/// resolved" and "the env ranges alone" coincide -- see the Task 6 report for how this
+/// was actually used. Default off (no `TLM_PROFILE_EXPORT` == no-op); diagnostic only,
+/// never touched by a scoring build.
+pub(crate) fn export_profile(path: &str) {
+    let sched_margin_spec = std::env::var("TLM_SCHED_MARGIN").unwrap_or_default();
+    let sched_margin = precision::parse_ranges(&sched_margin_spec).unwrap_or_else(|e| {
+        panic!("TLM_SCHED_MARGIN={sched_margin_spec:?} is not a valid precision spec: {e}")
+    });
+    let apply_lsbs_spec = std::env::var("TLM_APPLY_LSBS").unwrap_or_default();
+    let ifwd = precision::parse_apply_lsbs_ranges(&apply_lsbs_spec, precision::ApplyPass::InverseForward)
+        .unwrap_or_else(|e| {
+            panic!("TLM_APPLY_LSBS={apply_lsbs_spec:?} is not a valid apply-lsbs spec: {e}")
+        });
+    let mrev = precision::parse_apply_lsbs_ranges(&apply_lsbs_spec, precision::ApplyPass::MultiplyReverse)
+        .unwrap_or_else(|e| {
+            panic!("TLM_APPLY_LSBS={apply_lsbs_spec:?} is not a valid apply-lsbs spec: {e}")
+        });
+
+    let mut out = String::new();
+    out.push_str(&precision::render_profile("BAKED_SCHED_MARGIN", &sched_margin));
+    out.push('\n');
+    out.push_str(&precision::render_profile("BAKED_APPLY_LSBS_IFWD", &ifwd));
+    out.push('\n');
+    out.push_str(&precision::render_profile("BAKED_APPLY_LSBS_MREV", &mrev));
+
+    match std::fs::write(path, &out) {
+        Ok(()) => eprintln!("TLM_PROFILE_EXPORT: wrote {path}"),
+        Err(e) => eprintln!("TLM_PROFILE_EXPORT: failed to write {path}: {e}"),
+    }
 }
