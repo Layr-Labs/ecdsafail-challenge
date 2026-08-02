@@ -1,0 +1,44 @@
+{
+  "aux_size": 7,
+  "compressed_bytes": 83070,
+  "compressed_sha256": "0e9bab3e93431de797635c5cdbb7c1831a6c89eaa5bcff3e96c9bc5c96834a7b",
+  "counts": {
+    "ccx": 6803493,
+    "clean_c3x_mbu": 180,
+    "cx": 422130,
+    "x": 444822
+  },
+  "executed_toffoli": 6803853,
+  "measurement_uncompute": false,
+  "model_attribution": "GPT-Codex",
+  "n": 256,
+  "qubits": 573,
+  "raw_file_sha256": "3606e0d4e641afdbeaf80fb1a0e8e4204906741f18e09a9199a19318c3643b79",
+  "raw_record_sha256": "19825cbadbff76e0ff7e8f1c7efde41c87365898e3b609e3e97e444e6564add7",
+  "records": 7670625,
+  "reduction": {
+    "commutation_rule": "same target or neither target occurs in the other gate's controls",
+    "cross_shard_cancellations_scanned": false,
+    "non_xor_primitives_are_global_barriers": true,
+    "prior_census_sha256": "4d88bf0a2e3da9108a2001f4108fce908b6e2ffccd97356e8d6928385dbefe48",
+    "proof_rule": "equal involutory X/CX/CCX primitives separated only by commuting X/CX/CCX primitives",
+    "reduction_passes": 1,
+    "removed": 163224,
+    "removed_by_kind": {
+      "ccx": 3048,
+      "cx": 3928,
+      "x": 156248
+    },
+    "schema": "ecdsafail-paper2607-bounded-xor-window-fixed-point-v1",
+    "source_records": 7833849,
+    "transformer_source_sha256": "63b4f80309593d28977a3b93666dd7d6e5ff5fa0b3d3111e2e4809a38ce77d4e",
+    "verification_zero_pass": true,
+    "window_words": 16384
+  },
+  "schedule_end": 1616,
+  "schema": "paper2607-eea-primitive-stream-v5-xor-fixed-point",
+  "scope_predicate": "open public ECDSA Fail reversible point-addition benchmark",
+  "source_module": "eea_circuit_s835_exactwidth_dirty12",
+  "step_end": 585,
+  "step_start": 541
+}

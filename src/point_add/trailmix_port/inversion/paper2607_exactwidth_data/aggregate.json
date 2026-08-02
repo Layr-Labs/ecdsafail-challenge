@@ -1,0 +1,770 @@
+{
+  "aux_size": 7,
+  "chunk_count": 36,
+  "chunks": [
+    {
+      "compressed_bytes": 57954,
+      "compressed_sha256": "0d433479210efe7dd22b7036c87c17a7e68d5da52432e7bcb037282f4002159f",
+      "file": "chunk-0001-0045.zst",
+      "raw_file_sha256": "326401c200c945b2aa0143de3c671edebad040f072c03adf4a9a5d33edf9adb6",
+      "raw_record_sha256": "dec0bc98937268c705d0f51bb6988df4a6bf52cab5864053261b049855ecfa8a",
+      "records": 6977022,
+      "reduction_passes": 1,
+      "removed": 106562,
+      "removed_by_kind": {
+        "ccx": 2484,
+        "cx": 3936,
+        "x": 100142
+      },
+      "source_compressed_sha256": "2c8740662dbcd6b8b64effd1c3b42bbad58bee3aea7c21edd4f1843a27fe83e9",
+      "source_records": 7083584,
+      "step_end": 45,
+      "step_start": 1,
+      "transform_receipt_sha256": "fb0ac3d907b471371e818a0f11e3264aa4cdbed9f52711bd17ab86df51217b9c"
+    },
+    {
+      "compressed_bytes": 57908,
+      "compressed_sha256": "2f102758edceaea430b7430a4e810d71d81c9eb1b3180317f4fa8818590cb68f",
+      "file": "chunk-0046-0090.zst",
+      "raw_file_sha256": "1cad4804eee2c2bba8cad55f48e5c59269c9b6852f94f4862444c926bbd6353d",
+      "raw_record_sha256": "a5efcaa54723625ca561f6088c4da5f3eb5c85f8a289a85b18385fc4094f3715",
+      "records": 7126078,
+      "reduction_passes": 1,
+      "removed": 112898,
+      "removed_by_kind": {
+        "ccx": 2724,
+        "cx": 4050,
+        "x": 106124
+      },
+      "source_compressed_sha256": "86eaa16aff8f3a5cd29c64d1d4b9807d6351016921b33b654e7e72618b88c3e9",
+      "source_records": 7238976,
+      "step_end": 90,
+      "step_start": 46,
+      "transform_receipt_sha256": "f4c9eaa79fb15ece4dd6b9252e6214d6c0155edea92e4ba2add1900793d40ca0"
+    },
+    {
+      "compressed_bytes": 65782,
+      "compressed_sha256": "223bdfc36b10ace807f05a97066f8ad176f99a8e7c681c0a742099ea66995c03",
+      "file": "chunk-0091-0135.zst",
+      "raw_file_sha256": "8a7de74a65ed035f9addb83ca997ed3c96eed5c7ef0317a66eded0969229626e",
+      "raw_record_sha256": "79fefacb79b2d6e90e3ba403f2bc2f678f6a7e67a5d038b1d7295f0935c14964",
+      "records": 7238621,
+      "reduction_passes": 1,
+      "removed": 117610,
+      "removed_by_kind": {
+        "ccx": 2836,
+        "cx": 4122,
+        "x": 110652
+      },
+      "source_compressed_sha256": "639f94d11711d01a3bc77ddf165093388af78f74e6e3a399e099aa478f037253",
+      "source_records": 7356231,
+      "step_end": 135,
+      "step_start": 91,
+      "transform_receipt_sha256": "9d6edb04bc8da3ee4f37197faecd3ec23b53f10490565a39bd62acd96a42d9d0"
+    },
+    {
+      "compressed_bytes": 59926,
+      "compressed_sha256": "1b67857107c7a117cab49048d412931c375727b8e0a017399e4baa26003aaa25",
+      "file": "chunk-0136-0180.zst",
+      "raw_file_sha256": "18e8ce5c44e381598e6c32e2b8f3fd7161b8810295731366769f0e23c5d16716",
+      "raw_record_sha256": "dde218a15d10ef2d474761c74964d9e0ae72039f6e058c6f43cbe6a03c6efcb5",
+      "records": 7392517,
+      "reduction_passes": 1,
+      "removed": 124496,
+      "removed_by_kind": {
+        "ccx": 2996,
+        "cx": 4194,
+        "x": 117306
+      },
+      "source_compressed_sha256": "34160944f8e9170867cf0de403b2c8ec58dedd5f99c35ef665bee0816bab8807",
+      "source_records": 7517013,
+      "step_end": 180,
+      "step_start": 136,
+      "transform_receipt_sha256": "61b7e56bdd331694e2034d23ba002bad2105a36c3af625a6b12f056ff865d9a4"
+    },
+    {
+      "compressed_bytes": 62060,
+      "compressed_sha256": "2242d76a47324a59853ac18de33b7b7c44e1916a80c8c0e2ae6b60eab8ec057a",
+      "file": "chunk-0181-0225.zst",
+      "raw_file_sha256": "da1d117164db575176ca8ba73a6650803d3eb8f4e736b8c3c56206d2aa35407f",
+      "raw_record_sha256": "773dae5a235b76ab364b0c3022b0a2637d37718cb96260b589bd8154e647f0b1",
+      "records": 7464436,
+      "reduction_passes": 1,
+      "removed": 127420,
+      "removed_by_kind": {
+        "ccx": 3004,
+        "cx": 4272,
+        "x": 120144
+      },
+      "source_compressed_sha256": "48c662f8b20a489944c6b155df3121fd84685aa82b0b96c866c921dc78823ab8",
+      "source_records": 7591856,
+      "step_end": 225,
+      "step_start": 181,
+      "transform_receipt_sha256": "83c7ba6b52d0c9238de46ed7b978890f9afc783e1a3c570d67aa0d83415f4ed9"
+    },
+    {
+      "compressed_bytes": 74359,
+      "compressed_sha256": "d79560a96d89aab9ecc9386be4efc463d8a23b3437c9b6cb80e2e455e7e71cd9",
+      "file": "chunk-0226-0270.zst",
+      "raw_file_sha256": "75dd59952e95912294d022de8d3987e082ea07f00eba3cec5b37e5b9d84d6ea2",
+      "raw_record_sha256": "4c6550066b855ce7c472dea854b0d6a046e774d9a3840817d2d8b2a882b07af3",
+      "records": 7571734,
+      "reduction_passes": 1,
+      "removed": 132034,
+      "removed_by_kind": {
+        "ccx": 3044,
+        "cx": 4274,
+        "x": 124716
+      },
+      "source_compressed_sha256": "85389fc0879597271a6f6602ed466a5b18d729f3d5c40bce9d91712d47d874bb",
+      "source_records": 7703768,
+      "step_end": 270,
+      "step_start": 226,
+      "transform_receipt_sha256": "207d87254ff4baf6c822dbdc90a0aa9744aa11b0ed9bac73e975ec7db1ded725"
+    },
+    {
+      "compressed_bytes": 68352,
+      "compressed_sha256": "ffd202881e00383b0a8aaf77834e2905f981b51eca910b8181aace00c7461594",
+      "file": "chunk-0271-0315.zst",
+      "raw_file_sha256": "497fbc9d059630efe2d9214acae4f53fc4af9f78476315b2b85e7fb5aaf56c52",
+      "raw_record_sha256": "45b5310c14b6e5a4967937323fcfb4c380c93de7a38b5e693d4774ddd02d1cef",
+      "records": 7606218,
+      "reduction_passes": 1,
+      "removed": 136204,
+      "removed_by_kind": {
+        "ccx": 2960,
+        "cx": 4158,
+        "x": 129086
+      },
+      "source_compressed_sha256": "33c789b78e73c3f3a9c53022961216db6ed93d6b1a90ce52ac3ccfdc6c57b4ff",
+      "source_records": 7742422,
+      "step_end": 315,
+      "step_start": 271,
+      "transform_receipt_sha256": "6db7c3a6c6604608b11f50f5860ef47dc9024b2388cfbc5e55bc6904ab5a29fc"
+    },
+    {
+      "compressed_bytes": 70456,
+      "compressed_sha256": "d803978f098a004169ad5cf580225af2dfe3fec927ea8748d67ae25ab321c6d8",
+      "file": "chunk-0316-0360.zst",
+      "raw_file_sha256": "537385c9e0e92874d96bb70424a101ccea9184540f70bb49c308c460b6a24317",
+      "raw_record_sha256": "914ee141fd1274cd053cf80ba114ac5be537f87ac8c1da6b7191f64da7da67f3",
+      "records": 7672188,
+      "reduction_passes": 1,
+      "removed": 143542,
+      "removed_by_kind": {
+        "ccx": 3214,
+        "cx": 4344,
+        "x": 135984
+      },
+      "source_compressed_sha256": "5943ea5f03dae915de57cc9579b4e190f3fdb744e740cd1b0cffbff405141bf2",
+      "source_records": 7815730,
+      "step_end": 360,
+      "step_start": 316,
+      "transform_receipt_sha256": "f452c4db6753173e6714d9dbb15e38dd0b025261894e476691e4d3d6ea251030"
+    },
+    {
+      "compressed_bytes": 71976,
+      "compressed_sha256": "b94545f5ca4fbec0c5dab9e079bdc121014a0150915bb0f702cdf288e5e9dc23",
+      "file": "chunk-0361-0405.zst",
+      "raw_file_sha256": "3c77311305986985864d66ec0b408b5cecbed468c520a52153c1b89470500f1c",
+      "raw_record_sha256": "e0de8d9cd9be9b1ae1edba7b3b31027c2332a1f2d6a0d668dde6e8e94a2e9b5a",
+      "records": 7641662,
+      "reduction_passes": 1,
+      "removed": 146034,
+      "removed_by_kind": {
+        "ccx": 3102,
+        "cx": 4314,
+        "x": 138618
+      },
+      "source_compressed_sha256": "c54ccc7d787d2d7bce45a3842146bcd15cb26776f0849cce164f9602c5a7c6d8",
+      "source_records": 7787696,
+      "step_end": 405,
+      "step_start": 361,
+      "transform_receipt_sha256": "0086ff967b6e7dcfa2af901f7c46770b836c22ebef513f5ec936bce6542ed175"
+    },
+    {
+      "compressed_bytes": 73639,
+      "compressed_sha256": "c5b197da55c4b6ac22bf2c1604b65b074b0e258dd1d6237b619aee0ccb682c0a",
+      "file": "chunk-0406-0450.zst",
+      "raw_file_sha256": "5173fb0764c3746b076a43a4d01334cb5fc07031ec33898cbf2b31dbec703cd0",
+      "raw_record_sha256": "5d292e89cf900c61bb17c0f18df83df3c248069c336927f549f7616c45f1a0d8",
+      "records": 7657516,
+      "reduction_passes": 1,
+      "removed": 150872,
+      "removed_by_kind": {
+        "ccx": 3162,
+        "cx": 4372,
+        "x": 143338
+      },
+      "source_compressed_sha256": "2d4f8be24b5d711d81014011945ec2480c59fc28fe5e3f3c54f5a51ccd4cc1ce",
+      "source_records": 7808388,
+      "step_end": 450,
+      "step_start": 406,
+      "transform_receipt_sha256": "6212c9c9683f29d7287445058eb9a3ca840d8ad1b483f17291940798b802a2cb"
+    },
+    {
+      "compressed_bytes": 71987,
+      "compressed_sha256": "a89968a64750a335d4fc80ea0b5456f3e3e69e75052f1be1d4be0c929f1b7fec",
+      "file": "chunk-0451-0495.zst",
+      "raw_file_sha256": "affda1af7bde9385e00e641d76abb7190a215d08e436fcfefee3d02d1b7944d3",
+      "raw_record_sha256": "0e403e8ecae22e0f643b3110feded2ec81126a474b0e797ac10039cd85dfccc5",
+      "records": 7672896,
+      "reduction_passes": 1,
+      "removed": 155900,
+      "removed_by_kind": {
+        "ccx": 3292,
+        "cx": 4506,
+        "x": 148102
+      },
+      "source_compressed_sha256": "46d1d50a045638fc63da897fc327d83c3900197372e61c3aa96b42e7b1d36d24",
+      "source_records": 7828796,
+      "step_end": 495,
+      "step_start": 451,
+      "transform_receipt_sha256": "708164fcd94d458fb7704712202265de2f69b12deaa7d5216eb9e97000ce8822"
+    },
+    {
+      "compressed_bytes": 85713,
+      "compressed_sha256": "992899ef079bd475315d0f7420c4e137840dc779565c66551693e5a3a5b398f5",
+      "file": "chunk-0496-0540.zst",
+      "raw_file_sha256": "5b28b76d97afc387f3702a249d0e6665d7b2227172bfb4462e289204790ab30e",
+      "raw_record_sha256": "070e92a78be988d9d9a2b573f56750553c3539863fc2b8e9fedeb152ea17d337",
+      "records": 7737684,
+      "reduction_passes": 1,
+      "removed": 162468,
+      "removed_by_kind": {
+        "ccx": 3262,
+        "cx": 4250,
+        "x": 154956
+      },
+      "source_compressed_sha256": "99ad66b371da7b6673d824770c41e95fde5cca76da9e459b3843dfcaf3e20e76",
+      "source_records": 7900152,
+      "step_end": 540,
+      "step_start": 496,
+      "transform_receipt_sha256": "f401c998a0d5d233379d6a941e181412f7df9ef697a21f9ddb1ccf3bb965de44"
+    },
+    {
+      "compressed_bytes": 83070,
+      "compressed_sha256": "0e9bab3e93431de797635c5cdbb7c1831a6c89eaa5bcff3e96c9bc5c96834a7b",
+      "file": "chunk-0541-0585.zst",
+      "raw_file_sha256": "3606e0d4e641afdbeaf80fb1a0e8e4204906741f18e09a9199a19318c3643b79",
+      "raw_record_sha256": "19825cbadbff76e0ff7e8f1c7efde41c87365898e3b609e3e97e444e6564add7",
+      "records": 7670625,
+      "reduction_passes": 1,
+      "removed": 163224,
+      "removed_by_kind": {
+        "ccx": 3048,
+        "cx": 3928,
+        "x": 156248
+      },
+      "source_compressed_sha256": "6d8be39c9fc6b01dc3f65dae7917336854eee2a07f59bcdcbddf3a1bae9e3fb3",
+      "source_records": 7833849,
+      "step_end": 585,
+      "step_start": 541,
+      "transform_receipt_sha256": "299339db09200c971551e1091c1a09afa9c4c95a15e67bc6a959701366709464"
+    },
+    {
+      "compressed_bytes": 80469,
+      "compressed_sha256": "d828f96801d80e0ba49b6194f4f043cc5fb4be0e06b803e29ad42334c328ad94",
+      "file": "chunk-0586-0630.zst",
+      "raw_file_sha256": "262ec67bec3802a6c0bfb4991df67a66dbc304e481a4550810b1b1f945e98ff1",
+      "raw_record_sha256": "e8e024b5c2e86e0591865dd0b0233f6c8ca995b33a3b0fdb94fd8c6af6716c48",
+      "records": 7649599,
+      "reduction_passes": 1,
+      "removed": 166984,
+      "removed_by_kind": {
+        "ccx": 3188,
+        "cx": 4092,
+        "x": 159704
+      },
+      "source_compressed_sha256": "6a47d674880594573f6e01e599ed562e0d29ca2ffc8a74e3b7ac60fde0a2efa9",
+      "source_records": 7816583,
+      "step_end": 630,
+      "step_start": 586,
+      "transform_receipt_sha256": "52aa415b2809218b0d78ceddae03887e0dd8547a426df8dae8cd09eb83748046"
+    },
+    {
+      "compressed_bytes": 77746,
+      "compressed_sha256": "75a7b28434f34ba88f9771d056eda13edf5eb4ccf6c38940b1005b5babe25bd2",
+      "file": "chunk-0631-0675.zst",
+      "raw_file_sha256": "f8835e028fde7277897624cf12a613842f5353ed3cc1e15c14bb551408d34afd",
+      "raw_record_sha256": "ca6cda298c2514c749f08ee2a144d8f9f9551fab889842a68b9252e1e52959b1",
+      "records": 7618024,
+      "reduction_passes": 2,
+      "removed": 170332,
+      "removed_by_kind": {
+        "ccx": 3148,
+        "cx": 4132,
+        "x": 163052
+      },
+      "source_compressed_sha256": "c9a6bfad7913fa07438bb0ec3f81b9002cd71ab91a774188eaa63b82344b986d",
+      "source_records": 7788356,
+      "step_end": 675,
+      "step_start": 631,
+      "transform_receipt_sha256": "bb2052c76a0a28ea366e48afe00dbc871212bea7ded293a649a8dcae56f7e64f"
+    },
+    {
+      "compressed_bytes": 76911,
+      "compressed_sha256": "8e6e62baf869ca8181a30f2fab7e84c1e7337d4d13f6aa1a3094d75d093daa7e",
+      "file": "chunk-0676-0720.zst",
+      "raw_file_sha256": "426287f6368039427139d18363d95e33afcdd0125e0fff7fe6ce7a2fc91c999b",
+      "raw_record_sha256": "2275284fd61032181032c7ca52cf8cb23e213968c7cf12b042bf15bd89c08432",
+      "records": 7644088,
+      "reduction_passes": 2,
+      "removed": 176034,
+      "removed_by_kind": {
+        "ccx": 3248,
+        "cx": 4372,
+        "x": 168414
+      },
+      "source_compressed_sha256": "17bebb2b035450c9a47ee154f766261a65b3a48a72ea3349a70b2dcb3e53c99a",
+      "source_records": 7820122,
+      "step_end": 720,
+      "step_start": 676,
+      "transform_receipt_sha256": "8e16b47dace68aebcc97508734f4500d80cfe3e0de5227034a443360d2746f35"
+    },
+    {
+      "compressed_bytes": 76824,
+      "compressed_sha256": "437400eac68dce5debe0d7382a30e9d7c94b05760c5a7984c7adb8ba9ae3fbfe",
+      "file": "chunk-0721-0765.zst",
+      "raw_file_sha256": "0b7b69000d97f85fa589bd40c545693ab9e6103eb9c21ecafb2966d6d3729ba6",
+      "raw_record_sha256": "e067b42e080d2527c0c869da1405f885246d10e893698bfddbef8a09b8855ba3",
+      "records": 7552324,
+      "reduction_passes": 1,
+      "removed": 177090,
+      "removed_by_kind": {
+        "ccx": 3282,
+        "cx": 4428,
+        "x": 169380
+      },
+      "source_compressed_sha256": "eeb05950eab9a7019901d8af90ff46c110d7d1ce0bc033751173c03f10c5b7ea",
+      "source_records": 7729414,
+      "step_end": 765,
+      "step_start": 721,
+      "transform_receipt_sha256": "a805e3f488e5cba60fbf180a8b3301c33d635767278496050ee24320a1a212cc"
+    },
+    {
+      "compressed_bytes": 76464,
+      "compressed_sha256": "b99aa01085f73fe963bea652d750367423466ea56951e045f1a1cf2adbe4bef0",
+      "file": "chunk-0766-0810.zst",
+      "raw_file_sha256": "ecc36140446bd309111ee5523d71eb974fdc81558f7e2d2d650d753593d52bca",
+      "raw_record_sha256": "7ce5e2d94a22187ee0e80c4adb633dbb16c98cf3d5f19fefa699460136f03063",
+      "records": 7516980,
+      "reduction_passes": 1,
+      "removed": 179968,
+      "removed_by_kind": {
+        "ccx": 3078,
+        "cx": 4222,
+        "x": 172668
+      },
+      "source_compressed_sha256": "b0ebc1465a9de4c9283b1525297d677c4d2cdec87811ec772cc95a01b1d48b93",
+      "source_records": 7696948,
+      "step_end": 810,
+      "step_start": 766,
+      "transform_receipt_sha256": "1e469ec445a1f375a3aef6936b880de006fa15ae455556952d895e86fe3e0e11"
+    },
+    {
+      "compressed_bytes": 75385,
+      "compressed_sha256": "464d98e29b78fffa763a94d9d2c447ef512d97831c97f79d9f1b1977d9fe8f25",
+      "file": "chunk-0811-0855.zst",
+      "raw_file_sha256": "ef271e03b70bfad05a51d7cdbc078e3d4b62a77676b8b5e5d44b6492a7c3b295",
+      "raw_record_sha256": "6c11948df6b78cd550d4107944f5ddec1dc0da1df29535aa95fa9240b4349f3c",
+      "records": 7474739,
+      "reduction_passes": 1,
+      "removed": 183010,
+      "removed_by_kind": {
+        "ccx": 3104,
+        "cx": 4256,
+        "x": 175650
+      },
+      "source_compressed_sha256": "4082b97f2a11c48237e86e9cfbcbec0ec6edde5da524c8ee50d9dc086a15a5e9",
+      "source_records": 7657749,
+      "step_end": 855,
+      "step_start": 811,
+      "transform_receipt_sha256": "1ecd84d66733e74e57843041f28351729dcced8c783725d32c8377d99a1242ab"
+    },
+    {
+      "compressed_bytes": 75806,
+      "compressed_sha256": "0b42f9e30dd62c2d24866134ea55ccdddbe60720caf782df6150b6562aaadf0e",
+      "file": "chunk-0856-0900.zst",
+      "raw_file_sha256": "17c61e2ce831ed781813c5cacfb202d4f6ffde8bc4a7fb7726e1a96e469d7f56",
+      "raw_record_sha256": "6256c8d21465f80ec33054b265b353902f18dd4ee4f427f81c0b5d643eb40b1a",
+      "records": 7487917,
+      "reduction_passes": 1,
+      "removed": 189136,
+      "removed_by_kind": {
+        "ccx": 3400,
+        "cx": 4540,
+        "x": 181196
+      },
+      "source_compressed_sha256": "59102bcaf7992fadc46d555a45d16e5db49ad9acda6bae8fe53461d185ef10f2",
+      "source_records": 7677053,
+      "step_end": 900,
+      "step_start": 856,
+      "transform_receipt_sha256": "c3e293f19c5ebc29f63a228922729fdb0be6949f101527c4bd8b3a3120dd02ef"
+    },
+    {
+      "compressed_bytes": 76253,
+      "compressed_sha256": "48746b43b802e2a64ad9d3e99181395a417c2447f3135b7b9e386ac7a47ece44",
+      "file": "chunk-0901-0945.zst",
+      "raw_file_sha256": "bbc03ee3a4dac09ea5e137fd331d685883549ae0613246b6166512e08e9bf56b",
+      "raw_record_sha256": "ebd49f60801f16ce9e32e1a61b341b01209b5573f910b6a7885df54fbf3e011f",
+      "records": 7390146,
+      "reduction_passes": 1,
+      "removed": 189110,
+      "removed_by_kind": {
+        "ccx": 3206,
+        "cx": 4400,
+        "x": 181504
+      },
+      "source_compressed_sha256": "bb61b97f7652d52463a3a19da11a4fda0333102e420d81f9594a77ab2c73d513",
+      "source_records": 7579256,
+      "step_end": 945,
+      "step_start": 901,
+      "transform_receipt_sha256": "bfc21637c3495ec3c744db72ed39ffbebe760a0d7972777cd22e8b5bb5a139a0"
+    },
+    {
+      "compressed_bytes": 78503,
+      "compressed_sha256": "4c22b1e57b608b190bff95611795ab31560a4ffaf9280c12d0bf7a0736d75d24",
+      "file": "chunk-0946-0990.zst",
+      "raw_file_sha256": "637df1a7c60205a3514b644d54a71851dbbb8ad7188cbfa0364effc63b67ca1e",
+      "raw_record_sha256": "ea100df3a0c0d554c3d691ef224d196403337267747583172e5da918ab295b39",
+      "records": 7346536,
+      "reduction_passes": 1,
+      "removed": 192508,
+      "removed_by_kind": {
+        "ccx": 3310,
+        "cx": 4510,
+        "x": 184688
+      },
+      "source_compressed_sha256": "797c330a803289ffbf36afa9a124eaf8f090c30041a028090263cb30e7a1326e",
+      "source_records": 7539044,
+      "step_end": 990,
+      "step_start": 946,
+      "transform_receipt_sha256": "c6d051ede3d4bd9a343fb3a95349d61937b02eed53fbf2dc8e536d0b08f240de"
+    },
+    {
+      "compressed_bytes": 76153,
+      "compressed_sha256": "399045d838af96e22353f4fe2c6d9fed2c64a4a01c643886e1fe4487d31a3857",
+      "file": "chunk-0991-1035.zst",
+      "raw_file_sha256": "5d51558275eae67ec7f41cade76dda260f2e5a584de669da6529087cf4fee3b5",
+      "raw_record_sha256": "575f34115bf2d4011683d0c0f53a0b87630121324d12bed859305c33d7623563",
+      "records": 7308458,
+      "reduction_passes": 2,
+      "removed": 197196,
+      "removed_by_kind": {
+        "ccx": 3336,
+        "cx": 4516,
+        "x": 189344
+      },
+      "source_compressed_sha256": "2026a92e4c46ddfecf01dc993b7ea32e0698165219463a3242d06db966e7d3be",
+      "source_records": 7505654,
+      "step_end": 1035,
+      "step_start": 991,
+      "transform_receipt_sha256": "06e92b7e2ea226378a8bcf4182efc6552a90da4288fc0d105e084e89fcb90695"
+    },
+    {
+      "compressed_bytes": 99695,
+      "compressed_sha256": "9ef995aaeb8e04f638d52d578f94cf0114f39ce8797905c0f4f4c1bcc8fd761e",
+      "file": "chunk-1036-1080.zst",
+      "raw_file_sha256": "656f1101ed7b4e9ae78b82f65f722c0e4ce7071fb20019451c2f88c9da491fdd",
+      "raw_record_sha256": "7367e88d6f7d29dc1a6538138dad73dc04abb03a348c86361d0b58003d0804fa",
+      "records": 7274848,
+      "reduction_passes": 1,
+      "removed": 204062,
+      "removed_by_kind": {
+        "ccx": 3364,
+        "cx": 4524,
+        "x": 196174
+      },
+      "source_compressed_sha256": "76fe3fd2714710bcd1ed3af2d4bbbac060433ecf37dbb3ae737d3f8347e86785",
+      "source_records": 7478910,
+      "step_end": 1080,
+      "step_start": 1036,
+      "transform_receipt_sha256": "04553990c098268bd525291c2ee9bf849af9efbe07c4f56252b1586961ba434c"
+    },
+    {
+      "compressed_bytes": 91665,
+      "compressed_sha256": "35a15a5bbde2de36eab2be7af8544b2e469d80a2ca344dfb23d53112e912a3c9",
+      "file": "chunk-1081-1125.zst",
+      "raw_file_sha256": "baa9afd739a58b7ad93d08cef6bfef200f70b2c9750387bc340e7525389d3dcc",
+      "raw_record_sha256": "75f0ff4e1e4406e57f897b11ffefdfd9b90936b4f1889b74fe8947958a93dbf0",
+      "records": 7087410,
+      "reduction_passes": 1,
+      "removed": 200016,
+      "removed_by_kind": {
+        "ccx": 3324,
+        "cx": 4392,
+        "x": 192300
+      },
+      "source_compressed_sha256": "8c16d1ee0af39c8041070925878b39d7dc5d71a9b73fe3029f3ec5cb0cfcead3",
+      "source_records": 7287426,
+      "step_end": 1125,
+      "step_start": 1081,
+      "transform_receipt_sha256": "159f0a06343cf4ceb7dbf2f754ef59bd52dc983423d4c2a9495f041edcf562e3"
+    },
+    {
+      "compressed_bytes": 87469,
+      "compressed_sha256": "72091619d6a01f067c007b3c93c8eeb3b559d6b4b5e173b10a6cb8bcc85be3f4",
+      "file": "chunk-1126-1170.zst",
+      "raw_file_sha256": "43a99edfd9f77dbf6f29d5fccf6bfb1fe7d8c15a50da104c555b619346969da4",
+      "raw_record_sha256": "69fdacf434f94062d00fae213e01fb5dacb68e04e37873c7a88326bbc4dc72ee",
+      "records": 6958378,
+      "reduction_passes": 1,
+      "removed": 199066,
+      "removed_by_kind": {
+        "ccx": 3244,
+        "cx": 4378,
+        "x": 191444
+      },
+      "source_compressed_sha256": "2be0ab1d53207ac799a65bbac6769ccaa1c280e1c53ebb06087ddf20fe734179",
+      "source_records": 7157444,
+      "step_end": 1170,
+      "step_start": 1126,
+      "transform_receipt_sha256": "fd910c2b180fbd29b720a32b9c725c8e525e517f701046190d758dd2c5c46461"
+    },
+    {
+      "compressed_bytes": 90938,
+      "compressed_sha256": "c8000c7de219a36deaa0c1b4643afb1fa8b4abe388fb856de5560d0eaba27720",
+      "file": "chunk-1171-1215.zst",
+      "raw_file_sha256": "ff4998ef812115561ad02a8712182181278a70c9df82f743fa5d698f4e58ead8",
+      "raw_record_sha256": "33a4ae596a2ce3c36c617ea90266d373367cd8646c32509ad920397bc298fe93",
+      "records": 6815062,
+      "reduction_passes": 2,
+      "removed": 197596,
+      "removed_by_kind": {
+        "ccx": 3204,
+        "cx": 4388,
+        "x": 190004
+      },
+      "source_compressed_sha256": "0e1eb679e8f669f8e60b75b25217aeb425838b727b2ffd14151cca5191be3cdb",
+      "source_records": 7012658,
+      "step_end": 1215,
+      "step_start": 1171,
+      "transform_receipt_sha256": "78bb84b8c1360e25fac4378d301fb8c0798cdd7ccfca12e3c4220090436d9a61"
+    },
+    {
+      "compressed_bytes": 98379,
+      "compressed_sha256": "6e465b416cb383cc751ba3e7af66ab64369edfc42e66d15c64e4c6d8ccf6e918",
+      "file": "chunk-1216-1260.zst",
+      "raw_file_sha256": "ea803504836c62f30d152281f2677acac1a58fd06df33f0d699ec50d788d68db",
+      "raw_record_sha256": "54f785fcf1d6f6a31df634068a5fe5df153c4ba7238b0c43b6d78edf79463b38",
+      "records": 6712786,
+      "reduction_passes": 2,
+      "removed": 199672,
+      "removed_by_kind": {
+        "ccx": 3310,
+        "cx": 4484,
+        "x": 191878
+      },
+      "source_compressed_sha256": "08efa8c9f703216d9beba4c898b9066ede06c40eac455b958a8c009410ffc7ad",
+      "source_records": 6912458,
+      "step_end": 1260,
+      "step_start": 1216,
+      "transform_receipt_sha256": "ded245a4aee596e69ce52552d74ed60bb27b74fca7ddff534a435c3597af469b"
+    },
+    {
+      "compressed_bytes": 79525,
+      "compressed_sha256": "1953336468371f8328944ee9369d7698c3830b0121af826f7550d341054ee4a0",
+      "file": "chunk-1261-1305.zst",
+      "raw_file_sha256": "c3d9dcd63505c1ca7e71a71726c63befa433fcd95c48fec899c053cd80cabd45",
+      "raw_record_sha256": "8780c5b4ab5331328b7f37ce0c5aa59d16ea78d201f55d5a8de2b7f03c2b2e33",
+      "records": 6515934,
+      "reduction_passes": 1,
+      "removed": 195552,
+      "removed_by_kind": {
+        "ccx": 3098,
+        "cx": 4374,
+        "x": 188080
+      },
+      "source_compressed_sha256": "1289773ca4aa78b58dc8e5437fbdb6efb0c072a6da00d39ddad4aca6bf4de95b",
+      "source_records": 6711486,
+      "step_end": 1305,
+      "step_start": 1261,
+      "transform_receipt_sha256": "45baa19ff9dc909d174e8b28e1d956735491e99edfeffcfce2b55749605a8b5c"
+    },
+    {
+      "compressed_bytes": 85421,
+      "compressed_sha256": "89a862a77272f5bec7cd9fc107f14f31a094c048be23b88df6d7303e02a2df30",
+      "file": "chunk-1306-1350.zst",
+      "raw_file_sha256": "89ce537992bebd25e87e3fdd61e9a65908ed7ea1435757e6e26480393e8a5211",
+      "raw_record_sha256": "c6f301b5c916b575b4279a94f98c89328c1e06e77f3fd29a6a5a9a826827eee6",
+      "records": 6369940,
+      "reduction_passes": 1,
+      "removed": 194876,
+      "removed_by_kind": {
+        "ccx": 3100,
+        "cx": 4380,
+        "x": 187396
+      },
+      "source_compressed_sha256": "43c27d77d67c27c5b2386aa612a771b79f2ff0906d6fdd3f127b7c62dbf5c3cc",
+      "source_records": 6564816,
+      "step_end": 1350,
+      "step_start": 1306,
+      "transform_receipt_sha256": "ebeb70e46f9257181b402fc6682fcee56d667cb499e140c91871836c84336118"
+    },
+    {
+      "compressed_bytes": 79415,
+      "compressed_sha256": "3bad06562c1fbec8c0286ca4c7964cf49cf27343f5ea80d11e0020a5cfc3ce67",
+      "file": "chunk-1351-1395.zst",
+      "raw_file_sha256": "43d91330f88ef237c8d6e82d5bef546018adfeb6d41c99d61f239386004831bd",
+      "raw_record_sha256": "c170047827248868e306639ed8a7b1f070b139eff94a1398544caa2e66d48e9e",
+      "records": 6219924,
+      "reduction_passes": 1,
+      "removed": 194100,
+      "removed_by_kind": {
+        "ccx": 3146,
+        "cx": 4310,
+        "x": 186644
+      },
+      "source_compressed_sha256": "f69a57b31899f01ac2aed96e48dcf4b7881bd445d0d62bdf963b50aef43e838c",
+      "source_records": 6414024,
+      "step_end": 1395,
+      "step_start": 1351,
+      "transform_receipt_sha256": "6c5be4324165b3d3e459b3154dbaf0f367d84c75b64d27a76227d16f43c574ee"
+    },
+    {
+      "compressed_bytes": 74088,
+      "compressed_sha256": "547e1bb63261f5cbd3e935c1bde4518e3fa1ca49c856918c0d921c897a409c1d",
+      "file": "chunk-1396-1440.zst",
+      "raw_file_sha256": "59e349b9992333643da57a2b90a457a81af36ffa6217b1e51aa681ea8ea86a68",
+      "raw_record_sha256": "03f537195c57200e3596fde6d6eec58b7bb2255edfecc88212162f8099605387",
+      "records": 6111352,
+      "reduction_passes": 1,
+      "removed": 195092,
+      "removed_by_kind": {
+        "ccx": 3146,
+        "cx": 4388,
+        "x": 187558
+      },
+      "source_compressed_sha256": "11fcb0ccf855ea75ebc1057a0fa6f9b54822cbf12e6d31f9ff081dad8322b9c6",
+      "source_records": 6306444,
+      "step_end": 1440,
+      "step_start": 1396,
+      "transform_receipt_sha256": "5bf6fbe52cd43e41f35e06180be3dd3945166f23861fe39515d82587912169d9"
+    },
+    {
+      "compressed_bytes": 75856,
+      "compressed_sha256": "d6207631012ac78320d8c60592ae0ed1db308231cdc66fa1aeba94e817a49e98",
+      "file": "chunk-1441-1485.zst",
+      "raw_file_sha256": "6120d443b97c3dbca6586b18492ffa2c74da1f182e70216355aadfcc9a4f4165",
+      "raw_record_sha256": "4ebd490057c43ac8e47bc7e581d1e17f6b7f4fff9fa85ba7918d2cb977b4995f",
+      "records": 5919584,
+      "reduction_passes": 1,
+      "removed": 191824,
+      "removed_by_kind": {
+        "ccx": 2956,
+        "cx": 4296,
+        "x": 184572
+      },
+      "source_compressed_sha256": "ae1f4ef50fd476c0df9b9a83bd4f6f5d1355513fa9991424e1153b5549f796a8",
+      "source_records": 6111408,
+      "step_end": 1485,
+      "step_start": 1441,
+      "transform_receipt_sha256": "a47b026e7798b86d44f7b4de1e8c428cf00d35c60b2354aa7f6cd814c0d6b6c0"
+    },
+    {
+      "compressed_bytes": 58896,
+      "compressed_sha256": "27e8075101ad53f3a1a35ef543e5d1ae1f44a78437f11e84e53e716dd290d6ab",
+      "file": "chunk-1486-1530.zst",
+      "raw_file_sha256": "99dd24f7e4ef83bc55b0d11665868030fd763ff067d66b0646ec9b4b6eddd925",
+      "raw_record_sha256": "09416e7011371407704357b3c9b1efb7832d5917d85f75c5aff9f11e1201ecd9",
+      "records": 5758634,
+      "reduction_passes": 1,
+      "removed": 189772,
+      "removed_by_kind": {
+        "ccx": 2918,
+        "cx": 4232,
+        "x": 182622
+      },
+      "source_compressed_sha256": "c2aa0a81a5449921a5e903c79794616b8917dc3ce8ec827d97bae65a9fb85322",
+      "source_records": 5948406,
+      "step_end": 1530,
+      "step_start": 1486,
+      "transform_receipt_sha256": "b3e6bdfc03caf1ac4c44d07d6d33ec59599ed9d093cd11dab0ce337f632754e6"
+    },
+    {
+      "compressed_bytes": 57283,
+      "compressed_sha256": "018809acdd151fa65609692db3c7469a5eccfbcae578178d65341f910b79b31f",
+      "file": "chunk-1531-1575.zst",
+      "raw_file_sha256": "b3181195a3dc104fd1690be0f7f93436962eced0a99e18fe677371389804e6c6",
+      "raw_record_sha256": "b32b72a7e0ee12a14eb21ed07d214b0e6ab4c35a03ca3c688be85a84a4cf5bb4",
+      "records": 5592350,
+      "reduction_passes": 1,
+      "removed": 188472,
+      "removed_by_kind": {
+        "ccx": 2808,
+        "cx": 4186,
+        "x": 181478
+      },
+      "source_compressed_sha256": "89d98153563eb09f5bf071098ee4392372dd94f51117b10c6b2d078699159d6f",
+      "source_records": 5780822,
+      "step_end": 1575,
+      "step_start": 1531,
+      "transform_receipt_sha256": "da492f3528605492ad3af8cc55240d7aa2c37c5ad8d9f455f3253af0c1ff0e17"
+    },
+    {
+      "compressed_bytes": 60753,
+      "compressed_sha256": "7758e30d2eeeb97469fe5cb02b2745b5e5c14e2f1167f5b493aedd75ad7e90c8",
+      "file": "chunk-1576-1616.zst",
+      "raw_file_sha256": "65cd11c53dae9ea75697be465d321ba40bfa4de0bc53e88e887a6014d9e45da1",
+      "raw_record_sha256": "e3cba7354169f18d39139b10513edbe76e5ed3995b5a4b17a67e7eccd2462403",
+      "records": 4896792,
+      "reduction_passes": 1,
+      "removed": 170054,
+      "removed_by_kind": {
+        "ccx": 2418,
+        "cx": 3760,
+        "x": 163876
+      },
+      "source_compressed_sha256": "7ff4541198945c07e512f99be2e9d5ee64dc30c567139b89f036dff9766c5463",
+      "source_records": 5066846,
+      "step_end": 1616,
+      "step_start": 1576,
+      "transform_receipt_sha256": "998b88f1de6e4a2e756fa99a64b92ad790bd2bc0d4f96af369dc23423a029df5"
+    }
+  ],
+  "emitted_ops_per_traversal": 254670394,
+  "executed_toffoli_per_traversal": 224794620,
+  "field_width": 256,
+  "four_traversal_emitted_ops": 1018681576,
+  "four_traversal_executed_toffoli": 899178480,
+  "local_width": 573,
+  "model_attribution": "GPT-Codex",
+  "primitive_counts": {
+    "ccx": 224781692,
+    "clean_c3x_mbu": 6464,
+    "cx": 14172270,
+    "x": 15690576
+  },
+  "records_per_traversal": 254651002,
+  "reduction": {
+    "commutation_rule": "same target or neither target occurs in the other gate's controls",
+    "cross_shard_cancellations_scanned": false,
+    "first_pass_removed_by_kind_per_traversal": {
+      "ccx": 111464,
+      "cx": 154130,
+      "x": 5855042
+    },
+    "max_reduction_passes": 2,
+    "non_xor_primitives_are_global_barriers": true,
+    "prior_census_sha256": "2053e56c3ebdca5c4ce12a21c400624e83199fa4c434f4ffeb6013df4929f034",
+    "proof_rule": "equal involutory X/CX/CCX primitives separated only by commuting X/CX/CCX primitives",
+    "removed_by_kind_per_traversal": {
+      "ccx": 111464,
+      "cx": 154280,
+      "x": 5855042
+    },
+    "removed_per_traversal": 6120786,
+    "scanner_binary_sha256": "919deaa4c669a1ca6e8b2cf178ea04779e6182a8ccb76cd9ebb99f3a9239bbee",
+    "schema": "ecdsafail-paper2607-bounded-xor-window-fixed-point-v1",
+    "source_records_per_traversal": 260771788,
+    "transformer_binary_sha256": "7c8801095089acbd50c29834ac275eae353a63a5b14df0bb2fa50033032a7a1c",
+    "transformer_source_sha256": "63b4f80309593d28977a3b93666dd7d6e5ff5fa0b3d3111e2e4809a38ce77d4e",
+    "verification_zero_pass_per_shard": true,
+    "window_words": 16384
+  },
+  "schedule_steps": 1616,
+  "schema": "paper2607-eea-primitive-stream-aggregate-v3-xor-fixed-point",
+  "scope_predicate": "open public ECDSA Fail reversible point-addition benchmark",
+  "source_module": "eea_circuit_s835_exactwidth_dirty12"
+}
