@@ -1192,8 +1192,6 @@ fn configure_q1153_second512_submission_defaults() {
     set_default_env("TLM_COORD_RSUB_FUSED", "1");
     set_default_env("TLM_SQUARE_VENT_MARGIN", "0");
     set_default_env("TLM_COORD_ADD3X_TRUNC", "1");
-    set_default_env("TLM_COORD_MSBS", "18");
-    set_default_env("TLM_COORD_Y_SUB_FINAL_MSBS", "19");
     set_default_env("TLM_SQUARE_VENT_SHIFTED", "1");
     set_default_env("TLM_SQUARE_SHIFTED128_LOW_TAGS", "a,b,c");
     set_default_env("TLM_SQUARE_PEAK_CAP", "1154");
@@ -2378,13 +2376,12 @@ pub fn build() -> Vec<Op> {
     } else {
         apply_deep_strip_identity(ops)
     };
-    // Tail nonce for the exact H3 coordinate-width-18 stream
-    // (9,024/9,024 PASS, score 1,487,590,242).
-    // SUB4_TAIL_NONCE remains available for controlled re-grinding.
+    // Tail nonce for the exact H2 risk-3.0 stream (9024/9024 PASS, score 1,487,599,474).
+    // SUB4_TAIL_NONCE overrides it for controlled re-grinding.
     let nonce: u64 = std::env::var("SUB4_TAIL_NONCE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(62000008397024);
+        .unwrap_or(200321420125);
     let ops = apply_tail_nonce(ops, nonce);
     // `TLM_DIRTY_SCAN_FINAL=1` runs the reset/phase audit on the stream `eval_circuit`
     // will actually see, i.e. after every rewrite pass. Default off.

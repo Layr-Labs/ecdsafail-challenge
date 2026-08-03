@@ -1,7 +1,7 @@
 # Memory
 
-Durable notes for this circuit, mirrored from the repo-root `notes/` folder so they travel with submissions
-(`editablePaths` is `src/point_add` only, so anything outside it is not shipped).
+Start with `06-research-status.md` for the current frontier, proved scope, failed approaches, open problems, and exact
+re-entry commands. These notes live under `src/point_add` so they travel with submissions.
 
 | file | contents |
 |---|---|
@@ -10,6 +10,9 @@ Durable notes for this circuit, mirrored from the repo-root `notes/` folder so t
 | `03-proven-floors.md` | where the headroom is NOT, with proofs (rank bound, multiplicative complexity, exact codec enumeration) |
 | `04-traps.md` | four ways an env knob silently no-ops, positional addressing, validation gates |
 | `05-qubit-reduction.md` | the measured qubit programme, including the exchange-rate trap |
+| `06-research-status.md` | latest research handoff: certified baseline, scoped results, counterexamples, unresolved work, re-entry conditions |
+| `repro/` | compact tested programs retained to reproduce or extend the durable claims |
+| [`repro/world_model.py`](repro/world_model.py) | executable evidence, invalidation, history-replay, and promotion-gate model |
 
 The single most important operational fact: **a persistent-set reduction only pays if you lower `TLM_TARGET_Q` by the
 same amount**, because the vent pool expands to fill whatever you free. The second most important: **only a
