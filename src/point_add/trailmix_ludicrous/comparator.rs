@@ -169,10 +169,6 @@ const COMPARE_CIN_REMAINDER_KEYS: &[u32] = &[
 ];
 
 fn compare_cin_has_structurally_dead_carry(call_index: usize, bit: usize) -> bool {
-    if super::drops_off_family("CMPCIN") {
-        return false;
-    }
-
     if std::env::var_os("TLM_COMPARE_SKIP_STRUCTURAL_DEAD_CALLS").is_none() {
         return false;
     }
@@ -633,10 +629,6 @@ const COMPARE_DIRECT_REMAINDER_KEYS: &[u32] = &[
 ];
 
 fn compare_call_has_structurally_dead_top(call_index: usize, bit: usize) -> bool {
-    if super::drops_off_family("CMPTOP") {
-        return false;
-    }
-
     if std::env::var_os("TLM_COMPARE_SKIP_STRUCTURAL_DEAD_CALLS").is_none() {
         return false;
     }
@@ -809,29 +801,6 @@ pub fn compare_geq_cin_middle<F: FnOnce(&mut B, &QubitId, &QubitId, &QubitId)>(
     cin: &QubitId,
     body: F,
 ) {
-    compare_geq_cin_middle_keyed(circ, a, b, cin, body, Some(0));
-}
-
-/// Same as [`compare_geq_cin_middle`], but with explicit control over the census-derived
-/// structural-dead-carry drops.
-///
-/// `drops = Some(key_lo)` keys the lookup by `key_lo + i` instead of `i`, so that a caller passing
-/// a *sub-slice* of a wider operand still names the same physical gate (`key_lo` is the index of
-/// `a[0]` within the operand the tables were fitted against). `Some(0)` is bit-for-bit the original
-/// behaviour.
-///
-/// `drops = None` disables the drops entirely. A caller that changes the *value* of the carry chain
-/// — e.g. by truncating the window, which forces carry-in 0 where the fitted circuit had a real
-/// carry-in — MUST use `None`: the census established those gates never fire in the untruncated
-/// chain, and that evidence does not transfer.
-pub fn compare_geq_cin_middle_keyed<F: FnOnce(&mut B, &QubitId, &QubitId, &QubitId)>(
-    circ: &mut B,
-    a: &[QubitId],
-    b: &[QubitId],
-    cin: &QubitId,
-    body: F,
-    drops: Option<usize>,
-) {
     let call_index = next_compare_cin_call_index();
     let n = a.len();
     assert_eq!(b.len(), n, "compare_geq_cin_middle: a,b equal width");
@@ -847,11 +816,10 @@ pub fn compare_geq_cin_middle_keyed<F: FnOnce(&mut B, &QubitId, &QubitId, &Qubit
         circ.x(b[i]);
         circ.cx(*ci, b[i]);
         circ.cx(*ci, a[i]);
-        let key_bit = drops.map_or(i, |key_lo| key_lo + i);
         let old_context = crate::point_add::set_op_trace_context(
-            0x1300_0000 | (((call_index as u32) & 0xffff) << 8) | (key_bit as u32 & 0xff),
+            0x1300_0000 | (((call_index as u32) & 0xffff) << 8) | (i as u32 & 0xff),
         );
-        if drops.is_none() || !compare_cin_has_structurally_dead_carry(call_index, key_bit) {
+        if !compare_cin_has_structurally_dead_carry(call_index, i) {
             circ.ccx(a[i], b[i], next);
         }
         crate::point_add::restore_op_trace_context(old_context);

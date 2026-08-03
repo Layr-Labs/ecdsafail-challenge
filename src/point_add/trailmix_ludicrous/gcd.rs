@@ -1,40 +1,6 @@
 
 use super::arith::{self, F_SECP256K1};
 use super::schedule::{GAP_J2, ITERS, JUMP, SCHED_J2};
-
-fn gap_j2_delta() -> usize {
-    std::env::var("TLM_GAP_J2_DELTA")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(0)
-}
-
-fn gap_j2_mask_trunc_only() -> bool {
-    std::env::var("TLM_GAP_J2_TRUNC_ONLY").ok().as_deref() == Some("1")
-}
-
-// cmp window for step i: baseline is min(GAP_J2[i], current_n).
-// Delta narrows it; TRUNC_ONLY restricts narrowing to steps where the
-// baseline window is ALREADY a strict truncation (GAP_J2[i] < current_n),
-// leaving the exact-comparison tail steps untouched.
-fn cmp_window(i: usize, current_n: usize) -> usize {
-    let g = GAP_J2[i] as usize;
-    let base = g.min(current_n).max(1);
-    let d = gap_j2_delta();
-    if d == 0 {
-        return base;
-    }
-    if gap_j2_mask_trunc_only() && g >= current_n {
-        return base;
-    }
-    let lo = std::env::var("TLM_GAP_J2_LO").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
-    let hi = std::env::var("TLM_GAP_J2_HI").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(usize::MAX);
-    if i < lo || i >= hi {
-        return base;
-    }
-    base.saturating_sub(d).max(1)
-}
-
 use super::{B, BExt};
 use crate::circuit::{QubitId};
 use std::cell::Cell;
@@ -471,10 +437,6 @@ const GCD_REVERSE_CSWAP_REMAINDER_KEYS: &[u32] = &[
 ];
 
 fn gcd_reverse_cswap_has_structurally_dead_gate(step: usize, bit: usize) -> bool {
-    if super::drops_off_family("GCDRSW") {
-        return false;
-    }
-
     if std::env::var_os("TLM_GCD_SKIP_STRUCTURAL_DEAD_CSWAPS").is_none() {
         return false;
     }
@@ -509,15 +471,6 @@ fn gcd_reverse_cswap_has_structurally_dead_gate(step: usize, bit: usize) -> bool
 }
 
 fn gcd_forward_cswap_has_structurally_dead_gate(step: usize, bit: usize) -> bool {
-    if super::drops_off_family("GCDFSW") {
-        return false;
-    }
-
-    // W1155: forward structurally-dead-cswap predicate := reverse predicate (bit-exact,
-    // the forward pass shares the reverse pass's provably-dead structure).
-    if std::env::var_os("W1155_FWD_EQ_REV").is_some() {
-        return gcd_reverse_cswap_has_structurally_dead_gate(step, bit);
-    }
     if std::env::var_os("TLM_GCD_SKIP_STRUCTURAL_DEAD_CSWAPS").is_none()
         || std::env::var_os("TLM_GCD_SKIP_EXACT_FORWARD_CSWAPS").is_none()
     {
@@ -603,383 +556,6 @@ const GCD_SHIFT_DEAD_RANGES: &[(u8, usize, usize, usize)] = &[
     (12, 34, 40, 41),
     (12, 35, 41, 42),
     (12, 36, 42, 43),
-    // E251: 376 additional structurally-dead gcd-shift ranges (audit-recovered).
-    (12, 39, 46, 46),
-    (12, 40, 47, 47),
-    (12, 41, 48, 48),
-    (12, 42, 49, 49),
-    (12, 43, 50, 50),
-    (12, 44, 51, 51),
-    (12, 45, 52, 52),
-    (12, 46, 53, 53),
-    (12, 48, 55, 55),
-    (12, 50, 57, 57),
-    (12, 52, 59, 59),
-    (12, 53, 60, 60),
-    (12, 54, 61, 61),
-    (12, 55, 62, 62),
-    (12, 56, 63, 63),
-    (12, 57, 64, 64),
-    (12, 58, 65, 65),
-    (12, 59, 66, 66),
-    (12, 61, 68, 68),
-    (12, 62, 69, 69),
-    (12, 63, 70, 70),
-    (12, 64, 71, 71),
-    (12, 65, 72, 72),
-    (12, 66, 73, 73),
-    (12, 67, 74, 74),
-    (12, 68, 75, 75),
-    (12, 70, 77, 77),
-    (12, 71, 78, 78),
-    (12, 72, 79, 79),
-    (12, 73, 80, 80),
-    (12, 74, 81, 81),
-    (12, 75, 82, 82),
-    (12, 76, 83, 83),
-    (12, 77, 84, 84),
-    (12, 78, 85, 85),
-    (12, 79, 86, 86),
-    (12, 80, 87, 87),
-    (12, 81, 88, 88),
-    (12, 82, 89, 89),
-    (12, 83, 90, 90),
-    (12, 84, 91, 91),
-    (12, 85, 92, 92),
-    (12, 86, 93, 93),
-    (12, 87, 94, 94),
-    (12, 88, 95, 95),
-    (12, 89, 96, 96),
-    (12, 90, 97, 97),
-    (12, 91, 98, 98),
-    (12, 92, 99, 99),
-    (12, 93, 100, 100),
-    (12, 94, 101, 101),
-    (12, 95, 102, 102),
-    (12, 96, 103, 103),
-    (12, 97, 104, 104),
-    (12, 98, 105, 105),
-    (12, 99, 106, 106),
-    (12, 101, 108, 108),
-    (12, 102, 109, 109),
-    (12, 103, 110, 110),
-    (12, 104, 111, 111),
-    (12, 105, 112, 112),
-    (12, 106, 113, 113),
-    (12, 107, 114, 114),
-    (12, 108, 115, 115),
-    (12, 109, 116, 116),
-    (12, 110, 117, 117),
-    (12, 111, 118, 118),
-    (12, 113, 120, 120),
-    (12, 115, 122, 122),
-    (12, 117, 124, 124),
-    (12, 118, 125, 125),
-    (12, 119, 126, 126),
-    (12, 121, 128, 128),
-    (12, 124, 131, 131),
-    (12, 125, 132, 132),
-    (12, 126, 133, 133),
-    (12, 127, 134, 134),
-    (12, 129, 136, 136),
-    (12, 130, 137, 137),
-    (12, 131, 138, 138),
-    (12, 132, 139, 139),
-    (12, 134, 141, 141),
-    (12, 135, 142, 142),
-    (12, 136, 143, 143),
-    (12, 137, 144, 144),
-    (12, 138, 145, 145),
-    (12, 139, 146, 146),
-    (12, 140, 147, 147),
-    (12, 142, 149, 149),
-    (12, 143, 150, 150),
-    (12, 144, 151, 151),
-    (12, 146, 153, 153),
-    (12, 147, 154, 154),
-    (12, 148, 155, 155),
-    (12, 149, 156, 156),
-    (12, 150, 157, 157),
-    (12, 151, 158, 158),
-    (12, 152, 159, 159),
-    (12, 153, 160, 160),
-    (12, 154, 161, 161),
-    (12, 155, 162, 162),
-    (12, 156, 163, 163),
-    (12, 157, 164, 164),
-    (12, 158, 165, 165),
-    (12, 159, 166, 166),
-    (12, 160, 167, 167),
-    (12, 161, 168, 168),
-    (12, 163, 170, 170),
-    (12, 164, 171, 171),
-    (12, 165, 172, 172),
-    (12, 166, 173, 173),
-    (12, 167, 174, 174),
-    (12, 168, 175, 175),
-    (12, 169, 176, 176),
-    (12, 170, 177, 177),
-    (12, 171, 178, 178),
-    (12, 172, 179, 179),
-    (12, 173, 180, 180),
-    (12, 174, 181, 181),
-    (12, 175, 182, 182),
-    (12, 176, 183, 183),
-    (12, 177, 184, 184),
-    (12, 178, 185, 185),
-    (12, 179, 186, 186),
-    (12, 180, 187, 187),
-    (12, 181, 188, 188),
-    (12, 182, 189, 189),
-    (12, 184, 191, 191),
-    (12, 185, 192, 192),
-    (12, 186, 193, 193),
-    (12, 187, 194, 194),
-    (12, 188, 195, 195),
-    (12, 189, 196, 196),
-    (12, 190, 197, 197),
-    (12, 191, 198, 198),
-    (12, 192, 199, 199),
-    (12, 193, 200, 200),
-    (12, 194, 201, 201),
-    (12, 195, 202, 202),
-    (12, 196, 203, 203),
-    (12, 197, 204, 204),
-    (12, 198, 205, 205),
-    (12, 199, 206, 206),
-    (12, 200, 207, 207),
-    (12, 201, 208, 208),
-    (12, 202, 209, 209),
-    (12, 203, 210, 210),
-    (12, 204, 211, 211),
-    (12, 205, 212, 212),
-    (12, 206, 213, 213),
-    (12, 207, 214, 214),
-    (12, 209, 216, 216),
-    (12, 210, 217, 217),
-    (12, 211, 218, 218),
-    (12, 212, 219, 219),
-    (12, 213, 220, 220),
-    (12, 214, 221, 221),
-    (12, 215, 222, 222),
-    (12, 216, 223, 223),
-    (12, 217, 224, 224),
-    (12, 218, 225, 225),
-    (12, 219, 226, 226),
-    (12, 220, 227, 227),
-    (12, 221, 228, 228),
-    (12, 222, 229, 229),
-    (12, 223, 230, 230),
-    (12, 224, 231, 231),
-    (12, 225, 232, 232),
-    (12, 226, 233, 233),
-    (12, 227, 234, 234),
-    (12, 228, 235, 235),
-    (12, 229, 236, 236),
-    (12, 230, 237, 237),
-    (12, 231, 238, 238),
-    (12, 232, 239, 239),
-    (12, 233, 240, 240),
-    (12, 234, 241, 241),
-    (12, 235, 242, 242),
-    (12, 236, 243, 243),
-    (12, 237, 244, 244),
-    (12, 238, 245, 245),
-    (12, 239, 246, 246),
-    (12, 240, 247, 247),
-    (12, 241, 248, 248),
-    (12, 242, 249, 249),
-    (12, 243, 250, 250),
-    (12, 245, 252, 252),
-    (12, 246, 253, 253),
-    (12, 247, 254, 254),
-    (12, 248, 255, 255),
-    (12, 249, 256, 256),
-    (12, 250, 257, 257),
-    (12, 298, 46, 46),
-    (12, 299, 47, 47),
-    (12, 300, 48, 48),
-    (12, 301, 49, 49),
-    (12, 302, 50, 50),
-    (12, 303, 51, 51),
-    (12, 304, 52, 52),
-    (12, 305, 53, 53),
-    (12, 306, 54, 54),
-    (12, 307, 55, 55),
-    (12, 308, 56, 56),
-    (12, 309, 57, 57),
-    (12, 310, 58, 58),
-    (12, 311, 59, 59),
-    (12, 312, 60, 60),
-    (12, 313, 61, 61),
-    (12, 315, 63, 63),
-    (12, 316, 64, 64),
-    (12, 317, 65, 65),
-    (12, 318, 66, 66),
-    (12, 319, 67, 67),
-    (12, 320, 68, 68),
-    (12, 321, 69, 69),
-    (12, 322, 70, 70),
-    (12, 323, 71, 71),
-    (12, 324, 72, 72),
-    (12, 325, 73, 73),
-    (12, 326, 74, 74),
-    (12, 327, 75, 75),
-    (12, 328, 76, 76),
-    (12, 329, 77, 77),
-    (12, 330, 78, 78),
-    (12, 331, 79, 79),
-    (12, 332, 80, 80),
-    (12, 333, 81, 81),
-    (12, 334, 82, 82),
-    (12, 335, 83, 83),
-    (12, 336, 84, 84),
-    (12, 337, 85, 85),
-    (12, 338, 86, 86),
-    (12, 339, 87, 87),
-    (12, 340, 88, 88),
-    (12, 342, 90, 90),
-    (12, 343, 91, 91),
-    (12, 344, 92, 92),
-    (12, 345, 93, 93),
-    (12, 346, 94, 94),
-    (12, 347, 95, 95),
-    (12, 348, 96, 96),
-    (12, 350, 98, 98),
-    (12, 351, 99, 99),
-    (12, 352, 100, 100),
-    (12, 353, 101, 101),
-    (12, 354, 102, 102),
-    (12, 355, 103, 103),
-    (12, 356, 104, 104),
-    (12, 357, 105, 105),
-    (12, 358, 106, 106),
-    (12, 359, 107, 107),
-    (12, 360, 108, 108),
-    (12, 361, 109, 109),
-    (12, 362, 110, 110),
-    (12, 363, 111, 111),
-    (12, 364, 112, 112),
-    (12, 365, 113, 113),
-    (12, 366, 114, 114),
-    (12, 367, 115, 115),
-    (12, 368, 116, 116),
-    (12, 369, 117, 117),
-    (12, 370, 118, 118),
-    (12, 372, 120, 120),
-    (12, 376, 124, 124),
-    (12, 377, 125, 125),
-    (12, 378, 126, 126),
-    (12, 379, 127, 127),
-    (12, 380, 128, 128),
-    (12, 381, 129, 129),
-    (12, 382, 130, 130),
-    (12, 383, 131, 131),
-    (12, 384, 132, 132),
-    (12, 385, 133, 133),
-    (12, 386, 134, 134),
-    (12, 387, 135, 135),
-    (12, 388, 136, 136),
-    (12, 389, 137, 137),
-    (12, 391, 139, 139),
-    (12, 393, 141, 141),
-    (12, 394, 142, 142),
-    (12, 395, 143, 143),
-    (12, 396, 144, 144),
-    (12, 397, 145, 145),
-    (12, 398, 146, 146),
-    (12, 399, 147, 147),
-    (12, 401, 149, 149),
-    (12, 402, 150, 150),
-    (12, 404, 152, 152),
-    (12, 405, 153, 153),
-    (12, 406, 154, 154),
-    (12, 407, 155, 155),
-    (12, 409, 157, 157),
-    (12, 410, 158, 158),
-    (12, 412, 160, 160),
-    (12, 414, 162, 162),
-    (12, 415, 163, 163),
-    (12, 416, 164, 164),
-    (12, 417, 165, 165),
-    (12, 418, 166, 166),
-    (12, 419, 167, 167),
-    (12, 420, 168, 168),
-    (12, 422, 170, 170),
-    (12, 423, 171, 171),
-    (12, 424, 172, 172),
-    (12, 425, 173, 173),
-    (12, 426, 174, 174),
-    (12, 427, 175, 175),
-    (12, 428, 176, 176),
-    (12, 429, 177, 177),
-    (12, 430, 178, 178),
-    (12, 431, 179, 179),
-    (12, 433, 181, 181),
-    (12, 434, 182, 182),
-    (12, 435, 183, 183),
-    (12, 436, 184, 184),
-    (12, 437, 185, 185),
-    (12, 438, 186, 186),
-    (12, 439, 187, 187),
-    (12, 440, 188, 188),
-    (12, 441, 189, 189),
-    (12, 442, 190, 190),
-    (12, 443, 191, 191),
-    (12, 444, 192, 192),
-    (12, 445, 193, 193),
-    (12, 446, 194, 194),
-    (12, 447, 195, 195),
-    (12, 448, 196, 196),
-    (12, 449, 197, 197),
-    (12, 450, 198, 198),
-    (12, 451, 199, 199),
-    (12, 452, 200, 200),
-    (12, 453, 201, 201),
-    (12, 454, 202, 202),
-    (12, 455, 203, 203),
-    (12, 456, 204, 204),
-    (12, 457, 205, 205),
-    (12, 458, 206, 206),
-    (12, 459, 207, 207),
-    (12, 460, 208, 208),
-    (12, 461, 209, 209),
-    (12, 462, 210, 210),
-    (12, 463, 211, 211),
-    (12, 464, 212, 212),
-    (12, 465, 213, 213),
-    (12, 467, 215, 215),
-    (12, 468, 216, 216),
-    (12, 469, 217, 217),
-    (12, 470, 218, 218),
-    (12, 471, 219, 219),
-    (12, 472, 220, 220),
-    (12, 473, 221, 221),
-    (12, 474, 222, 222),
-    (12, 475, 223, 223),
-    (12, 476, 224, 224),
-    (12, 477, 225, 225),
-    (12, 478, 226, 226),
-    (12, 479, 227, 227),
-    (12, 480, 228, 228),
-    (12, 481, 229, 229),
-    (12, 482, 230, 230),
-    (12, 483, 231, 231),
-    (12, 484, 232, 232),
-    (12, 485, 233, 233),
-    (12, 486, 234, 234),
-    (12, 487, 235, 235),
-    (12, 488, 236, 236),
-    (12, 489, 237, 237),
-    (12, 490, 238, 238),
-    (12, 491, 239, 239),
-    (12, 492, 240, 240),
-    (12, 493, 241, 241),
-    (12, 494, 242, 242),
-    (12, 496, 244, 244),
-    (12, 497, 245, 245),
-    (12, 498, 246, 246),
-    (12, 499, 247, 247),
 ];
 
 const GCD_RIGHT_SHIFT_REMAINDER_KEYS: &[u32] = &[
@@ -1037,10 +613,6 @@ const GCD_LEFT_SHIFT_REMAINDER_KEYS: &[u32] = &[
 ];
 
 fn gcd_shift_has_structurally_dead_gate(tag: u8, call_index: usize, bit: usize) -> bool {
-    if super::drops_off_family("GCDSHIFT") {
-        return false;
-    }
-
     if std::env::var_os("TLM_GCD_SKIP_EXACT_SHIFT_REMAINDER").is_some() {
         let key = (((call_index as u32) & 0xffff) << 8) | (bit as u32 & 0xff);
         if (tag == 11 && GCD_RIGHT_SHIFT_REMAINDER_KEYS.binary_search(&key).is_ok())
@@ -1055,39 +627,8 @@ fn gcd_shift_has_structurally_dead_gate(tag: u8, call_index: usize, bit: usize) 
         })
 }
 
-/// One Fredkin at the top of every controlled-shift ladder is structurally dead.
-///
-/// The ladder realises a `w`-wire cyclic rotation as `w-1` Fredkins; the last one to be
-/// emitted exchanges the bit rotated out of the register with the bit sitting at the far
-/// end. Conditioned on the control being 1, both of those bits are known zero:
-///   * `v[0] == 0`, because the control is `!v[0]` - we only ever halve an even `v`; and
-///   * `v[w-1] == 0`, because the *unconditional* first halving of the same step already
-///     rotated that (also zero) `v[0]` into the top position.
-/// Exchanging two zeros is the identity, so the Fredkin is exactly removable: no census,
-/// no magnitude assumption, no added failure probability.
-///
-/// The sole exception is the step-0 `t1` shift, which *is* the first halving: nothing has
-/// zeroed the top bit yet and `v[w-1]` is a live bit of the raw 256-bit input. That call is
-/// the first right-shift of a forward walk and the last left-shift of a reverse walk.
-/// `TLM_GCD_SKIP_TOP_ZERO_SHIFT_EDGE=0` puts the redundant gates back for A/B measurement.
-fn skip_top_zero_controlled_shift_edge(tag: u8, call_index: usize) -> bool {
-    if std::env::var("TLM_GCD_SKIP_TOP_ZERO_SHIFT_EDGE").ok().as_deref() == Some("0") {
-        return false;
-    }
-    const CALLS_PER_WALK: usize = ITERS + 1;
-    let rel = call_index % CALLS_PER_WALK;
-    let step0_t1 = if tag == 11 { rel == 0 } else { rel == CALLS_PER_WALK - 1 };
-    !step0_t1
-}
-
-/// Diagnostic: of the 1176 shift Fredkins suppressed by the two census tables
-/// (`GCD_*_SHIFT_REMAINDER_KEYS` + `GCD_SHIFT_DEAD_RANGES`), 964 coincide with the
-/// provably-dead top-zero edge above. The other 212 rest only on "never observed to fire"
-/// and cluster at walk iterations 249..257, i.e. exactly where the walk is *assumed* to
-/// have converged (v == 0). They are therefore candidate contributors to the intrinsic
-/// mismatch rate. `TLM_GCD_SHIFT_PROVEN_ONLY=1` re-emits just those 212 for A/B.
-fn gcd_shift_census_enabled() -> bool {
-    std::env::var("TLM_GCD_SHIFT_PROVEN_ONLY").ok().as_deref() != Some("1")
+fn skip_top_zero_controlled_shift_edge() -> bool {
+    std::env::var_os("TLM_GCD_SKIP_TOP_ZERO_SHIFT_EDGE").is_some()
 }
 
 fn controlled_right_shift(circ: &mut B, ctrl: &QubitId, v: &[QubitId]) {
@@ -1096,12 +637,8 @@ fn controlled_right_shift(circ: &mut B, ctrl: &QubitId, v: &[QubitId]) {
         let old_context = crate::point_add::set_op_trace_context(
             0x0b00_0000 | (((call_index as u32) & 0xffff) << 8) | (i as u32 & 0xff),
         );
-        let top_zero_edge =
-            i + 2 == v.len() && skip_top_zero_controlled_shift_edge(11, call_index);
-        if !top_zero_edge
-            && !(gcd_shift_census_enabled()
-                && gcd_shift_has_structurally_dead_gate(11, call_index, i))
-        {
+        let top_zero_edge = skip_top_zero_controlled_shift_edge() && i + 2 == v.len();
+        if !top_zero_edge && !gcd_shift_has_structurally_dead_gate(11, call_index, i) {
             circ.cswap(*ctrl, v[i], v[i + 1]);
         }
         crate::point_add::restore_op_trace_context(old_context);
@@ -1114,12 +651,8 @@ fn controlled_left_shift(circ: &mut B, ctrl: &QubitId, v: &[QubitId]) {
         let old_context = crate::point_add::set_op_trace_context(
             0x0c00_0000 | (((call_index as u32) & 0xffff) << 8) | ((i - 1) as u32 & 0xff),
         );
-        let top_zero_edge =
-            i + 1 == v.len() && skip_top_zero_controlled_shift_edge(12, call_index);
-        if !top_zero_edge
-            && !(gcd_shift_census_enabled()
-                && gcd_shift_has_structurally_dead_gate(12, call_index, i - 1))
-        {
+        let top_zero_edge = skip_top_zero_controlled_shift_edge() && i + 1 == v.len();
+        if !top_zero_edge && !gcd_shift_has_structurally_dead_gate(12, call_index, i - 1) {
             circ.cswap(*ctrl, v[i], v[i - 1]);
         }
         crate::point_add::restore_op_trace_context(old_context);
@@ -1212,12 +745,6 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
     let mut tail4_prefix_encoded = false;
     for i in 0..iters {
         let trace_region_start = circ.phase_active_regions.len();
-        // DIAGNOSTIC (TRACE_OP_SITES): stamp every op emitted by this divstep with
-        // its pass and iteration index so a dirty `free` can be attributed to a
-        // specific i. Overwritten and restored by the inner cswap tags.
-        crate::point_add::set_op_trace_context(
-            0xa000_0000 | (u32::from(apply_inv.is_none()) << 24) | ((i as u32) & 0xffff),
-        );
         circ.set_phase(if apply_inv.is_some() {
             "tlm_inverse_gcd_forward_shift"
         } else {
@@ -1233,7 +760,7 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
             circ.zero_and_free(q);
         }
 
-        let cmp_eff = cmp_window(i, current_n);
+        let cmp_eff = (GAP_J2[i] as usize).min(current_n).max(1);
 
         if i == 0 {
             circ.cx(v[0], t1);
@@ -1464,9 +991,6 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
 
     for i in (0..iters).rev() {
         let trace_region_start = circ.phase_active_regions.len();
-        crate::point_add::set_op_trace_context(
-            0xa200_0000 | (u32::from(apply_fwd.is_none()) << 24) | ((i as u32) & 0xffff),
-        );
         circ.set_phase(if apply_fwd.is_some() {
             "tlm_multiply_gcd_reverse_decode"
         } else {
@@ -1479,7 +1003,7 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
         while v.len() < current_n {
             v.push(circ.alloc_qubit());
         }
-        let cmp_eff = cmp_window(i, current_n);
+        let cmp_eff = (GAP_J2[i] as usize).min(current_n).max(1);
 
         if pending.is_empty() {
             win_idx -= 1;
@@ -1849,7 +1373,7 @@ fn controlled_mod_sub_vented(circ: &mut B, ctrl: &QubitId, x: &[QubitId], y: &[Q
     }
 
     circ.set_phase("tlm_apply_inverse_mod_sub_clean");
-    let k = arith::msbs().min(n);
+    let k = arith::MSBS.min(n);
     let lo = n - k;
     let ctrl = *ctrl;
     let bit = circ.alloc_bit();

@@ -190,10 +190,6 @@ const FFG_DEAD_HYBRID_CARRY_RANGES: &[(usize, usize, usize)] = &[
 ];
 
 fn ffg_call_has_structurally_dead_hybrid_carry(call_index: usize, bit: usize, phase: &str) -> bool {
-    if super::drops_off_family("FFG") {
-        return false;
-    }
-
     if shifted_square_ffg_prefix_scope_enabled() && bit > 0 {
         return true;
     }
@@ -383,10 +379,6 @@ const CONST_CHUNK_REMAINDER_KEYS: &[u32] = &[
 ];
 
 fn const_chunk_call_has_structurally_dead_carry(call_index: usize, bit: usize) -> bool {
-    if super::drops_off_family("CONSTCHUNK") {
-        return false;
-    }
-
     if std::env::var_os("TLM_CONST_CHUNK_SKIP_STRUCTURAL_DEAD_CALLS").is_none() {
         return false;
     }
@@ -402,18 +394,14 @@ fn const_chunk_call_has_structurally_dead_carry(call_index: usize, bit: usize) -
 }
 
 fn cuccaro_call_has_structurally_dead_carry(call_index: usize, bit: usize) -> bool {
-    if super::drops_off_family("CUCCARO") {
-        return false;
-    }
-
     if std::env::var_os("TLM_CUCCARO_SKIP_STRUCTURAL_DEAD_CALLS").is_none() {
         return false;
     }
     match call_index {
 
-        12 | 25 => (0..=127).contains(&bit),
+        12 | 25 => (1..=127).contains(&bit),
         37 => bit <= 135,
-        19 => (0..=127).contains(&bit),
+        19 => (1..=127).contains(&bit),
         20 | 26 => bit >= 148,
         13 => bit >= 150,
         21 => matches!(bit, 147 | 148) || (150..=251).contains(&bit),
@@ -433,10 +421,6 @@ fn cuccaro_call_has_structurally_dead_carry(call_index: usize, bit: usize) -> bo
 }
 
 fn add_const_has_structurally_dead_carry(call_index: usize, bit: usize) -> bool {
-    if super::drops_off_family("ADDCONST") {
-        return false;
-    }
-
     if std::env::var_os("TLM_ADD_CONST_SKIP_STRUCTURAL_DEAD_CARRIES").is_none() {
         return false;
     }
@@ -452,14 +436,6 @@ pub const PAD: usize = 19;
 pub const LSBS: usize = 20 + F_BITLEN;
 
 pub const MSBS: usize = PAD;
-
-#[inline]
-pub fn msbs() -> usize {
-    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("TLM_MSBS").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(PAD)
-    })
-}
 
 pub const APPLY_CHUNK: usize = 40;
 
@@ -1530,9 +1506,10 @@ pub fn controlled_mod_add_k(circ: &mut B, ctrl: &QubitId, x: &[QubitId], y: &[Qu
     circ.set_phase("tlm_apply_forward_mod_add_fold");
     add_f_window(circ, &anc, y, LSBS, &f_bytes, ffg_g);
 
+    debug_assert_eq!(MSBS, PAD);
 
     circ.set_phase("tlm_apply_forward_mod_add_clean");
-    controlled_lt_msbs_conditional(circ, Some(ctrl), &y[..n], &x[..n], msbs(), anc);
+    controlled_lt_msbs_conditional(circ, Some(ctrl), &y[..n], &x[..n], MSBS, anc);
 }
 
 pub fn mod_sub(circ: &mut B, x: &[QubitId], y: &[QubitId]) {
@@ -1559,7 +1536,7 @@ pub fn mod_sub(circ: &mut B, x: &[QubitId], y: &[QubitId]) {
 
     sub_f_window(circ, &anc, y, LSBS, &f_bytes);
 
-    controlled_add_carry_msbs_conditional(circ, None, &y[..n], &x[..n], msbs(), &anc);
+    controlled_add_carry_msbs_conditional(circ, None, &y[..n], &x[..n], MSBS, &anc);
     circ.zero_and_free(anc);
 }
 
@@ -1594,7 +1571,7 @@ pub fn mod_rsub_vented_loaded(circ: &mut B, t1: &[QubitId], y: &[QubitId]) {
         circ.x(*q);
     }
     circ.x(anc);
-    controlled_lt_msbs_conditional(circ, None, &y[..n], &t1[..n], msbs(), anc);
+    controlled_lt_msbs_conditional(circ, None, &y[..n], &t1[..n], MSBS, anc);
 }
 
 fn add_cout_vented_skip_dead(circ: &mut B, x: &[QubitId], y: &[QubitId], cout: &QubitId, call_index: usize) {
@@ -1702,7 +1679,7 @@ pub fn mod_add(circ: &mut B, x: &[QubitId], y: &[QubitId]) {
 
     add_f_window(circ, &anc, y, LSBS, &f_bytes, Some(LSBS - 1));
 
-    controlled_lt_msbs_conditional(circ, None, &y[..n], &x[..n], msbs(), anc);
+    controlled_lt_msbs_conditional(circ, None, &y[..n], &x[..n], MSBS, anc);
 }
 
 pub fn mod_add_exact(circ: &mut B, x: &[QubitId], y: &[QubitId]) {
@@ -1731,7 +1708,7 @@ pub fn mod_add_lowpeak(circ: &mut B, x: &[QubitId], y: &[QubitId]) {
         add_cout_vented_skip_dead(circ, x, y, &anc, ci);
     }
     add_f_window(circ, &anc, y, LSBS, &f_bytes, None);
-    controlled_lt_msbs_conditional(circ, None, &y[..n], &x[..n], msbs(), anc);
+    controlled_lt_msbs_conditional(circ, None, &y[..n], &x[..n], MSBS, anc);
 }
 
 pub fn mod_add_shifted_low(circ: &mut B, x: &[QubitId], y: &[QubitId], shift: usize) {
@@ -1753,7 +1730,7 @@ pub fn mod_add_shifted_low(circ: &mut B, x: &[QubitId], y: &[QubitId], shift: us
         cuccaro_carry(circ, None, x, &y[shift..], None, Some(&anc));
     }
     add_f_window(circ, &anc, y, LSBS, &f_bytes, Some(LSBS - 1));
-    controlled_lt_msbs_conditional(circ, None, &y[n - msbs()..], &x[x.len() - msbs()..], msbs(), anc);
+    controlled_lt_msbs_conditional(circ, None, &y[n - MSBS..], &x[x.len() - MSBS..], MSBS, anc);
 }
 
 pub fn mod_sub_vented(circ: &mut B, x: &[QubitId], y: &[QubitId]) {
@@ -1777,7 +1754,7 @@ pub fn mod_sub_vented(circ: &mut B, x: &[QubitId], y: &[QubitId]) {
     for q in &y[..LSBS] {
         circ.x(*q);
     }
-    controlled_add_carry_msbs_conditional(circ, None, &y[..n], &x[..n], msbs(), &anc);
+    controlled_add_carry_msbs_conditional(circ, None, &y[..n], &x[..n], MSBS, &anc);
     circ.zero_and_free(anc);
 }
 
@@ -1805,7 +1782,7 @@ pub fn mod_sub_shifted_low(circ: &mut B, x: &[QubitId], y: &[QubitId], shift: us
         circ.x(*q);
     }
     sub_f_window(circ, &anc, y, LSBS, &f_bytes);
-    controlled_add_carry_msbs_conditional(circ, None, &y[n - msbs()..], &x[x.len() - msbs()..], msbs(), &anc);
+    controlled_add_carry_msbs_conditional(circ, None, &y[n - MSBS..], &x[x.len() - MSBS..], MSBS, &anc);
     circ.zero_and_free(anc);
 }
 
