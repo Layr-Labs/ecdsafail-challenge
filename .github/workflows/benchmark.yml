@@ -52,31 +52,6 @@ jobs:
             esac
           done < <(git diff --no-renames --name-only -z "$GITHUB_SHA^" "$GITHUB_SHA")
 
-      - name: Verify runner capacity
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          [[ "$(uname -s)" == "Linux" ]]
-          [[ "$(uname -m)" == "x86_64" ]]
-          command -v jq >/dev/null
-
-          mem_kib=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)
-          min_mem_kib=$((120 * 1024 * 1024))
-          if (( mem_kib < min_mem_kib )); then
-            echo "Runner has less than 120 GiB usable RAM" >&2
-            exit 1
-          fi
-
-          min_disk_kib=$((160 * 1024 * 1024))
-          for disk_path in "$GITHUB_WORKSPACE" /tmp; do
-            free_disk_kib=$(df -Pk "$disk_path" | awk 'NR == 2 { print $4 }')
-            if (( free_disk_kib < min_disk_kib )); then
-              echo "Runner has less than 160 GiB free at $disk_path" >&2
-              exit 1
-            fi
-          done
-
       - name: Restore setup cache
         id: setup-cache
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
