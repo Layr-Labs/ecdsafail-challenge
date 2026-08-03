@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   benchmark:
-    name: Benchmark on 128 GB runner
+    name: Benchmark
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 45
     outputs:
@@ -89,13 +89,21 @@ jobs:
           set -euo pipefail
 
           score=$(jq -er '.score | select(type == "number")' score.json)
+          toffoli=$(jq -er '.metrics.toffoli | select(type == "number")' score.json)
+          qubits=$(jq -er '.metrics.qubits | select(type == "number")' score.json)
           echo "value=$score" >> "$GITHUB_OUTPUT"
           {
-            echo "## Benchmark score"
+            echo "## Benchmark results"
             echo
-            echo "\`$score\`"
+            echo "| Metric | Value |"
+            echo "| --- | ---: |"
+            echo "| Score | \`$score\` |"
+            echo "| Toffoli | \`$toffoli\` |"
+            echo "| Qubits | \`$qubits\` |"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "Benchmark score: $score"
+          echo "Toffoli: $toffoli"
+          echo "Qubits: $qubits"
 
       - name: Upload score
         if: always()
