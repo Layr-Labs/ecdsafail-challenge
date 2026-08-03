@@ -1,0 +1,50 @@
+{
+  "clean_aux": 6,
+  "certified_stream": {
+    "aggregate_sha256": "39989d3fa2fe8d30cd2b0bc4eea218eb2b0b5969a83fb2cdffab161d047895d3",
+    "clean_c3x_mbu_per_traversal": 6464,
+    "emitted_ops_per_traversal": 289557916,
+    "executed_toffoli_per_traversal": 255886404,
+    "four_traversal_emitted_ops": 1158231664,
+    "four_traversal_executed_toffoli": 1023545616,
+    "records_per_traversal": 289538524
+  },
+  "count_semantics": "recursive definitions; clean-C3X markers are expanded",
+  "four_traversal_recursive_executed_toffoli": 1023571472,
+  "four_traversal_recursive_records": 1158205808,
+  "local_width": 572,
+  "production_count_only": {
+    "ccx": 1034191207,
+    "ccz": 0,
+    "cx": 57179590,
+    "cz": 100997,
+    "emitted_ops": 1182759471,
+    "hmr": 103817,
+    "peak_phase": "ec3.inv_fwd",
+    "peak_qubits": 818,
+    "structural_toffoli": 1034191207,
+    "swap": 589832,
+    "x": 90185830
+  },
+  "trusted_local_benchmark": {
+    "ancilla_garbage_batches": 0,
+    "average_executed_clifford": 58328088.918,
+    "average_executed_toffoli": 1034191207,
+    "classical_mismatches": 0,
+    "emitted_ops": 1182759471,
+    "phase_garbage_batches": 0,
+    "qubits": 818,
+    "score": 845968407326,
+    "tested_shots": 9024
+  },
+  "recursive_counts_per_traversal": {
+    "ccx": 255892868,
+    "cx": 13229966,
+    "x": 20428618
+  },
+  "recursive_executed_toffoli_per_traversal": 255892868,
+  "recursive_records_per_traversal": 289551452,
+  "schema": "paper2607-q818-aux6-schedule-count-v2",
+  "source_sha256": "7650dae7b9ad14ffc3f674d60dfefd865365469b5dc12a69c7a94f10afc343dd",
+  "steps": 1616
+}
