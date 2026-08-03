@@ -120,7 +120,7 @@ build_circuit_bin="$(pwd)/target/release/build_circuit"
 #    the trusted eval_circuit binary, or the repo sources, and from reaching the
 #    network — none of which the process-group reap below covers at run time.
 ops_scratch="$(cd "$(mktemp -d)" && pwd -P)"   # resolved real path (the macOS profile needs it)
-chmod 0777 "${ops_scratch}"   # the unprivileged sandbox uid must be able to write here
+chmod 1777 "${ops_scratch}"   # let the sandbox uid write without replacing runner-owned files
 
 # Build the (possibly confined) invocation:
 #   - Linux: bubblewrap (installed by setup.sh in the trusted sandbox).
@@ -129,6 +129,14 @@ chmod 0777 "${ops_scratch}"   # the unprivileged sandbox uid must be able to wri
 #     scores in a sandbox, so this never applies to the official run).
 bwrap_via_sudo=0
 if command -v bwrap >/dev/null 2>&1; then
+  # Blacksmith keeps /home/runner private from other users. Once bwrap drops to
+  # uid 65534, executing the binary through its workspace path therefore fails
+  # even though the file itself is executable. Stage a read-only copy in the
+  # world-traversable scratch directory that is already mounted into the sandbox.
+  sandbox_build_circuit_bin="${ops_scratch}/build_circuit"
+  cp "${build_circuit_bin}" "${sandbox_build_circuit_bin}"
+  chmod 0555 "${sandbox_build_circuit_bin}"
+
   # The sandbox runs this as a non-root user, and its bwrap carries Linux file
   # capabilities without setuid — which bwrap refuses when run non-root
   # ("Unexpected capabilities but not setuid, old file caps config?"). Get bwrap
@@ -154,7 +162,7 @@ if command -v bwrap >/dev/null 2>&1; then
       --unshare-user --unshare-net --unshare-ipc --unshare-uts --unshare-cgroup
       --cap-drop ALL --new-session --die-with-parent
       --uid 65534 --gid 65534
-      -- "${build_circuit_bin}"
+      -- "${sandbox_build_circuit_bin}"
   )
 elif [[ "$(uname -s)" == "Darwin" ]] && command -v sandbox-exec >/dev/null 2>&1; then
   # Read-only everywhere except the scratch dir (and /dev), and no network. TMPDIR
