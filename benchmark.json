@@ -7,5 +7,9 @@
   "editablePaths": ["src/point_add"],
   "setupCommand": ["bash", "-lc", "./setup.sh"],
   "benchmarkCommand": ["bash", "-lc", "./benchmark.sh"],
-  "scorePath": "score.json"
+  "scorePath": "score.json",
+  "runner": {
+    "provider": "github-actions",
+    "workflow": "benchmark.yml"
+  }
 }
