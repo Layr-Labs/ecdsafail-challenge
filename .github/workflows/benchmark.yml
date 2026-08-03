@@ -15,7 +15,7 @@ jobs:
   benchmark:
     name: Benchmark on 128 GB runner
     runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 360
+    timeout-minutes: 45
     outputs:
       score: ${{ steps.score.outputs.value }}
 
