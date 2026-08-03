@@ -1,0 +1,132 @@
+name: Benchmark
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Benchmark on 128 GB runner
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 360
+    outputs:
+      score: ${{ steps.score.outputs.value }}
+
+    steps:
+      - name: Checkout dispatched commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          clean: true
+
+      # Yukon enforces editablePaths while constructing the commit. Keep this
+      # independent check so a malformed submissions/* ref fails before setup.
+      - name: Verify submission surface
+        if: startsWith(github.ref, 'refs/heads/submissions/')
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          read -r -a commit_line <<< "$(git rev-list --parents -n 1 "$GITHUB_SHA")"
+          if (( ${#commit_line[@]} != 2 )); then
+            echo "Submission must be a single-parent commit" >&2
+            exit 1
+          fi
+
+          while IFS= read -r -d '' changed_path; do
+            case "$changed_path" in
+              src/point_add|src/point_add/*) ;;
+              *)
+                echo "Submission changed a non-editable path: $changed_path" >&2
+                exit 1
+                ;;
+            esac
+          done < <(git diff --no-renames --name-only -z "$GITHUB_SHA^" "$GITHUB_SHA")
+
+      - name: Verify runner capacity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          [[ "$(uname -s)" == "Linux" ]]
+          [[ "$(uname -m)" == "x86_64" ]]
+          command -v jq >/dev/null
+
+          mem_kib=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)
+          min_mem_kib=$((120 * 1024 * 1024))
+          if (( mem_kib < min_mem_kib )); then
+            echo "Runner has less than 120 GiB usable RAM" >&2
+            exit 1
+          fi
+
+          min_disk_kib=$((160 * 1024 * 1024))
+          for disk_path in "$GITHUB_WORKSPACE" /tmp; do
+            free_disk_kib=$(df -Pk "$disk_path" | awk 'NR == 2 { print $4 }')
+            if (( free_disk_kib < min_disk_kib )); then
+              echo "Runner has less than 160 GiB free at $disk_path" >&2
+              exit 1
+            fi
+          done
+
+      - name: Restore setup cache
+        id: setup-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: ecadd-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain*') }}
+
+      - name: Setup
+        shell: bash
+        run: ./setup.sh
+
+      # Submission refs can restore the default branch's cache, but never save
+      # one. Warm a new cache by manually dispatching this workflow on main.
+      - name: Save setup cache
+        if: github.ref_name == github.event.repository.default_branch && steps.setup-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: ${{ steps.setup-cache.outputs.cache-primary-key }}
+
+      - name: Benchmark
+        shell: bash
+        run: ./benchmark.sh
+
+      - name: Report score
+        id: score
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          score=$(jq -er '.score | select(type == "number")' score.json)
+          echo "value=$score" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Benchmark score"
+            echo
+            echo "\`$score\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Benchmark score: $score"
+
+      - name: Upload score
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: benchmark-score
+          path: score.json
+          if-no-files-found: error
+          retention-days: 30
