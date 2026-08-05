@@ -1,27 +1,18 @@
+//! Multi-controlled X with log*(k) clean ancillae, built on the Khattar-Gidney
+//! prefix-AND ladder. Used by the fold tail of the EC point-add circuit, which
+//! propagates the fold carry into the high bits via a cascade of `mcx_clean_k`
+//! calls.
 
-use super::{B, BExt};
-use crate::circuit::{QubitId};
-use std::sync::atomic::{AtomicU8, Ordering};
+use super::{BExt, B};
+use crate::circuit::QubitId;
 
+/// Clear `t = c0 AND c1` back to |0> by measurement (HMR + cz_if_bit, 0
+/// Toffoli). `c0`,`c1` must be alive/unmodified since the AND.
 fn mbu_clear_and(circ: &mut B, t: &QubitId, c0: &QubitId, c1: &QubitId) {
     let bit = circ.alloc_bit();
     circ.hmr(*t, bit);
     circ.cz_if_bit(*c0, *c1, bit);
     circ.zero_and_free(*t);
-}
-
-// E284 (TLM_KG_INC_VENT=1): replace the reverse-pass AND-uncompute Toffolis in the KG
-// increment with Gidney measurement-based uncomputation (mbu_clear_and, Clifford), bit-exact.
-// Only ancillae dead after their uncompute are vented; live recursive temp_target toggles stay Ccx.
-static KG_INC_VENT_FLAG: AtomicU8 = AtomicU8::new(2);
-fn kg_inc_vent_enabled() -> bool {
-    let c = KG_INC_VENT_FLAG.load(Ordering::Relaxed);
-    if c != 2 {
-        return c == 1;
-    }
-    let on = matches!(std::env::var("TLM_KG_INC_VENT").ok().as_deref(), Some("1"));
-    KG_INC_VENT_FLAG.store(u8::from(on), Ordering::Relaxed);
-    on
 }
 
 fn kg_get_layer_id(x: usize) -> usize {
@@ -42,6 +33,7 @@ fn kg_start_layer(layer_id: usize) -> usize {
     s
 }
 
+/// Clean-ancilla count for the KG prefix layer decomposition.
 #[must_use]
 pub fn kg_prefix_ancilla_count(n: usize) -> usize {
     if n <= 1 {
@@ -60,7 +52,10 @@ fn kg_apply_prefix_controlled_x(circ: &mut B, ctrls: &[&QubitId], target: &Qubit
         [] => circ.x(*target),
         [c] => circ.cx(**c, *target),
         [a, b] => circ.ccx(**a, **b, *target),
-        _ => panic!("kg_apply_prefix_controlled_x: expected <=2 ctrls, got {}", ctrls.len()),
+        _ => panic!(
+            "kg_apply_prefix_controlled_x: expected <=2 ctrls, got {}",
+            ctrls.len()
+        ),
     }
 }
 
@@ -97,11 +92,20 @@ fn kg_get_layers_for_prefix_and<'a>(
     q: &[&'a QubitId],
     inp_anc: &[&'a QubitId],
 ) -> Vec<KgPrefixLayer<'a>> {
-    assert!(!q.is_empty(), "kg_get_layers_for_prefix_and: q must be non-empty");
+    assert!(
+        !q.is_empty(),
+        "kg_get_layers_for_prefix_and: q must be non-empty"
+    );
     if q.len() == 1 {
         return vec![
-            KgPrefixLayer { ctrls: Vec::new(), ops: Vec::new() },
-            KgPrefixLayer { ctrls: vec![q[0]], ops: Vec::new() },
+            KgPrefixLayer {
+                ctrls: Vec::new(),
+                ops: Vec::new(),
+            },
+            KgPrefixLayer {
+                ctrls: vec![q[0]],
+                ops: Vec::new(),
+            },
         ];
     }
     assert!(
@@ -114,7 +118,10 @@ fn kg_get_layers_for_prefix_and<'a>(
 
     let n = q.len();
     let n_layers = kg_get_layer_id(q.len() - 1);
-    let mut ret = vec![KgPrefixLayer { ctrls: Vec::new(), ops: Vec::new() }];
+    let mut ret = vec![KgPrefixLayer {
+        ctrls: Vec::new(),
+        ops: Vec::new(),
+    }];
     let mut targets: Vec<&'a QubitId> = Vec::new();
     let mut anc: Vec<&'a QubitId> = vec![inp_anc[0]];
 
@@ -124,7 +131,10 @@ fn kg_get_layers_for_prefix_and<'a>(
 
         let mut layer_ctrls = targets.clone();
         layer_ctrls.push(q[st]);
-        ret.push(KgPrefixLayer { ctrls: layer_ctrls, ops: Vec::new() });
+        ret.push(KgPrefixLayer {
+            ctrls: layer_ctrls,
+            ops: Vec::new(),
+        });
 
         for i in (st + 1)..en {
             let offset = i - st;
@@ -164,7 +174,10 @@ fn kg_get_layers_for_prefix_and<'a>(
         return ret;
     }
 
-    ret.push(KgPrefixLayer { ctrls: Vec::new(), ops: Vec::new() });
+    ret.push(KgPrefixLayer {
+        ctrls: Vec::new(),
+        ops: Vec::new(),
+    });
     let target_prefix_layers = kg_get_layers_for_prefix_and(&targets, &inp_anc[2..]);
     for layer_id in 1..=n_layers {
         let st = kg_start_layer(layer_id);
@@ -202,6 +215,8 @@ fn kg_get_layers_for_prefix_and<'a>(
     ret
 }
 
+/// `target ^= AND(bits)` via the KG prefix-AND ladder (2k-3 Toffoli, log*(k)
+/// clean ancillae).
 fn xor_and_of_khattar_gidney_refs(circ: &mut B, bits: &[&QubitId], target: &QubitId) {
     match bits.len() {
         0 => {
@@ -252,6 +267,7 @@ fn xor_and_of_khattar_gidney_refs(circ: &mut B, bits: &[&QubitId], target: &Qubi
     }
 }
 
+/// Clean `target ^= AND(ctrls)`; `ctrls` restored. log*(k) clean ancillae.
 pub fn mcx_clean_k(circ: &mut B, ctrls: &[&QubitId], target: &QubitId) {
     match ctrls.len() {
         0 => circ.x(*target),
@@ -290,11 +306,13 @@ pub fn mcx_clean_k(circ: &mut B, ctrls: &[&QubitId], target: &QubitId) {
     }
 }
 
+/// Increment `a` modulo `2^a.len()` with the Khattar-Gidney prefix ladder.
 pub fn inc_khattar_gidney(circ: &mut B, a: &[QubitId]) {
     let refs: Vec<&QubitId> = a.iter().collect();
     inc_khattar_gidney_refs_inner(circ, &refs, false);
 }
 
+/// Controlled increment `a += ctrl (mod 2^a.len())`.
 pub fn cinc_khattar_gidney(circ: &mut B, a: &[QubitId], ctrl: &QubitId) {
     if a.is_empty() {
         return;
@@ -328,113 +346,18 @@ fn inc_khattar_gidney_refs_inner(circ: &mut B, a: &[&QubitId], skip_lsb_x: bool)
             op.emit(circ);
         }
     }
-    if !kg_inc_vent_enabled() {
-        for (i, layer) in layers.iter().enumerate().rev() {
-            if i < n && !(i == 0 && skip_lsb_x) {
-                kg_apply_prefix_controlled_x(circ, &layer.ctrls, a[i]);
-            }
-            for &op in layer.ops.iter().rev() {
-                op.emit(circ);
-            }
-        }
-        drop(layers);
-        drop(anc_refs);
-        for q in anc_owned {
-            circ.zero_and_free(q);
-        }
-        return;
-    }
-
-    // --- Vented reverse pass (E284, TLM_KG_INC_VENT=1) ---
-    #[derive(Clone, Copy)]
-    enum Step {
-        X0(QubitId),
-        X1(QubitId, QubitId),
-        X2(QubitId, QubitId, QubitId),
-        Xanc(QubitId),
-        Uncmp(QubitId, QubitId, QubitId),
-    }
-    let mut plan: Vec<Step> = Vec::new();
     for (i, layer) in layers.iter().enumerate().rev() {
         if i < n && !(i == 0 && skip_lsb_x) {
-            match layer.ctrls.as_slice() {
-                [] => plan.push(Step::X0(*a[i])),
-                [c] => plan.push(Step::X1(**c, *a[i])),
-                [x, y] => plan.push(Step::X2(**x, **y, *a[i])),
-                _ => panic!("inc_khattar_gidney vent: >2 prefix ctrls"),
-            }
+            kg_apply_prefix_controlled_x(circ, &layer.ctrls, a[i]);
         }
         for &op in layer.ops.iter().rev() {
-            match op {
-                KgPrefixOp::X(t) => plan.push(Step::Xanc(*t)),
-                KgPrefixOp::Ccx(x, y, t) => plan.push(Step::Uncmp(*x, *y, *t)),
-            }
+            op.emit(circ);
         }
     }
+
     drop(layers);
     drop(anc_refs);
-
-    fn touches(s: &Step) -> [Option<u64>; 3] {
-        match *s {
-            Step::X0(t) => [Some(t.0), None, None],
-            Step::X1(c, t) => [Some(c.0), Some(t.0), None],
-            Step::X2(x, y, t) => [Some(x.0), Some(y.0), Some(t.0)],
-            Step::Xanc(t) => [Some(t.0), None, None],
-            Step::Uncmp(x, y, t) => [Some(x.0), Some(y.0), Some(t.0)],
-        }
-    }
-    let mut occ: std::collections::HashMap<u64, Vec<usize>> = std::collections::HashMap::new();
-    for (idx, s) in plan.iter().enumerate() {
-        for q in touches(s).into_iter().flatten() {
-            occ.entry(q).or_default().push(idx);
-        }
-    }
-    let mut skip = vec![false; plan.len()];
-    let mut vent_pure = vec![false; plan.len()];
-    let mut vent_xc = vec![false; plan.len()];
-    let mut vented_anc: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    for k in 0..plan.len() {
-        if let Step::Uncmp(_, _, t) = plan[k] {
-            let after: Vec<usize> = occ
-                .get(&t.0)
-                .map(|v| v.iter().copied().filter(|&j| j > k).collect())
-                .unwrap_or_default();
-            if after.is_empty() {
-                vent_pure[k] = true;
-                vented_anc.insert(t.0);
-            } else if after.len() == 1
-                && matches!(plan[after[0]], Step::Xanc(tt) if tt.0 == t.0)
-            {
-                vent_xc[k] = true;
-                skip[after[0]] = true;
-                vented_anc.insert(t.0);
-            }
-        }
-    }
-    for k in 0..plan.len() {
-        if skip[k] {
-            continue;
-        }
-        match plan[k] {
-            Step::X0(t) => circ.x(t),
-            Step::X1(c, t) => circ.cx(c, t),
-            Step::X2(x, y, t) => circ.ccx(x, y, t),
-            Step::Xanc(t) => circ.x(t),
-            Step::Uncmp(x, y, t) => {
-                if vent_pure[k] {
-                    mbu_clear_and(circ, &t, &x, &y);
-                } else if vent_xc[k] {
-                    circ.x(t);
-                    mbu_clear_and(circ, &t, &x, &y);
-                } else {
-                    circ.ccx(x, y, t);
-                }
-            }
-        }
-    }
     for q in anc_owned {
-        if !vented_anc.contains(&q.0) {
-            circ.zero_and_free(q);
-        }
+        circ.zero_and_free(q);
     }
 }

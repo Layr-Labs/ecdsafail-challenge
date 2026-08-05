@@ -1,16 +1,41 @@
+//! Modular square-subtract `output -= lambda^2 mod q` (secp256k1) used by the
+//! EC point-add, built on the sibling `super::arith` mod-sub / mod-double
+//! primitives.
+//!
+//! - [`symmetric_square_into_prod`]: the symmetric schoolbook square -- each
+//!   cross-product x_i*x_j once, ~n^2/2 CCX. The row-add is `arith::
+//!   hybrid_add_adaptive`; the cross ANDs are uncomputed by `clear_and` (HMR +
+//!   conditional-Z), the diagonal by `cx`.
+//! - [`mod_square_sub_pm_secp256k1_symmetric`]: the unconditional Stage-2 reduce
+//!   `output -= lo + f*hi mod q`, built from `super::arith::{mod_double,
+//!   mod_sub}`.
+//!
+//! ## secp256k1 constants
+//!   q   = 2^256 - f,   f = 2^32 + 977   (bits {0,4,6,7,8,9,32})
+//!   PAD = 21  (the +f window carry-drop -> ~2^-PAD per-fire approximation,
+//!              inherited from `super::arith`'s mod-sub / mod-double folds).
 
-use super::arith::{self, cuccaro_carry, mod_add_lowpeak, mod_add_shifted_low, mod_sub, mod_sub_shifted_low, F_SECP256K1, LSBS};
-use super::{B, BExt};
-use crate::circuit::{QubitId};
+use super::arith::{
+    self, cuccaro_carry, mod_add_lowpeak, mod_add_shifted_low, mod_sub, mod_sub_shifted_low,
+    F_SECP256K1, LSBS,
+};
+use super::{BExt, B};
+use crate::circuit::QubitId;
 
 const N: usize = 256;
 
+/// Toffoli-free AND-uncompute (HMR + conditional-Z): `t` holds `a AND b` (here a
+/// square cross-product `x_i AND x_j`); the HMR measures it to |0> and the
+/// `cz_if_bit` cancels the deferred phase. Replaces the explicit reverse `ccx`
+/// (1 Toffoli) with a measurement (0 Toffoli).
 fn clear_and(circ: &mut B, t: &QubitId, a: &QubitId, b: &QubitId) {
     let bit = circ.alloc_bit();
     circ.hmr(*t, bit);
     circ.cz_if_bit(*a, *b, bit);
 }
 
+/// NAF of f = 2^32 + 977:
+/// f = 2^32 + 2^10 - 2^6 + 2^4 + 1.
 const F_NAF_TERMS: [(usize, ShiftOp); 5] = [
     (0, ShiftOp::Sub),
     (4, ShiftOp::Sub),
@@ -71,13 +96,23 @@ fn apply_shifted_hi_term(
     }
 }
 
+/// `slice += row` (mod 2^slice.len) via `arith::hybrid_add_adaptive`. `slice` is
+/// exactly one bit wider than `row` (one carry slot); the row carry rides into that top
+/// slot (or, when this slice is an interior window of a wider accumulator, into
+/// the already-populated high bits of `prod` -- the caller sizes the slice so the
+/// final carry lands in a real |0> or populated slot, never dropped).
+///
+/// One clean zero-pad qubit, freed.
 fn add_into(circ: &mut B, slice: &[QubitId], row: &[QubitId]) {
     let m = row.len();
     assert_eq!(slice.len(), m + 1, "slice must be one wider than row");
     if m == 0 {
         return;
     }
-
+    // Zero-pad `row` to the slice width and run the UNCONTROLLED exact adaptive add
+    // `slice += row_padded` (mod 2^(m+1)); the row carry rides into slice[m] (the
+    // pad keeps the addend's top bit |0>). The adder's headroom `k` is the value
+    // baked into the row-add schedule (SQ_ROW_K), read via next_sqrow_k().
     let pad = circ.alloc_qubit();
     let mut b: Vec<QubitId> = row.to_vec();
     b.push(pad);
@@ -86,48 +121,44 @@ fn add_into(circ: &mut B, slice: &[QubitId], row: &[QubitId]) {
     circ.zero_and_free(pad);
 }
 
+/// Build `prod[0..2n] += value(x[0..n])^2` (integer, no reduction) via the
+/// symmetric schoolbook square: each off-diagonal cross-product x[i]*x[j] (i<j)
+/// is computed once, halving the AND/Toffoli count vs the full schoolbook.
+///
+///   x^2 = sum_i x[i]*2^(2i)  +  sum_{i<j} 2*x[i]*x[j]*2^(i+j)
+///
+/// Row `i` (added at product position 2i):
+///   bit 0      = diagonal x[i]               (pos 2i)         via CX
+///   bit 1      = 0 (gap)
+///   bit k+2    = cross x[i] AND x[i+1+k]      (pos 2i+2+k)     via CCX
+///
+/// `prod` is grown lazily (only up to the highest bit written so far) so the
+/// per-row register recycles the not-yet-allocated high slots. Pass an empty Vec.
 fn symmetric_square_into_prod(circ: &mut B, x: &[QubitId], prod: &mut Vec<QubitId>) {
     let n = x.len();
-    if std::env::var("TLM_SQ_TRACE").ok().as_deref() == Some("1") {
-        eprintln!("SQ_CALL fwd n={n} crosses={}", n * (n - 1) / 2);
-    }
     assert!(prod.is_empty(), "prod is grown lazily; pass an empty Vec");
-
-    if square_addsub_enabled() && !(square_addsub_skip_c() && n == 129) {
-        for _ in 0..(2 * n) {
-            prod.push(circ.alloc_qubit());
-        }
-        if square_addsub_local_diag() {
-            crate::point_add::arith::square_addsub_local(circ, x, prod);
-        } else {
-            crate::point_add::arith::square_addsub_vented(circ, x, prod);
-        }
-        return;
-    }
     for i in 0..n {
-
+        // Row i has (n-1-i) crosses; the top cross lands at row-bit (n-1-i)+1 =
+        // n-i, so width = n-i+1 (i == n-1: only the diagonal, width 1).
         let num_cross = n.saturating_sub(i + 1);
         let width = if i == n - 1 { 1 } else { n - i + 1 };
-
+        // Row-add writes prod[2i .. 2i+width+1] (one carry slot). Grow prod up to
+        // the highest bit written so far.
         let hi = (2 * i + width + 1).min(2 * n);
         while prod.len() < hi {
             prod.push(circ.alloc_qubit());
         }
         let row: Vec<QubitId> = (0..width).map(|_| circ.alloc_qubit()).collect();
-        circ.cx(x[i], row[0]);
-
-        let skip_and = square_addsub_probe();
-        if !skip_and {
-            for k in 0..num_cross {
-                circ.ccx(x[i], x[i + 1 + k], row[k + 2]);
-            }
+        circ.cx(x[i], row[0]); // diagonal
+        for k in 0..num_cross {
+            circ.ccx(x[i], x[i + 1 + k], row[k + 2]); // cross x[i] & x[i+1+k]
         }
         add_into(circ, &prod[2 * i..hi], &row);
-
-        if !skip_and {
-            for k in 0..num_cross {
-                clear_and(circ, &row[k + 2], &x[i], &x[i + 1 + k]);
-            }
+        // Uncompute the row: each cross `row[k+2] = x[i] AND x[i+1+k]` is a clean
+        // AND (add_into restored `row`), so measurement-vent it (clear_and: HMR +
+        // cz, 0 Toffoli) instead of a reverse ccx. The diagonal is a CX.
+        for k in 0..num_cross {
+            clear_and(circ, &row[k + 2], &x[i], &x[i + 1 + k]);
         }
         circ.cx(x[i], row[0]);
         for q in row {
@@ -137,53 +168,22 @@ fn symmetric_square_into_prod(circ: &mut B, x: &[QubitId], prod: &mut Vec<QubitI
     debug_assert_eq!(prod.len(), 2 * n, "prod must reach 2n after the build");
 }
 
-fn square_addsub_enabled() -> bool {
-    true
-}
-
-fn square_addsub_local_diag() -> bool {
-    std::env::var("TLM_SQUARE_ADDSUB_LOCAL").ok().as_deref() == Some("1")
-}
-
-fn square_addsub_skip_c() -> bool {
-    std::env::var("TLM_SQUARE_ADDSUB_SKIP_C").ok().as_deref() == Some("1")
-}
-
-fn square_addsub_probe() -> bool {
-    std::env::var("TLM_SQUARE_ADDSUB_PROBE").ok().as_deref() == Some("1")
-}
-
+/// Gate-reverse of [`symmetric_square_into_prod`]: rebuilds each row and
+/// SUBTRACTS it from `prod`, draining `prod` back to |0>. Rows run in reverse
+/// order; `prod` is freed lazily (mirror of the forward lazy growth).
 fn symmetric_square_into_prod_reverse(circ: &mut B, x: &[QubitId], mut prod: Vec<QubitId>) {
     let n = x.len();
-    if std::env::var("TLM_SQ_TRACE").ok().as_deref() == Some("1") {
-        eprintln!("SQ_CALL rev n={n} crosses={}", n * (n - 1) / 2);
-    }
     assert_eq!(prod.len(), 2 * n);
-
-    if square_addsub_enabled() && !(square_addsub_skip_c() && n == 129) {
-        if square_addsub_local_diag() {
-            crate::point_add::arith::square_addsub_local_inverse(circ, x, &prod);
-        } else {
-            crate::point_add::arith::square_addsub_vented_inverse(circ, x, &prod);
-        }
-        for q in prod {
-            circ.zero_and_free(q);
-        }
-        return;
-    }
     for i in (0..n).rev() {
         let num_cross = n.saturating_sub(i + 1);
         let width = if i == n - 1 { 1 } else { n - i + 1 };
         let row: Vec<QubitId> = (0..width).map(|_| circ.alloc_qubit()).collect();
         circ.cx(x[i], row[0]);
-        let skip_and = square_addsub_probe();
-        if !skip_and {
-            for k in 0..num_cross {
-                circ.ccx(x[i], x[i + 1 + k], row[k + 2]);
-            }
+        for k in 0..num_cross {
+            circ.ccx(x[i], x[i + 1 + k], row[k + 2]);
         }
         let hi = (2 * i + width + 1).min(prod.len());
-
+        // subtract the row (X-sandwiched add).
         for q in &prod[2 * i..hi] {
             circ.x(*q);
         }
@@ -191,17 +191,16 @@ fn symmetric_square_into_prod_reverse(circ: &mut B, x: &[QubitId], mut prod: Vec
         for q in &prod[2 * i..hi] {
             circ.x(*q);
         }
-
-        if !skip_and {
-            for k in 0..num_cross {
-                clear_and(circ, &row[k + 2], &x[i], &x[i + 1 + k]);
-            }
+        // Vent the cross AND-uncompute (clean ANDs; see the forward build).
+        for k in 0..num_cross {
+            clear_and(circ, &row[k + 2], &x[i], &x[i + 1 + k]);
         }
         circ.cx(x[i], row[0]);
         for q in row {
             circ.zero_and_free(q);
         }
-
+        // Rows below i reach at most prod index n+i, so all indices > n+i are now
+        // |0> and can be freed (mirror of the forward lazy growth).
         let keep = (n + i + 1).min(2 * n);
         while prod.len() > keep {
             circ.zero_and_free(prod.pop().unwrap());
@@ -230,7 +229,11 @@ fn flipped(op: ShiftOp) -> ShiftOp {
 }
 
 fn apply_full_width(circ: &mut B, operand: &[QubitId], output_reg: &[QubitId], op: ShiftOp) {
-    assert_eq!(operand.len(), N, "full-width modular operand must be 256 bits");
+    assert_eq!(
+        operand.len(),
+        N,
+        "full-width modular operand must be 256 bits"
+    );
     match op {
         ShiftOp::Add => mod_add_lowpeak(circ, operand, output_reg),
         ShiftOp::Sub => mod_sub(circ, operand, output_reg),
@@ -254,7 +257,10 @@ fn apply_shifted_value_direct(
     shift: usize,
     op: ShiftOp,
 ) {
-    assert!(value.len() + shift <= N, "shifted value must fit in 256 bits");
+    assert!(
+        value.len() + shift <= N,
+        "shifted value must fit in 256 bits"
+    );
     let low_pads = alloc_zeroes(circ, shift);
     let high_pads = alloc_zeroes(circ, N - shift - value.len());
     let mut operand = Vec::with_capacity(N);
@@ -273,7 +279,10 @@ fn apply_shifted_value_low(
     shift: usize,
     op: ShiftOp,
 ) {
-    assert!(value.len() + shift <= N, "shifted value must fit in 256 bits");
+    assert!(
+        value.len() + shift <= N,
+        "shifted value must fit in 256 bits"
+    );
     if shift == 0 {
         apply_unshifted_value(circ, value, output_reg, op);
         return;
@@ -297,10 +306,19 @@ fn env_tag_enabled(var: &str, tag: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn apply_f_times_value_tagged(circ: &mut B, value: &[QubitId], output_reg: &[QubitId], op: ShiftOp, tag: &str) {
+fn apply_f_times_value_tagged(
+    circ: &mut B,
+    value: &[QubitId],
+    output_reg: &[QubitId],
+    op: ShiftOp,
+    tag: &str,
+) {
     assert!(value.len() <= N, "f-fold value must fit in 256 bits");
     if value.len() + 32 <= N
-        && (std::env::var("TLM_SQUARE_F_RAMP10_DIRECT32").ok().as_deref() == Some("1")
+        && (std::env::var("TLM_SQUARE_F_RAMP10_DIRECT32")
+            .ok()
+            .as_deref()
+            == Some("1")
             || env_tag_enabled("TLM_SQUARE_F_RAMP10_DIRECT32_TAGS", tag))
     {
         let pads = alloc_zeroes(circ, N + 1 - value.len());
@@ -374,6 +392,15 @@ fn apply_f_times_value_tagged(circ: &mut B, value: &[QubitId], output_reg: &[Qub
         return;
     }
 
+    // Shifted-low f-fold: instead of physically doubling `value` to each NAF
+    // shift (the old `mod_double` ramp: ~64 doublings of shift-shuffle overhead),
+    // read the 256-bit `value` register at each fixed bit offset and apply the
+    // explicit `+f`/`-f` overflow folds for the `shift` bits that wrap past bit
+    // 255. This is the same value-exact modular-shift technique already used by
+    // `apply_shifted_hi_term` / the shifted-low square route: each shifted term
+    // `±= (value << shift) mod q` is computed by `apply_shifted_hi_term`, which
+    // mirrors the mod_double ramp's per-term result gate-for-gate in value, while
+    // avoiding the doubling shuffle. Requires the full 256-bit register.
     if value.len() == N {
         for &(shift, sub_f_op) in &F_NAF_TERMS {
             let term_op = match op {
@@ -414,43 +441,30 @@ fn apply_f_times_value(circ: &mut B, value: &[QubitId], output_reg: &[QubitId], 
     apply_f_times_value_tagged(circ, value, output_reg, op, "generic");
 }
 
-fn apply_shifted_128_tagged(circ: &mut B, value: &[QubitId], output_reg: &[QubitId], op: ShiftOp, tag: &str) {
-    assert!(value.len() <= N + 2, "128-shifted half product must be at most 258 bits");
+fn apply_shifted_128_tagged(
+    circ: &mut B,
+    value: &[QubitId],
+    output_reg: &[QubitId],
+    op: ShiftOp,
+    tag: &str,
+) {
+    assert!(
+        value.len() <= N + 2,
+        "128-shifted half product must be at most 258 bits"
+    );
     let low_len = value.len().min(128);
-    if env_tag_enabled("TLM_SQUARE_SHIFTED128_LOW_TAGS", tag) {
-        // Preserve the full-width allocator/free-pool schedule for the downstream
-        // identity-keyed strip. Removing these unused pads makes 4,486 keys stale.
-        let low_pads = alloc_zeroes(circ, 128);
-        let high_pads = alloc_zeroes(circ, 128 - low_len);
-        let mut operand = Vec::with_capacity(128);
-        operand.extend_from_slice(&value[..low_len]);
-        operand.extend_from_slice(&high_pads);
-        match op {
-            ShiftOp::Add => mod_add_shifted_low(circ, &operand, output_reg, 128),
-            ShiftOp::Sub => mod_sub_shifted_low(circ, &operand, output_reg, 128),
-        }
-        free_zeroes(circ, high_pads);
-        free_zeroes(circ, low_pads);
-    } else {
-        let low_pads = alloc_zeroes(circ, 128);
-        let high_pads = alloc_zeroes(circ, 128 - low_len);
-        let mut operand = Vec::with_capacity(N);
-        operand.extend_from_slice(&low_pads);
-        operand.extend_from_slice(&value[..low_len]);
-        operand.extend_from_slice(&high_pads);
-        apply_full_width(circ, &operand, output_reg, op);
-        free_zeroes(circ, high_pads);
-        free_zeroes(circ, low_pads);
-    }
+    let low_pads = alloc_zeroes(circ, 128);
+    let high_pads = alloc_zeroes(circ, 128 - low_len);
+    let mut operand = Vec::with_capacity(N);
+    operand.extend_from_slice(&low_pads);
+    operand.extend_from_slice(&value[..low_len]);
+    operand.extend_from_slice(&high_pads);
+    apply_full_width(circ, &operand, output_reg, op);
+    free_zeroes(circ, high_pads);
+    free_zeroes(circ, low_pads);
 
     if value.len() > 128 {
-        if matches!(tag, "a" | "b" | "c") {
-            arith::with_shifted_square_ffg_prefix_scope(|| {
-                apply_f_times_value_tagged(circ, &value[128..], output_reg, op, tag);
-            });
-        } else {
-            apply_f_times_value_tagged(circ, &value[128..], output_reg, op, tag);
-        }
+        apply_f_times_value_tagged(circ, &value[128..], output_reg, op, tag);
     }
 }
 
@@ -459,7 +473,14 @@ fn build_sum_hi_lo(circ: &mut B, lambda: &[QubitId]) -> Vec<QubitId> {
     for i in 0..128 {
         circ.cx(lambda[i], sum[i]);
     }
-    cuccaro_carry(circ, None, &lambda[128..N], &sum[..128], None, Some(&sum[128]));
+    cuccaro_carry(
+        circ,
+        None,
+        &lambda[128..N],
+        &sum[..128],
+        None,
+        Some(&sum[128]),
+    );
     sum
 }
 
@@ -484,11 +505,39 @@ fn unbuild_sum_hi_lo(circ: &mut B, lambda: &[QubitId], sum: Vec<QubitId>) {
     free_zeroes(circ, sum);
 }
 
-pub fn mod_square_sub_pm_secp256k1_symmetric(circ: &mut B, lambda: &[QubitId], output_reg: &[QubitId]) {
+/// Unconditional `output_reg -= lambda^2 mod q` (secp256k1), normal throughout.
+///
+/// `lambda` is `n = 256` bits (lambda < q); `output_reg` is `n = 256` bits and
+/// holds a value < q on entry (the EC-add keeps output reduced).
+///
+/// Stage 1: build the 2n-bit integer product `prod = lambda^2`
+/// with [`symmetric_square_into_prod`] (~n(n-1)/2 CCX).
+/// Stage 2 (reduce): `lambda < q < 2^256 => lambda^2 < q^2 < 2^512`,
+/// so `hi = prod>>256 < q`. With `2^256 == f (mod q)`, `lambda^2 == lo + f*hi`.
+/// Subtract `lo` from `output`, then subtract the NAF expansion of `f*hi` by
+/// reading `hi` at fixed bit offsets. This avoids mutating/restoring `hi` via
+/// the old modular-doubling ramp.
+/// Stage 3: uncompute `prod` (gate-reverse of Stage 1).
+///
+/// Value note (carried-over miss probability): each `mod_double` / `mod_sub`
+/// inherits `super::arith`'s `+f`-window carry drop -- a documented ~2^-PAD
+/// (PAD=21) per-fire approximation. The common path is exact; the only legal
+/// divergence is that rare large-input +f-window miss.
+pub fn mod_square_sub_pm_secp256k1_symmetric(
+    circ: &mut B,
+    lambda: &[QubitId],
+    output_reg: &[QubitId],
+) {
     let n = N;
     assert_eq!(lambda.len(), n, "lambda must be n=256 bits (< q)");
     assert_eq!(output_reg.len(), n, "output must be n=256 bits (< q)");
 
+    // Karatsuba:
+    //   lambda = hi*2^128 + lo
+    //   A=lo^2, B=hi^2, C=(lo+hi)^2
+    //   lambda^2 = A + (C-A-B)*2^128 + B*2^256.
+    // Consume each half-square before building the next to keep the square off
+    // the global peak and avoid the three-product live set.
     circ.set_phase("square_sum_hi_lo");
     let sum = build_sum_hi_lo(circ, lambda);
 
@@ -524,215 +573,4 @@ pub fn mod_square_sub_pm_secp256k1_symmetric(circ: &mut B, lambda: &[QubitId], o
 
     circ.set_phase("square_sum_hi_lo_unbuild");
     unbuild_sum_hi_lo(circ, lambda, sum);
-}
-
-pub fn shifted128_low_miter() -> Result<usize, String> {
-    use crate::point_add::SECP256K1_P;
-    use crate::sim::Simulator;
-    use alloy_primitives::U256;
-    use sha3::{
-        digest::{ExtendableOutput, Update, XofReader},
-        Shake256,
-    };
-
-    struct HelperCircuit {
-        ops: Vec<crate::circuit::Op>,
-        source: Vec<QubitId>,
-        accumulator: Vec<QubitId>,
-        qubits: usize,
-        bits: usize,
-    }
-
-    fn build_helper(shifted: bool, op: ShiftOp) -> HelperCircuit {
-        let mut circ = B::new();
-        let source = circ.alloc_qubits(128);
-        let accumulator = circ.alloc_qubits(N);
-        if shifted {
-            match op {
-                ShiftOp::Add => mod_add_shifted_low(&mut circ, &source, &accumulator, 128),
-                ShiftOp::Sub => mod_sub_shifted_low(&mut circ, &source, &accumulator, 128),
-            }
-        } else {
-            let low_pads = alloc_zeroes(&mut circ, 128);
-            let mut operand = Vec::with_capacity(N);
-            operand.extend_from_slice(&low_pads);
-            operand.extend_from_slice(&source);
-            apply_full_width(&mut circ, &operand, &accumulator, op);
-            free_zeroes(&mut circ, low_pads);
-        }
-        HelperCircuit {
-            ops: circ.ops,
-            source,
-            accumulator,
-            qubits: circ.next_qubit as usize,
-            bits: circ.next_bit as usize,
-        }
-    }
-
-    fn subtract_mod(lhs: U256, rhs: U256) -> U256 {
-        if lhs >= rhs {
-            lhs - rhs
-        } else {
-            SECP256K1_P - (rhs - lhs)
-        }
-    }
-
-    fn run_helper(
-        circuit: &HelperCircuit,
-        source_values: &[U256; 64],
-        accumulator_values: &[U256; 64],
-        seed_label: &[u8],
-    ) -> Result<[U256; 64], String> {
-        let mut seed = Shake256::default();
-        seed.update(b"shifted128-low-helper-miter");
-        seed.update(seed_label);
-        let mut xof = seed.finalize_xof();
-        let mut sim = Simulator::new(circuit.qubits, circuit.bits, &mut xof);
-        sim.clear_for_shot();
-        for shot in 0..64 {
-            for bit in 0..128 {
-                if source_values[shot].bit(bit) {
-                    *sim.qubit_mut(circuit.source[bit]) |= 1u64 << shot;
-                }
-            }
-            for bit in 0..N {
-                if accumulator_values[shot].bit(bit) {
-                    *sim.qubit_mut(circuit.accumulator[bit]) |= 1u64 << shot;
-                }
-            }
-        }
-        sim.apply_iter(circuit.ops.iter());
-        if sim.phase != 0 {
-            return Err(format!("phase garbage 0x{:016x}", sim.phase));
-        }
-
-        let mut outputs = [U256::ZERO; 64];
-        for shot in 0..64 {
-            let mut source_after = U256::ZERO;
-            let mut output = U256::ZERO;
-            for bit in 0..128 {
-                if (sim.qubit(circuit.source[bit]) >> shot) & 1 == 1 {
-                    source_after |= U256::from(1u64) << bit;
-                }
-            }
-            for bit in 0..N {
-                if (sim.qubit(circuit.accumulator[bit]) >> shot) & 1 == 1 {
-                    output |= U256::from(1u64) << bit;
-                }
-            }
-            if source_after != source_values[shot] {
-                return Err(format!(
-                    "shot {shot}: source changed from {:#x} to {source_after:#x}",
-                    source_values[shot]
-                ));
-            }
-            outputs[shot] = output;
-        }
-
-        for q in 0..circuit.qubits as u64 {
-            if circuit.source.iter().any(|source| source.0 == q)
-                || circuit.accumulator.iter().any(|accumulator| accumulator.0 == q)
-            {
-                continue;
-            }
-            let value = sim.qubit(QubitId(q));
-            if value != 0 {
-                return Err(format!("ancilla qubit {q} not clean: 0x{value:016x}"));
-            }
-        }
-        Ok(outputs)
-    }
-
-    struct RestoreSquareMiterEnv {
-        no_vent_reduce: Option<std::ffi::OsString>,
-        vent_shifted: Option<std::ffi::OsString>,
-    }
-
-    impl Drop for RestoreSquareMiterEnv {
-        fn drop(&mut self) {
-            unsafe {
-                match self.no_vent_reduce.take() {
-                    Some(value) => std::env::set_var("TLM_SQUARE_NO_VENT_REDUCE", value),
-                    None => std::env::remove_var("TLM_SQUARE_NO_VENT_REDUCE"),
-                }
-                match self.vent_shifted.take() {
-                    Some(value) => std::env::set_var("TLM_SQUARE_VENT_SHIFTED", value),
-                    None => std::env::remove_var("TLM_SQUARE_VENT_SHIFTED"),
-                }
-            }
-        }
-    }
-
-    let _restore_env = RestoreSquareMiterEnv {
-        no_vent_reduce: std::env::var_os("TLM_SQUARE_NO_VENT_REDUCE"),
-        vent_shifted: std::env::var_os("TLM_SQUARE_VENT_SHIFTED"),
-    };
-    unsafe {
-        std::env::set_var("TLM_SQUARE_NO_VENT_REDUCE", "1");
-        std::env::remove_var("TLM_SQUARE_VENT_SHIFTED");
-    }
-    let mut checked = 0usize;
-    for (op_index, op) in [ShiftOp::Add, ShiftOp::Sub].into_iter().enumerate() {
-        let full = build_helper(false, op);
-        let shifted = build_helper(true, op);
-        for batch in 0u64..32 {
-            let mut input_seed = Shake256::default();
-            input_seed.update(b"shifted128-low-inputs");
-            input_seed.update(&(op_index as u64).to_le_bytes());
-            input_seed.update(&batch.to_le_bytes());
-            let mut inputs = input_seed.finalize_xof();
-            let mut source_values = [U256::ZERO; 64];
-            let mut accumulator_values = [U256::ZERO; 64];
-            let mut bytes = [0u8; 32];
-            for shot in 0..64 {
-                inputs.read(&mut bytes);
-                bytes[16..].fill(0);
-                source_values[shot] = U256::from_le_bytes(bytes);
-                inputs.read(&mut bytes);
-                accumulator_values[shot] = U256::from_le_bytes(bytes) % SECP256K1_P;
-            }
-
-            let mut label = [0u8; 24];
-            label[..8].copy_from_slice(&(op_index as u64).to_le_bytes());
-            label[8..16].copy_from_slice(&batch.to_le_bytes());
-            let full_outputs = run_helper(&full, &source_values, &accumulator_values, &label)
-                .map_err(|error| {
-                    format!("full helper op={op_index} batch={batch}: {error}")
-                })?;
-            let shifted_outputs =
-                run_helper(&shifted, &source_values, &accumulator_values, &label).map_err(
-                    |error| format!("shifted helper op={op_index} batch={batch}: {error}"),
-                )?;
-
-            for shot in 0..64 {
-                let operand = source_values[shot] << 128;
-                let expected = match op {
-                    ShiftOp::Add => {
-                        accumulator_values[shot].add_mod(operand, SECP256K1_P)
-                    }
-                    ShiftOp::Sub => subtract_mod(accumulator_values[shot], operand),
-                };
-                if full_outputs[shot] != expected {
-                    return Err(format!(
-                        "full helper op={op_index} batch={batch} shot={shot}: got {:#x}, expected {expected:#x}",
-                        full_outputs[shot]
-                    ));
-                }
-                if shifted_outputs[shot] != expected {
-                    return Err(format!(
-                        "shifted helper op={op_index} batch={batch} shot={shot}: got {:#x}, expected {expected:#x}",
-                        shifted_outputs[shot]
-                    ));
-                }
-                if shifted_outputs[shot] != full_outputs[shot] {
-                    return Err(format!(
-                        "miter op={op_index} batch={batch} shot={shot}: full={:#x}, shifted={:#x}",
-                        full_outputs[shot], shifted_outputs[shot]
-                    ));
-                }
-                checked += 1;
-            }
-        }
-    }
-    Ok(checked)
 }

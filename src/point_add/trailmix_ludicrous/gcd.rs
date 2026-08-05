@@ -1,78 +1,57 @@
+//! The product-min jump-GCD modular inversion (`y -> y * x^-1 mod q`
+//! and the forward `y -> y * x` direction), built on this crate's `B`
+//! builder and the `schedule` / `arith` / `comparator` / `codec` modules.
+//!
+//! ## Fused apply with incremental codec
+//! Schedule `schedule::SCHED_J2` / `GAP_J2`, jump=2, `ITERS = 258`. The dialog
+//! apply is fused into the forward/reverse GCD: each divstep symbol is applied to
+//! the coordinate pair the instant it is computed, so the apply adders run in the
+//! GCD passes' headroom and the full raw tape is never materialized.
+//!
+//!   1. `forward_gcd_jump` runs the jump=2 divstep loop, computing the per-step
+//!      dialog `(subtracted, swap, s_2)`. When `apply_inv` is set it applies the
+//!      inverse step to `[y, tmp]` (`Direction::Inverse`, producing `y*x^-1`)
+//!      before the symbol is swapped to the tape; otherwise it only records.
+//!   2. each codec window is compressed inline the instant its symbols are
+//!      recorded, so the resident tape stays compressed.
+//!   3. `reverse_gcd_jump` is the exact gate-inverse of the divstep loop: it
+//!      restores `x` and drains the tape to empty, decompressing one window at a
+//!      time. When `apply_fwd` is set it applies the forward step to `[tmp, y]`
+//!      (`Direction::Forward`, producing `y*x`) in reverse iter order.
+//!
+//! The compressed tape held live across a pass is `dialog_tape_qubits` qubits
+//! (603 for the len-258 all-triple tiling -- see `codec::dialog_tape_qubits`).
+//!
+//! ## Algorithm structure
+//! - The classical jump-before-swap divstep is the algebra `forward_gcd_jump`
+//!   realizes in the circuit.
+//! - The forward / reverse GCD: the per-step
+//!   shift / swap-decision / cswap / subtract structure and the schedule-driven
+//!   register shrink/regrow, with the comparator/subtract routed through this
+//!   crate's `comparator` / `arith`.
+//! - The reverse-iter apply (`if subtracted: y+=x; if swap: swap(x,y);
+//!   y *= 2^j mod q`): the multiply is the apply, the inversion is the
+//!   reverse-of-multiply composition.
+//! - The per-step variable shift (`controlled_right_shift` /
+//!   `controlled_left_shift`) and the apply's controlled doubling.
 
 use super::arith::{self, F_SECP256K1};
 use super::schedule::{GAP_J2, ITERS, JUMP, SCHED_J2};
+use super::{BExt, B};
+use crate::circuit::QubitId;
 
-fn gap_j2_delta() -> usize {
-    std::env::var("TLM_GAP_J2_DELTA")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(0)
-}
-
-fn gap_j2_mask_trunc_only() -> bool {
-    std::env::var("TLM_GAP_J2_TRUNC_ONLY").ok().as_deref() == Some("1")
-}
-
-// cmp window for step i: baseline is min(GAP_J2[i], current_n).
-// Delta narrows it; TRUNC_ONLY restricts narrowing to steps where the
-// baseline window is ALREADY a strict truncation (GAP_J2[i] < current_n),
-// leaving the exact-comparison tail steps untouched.
-fn cmp_window(i: usize, current_n: usize) -> usize {
-    let g = GAP_J2[i] as usize;
-    let base = g.min(current_n).max(1);
-    let d = gap_j2_delta();
-    if d == 0 {
-        return base;
-    }
-    if gap_j2_mask_trunc_only() && g >= current_n {
-        return base;
-    }
-    let lo = std::env::var("TLM_GAP_J2_LO").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
-    let hi = std::env::var("TLM_GAP_J2_HI").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(usize::MAX);
-    if i < lo || i >= hi {
-        return base;
-    }
-    base.saturating_sub(d).max(1)
-}
-
-use super::{B, BExt};
-use crate::circuit::{QubitId};
-use std::cell::Cell;
-
-thread_local! {
-    static RIGHT_SHIFT_CALL_INDEX: Cell<usize> = const { Cell::new(0) };
-    static LEFT_SHIFT_CALL_INDEX: Cell<usize> = const { Cell::new(0) };
-}
-
-pub(super) fn reset_gcd_trace_call_index() {
-    RIGHT_SHIFT_CALL_INDEX.with(|index| index.set(0));
-    LEFT_SHIFT_CALL_INDEX.with(|index| index.set(0));
-}
-
-fn next_right_shift_call_index() -> usize {
-    RIGHT_SHIFT_CALL_INDEX.with(|index| {
-        let current = index.get();
-        index.set(current + 1);
-        current
-    })
-}
-
-fn next_left_shift_call_index() -> usize {
-    LEFT_SHIFT_CALL_INDEX.with(|index| {
-        let current = index.get();
-        index.set(current + 1);
-        current
-    })
-}
-
+/// Which product the apply pass reconstructs into `y`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Direction {
-
+    /// `y -> y * x^-1 mod q` (the modular inversion: apply the dialog reversed
+    /// vs the multiply, i.e. forward iter order with the inverse step).
     Inverse,
-
+    /// `y -> y * x   mod q` (the multiply: reverse iter order, forward step).
     Forward,
 }
 
+/// secp256k1 prime q = 2^256 - f = 0xFFFF...FFFFFC2F, little-endian bytes.
+/// (Build-time constant; avoids a bignum dependency in the submission.)
 #[must_use]
 pub fn q_secp256k1_le() -> [u8; 32] {
     let mut b = [0xFFu8; 32];
@@ -82,6 +61,8 @@ pub fn q_secp256k1_le() -> [u8; 32] {
     b
 }
 
+/// All-triple group count the product-min selector picks for this
+/// schedule: `n3 = iters/3` (clamped inside `codec::jump_dialog_regions`).
 #[must_use]
 pub fn n3_for_iters(iters: usize) -> usize {
     iters / 3
@@ -120,6 +101,77 @@ fn maybe_adjust_late_gcd_k(i: usize, k: usize) -> usize {
     adjust_gcd_k("TLM_GCD_K_EXTRA", i, k)
 }
 
+fn env_step_usize(name: &str, step: usize) -> Option<usize> {
+    std::env::var(name).ok().and_then(|value| {
+        value
+            .split(',')
+            .filter_map(|item| item.trim().split_once(':'))
+            .find_map(|(index, value)| {
+                (index.parse::<usize>().ok()? == step)
+                    .then(|| value.parse::<usize>().ok())
+                    .flatten()
+            })
+    })
+}
+
+fn env_step_list_contains(name: &str, step: usize) -> bool {
+    std::env::var(name).ok().is_some_and(|value| {
+        value.split(',').any(|item| {
+            let item = item.trim();
+            if item.is_empty() {
+                return false;
+            }
+            if let Some((lo, hi)) = item.split_once('-') {
+                let Some(lo) = lo.trim().parse::<usize>().ok() else {
+                    return false;
+                };
+                let Some(hi) = hi.trim().parse::<usize>().ok() else {
+                    return false;
+                };
+                lo <= step && step <= hi
+            } else {
+                item.parse::<usize>().ok() == Some(step)
+            }
+        })
+    })
+}
+
+fn active_width_trim_for_step(i: usize) -> usize {
+    if let Some(trim) = env_step_usize("TLM_GCD_ACTIVE_WIDTH_TRIM_OVERRIDES", i) {
+        return trim;
+    }
+    let trim = env_usize("TLM_GCD_ACTIVE_WIDTH_TRIM", 0);
+    let after = env_usize("TLM_GCD_ACTIVE_WIDTH_TRIM_AFTER", 0);
+    if i >= after {
+        trim
+    } else {
+        0
+    }
+}
+
+fn active_width_trim_for_pass_step(pass: &str, i: usize) -> usize {
+    let key = format!("TLM_GCD_ACTIVE_WIDTH_TRIM_OVERRIDES_{pass}");
+    if let Some(trim) = env_step_usize(&key, i) {
+        return trim;
+    }
+    active_width_trim_for_step(i)
+}
+
+fn active_width_for_pass_step(pass: &str, i: usize) -> usize {
+    let base = (SCHED_J2[i] as usize).max(1);
+    base.saturating_sub(active_width_trim_for_pass_step(pass, i))
+        .max(1)
+}
+
+fn gcd_apply_dirty_vents(u: &[QubitId]) -> &[QubitId] {
+    let hi = u.len().min(4);
+    if hi > 1 {
+        &u[1..hi]
+    } else {
+        &[]
+    }
+}
+
 fn trace_step_regions(circ: &mut B, direction: &str, i: usize, region_start: usize) {
     if std::env::var("TRACE_TLM_GCD_STEPS").is_err() {
         return;
@@ -149,6 +201,11 @@ fn trace_step_regions(circ: &mut B, direction: &str, i: usize, region_start: usi
     }
 }
 
+// =====================================================================
+// MBU AND-uncompute (HMR + conditional-Z), measurement-vented. `t` holds
+// `a AND b` and is returned to |0>.
+// =====================================================================
+
 fn clear_and(circ: &mut B, t: &QubitId, a: &QubitId, b: &QubitId) {
     let bit = circ.alloc_bit();
     circ.hmr(*t, bit);
@@ -175,6 +232,27 @@ fn loan_odd_u0_enabled() -> bool {
     std::env::var("TLM_LOAN_ODD_U0").ok().as_deref() == Some("1")
 }
 
+fn precompare_park_odd_u0_enabled(i: usize, side: &str) -> bool {
+    // This park spans compare/cswap/body/apply; a same-id zero-lane loan can be
+    // reused before restoration, so only allow the fresh-id reset/free variant.
+    if loan_odd_u0_enabled() {
+        return false;
+    }
+    let all = std::env::var("TLM_PRECOMPARE_PARK_ODD_U0").ok().as_deref() == Some("1");
+    let side_on = std::env::var(format!("TLM_PRECOMPARE_PARK_ODD_U0_{side}"))
+        .ok()
+        .as_deref()
+        == Some("1");
+    if !all && !side_on {
+        return false;
+    }
+    let limit = std::env::var("TLM_PRECOMPARE_PARK_ODD_U0_LIMIT")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(usize::MAX);
+    i < limit
+}
+
 fn park_even_v0_enabled() -> bool {
     std::env::var("TLM_PARK_EVEN_V0").ok().as_deref() == Some("1")
 }
@@ -187,10 +265,23 @@ fn loan_gcd_y0_enabled() -> bool {
     std::env::var("TLM_LOAN_GCD_Y0").ok().as_deref() == Some("1")
 }
 
+fn gcd_body_serial_enabled() -> bool {
+    std::env::var("TLM_GCD_BODY_SERIAL").ok().as_deref() == Some("1")
+}
+
+fn recompress_pending_pair_during_apply_enabled() -> bool {
+    std::env::var("TLM_RECOMPRESS_PENDING_PAIR_DURING_APPLY")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
 fn apply_fwd_cswap_skip(i: usize) -> bool {
-    let legacy_first_skip =
-        std::env::var("TLM_APPLY_FWD_FIRST_CSWAP_SKIP").ok().as_deref() == Some("1")
-            && i + 1 == ITERS;
+    let legacy_first_skip = std::env::var("TLM_APPLY_FWD_FIRST_CSWAP_SKIP")
+        .ok()
+        .as_deref()
+        == Some("1")
+        && i + 1 == ITERS;
     let last_n = std::env::var("TLM_APPLY_FWD_CSWAP_SKIP_LAST")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -282,6 +373,22 @@ fn restore_known_zero(circ: &mut B, parked: QubitId) -> QubitId {
     }
 }
 
+fn recycle_symbol_flags_enabled() -> bool {
+    std::env::var("TLM_GCD_RECYCLE_SYMBOL_FLAGS")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+fn reuse_symbol_flags_as_tape_enabled() -> bool {
+    std::env::var("TLM_GCD_REUSE_FLAGS_AS_TAPE").ok().as_deref() == Some("1")
+}
+
+fn reuse_symbol_flags_as_tape_for_step(i: usize) -> bool {
+    reuse_symbol_flags_as_tape_enabled()
+        || env_step_list_contains("TLM_GCD_REUSE_FLAGS_AS_TAPE_STEPS", i)
+}
+
 fn loan_known_one_gcd_y0(circ: &mut B, q: QubitId) {
     circ.x(q);
     circ.loan_zero_qubit(q);
@@ -300,877 +407,84 @@ fn reclaim_known_zero_gcd_y0(circ: &mut B, q: QubitId) {
     circ.reclaim_zero_qubit(q);
 }
 
-const GCD_REVERSE_CSWAP_DEAD_RANGES: &[(usize, usize, usize)] = &[
-    (255, 5, 13),
-    (256, 3, 11),
-    (253, 8, 15),
-    (254, 7, 13),
-    (252, 10, 15),
-    (250, 13, 16),
-    (251, 12, 15),
-    (249, 13, 16),
-    (236, 27, 29),
-    (248, 15, 17),
-    (234, 29, 31),
-    (235, 28, 30),
-    (237, 26, 28),
-    (244, 18, 20),
-    (246, 17, 19),
-    (247, 16, 18),
-    (101, 164, 165),
-    (143, 122, 123),
-    (145, 120, 121),
-    (219, 45, 46),
-    (220, 44, 45),
-    (221, 43, 44),
-    (224, 40, 41),
-    (226, 38, 39),
-    (228, 36, 37),
-    (229, 35, 36),
-    (231, 33, 34),
-    (232, 32, 33),
-    (233, 31, 32),
-    (245, 18, 19),
-    (257, 7, 10),
-    (95, 170, 171),
-    (116, 149, 150),
-    (134, 131, 132),
-    (218, 46, 47),
-    (222, 42, 43),
-    (223, 41, 42),
-    (225, 39, 40),
-    (227, 37, 38),
-    (230, 34, 35),
-    (240, 22, 23),
-    (11, 254, 254),
-    (12, 253, 253),
-    (19, 246, 246),
-    (21, 244, 244),
-    (30, 235, 235),
-    (31, 234, 234),
-    (33, 232, 232),
-    (35, 230, 230),
-    (36, 229, 229),
-    (37, 228, 228),
-    (39, 226, 226),
-    (40, 225, 225),
-    (42, 223, 223),
-    (43, 222, 222),
-    (46, 219, 219),
-    (47, 218, 218),
-    (48, 217, 217),
-    (49, 216, 216),
-    (50, 215, 215),
-    (51, 214, 214),
-    (53, 212, 212),
-    (54, 211, 211),
-    (56, 209, 209),
-    (63, 202, 202),
-    (68, 197, 197),
-    (70, 195, 195),
-    (75, 190, 190),
-    (76, 189, 189),
-    (79, 186, 186),
-    (80, 185, 185),
-    (81, 184, 184),
-    (87, 178, 178),
-    (94, 172, 172),
-    (103, 163, 163),
-    (105, 161, 161),
-    (107, 159, 159),
-    (108, 158, 158),
-    (110, 156, 156),
-    (112, 154, 154),
-    (113, 153, 153),
-    (114, 152, 152),
-    (115, 151, 151),
-    (123, 143, 143),
-    (124, 142, 142),
-    (126, 140, 140),
-    (127, 139, 139),
-    (128, 138, 138),
-    (129, 137, 137),
-    (130, 136, 136),
-    (131, 135, 135),
-    (132, 134, 134),
-    (133, 133, 133),
-    (141, 125, 125),
-    (142, 124, 124),
-    (146, 119, 119),
-    (147, 118, 118),
-    (148, 117, 117),
-    (149, 116, 116),
-    (153, 112, 112),
-    (157, 108, 108),
-    (159, 106, 106),
-    (161, 104, 104),
-    (162, 103, 103),
-    (163, 102, 102),
-    (164, 101, 101),
-    (167, 98, 98),
-    (168, 97, 97),
-    (169, 96, 96),
-    (170, 95, 95),
-    (171, 94, 94),
-    (180, 85, 85),
-    (182, 83, 83),
-    (183, 82, 82),
-    (187, 78, 78),
-    (188, 77, 77),
-    (189, 76, 76),
-    (190, 75, 75),
-    (192, 73, 73),
-    (193, 72, 72),
-    (194, 71, 71),
-    (195, 70, 70),
-    (197, 68, 68),
-    (198, 67, 67),
-    (199, 66, 66),
-    (203, 62, 62),
-    (204, 61, 61),
-    (205, 60, 60),
-    (206, 59, 59),
-    (207, 58, 58),
-    (208, 57, 57),
-    (210, 55, 55),
-    (211, 54, 54),
-    (212, 53, 53),
-    (213, 52, 52),
-    (214, 51, 51),
-    (215, 50, 50),
-    (216, 49, 49),
-    (217, 48, 48),
-    (238, 25, 25),
-    (239, 24, 24),
-    (241, 22, 22),
-    (242, 21, 21),
-];
+// =====================================================================
+// Per-step variable shift (controlled right/left shift by 1).
+// =====================================================================
 
-const GCD_FORWARD_CSWAP_REMAINDER_KEYS: &[u32] = &[
-    3325, 4345, 8935, 9955, 17860, 24236, 26021, 26531, 26786, 27551, 28316, 28571,
-    29846, 31631, 31886, 32906, 33161, 33416, 33671, 33926, 34181, 34436, 35710,
-    36221, 36476, 36985, 37241, 38260, 40810, 41575, 41830, 43360, 44380, 45145,
-    46165, 46675, 47185, 47950, 48205, 48715, 49225, 50755, 51010, 51520, 51775,
-    52030, 52285, 52540, 53305, 53560, 54070, 54580, 54835, 55090, 55600, 56110,
-    56620, 56875, 57130, 57385, 57895, 58149, 58405, 58660, 58915, 59170, 59425,
-    59680, 59935, 60190, 60444, 60445, 60700, 62484, 62995, 63250, 63505, 63759,
-    63760, 64014, 64015, 64016, 64270, 64271, 64524, 64525, 64526, 64527, 64779,
-    64780, 64781, 64782, 64783, 65035, 65036, 65037, 65290, 65291, 65292, 65293,
-    65545, 65546, 65547, 65800, 65801, 65802,
-];
-
-const GCD_REVERSE_CSWAP_REMAINDER_KEYS: &[u32] = &[
-    3580, 3835, 4090, 4345, 4600, 4855, 5365, 5875, 6130, 6640, 6895, 7150,
-    7405, 7660, 8425, 8935, 9955, 10720, 11740, 13525, 14290, 15055, 15310,
-    15565, 15820, 16075, 16585, 16840, 17095, 17350, 18370, 18625, 18880,
-    19135, 19900, 20155, 21175, 21685, 22195, 22705, 22960, 23215, 23470,
-    23725, 24745, 25255, 25510, 26786, 31376, 34690, 34945, 35200, 35455,
-    38515, 38770, 39025, 39790, 40045, 40555, 41065, 42340, 42595, 44125,
-    44635, 44890, 45145, 45400, 45655, 45910, 46420, 47185, 47440, 48970,
-    50245, 51265, 53560,
-];
-
-fn gcd_reverse_cswap_has_structurally_dead_gate(step: usize, bit: usize) -> bool {
-    if super::drops_off_family("GCDRSW") {
-        return false;
-    }
-
-    if std::env::var_os("TLM_GCD_SKIP_STRUCTURAL_DEAD_CSWAPS").is_none() {
-        return false;
-    }
-    if std::env::var_os("TLM_GCD_SKIP_REVERSE_DIAGONAL_EDGE").is_some()
-        && step + bit
-            >= std::env::var("TLM_GCD_REVERSE_DIAGONAL_MIN")
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(265)
-        && step
-            >= std::env::var("TLM_GCD_REVERSE_DIAGONAL_STEP_MIN")
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(0)
-        && step
-            <= std::env::var("TLM_GCD_REVERSE_DIAGONAL_STEP_MAX")
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(usize::MAX)
-    {
-        return true;
-    }
-    if std::env::var_os("TLM_GCD_SKIP_EXACT_REVERSE_CSWAPS").is_some() {
-        let key = (((step as u32) & 0xffff) << 8) | (bit as u32 & 0xff);
-        if GCD_REVERSE_CSWAP_REMAINDER_KEYS.binary_search(&key).is_ok() {
-            return true;
-        }
-    }
-    GCD_REVERSE_CSWAP_DEAD_RANGES
-        .iter()
-        .any(|&(range_step, lo, hi)| range_step == step && (lo..=hi).contains(&bit))
-}
-
-fn gcd_forward_cswap_has_structurally_dead_gate(step: usize, bit: usize) -> bool {
-    if super::drops_off_family("GCDFSW") {
-        return false;
-    }
-
-    // W1155: forward structurally-dead-cswap predicate := reverse predicate (bit-exact,
-    // the forward pass shares the reverse pass's provably-dead structure).
-    if std::env::var_os("W1155_FWD_EQ_REV").is_some() {
-        return gcd_reverse_cswap_has_structurally_dead_gate(step, bit);
-    }
-    if std::env::var_os("TLM_GCD_SKIP_STRUCTURAL_DEAD_CSWAPS").is_none()
-        || std::env::var_os("TLM_GCD_SKIP_EXACT_FORWARD_CSWAPS").is_none()
-    {
-        return false;
-    }
-    let key = (((step as u32) & 0xffff) << 8) | (bit as u32 & 0xff);
-    GCD_FORWARD_CSWAP_REMAINDER_KEYS.binary_search(&key).is_ok()
-}
-
-const GCD_SHIFT_DEAD_RANGES: &[(u8, usize, usize, usize)] = &[
-    (12, 0, 1, 9),
-    (12, 259, 1, 9),
-    (12, 1, 3, 10),
-    (12, 2, 5, 12),
-    (12, 260, 3, 10),
-    (12, 261, 5, 12),
-    (12, 262, 7, 12),
-    (12, 263, 9, 14),
-    (12, 264, 9, 14),
-    (12, 3, 7, 12),
-    (12, 4, 9, 14),
-    (12, 5, 10, 14),
-    (11, 254, 11, 14),
-    (11, 515, 8, 8),
-    (11, 515, 10, 12),
-    (11, 516, 7, 10),
-    (12, 265, 11, 14),
-    (12, 266, 12, 15),
-    (12, 6, 11, 14),
-    (12, 7, 12, 15),
-    (11, 252, 12, 14),
-    (11, 253, 12, 14),
-    (11, 255, 10, 12),
-    (11, 256, 10, 12),
-    (11, 257, 8, 10),
-    (11, 258, 7, 9),
-    (11, 510, 13, 15),
-    (11, 512, 12, 14),
-    (11, 513, 12, 14),
-    (11, 514, 10, 12),
-    (12, 20, 25, 27),
-    (12, 267, 13, 15),
-    (12, 269, 15, 17),
-    (12, 270, 16, 18),
-    (12, 279, 25, 27),
-    (12, 280, 26, 28),
-    (12, 287, 33, 35),
-    (12, 8, 13, 15),
-    (12, 9, 14, 16),
-    (11, 250, 14, 15),
-    (11, 251, 14, 15),
-    (11, 391, 133, 134),
-    (11, 405, 119, 120),
-    (11, 511, 12, 12),
-    (11, 511, 14, 14),
-    (11, 517, 8, 9),
-    (12, 10, 16, 17),
-    (12, 11, 17, 18),
-    (12, 12, 17, 18),
-    (12, 13, 18, 19),
-    (12, 21, 27, 28),
-    (12, 22, 28, 29),
-    (12, 23, 29, 30),
-    (12, 24, 30, 31),
-    (12, 25, 31, 32),
-    (12, 26, 32, 33),
-    (12, 268, 15, 16),
-    (12, 27, 33, 34),
-    (12, 271, 17, 18),
-    (12, 28, 34, 35),
-    (12, 281, 28, 29),
-    (12, 283, 30, 31),
-    (12, 286, 33, 34),
-    (12, 288, 35, 36),
-    (12, 289, 36, 37),
-    (12, 290, 37, 38),
-    (12, 293, 40, 41),
-    (12, 294, 41, 42),
-    (12, 295, 42, 43),
-    (12, 31, 37, 38),
-    (12, 32, 38, 39),
-    (12, 33, 39, 40),
-    (12, 34, 40, 41),
-    (12, 35, 41, 42),
-    (12, 36, 42, 43),
-    // E251: 376 additional structurally-dead gcd-shift ranges (audit-recovered).
-    (12, 39, 46, 46),
-    (12, 40, 47, 47),
-    (12, 41, 48, 48),
-    (12, 42, 49, 49),
-    (12, 43, 50, 50),
-    (12, 44, 51, 51),
-    (12, 45, 52, 52),
-    (12, 46, 53, 53),
-    (12, 48, 55, 55),
-    (12, 50, 57, 57),
-    (12, 52, 59, 59),
-    (12, 53, 60, 60),
-    (12, 54, 61, 61),
-    (12, 55, 62, 62),
-    (12, 56, 63, 63),
-    (12, 57, 64, 64),
-    (12, 58, 65, 65),
-    (12, 59, 66, 66),
-    (12, 61, 68, 68),
-    (12, 62, 69, 69),
-    (12, 63, 70, 70),
-    (12, 64, 71, 71),
-    (12, 65, 72, 72),
-    (12, 66, 73, 73),
-    (12, 67, 74, 74),
-    (12, 68, 75, 75),
-    (12, 70, 77, 77),
-    (12, 71, 78, 78),
-    (12, 72, 79, 79),
-    (12, 73, 80, 80),
-    (12, 74, 81, 81),
-    (12, 75, 82, 82),
-    (12, 76, 83, 83),
-    (12, 77, 84, 84),
-    (12, 78, 85, 85),
-    (12, 79, 86, 86),
-    (12, 80, 87, 87),
-    (12, 81, 88, 88),
-    (12, 82, 89, 89),
-    (12, 83, 90, 90),
-    (12, 84, 91, 91),
-    (12, 85, 92, 92),
-    (12, 86, 93, 93),
-    (12, 87, 94, 94),
-    (12, 88, 95, 95),
-    (12, 89, 96, 96),
-    (12, 90, 97, 97),
-    (12, 91, 98, 98),
-    (12, 92, 99, 99),
-    (12, 93, 100, 100),
-    (12, 94, 101, 101),
-    (12, 95, 102, 102),
-    (12, 96, 103, 103),
-    (12, 97, 104, 104),
-    (12, 98, 105, 105),
-    (12, 99, 106, 106),
-    (12, 101, 108, 108),
-    (12, 102, 109, 109),
-    (12, 103, 110, 110),
-    (12, 104, 111, 111),
-    (12, 105, 112, 112),
-    (12, 106, 113, 113),
-    (12, 107, 114, 114),
-    (12, 108, 115, 115),
-    (12, 109, 116, 116),
-    (12, 110, 117, 117),
-    (12, 111, 118, 118),
-    (12, 113, 120, 120),
-    (12, 115, 122, 122),
-    (12, 117, 124, 124),
-    (12, 118, 125, 125),
-    (12, 119, 126, 126),
-    (12, 121, 128, 128),
-    (12, 124, 131, 131),
-    (12, 125, 132, 132),
-    (12, 126, 133, 133),
-    (12, 127, 134, 134),
-    (12, 129, 136, 136),
-    (12, 130, 137, 137),
-    (12, 131, 138, 138),
-    (12, 132, 139, 139),
-    (12, 134, 141, 141),
-    (12, 135, 142, 142),
-    (12, 136, 143, 143),
-    (12, 137, 144, 144),
-    (12, 138, 145, 145),
-    (12, 139, 146, 146),
-    (12, 140, 147, 147),
-    (12, 142, 149, 149),
-    (12, 143, 150, 150),
-    (12, 144, 151, 151),
-    (12, 146, 153, 153),
-    (12, 147, 154, 154),
-    (12, 148, 155, 155),
-    (12, 149, 156, 156),
-    (12, 150, 157, 157),
-    (12, 151, 158, 158),
-    (12, 152, 159, 159),
-    (12, 153, 160, 160),
-    (12, 154, 161, 161),
-    (12, 155, 162, 162),
-    (12, 156, 163, 163),
-    (12, 157, 164, 164),
-    (12, 158, 165, 165),
-    (12, 159, 166, 166),
-    (12, 160, 167, 167),
-    (12, 161, 168, 168),
-    (12, 163, 170, 170),
-    (12, 164, 171, 171),
-    (12, 165, 172, 172),
-    (12, 166, 173, 173),
-    (12, 167, 174, 174),
-    (12, 168, 175, 175),
-    (12, 169, 176, 176),
-    (12, 170, 177, 177),
-    (12, 171, 178, 178),
-    (12, 172, 179, 179),
-    (12, 173, 180, 180),
-    (12, 174, 181, 181),
-    (12, 175, 182, 182),
-    (12, 176, 183, 183),
-    (12, 177, 184, 184),
-    (12, 178, 185, 185),
-    (12, 179, 186, 186),
-    (12, 180, 187, 187),
-    (12, 181, 188, 188),
-    (12, 182, 189, 189),
-    (12, 184, 191, 191),
-    (12, 185, 192, 192),
-    (12, 186, 193, 193),
-    (12, 187, 194, 194),
-    (12, 188, 195, 195),
-    (12, 189, 196, 196),
-    (12, 190, 197, 197),
-    (12, 191, 198, 198),
-    (12, 192, 199, 199),
-    (12, 193, 200, 200),
-    (12, 194, 201, 201),
-    (12, 195, 202, 202),
-    (12, 196, 203, 203),
-    (12, 197, 204, 204),
-    (12, 198, 205, 205),
-    (12, 199, 206, 206),
-    (12, 200, 207, 207),
-    (12, 201, 208, 208),
-    (12, 202, 209, 209),
-    (12, 203, 210, 210),
-    (12, 204, 211, 211),
-    (12, 205, 212, 212),
-    (12, 206, 213, 213),
-    (12, 207, 214, 214),
-    (12, 209, 216, 216),
-    (12, 210, 217, 217),
-    (12, 211, 218, 218),
-    (12, 212, 219, 219),
-    (12, 213, 220, 220),
-    (12, 214, 221, 221),
-    (12, 215, 222, 222),
-    (12, 216, 223, 223),
-    (12, 217, 224, 224),
-    (12, 218, 225, 225),
-    (12, 219, 226, 226),
-    (12, 220, 227, 227),
-    (12, 221, 228, 228),
-    (12, 222, 229, 229),
-    (12, 223, 230, 230),
-    (12, 224, 231, 231),
-    (12, 225, 232, 232),
-    (12, 226, 233, 233),
-    (12, 227, 234, 234),
-    (12, 228, 235, 235),
-    (12, 229, 236, 236),
-    (12, 230, 237, 237),
-    (12, 231, 238, 238),
-    (12, 232, 239, 239),
-    (12, 233, 240, 240),
-    (12, 234, 241, 241),
-    (12, 235, 242, 242),
-    (12, 236, 243, 243),
-    (12, 237, 244, 244),
-    (12, 238, 245, 245),
-    (12, 239, 246, 246),
-    (12, 240, 247, 247),
-    (12, 241, 248, 248),
-    (12, 242, 249, 249),
-    (12, 243, 250, 250),
-    (12, 245, 252, 252),
-    (12, 246, 253, 253),
-    (12, 247, 254, 254),
-    (12, 248, 255, 255),
-    (12, 249, 256, 256),
-    (12, 250, 257, 257),
-    (12, 298, 46, 46),
-    (12, 299, 47, 47),
-    (12, 300, 48, 48),
-    (12, 301, 49, 49),
-    (12, 302, 50, 50),
-    (12, 303, 51, 51),
-    (12, 304, 52, 52),
-    (12, 305, 53, 53),
-    (12, 306, 54, 54),
-    (12, 307, 55, 55),
-    (12, 308, 56, 56),
-    (12, 309, 57, 57),
-    (12, 310, 58, 58),
-    (12, 311, 59, 59),
-    (12, 312, 60, 60),
-    (12, 313, 61, 61),
-    (12, 315, 63, 63),
-    (12, 316, 64, 64),
-    (12, 317, 65, 65),
-    (12, 318, 66, 66),
-    (12, 319, 67, 67),
-    (12, 320, 68, 68),
-    (12, 321, 69, 69),
-    (12, 322, 70, 70),
-    (12, 323, 71, 71),
-    (12, 324, 72, 72),
-    (12, 325, 73, 73),
-    (12, 326, 74, 74),
-    (12, 327, 75, 75),
-    (12, 328, 76, 76),
-    (12, 329, 77, 77),
-    (12, 330, 78, 78),
-    (12, 331, 79, 79),
-    (12, 332, 80, 80),
-    (12, 333, 81, 81),
-    (12, 334, 82, 82),
-    (12, 335, 83, 83),
-    (12, 336, 84, 84),
-    (12, 337, 85, 85),
-    (12, 338, 86, 86),
-    (12, 339, 87, 87),
-    (12, 340, 88, 88),
-    (12, 342, 90, 90),
-    (12, 343, 91, 91),
-    (12, 344, 92, 92),
-    (12, 345, 93, 93),
-    (12, 346, 94, 94),
-    (12, 347, 95, 95),
-    (12, 348, 96, 96),
-    (12, 350, 98, 98),
-    (12, 351, 99, 99),
-    (12, 352, 100, 100),
-    (12, 353, 101, 101),
-    (12, 354, 102, 102),
-    (12, 355, 103, 103),
-    (12, 356, 104, 104),
-    (12, 357, 105, 105),
-    (12, 358, 106, 106),
-    (12, 359, 107, 107),
-    (12, 360, 108, 108),
-    (12, 361, 109, 109),
-    (12, 362, 110, 110),
-    (12, 363, 111, 111),
-    (12, 364, 112, 112),
-    (12, 365, 113, 113),
-    (12, 366, 114, 114),
-    (12, 367, 115, 115),
-    (12, 368, 116, 116),
-    (12, 369, 117, 117),
-    (12, 370, 118, 118),
-    (12, 372, 120, 120),
-    (12, 376, 124, 124),
-    (12, 377, 125, 125),
-    (12, 378, 126, 126),
-    (12, 379, 127, 127),
-    (12, 380, 128, 128),
-    (12, 381, 129, 129),
-    (12, 382, 130, 130),
-    (12, 383, 131, 131),
-    (12, 384, 132, 132),
-    (12, 385, 133, 133),
-    (12, 386, 134, 134),
-    (12, 387, 135, 135),
-    (12, 388, 136, 136),
-    (12, 389, 137, 137),
-    (12, 391, 139, 139),
-    (12, 393, 141, 141),
-    (12, 394, 142, 142),
-    (12, 395, 143, 143),
-    (12, 396, 144, 144),
-    (12, 397, 145, 145),
-    (12, 398, 146, 146),
-    (12, 399, 147, 147),
-    (12, 401, 149, 149),
-    (12, 402, 150, 150),
-    (12, 404, 152, 152),
-    (12, 405, 153, 153),
-    (12, 406, 154, 154),
-    (12, 407, 155, 155),
-    (12, 409, 157, 157),
-    (12, 410, 158, 158),
-    (12, 412, 160, 160),
-    (12, 414, 162, 162),
-    (12, 415, 163, 163),
-    (12, 416, 164, 164),
-    (12, 417, 165, 165),
-    (12, 418, 166, 166),
-    (12, 419, 167, 167),
-    (12, 420, 168, 168),
-    (12, 422, 170, 170),
-    (12, 423, 171, 171),
-    (12, 424, 172, 172),
-    (12, 425, 173, 173),
-    (12, 426, 174, 174),
-    (12, 427, 175, 175),
-    (12, 428, 176, 176),
-    (12, 429, 177, 177),
-    (12, 430, 178, 178),
-    (12, 431, 179, 179),
-    (12, 433, 181, 181),
-    (12, 434, 182, 182),
-    (12, 435, 183, 183),
-    (12, 436, 184, 184),
-    (12, 437, 185, 185),
-    (12, 438, 186, 186),
-    (12, 439, 187, 187),
-    (12, 440, 188, 188),
-    (12, 441, 189, 189),
-    (12, 442, 190, 190),
-    (12, 443, 191, 191),
-    (12, 444, 192, 192),
-    (12, 445, 193, 193),
-    (12, 446, 194, 194),
-    (12, 447, 195, 195),
-    (12, 448, 196, 196),
-    (12, 449, 197, 197),
-    (12, 450, 198, 198),
-    (12, 451, 199, 199),
-    (12, 452, 200, 200),
-    (12, 453, 201, 201),
-    (12, 454, 202, 202),
-    (12, 455, 203, 203),
-    (12, 456, 204, 204),
-    (12, 457, 205, 205),
-    (12, 458, 206, 206),
-    (12, 459, 207, 207),
-    (12, 460, 208, 208),
-    (12, 461, 209, 209),
-    (12, 462, 210, 210),
-    (12, 463, 211, 211),
-    (12, 464, 212, 212),
-    (12, 465, 213, 213),
-    (12, 467, 215, 215),
-    (12, 468, 216, 216),
-    (12, 469, 217, 217),
-    (12, 470, 218, 218),
-    (12, 471, 219, 219),
-    (12, 472, 220, 220),
-    (12, 473, 221, 221),
-    (12, 474, 222, 222),
-    (12, 475, 223, 223),
-    (12, 476, 224, 224),
-    (12, 477, 225, 225),
-    (12, 478, 226, 226),
-    (12, 479, 227, 227),
-    (12, 480, 228, 228),
-    (12, 481, 229, 229),
-    (12, 482, 230, 230),
-    (12, 483, 231, 231),
-    (12, 484, 232, 232),
-    (12, 485, 233, 233),
-    (12, 486, 234, 234),
-    (12, 487, 235, 235),
-    (12, 488, 236, 236),
-    (12, 489, 237, 237),
-    (12, 490, 238, 238),
-    (12, 491, 239, 239),
-    (12, 492, 240, 240),
-    (12, 493, 241, 241),
-    (12, 494, 242, 242),
-    (12, 496, 244, 244),
-    (12, 497, 245, 245),
-    (12, 498, 246, 246),
-    (12, 499, 247, 247),
-];
-
-const GCD_RIGHT_SHIFT_REMAINDER_KEYS: &[u32] = &[
-    510, 766, 1022, 1278, 1534, 1790, 2046, 2302, 2558, 2814, 3070, 3325,
-    3580, 3835, 4090, 4345, 4600, 4855, 5110, 5365, 5620, 5875, 6130, 6385,
-    6640, 6895, 7150, 7405, 7660, 7915, 8170, 8425, 8680, 8935, 9190, 9445,
-    9700, 9955, 10210, 10465, 10720, 10975, 11230, 11485, 11740, 11995, 12250, 12505,
-    12760, 13015, 13270, 13525, 13780, 14035, 14290, 14545, 14800, 15055, 15310, 15565,
-    15820, 16075, 16330, 16585, 16840, 17095, 17350, 17605, 17860, 18115, 18370, 18625,
-    18880, 19135, 19390, 19645, 19900, 20155, 20410, 20665, 20920, 21175, 21430, 21685,
-    21940, 22195, 22450, 22705, 22960, 23215, 23470, 23725, 23980, 24235, 24491, 24746,
-    25000, 25255, 25510, 25765, 26020, 26276, 26530, 26786, 27041, 27296, 27550, 27806,
-    28061, 28315, 28571, 28826, 29081, 29336, 29591, 29846, 30101, 30355, 30610, 30865,
-    31120, 31375, 31631, 31886, 32141, 32395, 32651, 32906, 33161, 33416, 33671, 33926,
-    34181, 34436, 34691, 34945, 35200, 35455, 35710, 35965, 36220, 36476, 36731, 36986,
-    37240, 37496, 37750, 38005, 38260, 38515, 38770, 39025, 39280, 39535, 39790, 40045,
-    40300, 40555, 40810, 41065, 41320, 41575, 41830, 42085, 42340, 42595, 42850, 43105,
-    43360, 43615, 43870, 44125, 44380, 44635, 44890, 45145, 45400, 45655, 45910, 46165,
-    46420, 46675, 46930, 47185, 47440, 47695, 47950, 48205, 48460, 48715, 48970, 49225,
-    49480, 49735, 49990, 50245, 50500, 50755, 51010, 51265, 51520, 51775, 52030, 52285,
-    52540, 52795, 53050, 53305, 53560, 53815, 54070, 54325, 54580, 54835, 55090, 55345,
-    55600, 55855, 56110, 56365, 56620, 56875, 57130, 57385, 57640, 57895, 58150, 58405,
-    58660, 58915, 59170, 59425, 59680, 59935, 60190, 60445, 60700, 60955, 61208, 61463,
-    61718, 61973, 62228, 62483, 62739, 62994, 63250, 63505, 63760, 66814, 67070, 67326,
-    67582, 67838, 68094, 68350, 68606, 68862, 69118, 69374, 69629, 69884, 70139, 70394,
-    70649, 70904, 71159, 71414, 71669, 71924, 72179, 72434, 72689, 72944, 73199, 73454,
-    73709, 73964, 74219, 74474, 74729, 74984, 75239, 75494, 75749, 76004, 76259, 76514,
-    76769, 77024, 77279, 77534, 77789, 78044, 78299, 78554, 78809, 79064, 79319, 79574,
-    79829, 80084, 80339, 80594, 80849, 81104, 81359, 81614, 81869, 82124, 82379, 82634,
-    82889, 83144, 83399, 83654, 83909, 84164, 84419, 84674, 84929, 85184, 85439, 85694,
-    85949, 86204, 86459, 86714, 86969, 87224, 87479, 87734, 87989, 88244, 88499, 88754,
-    89009, 89264, 89519, 89774, 90029, 90284, 90539, 90795, 91050, 91304, 91559, 91814,
-    92069, 92324, 92580, 92834, 93090, 93345, 93600, 93854, 94110, 94365, 94619, 94875,
-    95130, 95385, 95640, 95895, 96150, 96405, 96659, 96914, 97169, 97424, 97679, 97935,
-    98190, 98445, 98699, 98955, 99210, 99465, 99720, 99975, 100485, 100740, 100995, 101249,
-    101504, 101759, 102014, 102269, 102524, 102780, 103035, 103290, 103544, 104054, 104309, 104564,
-    104819, 105074, 105329, 105584, 105839, 106094, 106349, 106604, 106859, 107114, 107369, 107624,
-    107879, 108134, 108389, 108644, 108899, 109154, 109409, 109664, 109919, 110174, 110429, 110684,
-    110939, 111194, 111449, 111704, 111959, 112214, 112469, 112724, 112979, 113234, 113489, 113744,
-    113999, 114254, 114509, 114764, 115019, 115274, 115529, 115784, 116039, 116294, 116549, 116804,
-    117059, 117314, 117569, 117824, 118079, 118334, 118589, 118844, 119099, 119354, 119609, 119864,
-    120119, 120374, 120629, 120884, 121139, 121394, 121649, 121904, 122159, 122414, 122669, 122924,
-    123179, 123434, 123689, 123944, 124199, 124454, 124709, 124964, 125219, 125474, 125729, 125984,
-    126239, 126494, 126749, 127004, 127259, 127512, 127767, 128022, 128277, 128532, 128787, 129043,
-    129298, 129554, 129809, 130064, 130319,
-];
-
-const GCD_LEFT_SHIFT_REMAINDER_KEYS: &[u32] = &[
-    3603, 3860, 4117, 4374, 4631, 4888, 7460, 7717, 9516, 9773, 12086, 12600,
-    13114, 15427, 17740, 25707, 28792, 29306, 29820, 30847, 31361, 31619, 32903, 34189,
-    36245, 37273, 41642, 47038, 53463, 62715, 69651, 69907, 70164, 70421, 70678, 70935,
-    71192, 72222, 72736, 72993, 74535, 74792, 75820, 76077, 80446, 87385, 89441, 95096,
-    95610, 95867, 96124, 99979, 100493, 102549, 103320, 104605, 105376, 105890, 107946, 110772,
-    119510, 126963, 128248,
-];
-
-fn gcd_shift_has_structurally_dead_gate(tag: u8, call_index: usize, bit: usize) -> bool {
-    if super::drops_off_family("GCDSHIFT") {
-        return false;
-    }
-
-    if std::env::var_os("TLM_GCD_SKIP_EXACT_SHIFT_REMAINDER").is_some() {
-        let key = (((call_index as u32) & 0xffff) << 8) | (bit as u32 & 0xff);
-        if (tag == 11 && GCD_RIGHT_SHIFT_REMAINDER_KEYS.binary_search(&key).is_ok())
-            || (tag == 12 && GCD_LEFT_SHIFT_REMAINDER_KEYS.binary_search(&key).is_ok())
-        {
-            return true;
-        }
-    }
-    std::env::var_os("TLM_GCD_SKIP_STRUCTURAL_DEAD_SHIFTS").is_some()
-        && GCD_SHIFT_DEAD_RANGES.iter().any(|&(range_tag, call, lo, hi)| {
-            range_tag == tag && call == call_index && (lo..=hi).contains(&bit)
-        })
-}
-
-/// One Fredkin at the top of every controlled-shift ladder is structurally dead.
-///
-/// The ladder realises a `w`-wire cyclic rotation as `w-1` Fredkins; the last one to be
-/// emitted exchanges the bit rotated out of the register with the bit sitting at the far
-/// end. Conditioned on the control being 1, both of those bits are known zero:
-///   * `v[0] == 0`, because the control is `!v[0]` - we only ever halve an even `v`; and
-///   * `v[w-1] == 0`, because the *unconditional* first halving of the same step already
-///     rotated that (also zero) `v[0]` into the top position.
-/// Exchanging two zeros is the identity, so the Fredkin is exactly removable: no census,
-/// no magnitude assumption, no added failure probability.
-///
-/// The sole exception is the step-0 `t1` shift, which *is* the first halving: nothing has
-/// zeroed the top bit yet and `v[w-1]` is a live bit of the raw 256-bit input. That call is
-/// the first right-shift of a forward walk and the last left-shift of a reverse walk.
-/// `TLM_GCD_SKIP_TOP_ZERO_SHIFT_EDGE=0` puts the redundant gates back for A/B measurement.
-fn skip_top_zero_controlled_shift_edge(tag: u8, call_index: usize) -> bool {
-    if std::env::var("TLM_GCD_SKIP_TOP_ZERO_SHIFT_EDGE").ok().as_deref() == Some("0") {
-        return false;
-    }
-    const CALLS_PER_WALK: usize = ITERS + 1;
-    let rel = call_index % CALLS_PER_WALK;
-    let step0_t1 = if tag == 11 { rel == 0 } else { rel == CALLS_PER_WALK - 1 };
-    !step0_t1
-}
-
-/// Diagnostic: of the 1176 shift Fredkins suppressed by the two census tables
-/// (`GCD_*_SHIFT_REMAINDER_KEYS` + `GCD_SHIFT_DEAD_RANGES`), 964 coincide with the
-/// provably-dead top-zero edge above. The other 212 rest only on "never observed to fire"
-/// and cluster at walk iterations 249..257, i.e. exactly where the walk is *assumed* to
-/// have converged (v == 0). They are therefore candidate contributors to the intrinsic
-/// mismatch rate. `TLM_GCD_SHIFT_PROVEN_ONLY=1` re-emits just those 212 for A/B.
-fn gcd_shift_census_enabled() -> bool {
-    std::env::var("TLM_GCD_SHIFT_PROVEN_ONLY").ok().as_deref() != Some("1")
-}
-
+/// Controlled logical right-shift-by-1 (LSB-first): when `ctrl`, v[i+1] -> v[i].
 fn controlled_right_shift(circ: &mut B, ctrl: &QubitId, v: &[QubitId]) {
-    let call_index = next_right_shift_call_index();
     for i in 0..v.len().saturating_sub(1) {
-        let old_context = crate::point_add::set_op_trace_context(
-            0x0b00_0000 | (((call_index as u32) & 0xffff) << 8) | (i as u32 & 0xff),
-        );
-        let top_zero_edge =
-            i + 2 == v.len() && skip_top_zero_controlled_shift_edge(11, call_index);
-        if !top_zero_edge
-            && !(gcd_shift_census_enabled()
-                && gcd_shift_has_structurally_dead_gate(11, call_index, i))
-        {
-            circ.cswap(*ctrl, v[i], v[i + 1]);
-        }
-        crate::point_add::restore_op_trace_context(old_context);
+        circ.cswap(*ctrl, v[i], v[i + 1]);
     }
 }
 
+/// Exact gate-inverse of [`controlled_right_shift`] (cswaps reversed).
 fn controlled_left_shift(circ: &mut B, ctrl: &QubitId, v: &[QubitId]) {
-    let call_index = next_left_shift_call_index();
     for i in (1..v.len()).rev() {
-        let old_context = crate::point_add::set_op_trace_context(
-            0x0c00_0000 | (((call_index as u32) & 0xffff) << 8) | ((i - 1) as u32 & 0xff),
-        );
-        let top_zero_edge =
-            i + 1 == v.len() && skip_top_zero_controlled_shift_edge(12, call_index);
-        if !top_zero_edge
-            && !(gcd_shift_census_enabled()
-                && gcd_shift_has_structurally_dead_gate(12, call_index, i - 1))
-        {
-            circ.cswap(*ctrl, v[i], v[i - 1]);
-        }
-        crate::point_add::restore_op_trace_context(old_context);
+        circ.cswap(*ctrl, v[i], v[i - 1]);
     }
 }
 
+/// Unconditional logical right-shift-by-1: v[i+1] -> v[i], top bit -> |0>.
+/// A swap chain from the bottom up; v[0] is |0> in the GCD post-subtract so it
+/// wraps harmlessly to the top.
 fn right_shift(circ: &mut B, v: &[QubitId]) {
     for i in 0..v.len().saturating_sub(1) {
         circ.swap(v[i], v[i + 1]);
     }
 }
 
+/// Exact gate-inverse of [`right_shift`].
 fn left_shift(circ: &mut B, v: &[QubitId]) {
     for i in (1..v.len()).rev() {
         circ.swap(v[i], v[i - 1]);
     }
 }
 
+// =====================================================================
+// Controlled mod_double for the apply (gated `y := 2*y mod q`), built on
+// this crate's arith::add_f_window (re-using add_f via a ctrl).
+// =====================================================================
+
+/// If `ctrl`: `a := 2*a mod q`; else `a` unchanged. `a.len() == n = 256`; the n+1
+/// shift view is `a ++ ovf` with a transient `ovf` (not a slot in `a`), restored to
+/// |0>. Normal controlled shift + the (MBU) `+f` fold gated on the shifted-out
+/// overflow + an MBU ancilla clean.
 fn controlled_mod_double(circ: &mut B, ctrl: &QubitId, a: &[QubitId]) {
     let n = a.len();
     assert_eq!(n, 256, "controlled_mod_double expects 256-bit a");
     let f_bytes = F_SECP256K1.to_le_bytes();
     let ovf = circ.alloc_qubit();
-
+    // 1) controlled left-shift by 1 over the n+1 view a ++ ovf: MSB -> ovf.
     let w: Vec<&QubitId> = a.iter().chain(std::iter::once(&ovf)).collect();
     for i in (0..n).rev() {
         circ.cswap(*ctrl, *w[i], *w[i + 1]);
     }
-
-    arith::add_f_window_pub(circ, &ovf, a, arith::LSBS, &f_bytes, None);
-
+    // 2) if ovf (= ctrl AND old-MSB), add f to the low LSBS bits.
+    arith::add_f_window_pub(circ, &ovf, a, arith::lsbs(), &f_bytes, None);
+    // 3) clear ovf (= ctrl AND a[0], post-fold) by MBU.
     clear_and(circ, &ovf, ctrl, &a[0]);
     circ.zero_and_free(ovf);
 }
 
+/// Exact gate-inverse of [`controlled_mod_double`]: if `ctrl`, `a := a/2 mod q`.
 fn controlled_mod_double_reverse(circ: &mut B, ctrl: &QubitId, a: &[QubitId]) {
     let n = a.len();
     assert_eq!(n, 256, "controlled_mod_double_reverse expects 256-bit a");
     let f_bytes = F_SECP256K1.to_le_bytes();
     let ovf = circ.alloc_qubit();
-
+    // inverse of 3): rebuild ovf = ctrl AND a[0] with a CCX.
     circ.ccx(*ctrl, a[0], ovf);
-
-    for q in &a[..arith::LSBS] {
+    // inverse of 2): subtract f (X-sandwich of add_f_window) gated on ovf.
+    let lsbs = arith::lsbs();
+    for q in &a[..lsbs] {
         circ.x(*q);
     }
-    arith::add_f_window_pub(circ, &ovf, a, arith::LSBS, &f_bytes, None);
-    for q in &a[..arith::LSBS] {
+    arith::add_f_window_pub(circ, &ovf, a, lsbs, &f_bytes, None);
+    for q in &a[..lsbs] {
         circ.x(*q);
     }
-
+    // inverse of 1): controlled right-shift over a ++ ovf; ovf shifted back to |0>.
     let w: Vec<&QubitId> = a.iter().chain(std::iter::once(&ovf)).collect();
     for i in 0..n {
         circ.cswap(*ctrl, *w[i], *w[i + 1]);
@@ -1178,14 +492,34 @@ fn controlled_mod_double_reverse(circ: &mut B, ctrl: &QubitId, a: &[QubitId]) {
     circ.zero_and_free(ovf);
 }
 
+// =====================================================================
+// Forward jump-GCD: record the dialog onto the compressed tape.
+// =====================================================================
+
+/// Forward jump=2 GCD on `(u = q, v = x)` over the baked schedule. `v` is the
+/// input register (>= 256 bits; bits beyond the active width must be |0> for
+/// schedule-fitting inputs). Computes the per-step dialog `(subtracted, swap,
+/// s_2)`, compresses each codec window inline, and returns the compressed tape
+/// (`[t1, win_0 code bits, ..]`, `codec::dialog_tape_qubits` long). On a fitting
+/// input, ends with `u = 0` (X'd from 1), `v = 0`, both shrunk away; the tape
+/// holds the whole dialog.
+///
+/// When `apply_inv` is `Some((x_reg, y_reg))`, the inverse apply step is fused in
+/// (applied to the coordinate pair each iter before the symbol is taped);
+/// otherwise the coordinate registers are untouched.
 #[must_use]
-pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&[QubitId], &[QubitId])>) -> Vec<QubitId> {
+pub fn forward_gcd_jump(
+    circ: &mut B,
+    v: &mut Vec<QubitId>,
+    apply_inv: Option<(&[QubitId], &[QubitId])>,
+) -> Vec<QubitId> {
     let n = 256usize;
     assert_eq!(JUMP, 2, "ludicrous apply/codec are jump=2 specific");
     assert!(v.len() >= n, "v must be at least n=256 bits");
     let iters = ITERS;
-    let sym_bits = 3;
+    let sym_bits = 3; // (subtracted, swap, s_2)
 
+    // u_full = q (n bits); shrinks per the schedule.
     let mut u: Vec<QubitId> = (0..n).map(|_| circ.alloc_qubit()).collect();
     let q_bytes = q_secp256k1_le();
     for (i, qb) in u.iter().enumerate() {
@@ -1194,11 +528,16 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
         }
     }
 
-    let subtracted = circ.alloc_qubit();
+    let recycle_symbol_flags = recycle_symbol_flags_enabled();
+    let mut subtracted_slot = Some(circ.alloc_qubit());
     let mut swap_flag: Option<QubitId> = None;
-    let s2 = circ.alloc_qubit();
-    let t1 = circ.alloc_qubit();
+    let mut s2_slot = Some(circ.alloc_qubit()); // the single jump=2 extra-shift flag
+    let t1 = circ.alloc_qubit(); // step-0 shift1-fired flag (= x even)
 
+    // Incremental all-triple codec: compress each codec window inline the instant
+    // its symbols are recorded, so the resident tape grows compressed (~603) not
+    // raw (775), bounding the peak. `tape` accumulates the t1 prefix
+    // followed by each window's compressed code bits, in iter order.
     let n3 = n3_for_iters(iters);
     let mut window_plan: Vec<super::codec::DialogCodec> = Vec::new();
     for (codec, count) in super::codec::jump_dialog_regions(n3, iters) {
@@ -1207,23 +546,25 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
         }
     }
     let mut tape: Vec<QubitId> = Vec::with_capacity(super::codec::dialog_tape_qubits(n3, iters));
-    let mut win_idx = 0usize;
-    let mut pending: Vec<QubitId> = Vec::new();
+    let mut win_idx = 0usize; // current window
+    let mut pending: Vec<QubitId> = Vec::new(); // raw symbol slots of the current window
     let mut tail4_prefix_encoded = false;
+    let mut pending_pair_encoded = false;
     for i in 0..iters {
         let trace_region_start = circ.phase_active_regions.len();
-        // DIAGNOSTIC (TRACE_OP_SITES): stamp every op emitted by this divstep with
-        // its pass and iteration index so a dirty `free` can be attributed to a
-        // specific i. Overwritten and restored by the inner cswap tags.
-        crate::point_add::set_op_trace_context(
-            0xa000_0000 | (u32::from(apply_inv.is_none()) << 24) | ((i as u32) & 0xffff),
-        );
+        let subtracted = *subtracted_slot.get_or_insert_with(|| circ.alloc_qubit());
+        let s2 = *s2_slot.get_or_insert_with(|| circ.alloc_qubit());
         circ.set_phase(if apply_inv.is_some() {
             "tlm_inverse_gcd_forward_shift"
         } else {
             "tlm_multiply_gcd_forward_shift"
         });
-        let current_n = (SCHED_J2[i] as usize).max(1);
+        let pass = if apply_inv.is_some() {
+            "INV_FWD"
+        } else {
+            "MUL_FWD"
+        };
+        let current_n = active_width_for_pass_step(pass, i);
         while u.len() > current_n {
             let q = u.pop().expect("u nonempty");
             circ.zero_and_free(q);
@@ -1232,28 +573,47 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
             let q = v.pop().expect("v nonempty");
             circ.zero_and_free(q);
         }
+        // swap-decision window: top GAP_J2[i] bits of the active width.
+        let cmp_eff = if std::env::var("TLM_CMP_FULL_WIDTH").ok().as_deref() == Some("1") {
+            current_n.max(1)
+        } else {
+            (GAP_J2[i] as usize).min(current_n).max(1)
+        };
 
-        let cmp_eff = cmp_window(i, current_n);
-
+        // 1) Shift-first: remove up to jump=2 trailing zeros of v.
+        //    i==0 gates shift1 on (v even) and records it in t1; i>=1 is
+        //    unconditional (v even post-subtract).
         if i == 0 {
-            circ.cx(v[0], t1);
-            circ.x(t1);
+            circ.cx(v[0], t1); // t1 = v[0]
+            circ.x(t1); // t1 = NOT(v[0]) = (x even)
             controlled_right_shift(circ, &t1, &v[..current_n]);
         } else {
             right_shift(circ, &v[..current_n]);
         }
-
+        // s_2: shift again while still even. Nesting is automatic (once an odd
+        // bit reaches LSB the shift stops).
         circ.cx(v[0], s2);
         circ.x(s2);
         controlled_right_shift(circ, &s2, &v[..current_n]);
 
+        // 2) subtracted = v[0] (post-shift parity): 1 => odd => swap+subtract.
         circ.cx(v[0], subtracted);
 
+        // 3) swap decision. Step 0: u=q, v=x<q always, so (v<u)=1 deterministically,
+        //    so swap = subtracted and no separate swap flag is needed. Else the narrow top-k comparator
+        //    decides swap_flag ^= subtracted AND (v < u).
         circ.set_phase(if apply_inv.is_some() {
             "tlm_inverse_gcd_forward_compare"
         } else {
             "tlm_multiply_gcd_forward_compare"
         });
+        let precompare_parked_u0 =
+            if i != 0 && cmp_eff < current_n && precompare_park_odd_u0_enabled(i, "FWD") {
+                let q = u[0];
+                Some(park_known_one(circ, q))
+            } else {
+                None
+            };
         let swp = if i == 0 {
             subtracted
         } else {
@@ -1268,23 +628,18 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
             );
             sf
         };
-
+        // 4) cswap(swap_flag, u, v).
         for j in 1..current_n {
-            if !gcd_forward_cswap_has_structurally_dead_gate(i, j) {
-                let old_context = crate::point_add::set_op_trace_context(
-                    0x1b00_0000 | (((i as u32) & 0xffff) << 8) | (j as u32 & 0xff),
-                );
-                circ.cswap(swp, u[j], v[j]);
-                crate::point_add::restore_op_trace_context(old_context);
-            }
+            circ.cswap(swp, u[j], v[j]);
         }
-        let parked_u0 = if park_odd_u0_enabled(i, "FWD") {
+        let parked_u0 = if precompare_parked_u0.is_none() && park_odd_u0_enabled(i, "FWD") {
             let q = u[0];
             Some(park_known_one(circ, q))
         } else {
             None
         };
-
+        // 5) v -= subtracted * u (controlled mod-free subtract on the active width;
+        //    post-swap v >= u so no borrow on a fitting input). X-sandwich add.
         circ.set_phase(if apply_inv.is_some() {
             "tlm_inverse_gcd_forward_body"
         } else {
@@ -1306,6 +661,10 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
             circ.x(*q);
         }
 
+        // Fused inverse apply (Direction::Inverse): apply this divstep's symbol to the
+        // coordinate pair using the live symbol bits, before they are swapped to the
+        // tape. Forward iter order matches apply_step_reverse's order, so the tape is
+        // never materialized for the apply -> the apply adders run in the GCD's headroom.
         circ.set_phase(if apply_inv.is_some() {
             "tlm_inverse_gcd_forward_apply"
         } else {
@@ -1318,6 +677,13 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
                 tape.len(),
                 pending.len(),
             );
+        }
+        if recompress_pending_pair_during_apply_enabled()
+            && !tail4_prefix_encoded
+            && pending.len() == 6
+        {
+            pending = super::codec::DialogCodec::Pair.compress_window(circ, &pending);
+            pending_pair_encoded = true;
         }
         let parked_v0 = if apply_inv.is_some() && park_even_v0_enabled() {
             let q = v[0];
@@ -1335,29 +701,82 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
                 &t1,
                 xr,
                 yr,
-                &u[1..4],
+                gcd_apply_dirty_vents(&u),
             );
         }
         if let Some(q) = parked_v0 {
             v[0] = restore_known_zero(circ, q);
         }
-        if let Some(q) = parked_u0 {
+        if let Some(q) = precompare_parked_u0 {
+            u[0] = restore_known_one(circ, q);
+        } else if let Some(q) = parked_u0 {
             u[0] = restore_known_one(circ, q);
         }
 
+        // 6) record the symbol into raw slots for the codec.
+        //
+        // Default: copy/swap into fresh |0> slots, then free the live flag qubits.
+        // Experimental low-q path: let the live flags *be* the raw slots. This
+        // avoids the momentary flag+slot duplication at the forward-codec peak;
+        // the next iteration allocates fresh flags only after this window has
+        // had a chance to compress/free its raw lanes.
         circ.set_phase(if apply_inv.is_some() {
             "tlm_inverse_gcd_forward_codec"
         } else {
             "tlm_multiply_gcd_forward_codec"
         });
-        let slots: Vec<QubitId> = (0..sym_bits).map(|_| circ.alloc_qubit()).collect();
-        circ.swap(subtracted, slots[0]);
-        if i == 0 {
-            circ.cx(slots[0], slots[1]);
-        } else {
-            circ.swap(swp, slots[1]);
+        let mut slots: Vec<QubitId> = Vec::with_capacity(sym_bits);
+        let reuse_symbol_flags_as_tape =
+            recycle_symbol_flags && reuse_symbol_flags_as_tape_for_step(i);
+        if pending_pair_encoded {
+            pending = super::codec::DialogCodec::Pair.decompress_window(circ, &pending);
+            pending_pair_encoded = false;
         }
-        circ.swap(s2, slots[2]);
+        if reuse_symbol_flags_as_tape {
+            let slot0 = subtracted_slot
+                .take()
+                .expect("subtracted flag live for tape ownership");
+            slots.push(slot0);
+            if i == 0 {
+                let slot1 = circ.alloc_qubit();
+                circ.cx(slots[0], slot1);
+                slots.push(slot1);
+            } else {
+                let slot1 = swap_flag.take().expect("swap flag live for tape ownership");
+                slots.push(slot1);
+            }
+            let slot2 = s2_slot.take().expect("s2 flag live for tape ownership");
+            slots.push(slot2);
+        } else {
+            let slot0 = circ.alloc_qubit();
+            circ.swap(subtracted, slot0);
+            slots.push(slot0);
+            if i == 0 {
+                let slot1 = circ.alloc_qubit();
+                circ.cx(slots[0], slot1);
+                slots.push(slot1);
+                if recycle_symbol_flags {
+                    circ.zero_and_free(subtracted_slot.take().expect("subtracted flag live"));
+                }
+            } else {
+                let slot1 = circ.alloc_qubit();
+                circ.swap(swp, slot1);
+                slots.push(slot1);
+                if recycle_symbol_flags {
+                    circ.zero_and_free(subtracted_slot.take().expect("subtracted flag live"));
+                    let sf = swap_flag
+                        .take()
+                        .expect("swap flag live after symbol record");
+                    circ.zero_and_free(sf);
+                }
+            }
+            let slot2 = circ.alloc_qubit();
+            circ.swap(s2, slot2);
+            slots.push(slot2);
+            if recycle_symbol_flags {
+                circ.zero_and_free(s2_slot.take().expect("s2 flag live"));
+            }
+        }
         if i == 0 {
             debug_assert_eq!(window_plan[win_idx], super::codec::DialogCodec::Step0);
             let data = super::codec::compress_step0_with_t1(circ, t1, &slots);
@@ -1378,6 +797,7 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
         }
         pending.extend(slots);
 
+        // When the current window's symbols are complete, compress it inline.
         let codec = window_plan[win_idx];
         if codec == super::codec::DialogCodec::Tail4Top32 {
             if !tail4_prefix_encoded && pending.len() == 3 * sym_bits {
@@ -1416,6 +836,7 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
     assert_eq!(win_idx, window_plan.len(), "all windows compressed");
     assert!(pending.is_empty(), "no leftover symbols");
 
+    // u converged to 1; X to 0 then free. v=0; shrink away.
     circ.x(u[0]);
     while let Some(q) = v.pop() {
         circ.zero_and_free(q);
@@ -1423,16 +844,30 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
     for q in u {
         circ.zero_and_free(q);
     }
-    circ.zero_and_free(subtracted);
+    if let Some(subtracted) = subtracted_slot {
+        circ.zero_and_free(subtracted);
+    }
     if let Some(swap_flag) = swap_flag {
         circ.zero_and_free(swap_flag);
     }
-    circ.zero_and_free(s2);
+    if let Some(s2) = s2_slot {
+        circ.zero_and_free(s2);
+    }
     assert_eq!(tape.len(), super::codec::dialog_tape_qubits(n3, iters));
     tape
 }
 
-pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<QubitId>, apply_fwd: Option<(&[QubitId], &[QubitId])>) {
+/// Reverse of [`forward_gcd_jump`]: restores `v[..256]` to the original `x` and
+/// drains the compressed `tape` to empty (all |0>, freed). Exact gate-inverse,
+/// step by step. Decompresses one codec window at a time (in reverse iter order),
+/// consumes its symbols, and frees the raw slots -- so the resident tape stays
+/// compressed.
+pub fn reverse_gcd_jump(
+    circ: &mut B,
+    v: &mut Vec<QubitId>,
+    tape: &mut Vec<QubitId>,
+    apply_fwd: Option<(&[QubitId], &[QubitId])>,
+) {
     let n = 256usize;
     let iters = ITERS;
     let n3 = n3_for_iters(iters);
@@ -1442,45 +877,58 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
         "tape must be the compressed dialog"
     );
 
+    // Window plan (iter order); we consume windows from the last one back.
     let mut window_plan: Vec<super::codec::DialogCodec> = Vec::new();
     for (codec, count) in super::codec::jump_dialog_regions(n3, iters) {
         for _ in 0..count {
             window_plan.push(codec);
         }
     }
-    let mut win_idx = window_plan.len();
-
+    let mut win_idx = window_plan.len(); // next window to decompress (from the end)
+                                         // `pending` holds the raw symbol slots of the currently-decompressed window,
+                                         // consumed symbol-by-symbol from the end (reverse symbol order).
     let mut pending: Vec<QubitId> = Vec::new();
     let mut pending_tail4 = false;
     let mut tail4_prefix_encoded = false;
+    let mut pending_pair_encoded = false;
 
+    // u regrows from 1 bit (forward ended u=0 post-X; re-init u_final=1 via X).
     let mut u: Vec<QubitId> = vec![circ.alloc_qubit()];
     circ.x(u[0]);
 
-    let subtracted = circ.alloc_qubit();
-    let mut swap_flag: Option<QubitId> = Some(circ.alloc_qubit());
-    let s2 = circ.alloc_qubit();
+    let recycle_symbol_flags = recycle_symbol_flags_enabled();
+    let mut subtracted_slot: Option<QubitId> = (!recycle_symbol_flags).then(|| circ.alloc_qubit());
+    let mut swap_flag: Option<QubitId> = (!recycle_symbol_flags).then(|| circ.alloc_qubit());
+    let mut s2_slot: Option<QubitId> = (!recycle_symbol_flags).then(|| circ.alloc_qubit());
     let mut step0_t1: Option<QubitId> = None;
 
     for i in (0..iters).rev() {
         let trace_region_start = circ.phase_active_regions.len();
-        crate::point_add::set_op_trace_context(
-            0xa200_0000 | (u32::from(apply_fwd.is_none()) << 24) | ((i as u32) & 0xffff),
-        );
         circ.set_phase(if apply_fwd.is_some() {
             "tlm_multiply_gcd_reverse_decode"
         } else {
             "tlm_inverse_gcd_reverse_decode"
         });
-        let current_n = (SCHED_J2[i] as usize).max(1);
+        let pass = if apply_fwd.is_some() {
+            "MUL_REV"
+        } else {
+            "INV_REV"
+        };
+        let current_n = active_width_for_pass_step(pass, i);
         while u.len() < current_n {
             u.push(circ.alloc_qubit());
         }
         while v.len() < current_n {
             v.push(circ.alloc_qubit());
         }
-        let cmp_eff = cmp_window(i, current_n);
+        let cmp_eff = if std::env::var("TLM_CMP_FULL_WIDTH").ok().as_deref() == Some("1") {
+            current_n.max(1)
+        } else {
+            (GAP_J2[i] as usize).min(current_n).max(1)
+        };
 
+        // If the current window is exhausted, decompress the next one (from the
+        // tape end) into raw symbol slots.
         if pending.is_empty() {
             win_idx -= 1;
             let codec = window_plan[win_idx];
@@ -1495,13 +943,16 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
                 pending = codec.decompress_window(circ, &data);
             }
             pending_tail4 = codec == super::codec::DialogCodec::Tail4Top32;
+        } else if pending_pair_encoded {
+            pending = super::codec::DialogCodec::Pair.decompress_window(circ, &pending);
+            pending_pair_encoded = false;
         } else if tail4_prefix_encoded {
             let suffix = pending.split_off(super::codec::DialogCodec::Triple.code_bits());
             pending = super::codec::DialogCodec::Triple.decompress_window(circ, &pending);
             pending.extend(suffix);
             tail4_prefix_encoded = false;
         }
-
+        // Pull the last symbol (3 bits) off `pending` into the ancilla.
         let plen = pending.len();
         let cur: Vec<QubitId> = pending.split_off(plen - 3);
         if pending_tail4 && pending.len() == 12 {
@@ -1512,6 +963,14 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
         } else if pending_tail4 && pending.is_empty() {
             pending_tail4 = false;
         }
+        if recompress_pending_pair_during_apply_enabled()
+            && !pending_tail4
+            && !tail4_prefix_encoded
+            && pending.len() == 6
+        {
+            pending = super::codec::DialogCodec::Pair.compress_window(circ, &pending);
+            pending_pair_encoded = true;
+        }
         if i >= 250 && std::env::var_os("TRACE_TLM_TAIL").is_some() {
             eprintln!(
                 "TLM_TAIL direction=reverse i={i} active={} tape={} pending={} encoded={tail4_prefix_encoded}",
@@ -1520,22 +979,43 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
                 pending.len(),
             );
         }
-        circ.swap(subtracted, cur[0]);
-        let swp = if i == 0 {
-            circ.cx(subtracted, cur[1]);
-            subtracted
+        let mut decoded_symbol_slots: Option<Vec<QubitId>> = None;
+        let (subtracted, swp, s2) = if recycle_symbol_flags {
+            // Use the raw decoded slots directly as the live symbol flags.  The
+            // reverse GCD uncomputes these controls to |0>, so they can be freed
+            // at the end of the iteration without ever allocating duplicate flags.
+            let sub = cur[0];
+            let s2q = cur[2];
+            let swap = if i == 0 {
+                circ.cx(sub, cur[1]);
+                sub
+            } else {
+                cur[1]
+            };
+            decoded_symbol_slots = Some(cur);
+            (sub, swap, s2q)
         } else {
-            let sf = *swap_flag
-                .as_ref()
-                .expect("swap flag live for non-step0 replay");
-            circ.swap(sf, cur[1]);
-            sf
+            let sub = *subtracted_slot.get_or_insert_with(|| circ.alloc_qubit());
+            let s2q = *s2_slot.get_or_insert_with(|| circ.alloc_qubit());
+            circ.swap(sub, cur[0]);
+            let swap = if i == 0 {
+                circ.cx(sub, cur[1]);
+                sub
+            } else {
+                let sf = *swap_flag.get_or_insert_with(|| circ.alloc_qubit());
+                circ.swap(sf, cur[1]);
+                sf
+            };
+            circ.swap(s2q, cur[2]);
+            // Free the 3 now-|0> symbol slots here -- before the apply -- so they are not
+            // carried as dead live qubits through the apply + GCD-undo, where they would
+            // inflate the peak by sym_bits=3. The next window's decompress re-allocs
+            // from these freed slots.
+            for q in cur {
+                circ.zero_and_free(q);
+            }
+            (sub, swap, s2q)
         };
-        circ.swap(s2, cur[2]);
-
-        for q in cur {
-            circ.zero_and_free(q);
-        }
 
         circ.set_phase(if apply_fwd.is_some() {
             "tlm_multiply_gcd_reverse_apply"
@@ -1549,6 +1029,10 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
             None
         };
 
+        // Fused forward apply (Direction::Forward multiply): apply this divstep's
+        // symbol to the coordinate pair using the live symbol bits, in reverse iter
+        // order matching apply_step_forward's order, so the tape is never materialized
+        // for the apply -> the apply adders run in the (reverse) GCD's headroom.
         let parked_v0 = if apply_fwd.is_some() && park_even_v0_enabled() {
             let q = v[0];
             Some(park_known_zero(circ, q))
@@ -1566,13 +1050,16 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
                 &t1,
                 xr,
                 yr,
-                &u[1..4],
+                gcd_apply_dirty_vents(&u),
             );
         }
         if let Some(q) = parked_v0 {
             v[0] = restore_known_zero(circ, q);
         }
 
+        // Inverse step (reverse op order): sub^-1, cswap^-1, cmp^-1, subtracted^-1,
+        // s_2^-1, shift1^-1.
+        // a) sub^-1: v += subtracted*u (X-sandwich cancels).
         circ.set_phase(if apply_fwd.is_some() {
             "tlm_multiply_gcd_reverse_body"
         } else {
@@ -1590,17 +1077,14 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
         if let Some(q) = parked_u0 {
             u[0] = restore_known_one(circ, q);
         }
-
+        // b) cswap^-1 (involutory).
         for j in 1..current_n {
-            let old_context = crate::point_add::set_op_trace_context(
-                0x1200_0000 | (((i as u32) & 0xffff) << 8) | (j as u32 & 0xff),
-            );
-            if !gcd_reverse_cswap_has_structurally_dead_gate(i, j) {
-                circ.cswap(swp, u[j], v[j]);
-            }
-            crate::point_add::restore_op_trace_context(old_context);
+            circ.cswap(swp, u[j], v[j]);
         }
-
+        // c) uncompute swap_flag. Step 0 is a CNOT (swap_flag == subtracted). For
+        //    i>=1 the flag holds `subtracted AND (v<u)`; clear it by measurement-vent
+        //    (hmr + capped Z-recompute under push_condition) -- ~half the normal
+        //    comparator's Toffoli, scorer-discounted ~0.5 more.
         if i != 0 {
             super::comparator::swap_decision_uncompute_vented(
                 circ,
@@ -1611,13 +1095,13 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
                 &swp,
             );
         }
-
+        // d) subtracted^-1: cx(v[0], subtracted) (v[0] still post-shift parity).
         circ.cx(v[0], subtracted);
-
+        // e) s_2 inverse: controlled left-shift, uncompute s_2.
         controlled_left_shift(circ, &s2, &v[..current_n]);
         circ.x(s2);
         circ.cx(v[0], s2);
-
+        // f) shift1 inverse: i>=1 unconditional left-shift; i==0 gated on t1.
         if i == 0 {
             let t1 = step0_t1.expect("step0 t1 decompressed");
             controlled_left_shift(circ, &t1, &v[..current_n]);
@@ -1627,11 +1111,25 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
             left_shift(circ, &v[..current_n]);
         }
 
+        // (symbol slots already freed before the apply, above). At i==0 drain t1.
         if i == 0 {
             let t1 = step0_t1.take().expect("step0 t1 present");
             circ.zero_and_free(t1);
         }
-        if i == 1 {
+        if let Some(cur) = decoded_symbol_slots.take() {
+            for q in cur {
+                circ.zero_and_free(q);
+            }
+        } else if recycle_symbol_flags {
+            let sub = subtracted_slot.take().expect("subtracted flag live");
+            circ.zero_and_free(sub);
+            if i != 0 {
+                let sf = swap_flag.take().expect("swap flag live");
+                circ.zero_and_free(sf);
+            }
+            let s2q = s2_slot.take().expect("s2 flag live");
+            circ.zero_and_free(s2q);
+        } else if i == 1 {
             let sf = swap_flag.take().expect("swap flag still allocated");
             circ.zero_and_free(sf);
         }
@@ -1649,6 +1147,7 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
     }
     assert!(tape.is_empty(), "tape not fully drained");
 
+    // u grew back to 256 bits holding q; deinit and free.
     let q_bytes = q_secp256k1_le();
     for (i, qb) in u.iter().enumerate().take(n) {
         if (q_bytes.get(i / 8).copied().unwrap_or(0) >> (i % 8)) & 1 == 1 {
@@ -1658,13 +1157,23 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
     for q in u {
         circ.zero_and_free(q);
     }
-    circ.zero_and_free(subtracted);
+    if let Some(subtracted) = subtracted_slot {
+        circ.zero_and_free(subtracted);
+    }
     if let Some(swap_flag) = swap_flag {
         circ.zero_and_free(swap_flag);
     }
-    circ.zero_and_free(s2);
+    if let Some(s2) = s2_slot {
+        circ.zero_and_free(s2);
+    }
 }
 
+// =====================================================================
+// Active-width helpers (the GCD body runs on `current_n` bits, NOT n=256).
+// =====================================================================
+
+/// `target ^= ctrl AND (v_top < u_top)` on the top `k` MSBs of the active-width
+/// slices.
 fn controlled_swap_decision_v_lt_u(
     circ: &mut B,
     ctrl: &QubitId,
@@ -1682,6 +1191,16 @@ enum GcdBit0Mode {
     ReverseKnownZeroBeforeCx,
 }
 
+/// `y += ctrl * x (mod 2^width)` over the active width (no carry-out captured).
+/// The GCD subtract uses this inside an X-sandwich; post-swap `v >= u` so the
+/// two's-complement subtract never borrows out on a fitting input.
+///
+/// Measurement-vented threaded add: ~2 Toffoli/bit (one forward carry +
+/// one gated sum), with the carry-uncompute vented by `hmr` (0 Toffoli) and no
+/// gated-addend materialization -- vs the single-ancilla Cuccaro's ~3 Toffoli/bit.
+/// The per-bit carry qubits (allocated + freed inside) fit in the GCD passes'
+/// headroom below the global (apply) peak. mod-2^m: the carry-out is dropped, as
+/// the GCD subtract never carries out on a fitting input.
 fn controlled_add_active(
     circ: &mut B,
     i: usize,
@@ -1691,38 +1210,56 @@ fn controlled_add_active(
     bit0_mode: GcdBit0Mode,
     dirty_vents: &[QubitId],
 ) {
-
-    let k = maybe_adjust_late_gcd_k(i, super::next_gcd_k());
-    let branch = super::next_gcd_branch();
+    // The GCD subtract `v -= u` (here `y += x` inside the X-sandwich):
+    // a = target = y (= v), b = addend = x (= u). cap = PAD.
+    // Schedule-driven GCD subtract: pull the baked carry-cap `k` for this call
+    // (next_gcd_k) and emit the capped varchunk/adaptive adder. The baked `k`
+    // fixes the chunk decomposition deterministically.
+    // Kaliski bit-0 optimization: under the odd-u invariant the subtrahend bit0
+    // `x[0] == 1`, and the accumulator bit0 is the control (forward, inside the
+    // X-sandwich `~v[0] == NOT ctrl`) or 0 (reverse-add). Either way the bit-0
+    // carry-out `acc[0] AND ctrl AND x[0]` is provably 0, so the bit-0 result is the
+    // known `cx(ctrl, y[0])` with no carry into bit 1 -- emit it directly and run the
+    // capped adder on bits 1.. with carry-in 0. Saves the bit-0 carry CCX (~1-2 tof)
+    // per GCD conditional sub/add * 2 (fwd+rev) * ITERS ~= 1000+ tof. Not the apply.
     let loan_y0 = loan_gcd_y0_enabled() && x.len() > 1;
     match bit0_mode {
         GcdBit0Mode::ForwardKnownOneAfterCx => {
-            circ.cx(*ctrl, y[0]);
+            circ.cx(*ctrl, y[0]); // bit-0 sum is known one inside the X-sandwich.
             if loan_y0 {
                 loan_known_one_gcd_y0(circ, y[0]);
             }
         }
         GcdBit0Mode::ReverseKnownZeroBeforeCx => {
-
+            // The inverse add starts with y[0] = 0 and no carry into bit 1. Delay the
+            // bit-0 CNOT until after the high-bit adder so y[0] can be borrowed.
             if loan_y0 {
                 loan_known_zero_gcd_y0(circ, y[0]);
             }
         }
     }
     if x.len() > 1 {
-        let yr: Vec<&QubitId> = y[1..].iter().collect();
-        let xr: Vec<&QubitId> = x[1..].iter().collect();
-        super::gidney::with_dirty_vent_pool(dirty_vents, || {
-            super::gidney::controlled_hybrid_add_capped_branch(
-                circ,
-                ctrl,
-                &yr,
-                &xr,
-                k,
-                super::PAD,
-                branch,
-            );
-        });
+        if gcd_body_serial_enabled() {
+            let yr: Vec<QubitId> = y[1..].to_vec();
+            let xr: Vec<QubitId> = x[1..].to_vec();
+            arith::cuccaro_carry(circ, Some(ctrl), &xr, &yr, None, None);
+        } else {
+            let k = maybe_adjust_late_gcd_k(i, super::next_gcd_k());
+            let branch = super::next_gcd_branch();
+            let yr: Vec<&QubitId> = y[1..].iter().collect();
+            let xr: Vec<&QubitId> = x[1..].iter().collect();
+            super::gidney::with_dirty_vent_pool(dirty_vents, || {
+                super::gidney::controlled_hybrid_add_capped_branch(
+                    circ,
+                    ctrl,
+                    &yr,
+                    &xr,
+                    k,
+                    super::PAD,
+                    branch,
+                );
+            });
+        }
     }
     if loan_y0 {
         match bit0_mode {
@@ -1731,10 +1268,17 @@ fn controlled_add_active(
         }
     }
     if bit0_mode == GcdBit0Mode::ReverseKnownZeroBeforeCx {
-        circ.cx(*ctrl, y[0]);
+        circ.cx(*ctrl, y[0]); // bit-0 sum (x[0] == 1 under the odd-u invariant)
     }
 }
 
+// =====================================================================
+// Apply: read the (decompressed) tape and reconstruct the modular product.
+// =====================================================================
+
+/// One forward apply step (the multiply body) at iter `i` with the symbol bits
+/// `(sub, swp, s2)` and the t1 prefix `t1`:
+///   if sub: y += x mod q; if swp: swap(x,y); y *= 2 (shift1) ; if s2: y *= 2.
 fn apply_step_forward(
     circ: &mut B,
     i: usize,
@@ -1749,29 +1293,26 @@ fn apply_step_forward(
     let n = 256usize;
     let s2_known_zero = i != 0 && apply_fwd_s2_zero(i);
 
+    // 1) if subtracted: y += x mod q. Apply cofactor add -> cout adder at the
+    // schedule's k.
     circ.set_phase("tlm_apply_forward_mod_add");
     let k = super::next_cout_k();
     let ffg = super::next_ffg();
     if !apply_add_skip(i, true) {
         super::gidney::with_dirty_vent_pool(dirty_vents, || {
-            arith::controlled_mod_add_k(
-                circ,
-                sub,
-                &x_reg[..n],
-                &y_reg[..n],
-                Some(k),
-                Some(ffg),
-            );
+            arith::controlled_mod_add_k(circ, sub, &x_reg[..n], &y_reg[..n], Some(k), Some(ffg));
         });
     }
-
+    // 2) if swap: swap(x, y).
     circ.set_phase("tlm_apply_forward_swap");
     if !apply_fwd_cswap_skip(i) {
         for j in 0..n {
             circ.cswap(*swp, x_reg[j], y_reg[j]);
         }
     }
-
+    // 3) y := 2*(1+s2)*y mod q. i==0: two separate controlled doublings (shift1 is
+    //    t1-gated). i>0: the fused double+cdouble -- one combined (e+2d)*f fold
+    //    (the unfused form costs extra inversion Toffoli).
     circ.set_phase("tlm_apply_forward_fold");
     if i == 0 {
         controlled_mod_double(circ, t1, y_reg);
@@ -1783,6 +1324,8 @@ fn apply_step_forward(
     }
 }
 
+/// One inverse apply step (the divide body, gate-inverse of [`apply_step_forward`])
+/// at iter `i`:  s_2 halve; shift1 halve; if swp: swap(x,y); if sub: y -= x mod q.
 fn apply_step_reverse(
     circ: &mut B,
     i: usize,
@@ -1794,9 +1337,14 @@ fn apply_step_reverse(
     y_reg: &[QubitId],
     dirty_vents: &[QubitId],
 ) {
-    let n = 256usize;
+    let n = std::env::var("TLM_APPLY_INV_PAIR_N")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(256usize);
     let s2_known_zero = i != 0 && apply_inv_s2_zero(i);
 
+    // inverse of 3): i==0 two separate reverse-doublings (s2 halve then t1 halve);
+    // i>0 the fused inverse double+cdouble.
     circ.set_phase("tlm_apply_inverse_fold");
     if i == 0 {
         controlled_mod_double_reverse(circ, s2, y_reg);
@@ -1806,14 +1354,16 @@ fn apply_step_reverse(
     } else {
         super::fused::fused_double_cdouble_reverse(circ, s2, y_reg);
     }
-
+    // inverse of 2): swap (involutory).
     circ.set_phase("tlm_apply_inverse_swap");
     if !apply_inv_cswap_skip(i) {
         for j in 0..n {
             circ.cswap(*swp, x_reg[j], y_reg[j]);
         }
     }
-
+    // inverse of 1): y -= x mod q. The apply-path operands carry pseudo-Mersenne
+    // representation drift, so the borrow clean uses the MBU form.
+    // Apply cofactor sub -> schedule cout k.
     circ.set_phase("tlm_apply_inverse_mod_sub");
     let k = super::next_cout_k();
     if !apply_add_skip(i, false) {
@@ -1823,12 +1373,23 @@ fn apply_step_reverse(
     }
 }
 
-fn controlled_mod_sub_vented(circ: &mut B, ctrl: &QubitId, x: &[QubitId], y: &[QubitId], sched_k: Option<usize>) {
+/// Apply-path `y := y - ctrl * x (mod q)` whose borrow ancilla is cleaned by
+/// MBU (hmr + cz_if_bit) rather than the normal comparator
+/// `zero_and_free`. Tolerates pseudo-Mersenne representation drift (operands in
+/// `[0, 2^256)` not strictly `< q`), which the apply pipeline produces. A gated
+/// add over the full width with an MSBs phase-correction borrow clean.
+fn controlled_mod_sub_vented(
+    circ: &mut B,
+    ctrl: &QubitId,
+    x: &[QubitId],
+    y: &[QubitId],
+    sched_k: Option<usize>,
+) {
     let n = x.len();
     assert_eq!(y.len(), n, "x,y equal width");
     let f_bytes = F_SECP256K1.to_le_bytes();
     let anc = circ.alloc_qubit();
-
+    // X-sandwich: ~y += ctrl*x => y -= ctrl*x; cout = ctrl AND borrow.
     circ.set_phase("tlm_apply_inverse_mod_sub_register");
     for q in y {
         circ.x(*q);
@@ -1837,17 +1398,25 @@ fn controlled_mod_sub_vented(circ: &mut B, ctrl: &QubitId, x: &[QubitId], y: &[Q
     for q in y {
         circ.x(*q);
     }
-
+    // gated -f fold on the borrow.
     circ.set_phase("tlm_apply_inverse_mod_sub_fold");
-    for q in &y[..arith::LSBS] {
+    let lsbs = arith::lsbs();
+    for q in &y[..lsbs] {
         circ.x(*q);
     }
     let ffg = super::next_ffg();
-    arith::add_f_window_pub(circ, &anc, y, arith::LSBS, &f_bytes, Some(ffg));
-    for q in &y[..arith::LSBS] {
+    arith::add_f_window_pub(circ, &anc, y, lsbs, &f_bytes, Some(ffg));
+    for q in &y[..lsbs] {
         circ.x(*q);
     }
-
+    // Measurement-vented borrow clean by MBU over the top `msbs` bits (a vented
+    // adaptive msbs comparator, not a normal 2k MAJ/un-MAJ). The borrow == ctrl AND
+    // carryout(y_final + x + 1); the -f fold only touched the low LSBS bits, so the
+    // predicate is recomputed on the top msbs, which the fold left intact (msbs =
+    // PAD). HMR the borrow, then on the fired shots recompute the carry as a deferred
+    // Z via the Gidney `a + ~b + ~cin` carry chain (~1 Toffoli/bit); cz_if_bit(ctrl,
+    // carry) cancels the phase. This never asserts |0>, so operand drift is tolerated.
+    // Flip x_top so the comparator's internal `~b` yields `+x_top` (carryout(y+x+1)).
     circ.set_phase("tlm_apply_inverse_mod_sub_clean");
     let k = arith::msbs().min(n);
     let lo = n - k;
@@ -1859,13 +1428,25 @@ fn controlled_mod_sub_vented(circ: &mut B, ctrl: &QubitId, x: &[QubitId], y: &[Q
     let yt: Vec<QubitId> = y[lo..n].to_vec();
     let xt: Vec<QubitId> = x[lo..n].to_vec();
     for q in &xt {
-        circ.x(*q);
+        circ.x(*q); // ~b = ~(~x_top) = x_top inside the comparator -> carryout(y+x+1)
     }
-
+    // Recompute the borrow through the headroom-adaptive (chunked) comparator
+    // backend (`compare_geq_chunked_middle`); held-carry count = the full window
+    // `k`. `flag = [yt >= xt] = carryout(yt + x + 1)` (xt was complemented to ~x
+    // above) = the borrow predicate; deposit Z^(ctrl AND flag). The chunked
+    // comparator builds the [>=] carry with an implicit +1 carry-in, so no separate
+    // `zcin` is needed (this also drops a qubit vs the explicit carry-in form).
     let flag = circ.alloc_qubit();
-    super::comparator::compare_geq_chunked_middle(circ, &yt, &xt, &flag, |c, fl| {
-        c.cz(ctrl, *fl);
-    }, k);
+    super::comparator::compare_geq_chunked_middle(
+        circ,
+        &yt,
+        &xt,
+        &flag,
+        |c, fl| {
+            c.cz(ctrl, *fl);
+        },
+        k,
+    );
     circ.zero_and_free(flag);
     for q in &xt {
         circ.x(*q);
@@ -1873,18 +1454,39 @@ fn controlled_mod_sub_vented(circ: &mut B, ctrl: &QubitId, x: &[QubitId], y: &[Q
     circ.pop_condition();
 }
 
-fn controlled_add_active_cout(circ: &mut B, ctrl: &QubitId, x: &[QubitId], y: &[QubitId], cout: &QubitId, sched_k: Option<usize>) {
+/// `y += ctrl * x` over `n` bits depositing carry-out into `cout` (= ctrl AND
+/// overflow). Measurement-vented chunked-gated adder (~2.5 Toffoli/bit, bounded
+/// peak) -- the inverse apply's mod-sub register add, on the peak-bound hot path.
+/// `cout` is |0> on entry; `x` restored.
+fn controlled_add_active_cout(
+    circ: &mut B,
+    ctrl: &QubitId,
+    x: &[QubitId],
+    y: &[QubitId],
+    cout: &QubitId,
+    sched_k: Option<usize>,
+) {
     match sched_k {
         Some(k) => {
-
+            // cout adder at the schedule's k (a = target = y, b = addend = x).
             let yr: Vec<&QubitId> = y.iter().collect();
             let xr: Vec<&QubitId> = x.iter().collect();
             super::gidney::controlled_hybrid_add_cout_refs(circ, ctrl, &yr, &xr, cout, k);
         }
-        None => arith::controlled_add_vented_chunked_cout(circ, ctrl, x, y, arith::APPLY_CHUNK, Some(cout)),
+        None => arith::controlled_add_vented_chunked_cout(
+            circ,
+            ctrl,
+            x,
+            y,
+            arith::APPLY_CHUNK,
+            Some(cout),
+        ),
     }
 }
 
+/// Jump-GCD in-place modular inversion / multiply: `(xv, y) -> (xv, y*x^{±1})`.
+/// `Direction::Inverse` => `y := y * xv^-1 mod q`; `Direction::Forward` => `y := y * xv mod q`.
+/// xv restored. Fused both directions (apply folded into the GCD passes).
 #[must_use]
 pub fn mod_mul_inverse_in_place(
     circ: &mut B,
@@ -1898,10 +1500,11 @@ pub fn mod_mul_inverse_in_place(
 
     match dir {
         Direction::Inverse => {
-
+            // Fused inverse apply folds into the forward GCD. apply pair (x_reg=y,
+            // y_reg=tmp); result y = z*x^-1, tmp = 0.
             let tmp: Vec<QubitId> = (0..n).map(|_| circ.alloc_qubit()).collect();
             for j in 0..n {
-                circ.swap(y[j], tmp[j]);
+                circ.swap(y[j], tmp[j]); // tmp = z, y = 0
             }
             let mut tape = forward_gcd_jump(circ, &mut xv, Some((y, &tmp)));
             for q in tmp {
@@ -1911,11 +1514,12 @@ pub fn mod_mul_inverse_in_place(
             xv
         }
         Direction::Forward => {
-
+            // Fused forward apply folds into the reverse GCD. apply pair (x_reg=tmp=z,
+            // y_reg=y=0); result y = z*x, tmp = canonical 0 (drift cleared).
             let mut tape = forward_gcd_jump(circ, &mut xv, None);
             let tmp: Vec<QubitId> = (0..n).map(|_| circ.alloc_qubit()).collect();
             for j in 0..n {
-                circ.swap(y[j], tmp[j]);
+                circ.swap(y[j], tmp[j]); // tmp = z, y = 0
             }
             reverse_gcd_jump(circ, &mut xv, &mut tape, Some((&tmp, y)));
             clear_zeroed_drift(circ, &tmp[..n]);
@@ -1927,6 +1531,8 @@ pub fn mod_mul_inverse_in_place(
     }
 }
 
+/// Clear a register holding a value `== 0 (mod q)` whose representative is `0` or
+/// `q`: XOR q maps `q -> 0` (caught by the caller's zero_and_free if not).
 fn clear_zeroed_drift(circ: &mut B, reg: &[QubitId]) {
     let q_bytes = q_secp256k1_le();
     for (i, qb) in reg.iter().enumerate() {
