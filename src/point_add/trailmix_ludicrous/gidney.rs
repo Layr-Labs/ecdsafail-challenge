@@ -1848,9 +1848,21 @@ fn controlled_hybrid_add_varchunk_gated_refs(circ: &mut B, ctrl: &QubitId, a: &[
     let mut carries: Vec<QubitId> = Vec::with_capacity(sizes.len());
     let mut bounds: Vec<(usize, usize)> = Vec::with_capacity(sizes.len());
     let mut lo = 0usize;
+    let last_chunk = sizes.len() - 1;
     for (j, &s) in sizes.iter().enumerate() {
         let hi = lo + s;
-        let cout = circ.alloc_qubit();
+        // This is the NO-COUT adder: the caller never receives a carry out, and
+        // chunk j consumes only `carries[j - 1]`, so `carries[m - 1]` is read by
+        // nothing but its own erase. Producing it costs a compute-AND, a vent and
+        // a capped erase for zero effect. Passing `cout: None` makes
+        // controlled_clean_add_threaded set `n_inner = s - 1` and `produces(s-1)`
+        // false, so the top bit takes the `!produces` branch: no forward CCX, no
+        // boundary CCX, and no vent -- the compute-AND and its measurement
+        // uncompute disappear as a matched pair. Only the `direct` path is
+        // changed; the legacy vented path still needs a real cout per chunk.
+        // Same shape as TLM_GRAD_FINAL_NO_COUT (mod.rs:2208, arith.rs:1164).
+        let drop_cout = direct && j == last_chunk;
+        let cout = (!drop_cout).then(|| circ.alloc_qubit());
         if direct {
 
             let fit = super::next_hyb_v_fit();
@@ -1864,7 +1876,7 @@ fn controlled_hybrid_add_varchunk_gated_refs(circ: &mut B, ctrl: &QubitId, a: &[
                 &a[lo..hi],
                 &b[lo..hi],
                 cin,
-                Some(&cout),
+                cout.as_ref(),
                 hi - lo,
             );
             trace_schedule_fit(
@@ -1885,16 +1897,27 @@ fn controlled_hybrid_add_varchunk_gated_refs(circ: &mut B, ctrl: &QubitId, a: &[
             } else {
                 &carries[j - 1]
             };
-            controlled_vented_chunk_add(circ, ctrl, &a[lo..hi], &b[lo..hi], cin, &cout);
+            controlled_vented_chunk_add(
+                circ,
+                ctrl,
+                &a[lo..hi],
+                &b[lo..hi],
+                cin,
+                cout.as_ref().expect("legacy vented chunk needs a cout"),
+            );
         }
-        carries.push(cout);
+        if let Some(cout) = cout {
+            carries.push(cout);
+        }
         bounds.push((lo, hi));
         lo = hi;
     }
     if let Some(cin0) = cin0 {
         circ.zero_and_free(cin0);
     }
-    for j in (0..sizes.len()).rev() {
+    // Only the carries that were actually produced need erasing; when the final
+    // chunk's cout was dropped there is no carry at index `last_chunk`.
+    for j in (0..carries.len()).rev() {
         let (lo, hi) = bounds[j];
         let carry = carries.pop().expect("carry present");
         if j == 0 {

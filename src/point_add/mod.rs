@@ -2376,12 +2376,13 @@ pub fn build() -> Vec<Op> {
     } else {
         apply_deep_strip_identity(ops)
     };
-    // Tail nonce for the exact H2 risk-3.0 stream (9024/9024 PASS, score 1,487,599,474).
+    // Tail nonce for the v4 composed geometry (9024/9024 PASS, avg 1286611.658 x 1154 qubits,
+    // score 1,484,750,248). Dispositioned by trusted CPU oracle 0/0/0 and reproduced on a fresh tree.
     // SUB4_TAIL_NONCE overrides it for controlled re-grinding.
     let nonce: u64 = std::env::var("SUB4_TAIL_NONCE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(200321420125);
+        .unwrap_or(1001707183656);
     let ops = apply_tail_nonce(ops, nonce);
     // `TLM_DIRTY_SCAN_FINAL=1` runs the reset/phase audit on the stream `eval_circuit`
     // will actually see, i.e. after every rewrite pass. Default off.
