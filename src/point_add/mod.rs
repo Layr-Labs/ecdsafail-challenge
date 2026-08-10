@@ -2371,56 +2371,18 @@ pub fn build() -> Vec<Op> {
     // census-time tuple occupancy, a self-check strictly stronger than gating on
     // baked_artifacts_valid(): it catches ANY ordinal-moving edit and discards only
     // the affected keys, loudly, instead of disabling the table.
-    let strip_enabled = std::env::var("SUB4_APPLY_STRIP").ok().as_deref() != Some("0");
-    let mut ops = if !strip_enabled {
+    let ops = if std::env::var("SUB4_APPLY_STRIP").ok().as_deref() == Some("0") {
         ops
     } else {
         apply_deep_strip_identity(ops)
     };
-    if strip_enabled {
-        let mut post_strip_fanout_passes = 0usize;
-        loop {
-            match single_ccx_fanout::rewrite_first_target_fanout(ops.clone(), 96) {
-                Ok((rewritten, witness)) => {
-                    post_strip_fanout_passes += 1;
-                    eprintln!(
-                        "POST_STRIP_TARGET_FANOUT_WITNESS: pass={} first={} blocker={} second={} controls=({}, {}) old_target={} new_target={} condition={}",
-                        post_strip_fanout_passes,
-                        witness.first_index,
-                        witness.blocker_index,
-                        witness.second_index,
-                        witness.control_a,
-                        witness.control_b,
-                        witness.old_target,
-                        witness.new_target,
-                        witness.condition,
-                    );
-                    ops = rewritten;
-                }
-                Err(error) => {
-                    eprintln!(
-                        "POST_STRIP_TARGET_FANOUT_DONE: passes={} terminal={}",
-                        post_strip_fanout_passes,
-                        error,
-                    );
-                    break;
-                }
-            }
-        }
-        assert_eq!(
-            post_strip_fanout_passes,
-            10,
-            "3701581 post-strip target-fanout census drift"
-        );
-    }
-    // Tail nonce for the post-strip target-fanout closure (9024/9024 PASS,
-    // avg 1285658.939 x 1154 qubits, score 1,483,650,486).
-    // Dispositioned by trusted CPU oracle 0/0/0 over 9,024 shots.
+    // Tail nonce for the v5c composed geometry (9024/9024 PASS, avg 1285673.863 x 1154 qubits,
+    // score 1,483,667,638). Dispositioned by trusted CPU oracle 0/0/0 over 9,024 shots.
     // SUB4_TAIL_NONCE overrides it for controlled re-grinding.
     let nonce: u64 = std::env::var("SUB4_TAIL_NONCE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(8000264417270);
+        .unwrap_or(902265393175);
     let ops = apply_tail_nonce(ops, nonce);
     // `TLM_DIRTY_SCAN_FINAL=1` runs the reset/phase audit on the stream `eval_circuit`
     // will actually see, i.e. after every rewrite pass. Default off.
