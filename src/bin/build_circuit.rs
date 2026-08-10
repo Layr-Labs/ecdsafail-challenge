@@ -7,10 +7,27 @@
 //! code cannot influence the score.
 
 use quantum_ecc::circuit::Op;
-use quantum_ecc::point_add;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::Path;
+
+// Contestant code is compiled into THIS binary only. It must never be part
+// of the shared `quantum_ecc` library: that library is also linked into the
+// trusted `eval_circuit`, and an `.init_array`/`__mod_init_func` constructor
+// in contestant code would then run before `main` in the scorer process,
+// letting it forge `score.json` and exit 0 before any validation runs.
+// Including the sources via `#[path]` keeps every existing `crate::point_add`,
+// `crate::circuit`, `crate::sim`, `crate::weierstrass_elliptic_curve` path
+// inside `src/point_add/**` resolving exactly as before, so existing
+// submissions build unchanged.
+#[allow(dead_code)]
+#[path = "../point_add/mod.rs"]
+mod point_add;
+
+// Root bindings backing the `crate::{circuit,sim,weierstrass_elliptic_curve}`
+// paths used inside `src/point_add/**` (see the note above).
+#[allow(unused_imports)]
+use quantum_ecc::{circuit, sim, weierstrass_elliptic_curve};
 
 const OPS_PATH: &str = "ops.bin";
 // "Z" suffix marks the zstd-compressed framing (was "QECCOPS1", uncompressed).
