@@ -11,10 +11,17 @@
 //! with the process boundary: contestant code cannot tamper with the
 //! simulator, the test inputs, or the score because none of that runs in
 //! `build_circuit`.
+//!
+//! NOTE: `point_add` (contestant code) is deliberately NOT a module of this
+//! library. It is compiled directly into the `build_circuit` binary via a
+//! `#[path]` module (see `src/bin/build_circuit.rs`). If it lived here, the
+//! shared crate would be linked into `eval_circuit` too, and an
+//! `.init_array` constructor in contestant code would run before `main` in
+//! the trusted scorer — enough to forge `score.json` and exit 0 before any
+//! validation runs.
 
 #[allow(dead_code)]
 pub mod circuit;
-pub mod point_add;
 #[allow(dead_code)]
 pub mod sim;
 #[allow(dead_code)]
