@@ -1682,33 +1682,18 @@ fn emit_adaptive_layout_no_cout(
     }
     let cin0 = circ.alloc_qubit();
     let mut carries: Vec<QubitId> = Vec::with_capacity(bounds.len());
-    // The ONLY reader of `carries.last()` is the plain-tail add below. When
-    // `plain_len == 0` that branch does not run, so the final chunk's cout is
-    // consumed by nothing but its own erase: producing it costs a compute-AND,
-    // a vent and a capped erase for zero effect. Passing `cout: None` makes
-    // controlled_clean_add_threaded set n_inner = s-1 and produces(s-1) false,
-    // so the compute-AND and its measurement uncompute vanish as a matched pair.
-    // Static dataflow, not statistics -- same shape as TLM_GRAD_FINAL_NO_COUT
-    // (arith.rs:1164) and the varchunk last-chunk drop above.
-    let drop_last = layout.plain_len == 0
-        && !bounds.is_empty()
-        && std::env::var("TLM_ADAPTIVE_FINAL_NO_COUT").ok().as_deref() == Some("1");
-    let last_chunk = bounds.len().saturating_sub(1);
     for (j, &(lo, hi)) in bounds.iter().enumerate() {
-        let cout = (!(drop_last && j == last_chunk)).then(|| circ.alloc_qubit());
+        let cout = circ.alloc_qubit();
         let cin: &QubitId = if j == 0 { &cin0 } else { &carries[j - 1] };
-        controlled_clean_add_threaded(circ, ctrl, &a[lo..hi], &b[lo..hi], Some(cin), cout.as_ref(), hi - lo);
-        if let Some(cout) = cout {
-            carries.push(cout);
-        }
+        controlled_clean_add_threaded(circ, ctrl, &a[lo..hi], &b[lo..hi], Some(cin), Some(&cout), hi - lo);
+        carries.push(cout);
     }
     if layout.plain_len > 0 {
         let cin: &QubitId = carries.last().unwrap_or(&cin0);
         controlled_clean_add_threaded(circ, ctrl, &a[l..n], &b[l..n], Some(cin), None, layout.plain_len);
     }
     circ.zero_and_free(cin0);
-    // Only carries actually produced need erasing.
-    for j in (0..carries.len()).rev() {
+    for j in (0..bounds.len()).rev() {
         let (lo, hi) = bounds[j];
         let carry = carries.pop().expect("carry present");
         if j == 0 {
