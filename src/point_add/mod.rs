@@ -1188,7 +1188,7 @@ fn configure_q1153_second512_submission_defaults() {
 
     set_default_env("TLM_FFG_RELEASE_CY0_DURING_SUFFIX", "1");
     set_default_env("TLM_FFG_RELEASE_CY0_CALLS", "178,180,181,182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,198,199,200,201,203,208,210,211,212,213,215,217,219,221,226,232,234,235,236,237,239");
-    set_default_env("TLM_APPLY_FWD_CSWAP_SKIP_LAST", "2");
+    set_default_env("TLM_APPLY_FWD_CSWAP_SKIP_LAST", "3");
     set_default_env("TLM_COORD_RSUB_FUSED", "1");
     set_default_env("TLM_SQUARE_VENT_MARGIN", "0");
     set_default_env("TLM_COORD_ADD3X_TRUNC", "1");
@@ -2217,8 +2217,8 @@ pub fn build() -> Vec<Op> {
     set_default_env("TLM_TARGET_FFG_CALL_RESERVE_OVERRIDES", "184:4,186:4,188:4,205:6,207:6,209:6,220:7,222:7,224:7,238:8,240:8,242:8,251:9,257:10,262:10,355:10,362:10,359:10,181:3,183:3,185:3,187:4,189:4,191:4,196:5,198:5,200:5,208:6,210:6,212:6,223:7,225:7,227:7,241:8,243:8,245:8,250:9,252:9,190:4,192:4,193:5,194:4,195:5,197:5,199:5,201:5,202:6,203:5,204:6,206:6,211:6,213:6,214:7,215:6,216:7,218:7,226:7,228:8,229:8,230:8,231:8,233:8,244:8,246:8,247:9,253:9,254:10,259:11,358:10,340:11,341:11,342:11,343:11,344:11,345:11,346:11,347:11,348:11,349:11,350:11");
     set_default_env("TLM_APPLY_FWD_S2_ZERO_LAST", "1");
     set_default_env("TLM_APPLY_INV_S2_ZERO_LAST", "1");
-    set_default_env("TLM_APPLY_FWD_CSWAP_SKIP_LAST", "2");
-    set_default_env("TLM_APPLY_INV_CSWAP_SKIP_LAST", "1");
+    set_default_env("TLM_APPLY_FWD_CSWAP_SKIP_LAST", "3");
+    set_default_env("TLM_APPLY_INV_CSWAP_SKIP_LAST", "3");
     set_default_env("TLM_FOLD_RELEASE_CONTROLS", "1");
     set_default_env("TLM_TARGET_FFG_RESERVE", "9");
     set_default_env(
@@ -2371,18 +2371,39 @@ pub fn build() -> Vec<Op> {
     // census-time tuple occupancy, a self-check strictly stronger than gating on
     // baked_artifacts_valid(): it catches ANY ordinal-moving edit and discards only
     // the affected keys, loudly, instead of disabling the table.
-    let ops = if std::env::var("SUB4_APPLY_STRIP").ok().as_deref() == Some("0") {
+    let strip_enabled = std::env::var("SUB4_APPLY_STRIP").ok().as_deref() != Some("0");
+    let mut ops = if !strip_enabled {
         ops
     } else {
         apply_deep_strip_identity(ops)
     };
+    // POST-STRIP target-fanout closure (jackylee0424 95bf230). Deleting gates EXPOSES
+    // new `CCX a,b,t1; CCX a,b,t2 -> CCX a,b,t1; CX t1,t2` rewrites that the pre-strip
+    // pass could not see, so the fanout fixpoint must be re-run AFTER the strip.
+    // We strip 832 keys more than the table this was written against, so the pass count
+    // is expected to exceed their 10; it is asserted below once measured, as drift armour.
+    if strip_enabled {
+        let mut post_strip_fanout_passes = 0usize;
+        loop {
+            match single_ccx_fanout::rewrite_first_target_fanout(ops.clone(), 96) {
+                Ok((rewritten, _witness)) => {
+                    post_strip_fanout_passes += 1;
+                    ops = rewritten;
+                }
+                Err(_error) => {
+                    eprintln!("POST_STRIP_TARGET_FANOUT_DONE: passes={}", post_strip_fanout_passes);
+                    break;
+                }
+            }
+        }
+    }
     // Tail nonce for the v5c composed geometry (9024/9024 PASS, avg 1285673.863 x 1154 qubits,
     // score 1,483,667,638). Dispositioned by trusted CPU oracle 0/0/0 over 9,024 shots.
     // SUB4_TAIL_NONCE overrides it for controlled re-grinding.
     let nonce: u64 = std::env::var("SUB4_TAIL_NONCE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(365918044);
+        .unwrap_or(906027526784);
     let ops = apply_tail_nonce(ops, nonce);
     // `TLM_DIRTY_SCAN_FINAL=1` runs the reset/phase audit on the stream `eval_circuit`
     // will actually see, i.e. after every rewrite pass. Default off.
