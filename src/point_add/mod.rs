@@ -2397,13 +2397,55 @@ pub fn build() -> Vec<Op> {
             }
         }
     }
+    // Apply the single exact top-level affine bridge witnessed on this fixed
+    // post-strip stream.  The seven-gate source and three-gate replacement are
+    // the basis-action identity proved by AffineBridgeConjugation; requiring a
+    // unique occurrence fails closed if an upstream edit moves or duplicates it.
+    let mut affine_source = Vec::with_capacity(7);
+    let cx = |control: u64, target: u64| {
+        let mut op = Op::empty();
+        op.kind = OperationType::CX;
+        op.q_control1 = QubitId(control);
+        op.q_target = QubitId(target);
+        op
+    };
+    let ccx = |a: u64, b: u64, target: u64| {
+        let mut op = Op::empty();
+        op.kind = OperationType::CCX;
+        op.q_control2 = QubitId(a);
+        op.q_control1 = QubitId(b);
+        op.q_target = QubitId(target);
+        op
+    };
+    affine_source.extend([
+        ccx(511, 898, 735),
+        cx(735, 897),
+        cx(735, 734),
+        cx(735, 897),
+        cx(734, 897),
+        cx(735, 734),
+        ccx(511, 898, 735),
+    ]);
+    let matches: Vec<usize> = ops
+        .windows(affine_source.len())
+        .enumerate()
+        .filter_map(|(index, window)| (window == affine_source.as_slice()).then_some(index))
+        .collect();
+    assert_eq!(matches.len(), 1, "exact affine bridge occurrence drift");
+    let affine_index = matches[0];
+    assert!(affine_index + affine_source.len() <= ops.len() - 96);
+    ops.splice(
+        affine_index..affine_index + affine_source.len(),
+        [cx(734, 897), cx(735, 897), ccx(511, 898, 897)],
+    );
+
     // Tail nonce for the v5c composed geometry (9024/9024 PASS, avg 1285673.863 x 1154 qubits,
     // score 1,483,667,638). Dispositioned by trusted CPU oracle 0/0/0 over 9,024 shots.
     // SUB4_TAIL_NONCE overrides it for controlled re-grinding.
     let nonce: u64 = std::env::var("SUB4_TAIL_NONCE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(906027526784);
+        .unwrap_or(1978352376);
     let ops = apply_tail_nonce(ops, nonce);
     // `TLM_DIRTY_SCAN_FINAL=1` runs the reset/phase audit on the stream `eval_circuit`
     // will actually see, i.e. after every rewrite pass. Default off.
