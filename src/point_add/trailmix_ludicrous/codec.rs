@@ -224,23 +224,73 @@ fn apply_op_off(circ: &mut B, w: &[&QubitId], op: (u8, u8, u8, u8), off: u8) {
 fn apply_merge25(circ: &mut B, w: &[&QubitId], off: u8, reverse: bool) {
     let clear: &[usize] = if reverse { &MERGE25_CLEAR_REV } else { &MERGE25_CLEAR_FWD };
     let n = MERGE25_OPS.len();
+    // E209: op 5 is ccx(w13,w14 -> w12); it computes the product w13*w14 and
+    // discards it. Between op 5 and op 18 the source touches w13 only with the
+    // single X at op 17 and never touches w14, so the product op 18's AND tree
+    // needs satisfies w13_cur*w14 = (w13_old*w14) ^ w14. Retaining op 5's
+    // product in a clean ancilla therefore hands the tree one finished node and
+    // collapses the 5-control Toffoli (4 T) to a 4-control one (3 T).
+    // Forward the ancilla is allocated at op 5 and retired at op 18; the reverse
+    // pass walks the same span backwards, so it allocates at op 18 and retires
+    // at op 5. Peak clean ancilla is unchanged at 3.
+    let mut shared: Option<QubitId> = None;
     for step in 0..n {
         let i = if reverse { n - 1 - step } else { step };
-        // E208: ops 18..=26 form one 5-control Toffoli w12 ^= AND(w8,w9,w10,w13,w14),
-        // 9 Toffoli-class gates (2 clean anc). Replace with mcx_clean_k: 7 gates, 3 clean anc.
-        // 5-ctrl Toffoli is an involution => same call for forward and reverse.
+        if i == 5 {
+            debug_assert_eq!(MERGE25_OPS[5], (2u8, 13u8, 14u8, 12u8));
+            let w13 = w[(13 - off) as usize];
+            let w14 = w[(14 - off) as usize];
+            let w12 = w[(12 - off) as usize];
+            if reverse {
+                let q = shared.take().expect("merge25 shared product missing on reverse");
+                circ.cx(q, *w12);
+                clear_and(circ, &q, w13, w14); // free: q == w13 * w14 here
+                circ.zero_and_free(q);
+            } else {
+                let q = circ.alloc_qubit();
+                circ.ccx(*w13, *w14, q); // q = w13 * w14
+                circ.cx(q, *w12); // same net effect on w12 as the original ccx
+                shared = Some(q);
+            }
+            continue;
+        }
+        // E208 + E209: ops 18..=26 form one 5-control Toffoli
+        // w12 ^= AND(w8,w9,w10,w13,w14). With op 5's product retained this is a
+        // 4-control Toffoli on (w8, w9, w10, q): 3 Toffoli, 2 clean anc.
         if i == 18 {
-            super::mcx::mcx_clean_k(
-                circ,
-                &[
-                    w[(8 - off) as usize],
-                    w[(9 - off) as usize],
-                    w[(10 - off) as usize],
-                    w[(13 - off) as usize],
-                    w[(14 - off) as usize],
-                ],
-                w[(12 - off) as usize],
-            );
+            let w13 = w[(13 - off) as usize];
+            let w14 = w[(14 - off) as usize];
+            if reverse {
+                let q = circ.alloc_qubit();
+                circ.ccx(*w13, *w14, q); // q = w13_cur * w14
+                super::mcx::mcx_clean_k(
+                    circ,
+                    &[
+                        w[(8 - off) as usize],
+                        w[(9 - off) as usize],
+                        w[(10 - off) as usize],
+                        &q,
+                    ],
+                    w[(12 - off) as usize],
+                );
+                circ.cx(*w14, q); // q = w13_old * w14, for op 5 to retire
+                shared = Some(q);
+            } else {
+                let q = shared.take().expect("merge25 shared product missing on forward");
+                circ.cx(*w14, q); // q = (w13_old*w14) ^ w14 = w13_cur * w14
+                super::mcx::mcx_clean_k(
+                    circ,
+                    &[
+                        w[(8 - off) as usize],
+                        w[(9 - off) as usize],
+                        w[(10 - off) as usize],
+                        &q,
+                    ],
+                    w[(12 - off) as usize],
+                );
+                clear_and(circ, &q, w13, w14); // free: q == w13_cur * w14 here
+                circ.zero_and_free(q);
+            }
             continue;
         }
         if (19..=26).contains(&i) {
@@ -258,6 +308,7 @@ fn apply_merge25(circ: &mut B, w: &[&QubitId], off: u8, reverse: bool) {
             apply_op_off(circ, w, op, off);
         }
     }
+    debug_assert!(shared.is_none(), "merge25 shared product leaked");
 }
 
 fn compress_3sym(circ: &mut B, w: &[&QubitId; 11]) {
