@@ -591,12 +591,83 @@ fn control_net_restored(
     stack.is_empty()
 }
 
+/// Cascade-root residual triples, each measured over 10,485,760 real shots.
+///
+/// A cascade root is a blocked self-inverse CCX pair whose single intervening
+/// write is one unconditional CCX; cancelling it leaves `t ^= s AND c AND d`.
+/// The pair is therefore removable only to the extent that triple never fires,
+/// so each entry below is an explicit error-rate trade, not a value-exact
+/// rewrite. Measured fire counts per 10,485,760 shots (expected mismatches per
+/// 9,024-shot run in brackets):
+///
+///   9:270:271      4  [0.0034]      143:273:274    7  [0.0060]
+///   274:275:1147   7  [0.0060]      143:271:272   13  [0.0112]
+///   530:531:1132  22  [0.0189]      274:275:1088  27  [0.0232]
+///   530:531:1150  46  [0.0396]      274:275:889   97  [0.0835]
+///   273:274:915  103  [0.0886]      530:531:1149 111  [0.0955]
+///   271:272:886  134  [0.1153]
+///
+/// Total added lambda 0.4912 (grind cost x1.63). Three further roots were
+/// measured and deliberately EXCLUDED as lambda-inefficient: 526:527:1150
+/// (428 fires, 0.3683 — 31% of the available lambda for 8% of the gain),
+/// 10:526:527 (241, 0.2074) and 529:530:1152 (151, 0.1299). The gap is clean:
+/// every retained root returns >=272 removed ops per unit lambda, every
+/// excluded one <=216.
+///
+/// A 1M-shot pass is NOT enough to rank these: it reported 274:275:1147 as
+/// zero-fire and mis-ordered several neighbours. Re-measure at >=10M before
+/// trusting any change to this table.
+///
+/// Removing these 11 roots unblocks 144 further pairs that the EXACT predicate
+/// then accepts on its own (inverse_pairs 1 -> 155, constprop iters 3 -> 16),
+/// so the risk surface is these 11 triples only. Net effect measured paired on
+/// identical inputs: exactly -308.000 average executed Toffoli.
+const DEFAULT_CASCADE_TRIPLES: &[(u64, u64, u64)] = &[
+    (9, 270, 271),
+    (143, 271, 272),
+    (143, 273, 274),
+    (271, 272, 886),
+    (273, 274, 915),
+    (274, 275, 889),
+    (274, 275, 1088),
+    (274, 275, 1147),
+    (530, 531, 1132),
+    (530, 531, 1149),
+    (530, 531, 1150),
+];
+
 fn find_inverse_pairs(
     ops: &[Op],
     num_q: usize,
     num_b: usize,
     straddle: bool,
 ) -> (Vec<PairKill>, usize) {
+
+    // ── cascade lever (Echo-Merlini note cd0a483): accept a blocked pair whose only
+    // intervening write is one unconditional CCX on one control, when the residual
+    // triple (surviving_ctrl ∧ wc1 ∧ wc2) is a verified-dead triple. λ-priced, not
+    // value-exact: net effect is t ^= s·c·d, measured ~1e-5 fire rate per triple.
+    let cascade_trace = std::env::var("TLM_CASCADE_TRACE").ok().as_deref() == Some("1");
+    let cascade_disable = std::env::var("TLM_CASCADE_DISABLE").ok().as_deref() == Some("1");
+    let mut cascade_allow: Vec<(u64, u64, u64)> = if cascade_disable {
+        Vec::new()
+    } else {
+        DEFAULT_CASCADE_TRIPLES.to_vec()
+    };
+    if !cascade_disable {
+        if let Ok(s) = std::env::var("TLM_CASCADE_TRIPLES") {
+            for part in s.split(',').filter(|x| !x.is_empty()) {
+                let v: Vec<u64> = part.split(':').filter_map(|x| x.parse().ok()).collect();
+                if v.len() == 3 {
+                    let mut t = [v[0], v[1], v[2]];
+                    t.sort();
+                    cascade_allow.push((t[0], t[1], t[2]));
+                }
+            }
+        }
+    }
+    let cascade_any = cascade_trace || !cascade_allow.is_empty();
+    let track = straddle || cascade_any;
 
     let mut wlast_q = vec![usize::MAX; num_q];
     let mut rlast_q = vec![usize::MAX; num_q];
@@ -622,12 +693,12 @@ fn find_inverse_pairs(
     let mut killed = vec![false; ops.len()];
     let mut pairs = Vec::new();
 
-    let mut wev_q: Vec<Vec<WEvent>> = if straddle {
+    let mut wev_q: Vec<Vec<WEvent>> = if track {
         vec![Vec::new(); num_q]
     } else {
         Vec::new()
     };
-    let mut wev_b: Vec<Vec<u32>> = if straddle {
+    let mut wev_b: Vec<Vec<u32>> = if track {
         vec![Vec::new(); num_b]
     } else {
         Vec::new()
@@ -694,6 +765,57 @@ fn find_inverse_pairs(
                             straddle_extra += 1;
                         }
                     }
+
+                    if !cancelled
+                        && cascade_any
+                        && same_gate
+                        && same_epoch
+                        && tgt_clean
+                        && cond_clean
+                        && stack_clean
+                        && cb == u64::MAX
+                        && cond_stack.is_empty()
+                    {
+                        let iw = |x: u64| -> Vec<u32> {
+                            wev_q[x as usize]
+                                .iter()
+                                .map(|e| e.idx)
+                                .filter(|&w| (w as usize) > p.idx && (w as usize) < i)
+                                .collect()
+                        };
+                        let wa = iw(a);
+                        let wb = iw(b);
+                        if wa.len() + wb.len() == 1 {
+                            let (dirty, surviving) = if wa.len() == 1 { (a, b) } else { (b, a) };
+                            let widx = *wa.first().or(wb.first()).unwrap() as usize;
+                            let wop = &ops[widx];
+                            if wop.kind == OperationType::CCX
+                                && wop.q_target.0 == dirty
+                                && wop.c_condition.0 == u64::MAX
+                            {
+                                let (wc1, wc2) = (wop.q_control1.0, wop.q_control2.0);
+                                let mut tri = [surviving, wc1, wc2];
+                                tri.sort();
+                                if cascade_trace {
+                                    eprintln!(
+                                        "CASCADE_ROOT pair=CCX({},{}->{}) first={} second={} span={} write_idx={} write=CCX({},{}->{}) triple=({},{},{})",
+                                        a, b, t, p.idx, i, i - p.idx, widx, wc1, wc2, dirty, tri[0], tri[1], tri[2]
+                                    );
+                                }
+                                if cascade_allow.contains(&(tri[0], tri[1], tri[2])) {
+                                    killed[p.idx] = true;
+                                    killed[i] = true;
+                                    pairs.push(PairKill { first: p.idx, second: i });
+                                    pending[t as usize] = None;
+                                    cancelled = true;
+                                    eprintln!(
+                                        "CASCADE_ACCEPT pair=CCX({},{}->{}) triple=({},{},{})",
+                                        a, b, t, tri[0], tri[1], tri[2]
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
 
                 if !cancelled {
@@ -704,7 +826,7 @@ fn find_inverse_pairs(
                     if cb != u64::MAX {
 
                     }
-                    if straddle {
+                    if track {
 
                         wev_q[t as usize].push(WEvent {
                             idx: i as u32,
@@ -728,7 +850,7 @@ fn find_inverse_pairs(
                 rlast_q[op.q_control1.0 as usize] = i;
                 wlast_q[op.q_target.0 as usize] = i;
                 pending[op.q_target.0 as usize] = None;
-                if straddle {
+                if track {
 
                     wev_q[op.q_target.0 as usize].push(WEvent {
                         idx: i as u32,
@@ -741,7 +863,7 @@ fn find_inverse_pairs(
             OperationType::X => {
                 wlast_q[op.q_target.0 as usize] = i;
                 pending[op.q_target.0 as usize] = None;
-                if straddle {
+                if track {
 
                     wev_q[op.q_target.0 as usize].push(WEvent {
                         idx: i as u32,
@@ -758,7 +880,7 @@ fn find_inverse_pairs(
                 wlast_q[x] = i; wlast_q[y] = i;
                 pending[x] = None;
                 pending[y] = None;
-                if straddle {
+                if track {
                     wev_q[x].push(WEvent { idx: i as u32, src: u32::MAX, cond: u32::MAX, epoch: cond_epoch as u32 });
                     wev_q[y].push(WEvent { idx: i as u32, src: u32::MAX, cond: u32::MAX, epoch: cond_epoch as u32 });
                 }
@@ -766,7 +888,7 @@ fn find_inverse_pairs(
             OperationType::R => {
                 wlast_q[op.q_target.0 as usize] = i;
                 pending[op.q_target.0 as usize] = None;
-                if straddle {
+                if track {
                     wev_q[op.q_target.0 as usize].push(WEvent { idx: i as u32, src: u32::MAX, cond: u32::MAX, epoch: cond_epoch as u32 });
                 }
             }
@@ -774,7 +896,7 @@ fn find_inverse_pairs(
                 wlast_q[op.q_target.0 as usize] = i;
                 if op.c_target.0 != u64::MAX { wlast_b[op.c_target.0 as usize] = i; }
                 pending[op.q_target.0 as usize] = None;
-                if straddle {
+                if track {
                     wev_q[op.q_target.0 as usize].push(WEvent { idx: i as u32, src: u32::MAX, cond: u32::MAX, epoch: cond_epoch as u32 });
                     if op.c_target.0 != u64::MAX { wev_b[op.c_target.0 as usize].push(i as u32); }
                 }
@@ -796,7 +918,7 @@ fn find_inverse_pairs(
             | OperationType::BitStore0
             | OperationType::BitStore1 => {
                 if op.c_target.0 != u64::MAX { wlast_b[op.c_target.0 as usize] = i; }
-                if straddle && op.c_target.0 != u64::MAX {
+                if track && op.c_target.0 != u64::MAX {
                     wev_b[op.c_target.0 as usize].push(i as u32);
                 }
             }
