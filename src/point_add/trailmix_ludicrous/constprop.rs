@@ -634,6 +634,7 @@ const DEFAULT_CASCADE_TRIPLES: &[(u64, u64, u64)] = &[
     (530, 531, 1132),
     (530, 531, 1149),
     (530, 531, 1150),
+    (529, 530, 1152),
 ];
 
 fn find_inverse_pairs(
