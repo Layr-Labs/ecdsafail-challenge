@@ -459,7 +459,13 @@ fn build_sum_hi_lo(circ: &mut B, lambda: &[QubitId]) -> Vec<QubitId> {
     for i in 0..128 {
         circ.cx(lambda[i], sum[i]);
     }
-    cuccaro_carry(circ, None, &lambda[128..N], &sum[..128], None, Some(&sum[128]));
+    // Vented square-sum carry (exact; -128 emitted CCX here, -127 net after the fanout
+    // give-back). Default ON; TLM_SQUARE_SUM_VENTED=0 restores the recomputing Cuccaro.
+    if std::env::var("TLM_SQUARE_SUM_VENTED").ok().as_deref() == Some("0") {
+        cuccaro_carry(circ, None, &lambda[128..N], &sum[..128], None, Some(&sum[128]));
+    } else {
+        arith::cuccaro_carry_vented(circ, &lambda[128..N], &sum[..128], Some(&sum[128]));
+    }
     sum
 }
 

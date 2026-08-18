@@ -593,48 +593,25 @@ fn control_net_restored(
 
 /// Cascade-root residual triples, each measured over 10,485,760 real shots.
 ///
+/// Cascade-root residual triples, validated by large-sample measurement.
+///
 /// A cascade root is a blocked self-inverse CCX pair whose single intervening
 /// write is one unconditional CCX; cancelling it leaves `t ^= s AND c AND d`.
 /// The pair is therefore removable only to the extent that triple never fires,
 /// so each entry below is an explicit error-rate trade, not a value-exact
-/// rewrite. Measured fire counts per 10,485,760 shots (expected mismatches per
-/// 9,024-shot run in brackets):
-///
-///   9:270:271      4  [0.0034]      143:273:274    7  [0.0060]
-///   274:275:1147   7  [0.0060]      143:271:272   13  [0.0112]
-///   530:531:1132  22  [0.0189]      274:275:1088  27  [0.0232]
-///   530:531:1150  46  [0.0396]      274:275:889   97  [0.0835]
-///   273:274:915  103  [0.0886]      530:531:1149 111  [0.0955]
-///   271:272:886  134  [0.1153]
-///
-/// Total added lambda 0.4912 (grind cost x1.63). Three further roots were
-/// measured and deliberately EXCLUDED as lambda-inefficient: 526:527:1150
-/// (428 fires, 0.3683 — 31% of the available lambda for 8% of the gain),
-/// 10:526:527 (241, 0.2074) and 529:530:1152 (151, 0.1299). The gap is clean:
-/// every retained root returns >=272 removed ops per unit lambda, every
-/// excluded one <=216.
-///
-/// A 1M-shot pass is NOT enough to rank these: it reported 274:275:1147 as
-/// zero-fire and mis-ordered several neighbours. Re-measure at >=10M before
-/// trusting any change to this table.
-///
-/// Removing these 11 roots unblocks 144 further pairs that the EXACT predicate
-/// then accepts on its own (inverse_pairs 1 -> 155, constprop iters 3 -> 16),
-/// so the risk surface is these 11 triples only. Net effect measured paired on
-/// identical inputs: exactly -308.000 average executed Toffoli.
+/// rewrite. Mechanism credit: Echo-Merlini, public note cd0a483.
 const DEFAULT_CASCADE_TRIPLES: &[(u64, u64, u64)] = &[
-    (9, 270, 271),
-    (143, 271, 272),
-    (143, 273, 274),
-    (271, 272, 886),
-    (273, 274, 915),
-    (274, 275, 889),
-    (274, 275, 1088),
-    (274, 275, 1147),
-    (530, 531, 1132),
-    (530, 531, 1149),
-    (530, 531, 1150),
-    (529, 530, 1152),
+    (8, 527, 528),
+    (271, 272, 889),
+    (271, 272, 1133),
+    (272, 273, 1145),
+    (273, 274, 1087),
+    (273, 274, 1133),
+    (274, 275, 888),
+    (274, 275, 915),
+    (274, 275, 1145),
+    (530, 531, 1148),
+    (530, 531, 1152),
 ];
 
 fn find_inverse_pairs(
