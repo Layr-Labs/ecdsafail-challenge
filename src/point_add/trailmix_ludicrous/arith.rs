@@ -1290,6 +1290,7 @@ fn add_f_window_hybrid(
 
 fn add_f_window(circ: &mut B, ctrl: &QubitId, reg: &[QubitId], lsbs: usize, c: &[u8], g_sched: Option<usize>) {
     let call_index = next_ffg_call_index();
+    if crate::point_add::trace_calls_enabled() { eprintln!("FFGCALL idx={} phase={} div={:#010x}", call_index, circ.phase, crate::point_add::cur_divstep()); }
     let timeline_start = circ.active_timeline.len();
     let n = lsbs;
     assert!(n <= reg.len(), "register too short for +f window");

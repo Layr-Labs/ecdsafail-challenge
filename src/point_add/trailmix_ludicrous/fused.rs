@@ -1765,6 +1765,7 @@ fn build_fold_at(circ: &mut B, e: &QubitId, d: &QubitId, y: &[QubitId], dirty: &
 
 fn fused_fold(circ: &mut B, e: &QubitId, d: &QubitId, ylow: &[QubitId], dirty: &[QubitId]) {
     let call_index = next_fold_call_index();
+    if crate::point_add::trace_calls_enabled() { eprintln!("FOLDCALL idx={} phase={} div={:#010x}", call_index, circ.phase, crate::point_add::cur_divstep()); }
     let prior_fold_call_index = enter_fold_call_index(call_index);
     let timeline_start = circ.active_timeline.len();
     let entry_active = circ.active_qubits;
@@ -1812,6 +1813,7 @@ fn fused_fold(circ: &mut B, e: &QubitId, d: &QubitId, ylow: &[QubitId], dirty: &
 
 fn fused_fold_e_only(circ: &mut B, e: &QubitId, y: &[QubitId]) {
     let call_index = next_fold_call_index();
+    if crate::point_add::trace_calls_enabled() { eprintln!("FOLDCALL idx={} phase={} div={:#010x}", call_index, circ.phase, crate::point_add::cur_divstep()); }
     let prior_fold_call_index = enter_fold_call_index(call_index);
     let timeline_start = circ.active_timeline.len();
     let entry_active = circ.active_qubits;

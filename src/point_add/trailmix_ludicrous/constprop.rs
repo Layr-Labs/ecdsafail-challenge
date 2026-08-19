@@ -593,25 +593,44 @@ fn control_net_restored(
 
 /// Cascade-root residual triples, each measured over 10,485,760 real shots.
 ///
-/// Cascade-root residual triples, validated by large-sample measurement.
-///
 /// A cascade root is a blocked self-inverse CCX pair whose single intervening
 /// write is one unconditional CCX; cancelling it leaves `t ^= s AND c AND d`.
 /// The pair is therefore removable only to the extent that triple never fires,
 /// so each entry below is an explicit error-rate trade, not a value-exact
-/// rewrite. Mechanism credit: Echo-Merlini, public note cd0a483.
+/// rewrite. This table is for the s54 schedule (SCHED_J2/GAP_J2 narrowed at
+/// 201..237 and 244..260, caps 1153); the old-head table is inert here.
+/// Measured fire counts per 10,485,760 visits (expected mismatches per
+/// 9,024-shot run in brackets), static CCX removed per root:
+///
+///   271:272:1133    0  [<0.0026] 32    274:275:915   33  [0.0284] 26
+///   272:273:1145    2  [ 0.0017] 30    530:531:1148  37  [0.0318] 26
+///   274:275:1145    7  [ 0.0060] 26    8:527:528    108  [0.0929] 32
+///   273:274:1133    8  [ 0.0069] 28    274:275:888  102  [0.0878] 26
+///   530:531:1152   27  [ 0.0232] 26    271:272:889  126  [0.1084] 32
+///   273:274:1087  116  [ 0.0998] 28
+///
+/// Total added lambda 0.49. Three further roots were measured and deliberately
+/// EXCLUDED as lambda-inefficient: 530:531:1147 (120 fires, 0.1033 — would
+/// exceed the Σλ ≤ 0.5 budget), 529:530:1149 (134, 0.1153) and 527:528:1130
+/// (206, 0.1773). Acceptance rule: marginal static CCX per unit lambda >= 250
+/// and cumulative Σλ <= 0.5.
+///
+/// A 1M-shot pass is NOT enough to rank these: 1M mis-orders neighbours near
+/// the threshold. This table was ranked on 10.49M visits per root.
+///
+/// Removing these 11 roots unblocks further pairs that the EXACT predicate
+/// then accepts on its own, so the risk surface is these 11 triples only.
+/// Net effect measured paired on identical inputs: -320 average executed
+/// Toffoli (static -312, executed/static ~1.0).
 const DEFAULT_CASCADE_TRIPLES: &[(u64, u64, u64)] = &[
-    (8, 527, 528),
-    (271, 272, 889),
-    (271, 272, 1133),
-    (272, 273, 1145),
-    (273, 274, 1087),
-    (273, 274, 1133),
-    (274, 275, 888),
-    (274, 275, 915),
-    (274, 275, 1145),
-    (530, 531, 1148),
+    // W30x259 accept set (Phase 9): 10.49M-visit residual census, CCX/lambda >= 250, sum lambda <= 0.5
+    (12, 272, 273),
+    (9, 273, 274),
+    (530, 531, 823),
     (530, 531, 1152),
+    (273, 274, 1097),
+    (530, 531, 1149),
+    (529, 530, 1150),
 ];
 
 fn find_inverse_pairs(

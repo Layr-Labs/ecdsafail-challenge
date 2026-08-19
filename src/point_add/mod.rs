@@ -28,6 +28,7 @@ mod deep_strip_keys;
 mod dirtyscan;
 
 thread_local! {
+    pub(crate) static CUR_DIVSTEP: std::cell::Cell<u32> = std::cell::Cell::new(0xffff_ffff);
     static D1_PHASE_CORRECTED_PRODUCT_CORE_SCOPE: std::cell::Cell<bool> =
         std::cell::Cell::new(false);
     static OP_SITE_TRACE: std::cell::RefCell<Vec<OpSite>> =
@@ -57,6 +58,10 @@ fn record_op_site(site: OpSite) {
         OP_SITE_TRACE.with(|sites| sites.borrow_mut().push(site));
     }
 }
+
+pub(crate) fn set_cur_divstep(v: u32) { CUR_DIVSTEP.with(|c| c.set(v)); }
+pub(crate) fn cur_divstep() -> u32 { CUR_DIVSTEP.with(|c| c.get()) }
+pub(crate) fn trace_calls_enabled() -> bool { std::env::var_os("TLM_TRACE_CALLS").is_some() }
 
 pub(crate) fn set_op_trace_context(context: u32) -> u32 {
     if !op_site_trace_enabled() {
@@ -1792,86 +1797,114 @@ fn apply_deep_strip_identity(ops: Vec<Op>) -> Vec<Op> {
 /// b ^= C*d while d is restored, so the equal endpoint CCX pair reduces to CCX(a,d -> t)
 /// after the retained block. Both windows must occur exactly once (outside the tail).
 fn apply_exact_affine_bridges(mut ops: Vec<Op>) -> Vec<Op> {
-    let cx = |control: u64, target: u64| {
-        let mut op = Op::empty();
-        op.kind = OperationType::CX;
-        op.q_control1 = QubitId(control);
-        op.q_target = QubitId(target);
-        op
+    // Shape matcher: a pattern is a list of (kind, c2-var, c1-var, t-var) with wire
+    // VARIABLES (small ints); all distinct variables must bind to distinct wires.
+    // NOVAR = operand must be NO_QUBIT. The exactness proofs of both bridges hold for
+    // any distinct wires (bridge 1: 32-state truth table on 5 wires; bridge 2: net
+    // Clifford action b ^= C*d with d restored under the shared condition), so matching
+    // by shape makes the rewrite ITERS-/allocation-independent while the unique-witness
+    // asserts keep it fail-closed.
+    const NOVAR: i32 = -1;
+    fn match_shape(ops: &[Op], at: usize, pat: &[(OperationType, i32, i32, i32)], nvars: usize) -> Option<Vec<u64>> {
+        let mut bind: Vec<Option<u64>> = vec![None; nvars];
+        for (k, (kind, v2, v1, vt)) in pat.iter().enumerate() {
+            let op = &ops[at + k];
+            if op.kind != *kind || op.c_condition.0 != u64::MAX && false { return None; }
+            if op.kind != *kind { return None; }
+            for (var, val) in [(*v2, op.q_control2.0), (*v1, op.q_control1.0), (*vt, op.q_target.0)] {
+                if var == NOVAR { if val != u64::MAX { return None; } continue; }
+                match bind[var as usize] {
+                    None => { if val == u64::MAX { return None; } bind[var as usize] = Some(val); }
+                    Some(b) => { if b != val { return None; } }
+                }
+            }
+        }
+        let vals: Vec<u64> = bind.iter().map(|b| b.unwrap()).collect();
+        // all-distinct
+        for i in 0..vals.len() { for j in 0..i { if vals[i] == vals[j] { return None; } } }
+        // same condition context: no Push/Pop inside and identical c_condition on all ops
+        let cc = ops[at].c_condition.0;
+        for k in 0..pat.len() { if ops[at + k].c_condition.0 != cc { return None; } }
+        Some(vals)
+    }
+    let find_unique = |ops: &[Op], pat: &[(OperationType, i32, i32, i32)], nvars: usize, name: &str| -> (usize, Vec<u64>) {
+        let mut hits: Vec<(usize, Vec<u64>)> = Vec::new();
+        let limit = ops.len() - 96 - pat.len();
+        for at in 0..=limit {
+            if ops[at].kind != pat[0].0 { continue; }
+            if let Some(b) = match_shape(ops, at, pat, nvars) { hits.push((at, b)); }
+        }
+        assert_eq!(hits.len(), 1, "exact affine bridge occurrence drift ({name}): {} matches", hits.len());
+        hits.pop().unwrap()
     };
-    let ccx = |a: u64, b: u64, target: u64| {
-        let mut op = Op::empty();
-        op.kind = OperationType::CCX;
-        op.q_control2 = QubitId(a);
-        op.q_control1 = QubitId(b);
-        op.q_target = QubitId(target);
-        op
-    };
-    let affine_source = [
-        ccx(511, 898, 735),
-        cx(735, 897),
-        cx(735, 734),
-        cx(735, 897),
-        cx(734, 897),
-        cx(735, 734),
-        ccx(511, 898, 735),
-    ];
-    let matches: Vec<usize> = ops
-        .windows(affine_source.len())
-        .enumerate()
-        .filter_map(|(index, window)| (window == affine_source.as_slice()).then_some(index))
-        .collect();
-    assert_eq!(matches.len(), 1, "exact affine bridge occurrence drift");
-    let affine_index = matches[0];
-    assert!(affine_index + affine_source.len() <= ops.len() - 96);
-    ops.splice(
-        affine_index..affine_index + affine_source.len(),
-        [cx(734, 897), cx(735, 897), ccx(511, 898, 897)],
-    );
+    use OperationType::{CCX, CX};
+    let cxop = |control: u64, target: u64, cc: u64| { let mut op = Op::empty(); op.kind = CX; op.q_control1 = QubitId(control); op.q_target = QubitId(target); op.c_condition = BitId(cc); op };
+    let ccxop = |a: u64, b: u64, target: u64, cc: u64| { let mut op = Op::empty(); op.kind = CCX; op.q_control2 = QubitId(a); op.q_control1 = QubitId(b); op.q_target = QubitId(target); op.c_condition = BitId(cc); op };
 
-    let affine_delta_source = [
-        ccx(513, 565, 566),
-        cx(0, 565),
-        cx(0, 569),
-        cx(0, 571),
-        cx(0, 572),
-        cx(0, 573),
-        cx(0, 574),
-        cx(0, 597),
-        cx(0, 768),
-        cx(0, 512),
-        cx(512, 565),
-        cx(0, 768),
-        cx(0, 512),
-        ccx(513, 565, 566),
+    // Bridge 1 (7 -> 3): vars A=0 B=1 T=2 X=3 Y=4
+    let p1: [(OperationType, i32, i32, i32); 7] = [
+        (CCX, 0, 1, 2), (CX, NOVAR, 2, 3), (CX, NOVAR, 2, 4), (CX, NOVAR, 2, 3), (CX, NOVAR, 4, 3), (CX, NOVAR, 2, 4), (CX, NOVAR, 2, 4),
     ];
-    let delta_matches: Vec<usize> = ops
-        .windows(affine_delta_source.len())
-        .enumerate()
-        .filter_map(|(index, window)| (window == affine_delta_source.as_slice()).then_some(index))
-        .collect();
-    assert_eq!(delta_matches.len(), 1, "exact affine control-delta bridge occurrence drift");
-    let delta_index = delta_matches[0];
-    assert!(delta_index + affine_delta_source.len() <= ops.len() - 96);
-    ops.splice(
-        delta_index..delta_index + affine_delta_source.len(),
-        [
-            cx(0, 565),
-            cx(0, 569),
-            cx(0, 571),
-            cx(0, 572),
-            cx(0, 573),
-            cx(0, 574),
-            cx(0, 597),
-            cx(0, 768),
-            cx(0, 512),
-            cx(512, 565),
-            cx(0, 768),
-            cx(0, 512),
-            ccx(513, 512, 566),
-        ],
-    );
-    eprintln!("[affine-bridges] bridge1 at {} (7->3), bridge2 at {} (14->13)", affine_index, delta_index);
+    // (last element placeholder fixed below: the 7th op is the closing CCX)
+    let mut p1 = p1; p1[6] = (CCX, 0, 1, 2);
+    let (i1, b1) = find_unique(&ops, &p1, 5, "bridge1");
+    let cc1 = ops[i1].c_condition.0;
+    let (a, b, t, x, y) = (b1[0], b1[1], b1[2], b1[3], b1[4]);
+    ops.splice(i1..i1 + 7, [cxop(y, x, cc1), cxop(t, x, cc1), ccxop(a, b, x, cc1)]);
+
+    // Bridge 2 (control-delta): CCX(A,B->T); CX(C->B); {CX(C->z)}*; CX(C->D); CX(D->B); {CX(C->z')}*; CX(C->D); CCX(A,B->T)
+    // with z, z' distinct from {A,B,T,C,D}, all under one condition context. Net Clifford action is
+    // b ^= d0 with d restored and a,t untouched, so the pair reduces to CCX(A,D->T) after the block.
+    let mut hits2: Vec<(usize, usize, u64, u64, u64, u64, u64)> = Vec::new(); // (start, len, A,B,T,C,D)
+    let limit2 = ops.len() - 96;
+    for i in 0..limit2 {
+        let o0 = &ops[i];
+        if o0.kind != CCX { continue; }
+        let (a, b, t, cc) = (o0.q_control2.0, o0.q_control1.0, o0.q_target.0, o0.c_condition.0);
+        let o1 = &ops[i + 1];
+        if o1.kind != CX || o1.q_target.0 != b || o1.c_condition.0 != cc { continue; }
+        let c = o1.q_control1.0;
+        if c == a || c == t || c == b { continue; }
+        let mut j = i + 2; let mut d: Option<u64> = None; let mut ok = false; let mut phase = 0;
+        while j < limit2 && j < i + 48 {
+            let o = &ops[j];
+            if o.c_condition.0 != cc { break; }
+            if phase == 0 {
+                if o.kind == CX && o.q_control1.0 == c && ![a, b, t, c].contains(&o.q_target.0) {
+                    // either a fan-out z or the CX(C->D): decide by lookahead: next op CX(D->B)?
+                    let n = &ops[j + 1];
+                    if n.kind == CX && n.q_control1.0 == o.q_target.0 && n.q_target.0 == b && n.c_condition.0 == cc {
+                        d = Some(o.q_target.0); j += 2; phase = 1; continue;
+                    }
+                    j += 1; continue;
+                }
+                break;
+            } else {
+                let dd = d.unwrap();
+                if o.kind == CX && o.q_control1.0 == c && o.q_target.0 == dd {
+                    let n = &ops[j + 1];
+                    if n.kind == CCX && n.q_control2.0 == a && n.q_control1.0 == b && n.q_target.0 == t && n.c_condition.0 == cc { ok = true; j += 2; break; }
+                    break;
+                }
+                if o.kind == CX && o.q_control1.0 == c && ![a, b, t, c, dd].contains(&o.q_target.0) { j += 1; continue; }
+                break;
+            }
+        }
+        if ok { hits2.push((i, j - i, a, b, t, c, d.unwrap())); }
+    }
+    assert!(hits2.len() <= 1, "exact affine bridge occurrence drift (bridge2): {} matches", hits2.len());
+    if hits2.is_empty() {
+        // The bridge-2 site lived in the ITERS=261 tail divsteps; at ITERS=259 it does not exist.
+        eprintln!("[affine-bridges] bridge1 at {} (7->3) wires A={} B={} T={} X={} Y={}; bridge2: no window (0 matches, skipped)", i1, a, b, t, x, y);
+        return ops;
+    }
+    let (i2, len2, a2, b2v, t2, c2v, d2) = hits2[0];
+    let cc2 = ops[i2].c_condition.0;
+    let mut middle: Vec<Op> = ops[i2 + 1..i2 + len2 - 1].to_vec();
+    middle.push(ccxop(a2, d2, t2, cc2));
+    ops.splice(i2..i2 + len2, middle);
+    let b2 = [a2, b2v, t2, c2v, d2];
+    eprintln!("[affine-bridges] bridge1 at {} (7->3) wires A={} B={} T={} X={} Y={}; bridge2 at {} (len {} -> {}) wires A={} B={} T={} C={} D={}", i1, a, b, t, x, y, i2, len2, len2 - 1, b2[0], b2[1], b2[2], b2[3], b2[4]);
     ops
 }
 
@@ -2304,29 +2337,17 @@ pub fn build() -> Vec<Op> {
     set_default_env("TLM_TARGET_Q", "1155");
     set_default_env("TLM_FOLD_BOUNDARY_ZERO_DIRECT", "1");
     set_default_env("TLM_FOLD_CHUNK_FORCE", "4");
-    set_default_env("TLM_TARGET_FOLD_CALL_RESERVE_OVERRIDES", "173:3,175:3,177:3,256:11,257:11,336:3,338:3,340:3,176:3,178:3,180:3,254:5,259:20,333:3,335:3,337:3,179:3,181:3,183:3,182:3,184:3,186:3,327:3,329:3,330:3,331:3,332:3,334:3");
-    set_default_env("TLM_TARGET_FFG_CALL_RESERVE_OVERRIDES", "184:4,186:4,188:4,205:6,207:6,209:6,220:7,222:7,224:7,238:8,240:8,242:8,251:9,257:10,262:10,355:10,362:10,359:10,181:3,183:3,185:3,187:4,189:4,191:4,196:5,198:5,200:5,208:6,210:6,212:6,223:7,225:7,227:7,241:8,243:8,245:8,250:9,252:9,190:4,192:4,193:5,194:4,195:5,197:5,199:5,201:5,202:6,203:5,204:6,206:6,211:6,213:6,214:7,215:6,216:7,218:7,226:7,228:8,229:8,230:8,231:8,233:8,244:8,246:8,247:9,253:9,254:10,259:11,358:10,340:11,341:11,342:11,343:11,344:11,345:11,346:11,347:11,348:11,349:11,350:11");
+    set_default_env("TLM_TARGET_FOLD_CALL_RESERVE_OVERRIDES", "173:3,175:3,177:3,256:11,257:11,332:3,334:3,336:3,176:3,178:3,180:3,254:5,329:3,331:3,333:3,179:3,181:3,183:3,182:3,184:3,186:3,323:3,325:3,326:3,327:3,328:3,330:3");
+    set_default_env("TLM_TARGET_FFG_CALL_RESERVE_OVERRIDES", "184:4,186:4,188:4,205:6,207:6,209:6,220:7,222:7,224:7,238:8,240:8,242:8,251:9,257:10,351:10,358:10,355:10,181:3,183:3,185:3,187:4,189:4,191:4,196:5,198:5,200:5,208:6,210:6,212:6,223:7,225:7,227:7,241:8,243:8,245:8,250:9,252:9,190:4,192:4,193:5,194:4,195:5,197:5,199:5,201:5,202:6,203:5,204:6,206:6,211:6,213:6,214:7,215:6,216:7,218:7,226:7,228:8,229:8,230:8,231:8,233:8,244:8,246:8,247:9,253:9,254:10,259:11,354:10,336:11,337:11,341:11,342:11,343:11,344:11,345:11,346:11");
     set_default_env("TLM_APPLY_FWD_S2_ZERO_LAST", "1");
     set_default_env("TLM_APPLY_INV_S2_ZERO_LAST", "1");
     set_default_env("TLM_APPLY_FWD_CSWAP_SKIP_LAST", "3");
     set_default_env("TLM_APPLY_INV_CSWAP_SKIP_LAST", "3");
     set_default_env("TLM_FOLD_RELEASE_CONTROLS", "1");
     set_default_env("TLM_TARGET_FFG_RESERVE", "9");
-    set_default_env(
-        "TLM_TARGET_FFG_CALL_RESERVES",
-        concat!(
-            "163:8,165:8,166:7,167:8,168:7,169:6,170:7,171:6,172:5,173:6,174:5,175:4,176:5,177:4,178:3,179:4,180:3,181:2,182:3,183:2,184:1,185:2,186:1,187:0,188:1,189:0,190:3,191:0,192:3,193:3,194:3,195:3,196:4,197:3,198:4,199:4,200:4,201:4,202:4,203:4,204:4,205:5,206:4,207:5,208:5,209:5,210:5,211:5,212:5,213:5,214:5,215:5,216:5,217:6,218:5,219:6,220:6,221:6,222:6,223:6,224:6,225:6,226:6,227:6,228:6,229:6,230:6,231:6,232:7,233:6,234:7,235:7,236:7,237:7,238:7,239:7,240:7,241:7,242:7,243:7,244:7,245:7,246:7,247:7,248:8,249:8,250:8,251:8,252:8,253:8,254:8,",
-            "509:8,510:8,511:8,512:8,513:8,514:8,515:8,516:7,517:7,518:7,519:7,520:7,521:7,522:7,523:7,524:7,525:7,526:7,527:7,528:7,529:7,530:6,531:7,532:6,533:6,534:6,535:6,536:6,537:6,538:6,539:6,540:6,541:6,542:6,543:6,544:6,545:5,546:6,547:5,548:5,549:5,550:5,551:5,552:5,553:5,554:5,555:5,556:5,557:4,558:5,559:4,560:4,561:4,562:4,563:4,564:4,565:4,566:3,567:4,568:3,569:3,570:3,571:3,572:0,573:3,574:0,575:1,576:0,577:1,578:2,579:1,580:2,581:3,582:2,583:3,584:4,585:3,586:4,587:5,588:4,589:5,590:6,591:5,592:6,593:7,594:6,595:7,596:8,597:7,598:8,600:8",
-        ),
-    );
+    set_default_env("TLM_TARGET_FFG_CALL_RESERVES", "163:8,165:8,166:7,167:8,168:7,169:6,170:7,171:6,172:5,173:6,174:5,175:4,176:5,177:4,178:3,179:4,180:3,181:2,182:3,183:2,184:1,185:2,186:1,187:0,188:1,189:0,190:3,191:0,192:3,193:3,194:3,195:3,196:4,197:3,198:4,199:4,200:4,201:4,202:4,203:4,204:4,205:5,206:4,207:5,208:5,209:5,210:5,211:5,212:5,213:5,214:5,215:5,216:5,217:6,218:5,219:6,220:6,221:6,222:6,223:6,224:6,225:6,226:6,227:6,228:6,229:6,230:6,231:6,232:7,233:6,234:7,235:7,236:7,237:7,238:7,239:7,240:7,241:7,242:7,243:7,244:7,245:7,246:7,247:7,248:8,249:8,250:8,251:8,252:8,253:8,254:8,505:8,506:8,507:8,508:8,509:8,510:8,511:8,512:7,513:7,514:7,515:7,516:7,517:7,518:7,519:7,520:7,521:7,522:7,523:7,524:7,525:7,526:6,527:7,528:6,529:6,530:6,531:6,532:6,533:6,534:6,535:6,536:6,537:6,538:6,539:6,540:6,541:5,542:6,543:5,544:5,545:5,546:5,547:5,548:5,549:5,550:5,551:5,552:5,553:4,554:5,555:4,556:4,557:4,558:4,559:4,560:4,561:4,562:3,563:4,564:3,565:3,566:3,567:3,568:0,569:3,570:0,571:1,572:0,573:1,574:2,575:1,576:2,577:3,578:2,579:3,580:4,581:3,582:4,583:5,584:4,585:5,586:6,587:5,588:6,589:7,590:6,591:7,592:8,593:7,594:8,596:8");
     set_default_env("TLM_TARGET_FOLD_RESERVE", "4");
-    set_default_env(
-        "TLM_TARGET_FOLD_CALL_RESERVES",
-        concat!(
-            "170:3,172:3,173:2,174:3,175:2,176:1,177:2,178:1,179:0,180:1,181:0,182:0,183:0,184:0,185:3,186:0,187:3,188:3,189:3,190:3,191:3,192:3,193:3,195:3,",
-            "251:3,252:3,253:3,254:3,255:3,256:3,257:3,258:3,259:3,260:3,261:3,262:3,318:3,320:3,321:3,322:3,323:3,324:3,325:3,326:3,327:0,328:3,329:0,330:0,331:0,332:0,333:1,334:0,335:1,336:2,337:1,338:2,339:3,340:2,341:3,343:3",
-        ),
-    );
+    set_default_env("TLM_TARGET_FOLD_CALL_RESERVES", "170:3,172:3,173:2,174:3,175:2,176:1,177:2,178:1,179:0,180:1,181:0,182:0,183:0,184:0,185:3,186:0,187:3,188:3,189:3,190:3,191:3,192:3,193:3,195:3,251:3,252:3,253:3,254:3,255:3,256:3,257:3,258:3,314:3,316:3,317:3,318:3,319:3,320:3,321:3,322:3,323:0,324:3,325:0,326:0,327:0,328:0,329:1,330:0,331:1,332:2,333:1,334:2,335:3,336:2,337:3,339:3");
     set_default_env("TLM_GCD_RESELECT_LAYOUT", "1");
     set_default_env("TLM_DIRECT_VARCHUNK", "1");
     set_default_env("TLM_COUT_LAYOUT_SEARCH", "1");
@@ -2498,8 +2519,8 @@ pub fn build() -> Vec<Op> {
             }
         }
     }
-    // Tail nonce for this geometry (9024/9024 PASS, avg 1284344.872 x 1153 qubits,
-    // score 1,480,849,785). Dispositioned by trusted CPU oracle 0/0/0 over 9,024 shots.
+    // Tail nonce for this geometry (9024/9024 PASS, avg 1281867.368 x 1153 qubits,
+    // score 1,477,992,651). Dispositioned by trusted CPU oracle 0/0/0 over 9,024 shots.
     // SUB4_TAIL_NONCE overrides it for controlled re-grinding.
     //
     // This literal is a Fiat-Shamir *search parameter*, not a secret or a credential. Test
@@ -2511,7 +2532,7 @@ pub fn build() -> Vec<Op> {
     let nonce: u64 = std::env::var("SUB4_TAIL_NONCE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(865024934);
+        .unwrap_or(11015281151);
     let ops = apply_tail_nonce(ops, nonce);
     // `TLM_DIRTY_SCAN_FINAL=1` runs the reset/phase audit on the stream `eval_circuit`
     // will actually see, i.e. after every rewrite pass. Default off.
