@@ -51,7 +51,7 @@ fn replay_chunk_compare() -> usize {
 
 fn replay_fold_window() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    tuned_window("SUB4_PP_REPLAY_FOLD_WINDOW", &SLOT, 56)
+    tuned_window("SUB4_PP_REPLAY_FOLD_WINDOW", &SLOT, 55)
 }
 
 /// 54, not 55: the fold carry chain is `min(n-2, highest_set_bit(c) + window)`
@@ -66,7 +66,7 @@ fn endpoint_fold_window() -> usize {
 
 fn replay_flag_compare() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    tuned_window("SUB4_PP_REPLAY_FLAG_COMPARE", &SLOT, 24)
+    tuned_window("SUB4_PP_REPLAY_FLAG_COMPARE", &SLOT, 25)
 }
 
 /// Translate the source model's `lsbs = 56` literally: its pseudo-Mersenne
