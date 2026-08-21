@@ -80,7 +80,7 @@ fn replay_fold_window() -> usize {
 /// which the tail nonce absorbs.
 fn endpoint_fold_window() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    tuned_window("SUB4_PP_ENDPOINT_FOLD_WINDOW", &SLOT, 28)
+    tuned_window("SUB4_PP_ENDPOINT_FOLD_WINDOW", &SLOT, 20)
 }
 
 fn replay_flag_compare() -> usize {
@@ -1151,9 +1151,9 @@ fn plan(rounds: usize) -> Option<Plan> {
     // measured-erasure exposure (lambda) goes down as well.
     // `SUB4_PP_R1=509 SUB4_PP_R2=610` restores the previous op stream byte for
     // byte: at r1=509 no walk round is ever over budget, so nothing splits.
-    let r1 = env("SUB4_PP_R1", 289).min(rounds);
-    let r2 = env("SUB4_PP_R2", 598).min(rounds.saturating_sub(1));
-    let peak = env("SUB4_PP_PEAK", 1275);
+    let r1 = env("SUB4_PP_R1", 286).min(rounds);
+    let r2 = env("SUB4_PP_R2", 603).min(rounds.saturating_sub(1));
+    let peak = env("SUB4_PP_PEAK", 1274);
     Some(Plan { r1, r2, peak })
 }
 
@@ -1526,6 +1526,26 @@ fn fused_fold_maskfree(
     first_carry: QubitId,
 ) {
     let width = acc.len();
+    // At the Q1274 replay cliff the monolithic fold becomes the peak owner.
+    // Split it exactly and retire the low carry ladder before allocating the
+    // high ladder. Q1275 and wider routes remain byte-identical.
+    let force_segmented = std::env::var_os("SUB4_PP_SEGMENTED_FOLD_FORCE").is_some();
+    let needs_segmented = ladder_target_now().is_some_and(|budget| budget < 60);
+    if std::env::var_os("SUB4_PP_NO_SEGMENTED_FOLD").is_none()
+        && (force_segmented || needs_segmented)
+        && width >= 6
+    {
+        return fused_fold_maskfree_segmented(
+            b,
+            acc,
+            f,
+            negative_f,
+            plus_f,
+            plus_2f,
+            minus_f,
+            first_carry,
+        );
+    }
     let controls = |index| fused_operand_controls(f, negative_f, index, plus_f, plus_2f, minus_f);
 
     for control in controls(0) {
@@ -1610,6 +1630,182 @@ fn fused_fold_maskfree(
     }
     b.free_vec(&carries);
     b.free(operand);
+}
+
+/// Two-segment exact form of [`fused_fold_maskfree`].
+///
+/// After the low boundary carry has fed the high segment, the low ladder is
+/// retired. The boundary itself is measurement-erased using the exact
+/// identity `carry = (low_sum < selected_low_operand)`.
+fn fused_fold_maskfree_segmented(
+    b: &mut B,
+    acc: &[QubitId],
+    f: U256,
+    negative_f: &[bool],
+    plus_f: QubitId,
+    plus_2f: QubitId,
+    minus_f: QubitId,
+    first_carry: QubitId,
+) {
+    let width = acc.len();
+    let split = replay_chunk_compare().min(width - 3).max(2);
+    let controls = |index| fused_operand_controls(f, negative_f, index, plus_f, plus_2f, minus_f);
+
+    for control in controls(0) {
+        b.cx(control, acc[0]);
+    }
+
+    let operand = b.alloc_qubit();
+
+    // Low segment: positions 1..split, retaining only the boundary carry.
+    let low_count = split - 1;
+    let low_carries = b.alloc_qubits(low_count);
+    for offset in 0..low_count {
+        let i = 1 + offset;
+        let previous = if offset == 0 {
+            first_carry
+        } else {
+            low_carries[offset - 1]
+        };
+        let selectors = controls(i);
+        if selectors.is_empty() {
+            b.cx(previous, acc[i]);
+            b.ccx(previous, acc[i], low_carries[offset]);
+            b.cx(previous, low_carries[offset]);
+        } else {
+            for &control in &selectors {
+                b.cx(control, operand);
+            }
+            b.cx(previous, operand);
+            b.cx(previous, acc[i]);
+            b.ccx(operand, acc[i], low_carries[offset]);
+            b.cx(previous, low_carries[offset]);
+            b.cx(previous, operand);
+            for &control in &selectors {
+                b.cx(control, operand);
+            }
+        }
+    }
+    let boundary = low_carries[low_count - 1];
+
+    for offset in (0..low_count - 1).rev() {
+        let i = 1 + offset;
+        let previous = if offset == 0 {
+            first_carry
+        } else {
+            low_carries[offset - 1]
+        };
+        let selectors = controls(i);
+        if selectors.is_empty() {
+            b.cx(previous, low_carries[offset]);
+            let measured = b.alloc_bit();
+            b.hmr(low_carries[offset], measured);
+            b.cz_if(previous, acc[i], measured);
+        } else {
+            for &control in &selectors {
+                b.cx(control, operand);
+            }
+            b.cx(previous, low_carries[offset]);
+            b.cx(previous, operand);
+            let measured = b.alloc_bit();
+            b.hmr(low_carries[offset], measured);
+            b.cz_if(operand, acc[i], measured);
+            b.cx(previous, operand);
+            b.cx(operand, acc[i]);
+            for &control in &selectors {
+                b.cx(control, operand);
+            }
+        }
+    }
+    b.free_vec(&low_carries[..low_count - 1]);
+    for control in controls(split - 1) {
+        b.cx(control, acc[split - 1]);
+    }
+
+    // High segment: the retained low boundary is its carry-in.
+    let high_count = width - 1 - split;
+    let high_carries = b.alloc_qubits(high_count);
+    for offset in 0..high_count {
+        let i = split + offset;
+        let previous = if offset == 0 {
+            boundary
+        } else {
+            high_carries[offset - 1]
+        };
+        let selectors = controls(i);
+        if selectors.is_empty() {
+            b.cx(previous, acc[i]);
+            b.ccx(previous, acc[i], high_carries[offset]);
+            b.cx(previous, high_carries[offset]);
+        } else {
+            for &control in &selectors {
+                b.cx(control, operand);
+            }
+            b.cx(previous, operand);
+            b.cx(previous, acc[i]);
+            b.ccx(operand, acc[i], high_carries[offset]);
+            b.cx(previous, high_carries[offset]);
+            b.cx(previous, operand);
+            for &control in &selectors {
+                b.cx(control, operand);
+            }
+        }
+    }
+
+    b.cx(high_carries[high_count - 1], acc[width - 1]);
+    for control in controls(width - 1) {
+        b.cx(control, acc[width - 1]);
+    }
+
+    for offset in (0..high_count).rev() {
+        let i = split + offset;
+        let previous = if offset == 0 {
+            boundary
+        } else {
+            high_carries[offset - 1]
+        };
+        let selectors = controls(i);
+        if selectors.is_empty() {
+            b.cx(previous, high_carries[offset]);
+            let measured = b.alloc_bit();
+            b.hmr(high_carries[offset], measured);
+            b.cz_if(previous, acc[i], measured);
+        } else {
+            for &control in &selectors {
+                b.cx(control, operand);
+            }
+            b.cx(previous, high_carries[offset]);
+            b.cx(previous, operand);
+            let measured = b.alloc_bit();
+            b.hmr(high_carries[offset], measured);
+            b.cz_if(operand, acc[i], measured);
+            b.cx(previous, operand);
+            b.cx(operand, acc[i]);
+            for &control in &selectors {
+                b.cx(control, operand);
+            }
+        }
+    }
+    b.free_vec(&high_carries);
+    b.free(operand);
+
+    // Materialise the selected low operand only for exact boundary repair.
+    let phase = b.alloc_bit();
+    b.hmr(boundary, phase);
+    b.free(boundary);
+    let selected = b.alloc_qubits(split);
+    for (i, &q) in selected.iter().enumerate() {
+        for control in controls(i) {
+            b.cx(control, q);
+        }
+    }
+    cmp_lt_phase_conditioned(b, &acc[..split], &selected, phase);
+    for (i, &q) in selected.iter().enumerate().rev() {
+        for control in controls(i) {
+            b.cx(control, q);
+        }
+    }
+    b.free_vec(&selected);
 }
 
 fn signed_mod_add_pm_halve_fused(b: &mut B, sign: QubitId, source: &[QubitId], target: &[QubitId]) {
