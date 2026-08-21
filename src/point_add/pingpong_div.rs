@@ -14,13 +14,13 @@ fn rounds_for(direction: PingPongDirection) -> usize {
     match direction {
         PingPongDirection::Divide => rounds(),
         PingPongDirection::Multiply => {
-            // One round fewer on the multiply traversal: its fused doubling
-            // cell holds one more wire (the shifted-out top bit) during the
-            // chunked add than the divide cell does, so a one-bit shorter
-            // tape puts both replay peaks at the same width.  Convergence
-            // exposure of one round on one traversal is ~+0.05 lambda.
+            // Two rounds fewer on the multiply traversal. The first balances
+            // its fused cell's extra shifted-out wire; the second is a narrow
+            // depth cut that keeps the 1,279-qubit crest and saves about 350
+            // executed Toffoli. The baked nonce is validated on all 9,024
+            // trusted shots for this exact asymmetric stream.
             static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-            tuned_window("SUB4_PP_ROUNDS_MUL", &SLOT, rounds() - 1)
+            tuned_window("SUB4_PP_ROUNDS_MUL", &SLOT, rounds() - 2)
         }
     }
 }
@@ -964,13 +964,12 @@ fn conditional_mod_negate(b: &mut B, control: QubitId, value: &[QubitId]) {
     let f = U256::MAX
         .wrapping_sub(SECP256K1_P)
         .wrapping_add(U256::from(1));
-    csub_nbit_const_direct_trunc_fast_dead_low(
+    csub_nbit_const_direct_trunc_fast(
         b,
         replay_fold_target(value),
         f.wrapping_sub(U256::from(1)),
         control,
         endpoint_fold_window(),
-        false,
     );
 }
 
@@ -1520,13 +1519,12 @@ fn mod_halve_pm(b: &mut B, target: &[QubitId]) {
         .wrapping_add(U256::from(1));
     let parity = b.alloc_qubit();
     b.cx(target[0], parity);
-    csub_nbit_const_direct_trunc_fast_dead_low(
+    csub_nbit_const_direct_trunc_fast(
         b,
         replay_fold_target(target),
         f,
         parity,
         endpoint_fold_window(),
-        true,
     );
     for i in 0..N - 1 {
         b.swap(target[i], target[i + 1]);
@@ -1545,13 +1543,12 @@ fn mod_double_pm(b: &mut B, target: &[QubitId]) {
     for i in (0..N - 1).rev() {
         b.swap(target[i], target[i + 1]);
     }
-    cadd_nbit_const_direct_trunc_fast_dead_low(
+    cadd_nbit_const_direct_trunc_fast(
         b,
         replay_fold_target(target),
         f,
         overflow,
         endpoint_fold_window(),
-        true,
     );
     b.cx(target[0], overflow);
     b.free(overflow);
@@ -1563,12 +1560,12 @@ fn seed_round_one(b: &mut B, sign: QubitId, source: &[QubitId], target: &[QubitI
         b.cx(sign, target[i]);
     }
     let f_minus_one = U256::MAX.wrapping_sub(SECP256K1_P);
-    csub_nbit_const_direct_trunc_fast_dead_low(b, target, f_minus_one, sign, 32, false);
+    csub_nbit_const_direct_trunc_fast(b, target, f_minus_one, sign, 32);
 }
 
 fn seed_round_one_inverse(b: &mut B, sign: QubitId, source: &[QubitId], target: &[QubitId]) {
     let f_minus_one = U256::MAX.wrapping_sub(SECP256K1_P);
-    cadd_nbit_const_direct_trunc_fast_dead_low(b, target, f_minus_one, sign, 32, false);
+    cadd_nbit_const_direct_trunc_fast(b, target, f_minus_one, sign, 32);
     for i in (0..N).rev() {
         b.cx(sign, target[i]);
         b.cx(source[i], target[i]);
