@@ -20,22 +20,21 @@ const F_NAF: [(usize, bool); 5] = [
     (32, false),
 ];
 
+/// Wide adds (>= `SQUARE_CHUNK_MIN` bits) use the replay's chunked adder with
+/// measured boundary erasure instead of one full-width carry ladder: the
+/// 257-carry ladder of `tri_corr` was the square's peak owner (1287 qubits).
+const SQUARE_CHUNK_MIN: usize = 200;
 fn add_full(circ: &mut B, addend: &[QubitId], acc: &[QubitId]) {
     assert_eq!(addend.len(), acc.len());
-    // Unbounded venting sets the square's width crest.  Under a configured
-    // cap the vent budget adapts to the live set, exactly like the square's
-    // other bounded adders, so the crest tracks the cap instead of the
-    // widest add.  Unset (the default) this is the original unbounded add.
-    let k = match std::env::var("SUB4_SQUARE_ADD_CAP")
+    let chunk_min = std::env::var("SUB4_SQUARE_CHUNK_MIN")
         .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-    {
-        Some(cap) => cap
-            .saturating_sub(circ.active_qubits as usize)
-            .max(48),
-        None => usize::MAX,
-    };
-    arith::hybrid_add_adaptive(circ, acc, addend, k);
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(SQUARE_CHUNK_MIN);
+    if acc.len() >= chunk_min {
+        crate::point_add::pingpong_div::add_chunked_measured(circ, addend, acc, None);
+        return;
+    }
+    arith::hybrid_add_adaptive(circ, acc, addend, usize::MAX);
 }
 
 fn sub_full(circ: &mut B, addend: &[QubitId], acc: &[QubitId]) {

@@ -22,6 +22,7 @@ pub(crate) use rounds::*;
 
 pub mod trailmix_ludicrous;
 mod pingpong_div;
+mod pp_profile;
 mod single_ccx_fanout;
 mod m60_dead_t10;
 mod d2_deep_strip;
@@ -518,7 +519,14 @@ impl B {
             .free_qubits
             .iter()
             .position(|&free_q| u64::from(free_q) == q.0)
-            .expect("reacquire qubit that is not currently free");
+            .unwrap_or_else(|| {
+                panic!(
+                    "reacquire qubit {:?} that is not currently free (phase '{}', ops {})",
+                    q,
+                    self.phase,
+                    self.current_ops_len()
+                )
+            });
         self.free_qubits.swap_remove(pos);
         self.active_qubits += 1;
         self.record_phase_active();
@@ -2531,7 +2539,7 @@ pub fn build() -> Vec<Op> {
         let nonce = std::env::var("SUB4_PINGPONG_TAIL_NONCE")
             .unwrap_or_default()
             .parse::<u64>()
-            .unwrap_or(3200265);
+            .unwrap_or(3004060);
         let mut x = Op::empty();
         x.kind = OperationType::X;
         x.q_target = QubitId(0);
