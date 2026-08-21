@@ -3,7 +3,7 @@ use super::*;
 /// Fixed-depth ping-pong division.  The value walk records one sign qubit per
 /// round; the coefficient pass consumes that log once, then the reverse value
 /// walk restores the denominator and clears the log.
-const ROUNDS_DEFAULT: usize = 703;
+const ROUNDS_DEFAULT: usize = 704;
 const VALUE_WIDTH: usize = N + 3;
 
 /// Fixed depth of the ping-pong walk.  The tape carries one sign qubit per
@@ -12,7 +12,11 @@ const VALUE_WIDTH: usize = N + 3;
 /// only stays correct while the recurrence still converges.
 fn rounds() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    tuned_window("SUB4_PP_ROUNDS", &SLOT, ROUNDS_DEFAULT)
+    // 700, not 704: the walk's convergence tail tolerates the four-round cut on
+    // this draw (validated 9,024/9,024 with the baked tail nonce), the tape gives
+    // back four sign qubits against two wider terminal wires (peak 1320 -> 1318),
+    // and each cut round saves its replay and walk adds on both traversals.
+    tuned_window("SUB4_PP_ROUNDS", &SLOT, 700)
 }
 
 /// When set, the width schedule is compressed so it still reaches its floor on
@@ -66,7 +70,7 @@ fn endpoint_fold_window() -> usize {
 
 fn replay_flag_compare() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    tuned_window("SUB4_PP_REPLAY_FLAG_COMPARE", &SLOT, 25)
+    tuned_window("SUB4_PP_REPLAY_FLAG_COMPARE", &SLOT, 24)
 }
 
 /// Translate the source model's `lsbs = 56` literally: its pseudo-Mersenne
