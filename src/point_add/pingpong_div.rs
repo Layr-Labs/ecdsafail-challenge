@@ -80,7 +80,7 @@ fn replay_fold_window() -> usize {
 /// which the tail nonce absorbs.
 fn endpoint_fold_window() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    tuned_window("SUB4_PP_ENDPOINT_FOLD_WINDOW", &SLOT, 28)
+    tuned_window("SUB4_PP_ENDPOINT_FOLD_WINDOW", &SLOT, 20)
 }
 
 fn replay_flag_compare() -> usize {
@@ -1151,9 +1151,9 @@ fn plan(rounds: usize) -> Option<Plan> {
     // measured-erasure exposure (lambda) goes down as well.
     // `SUB4_PP_R1=509 SUB4_PP_R2=610` restores the previous op stream byte for
     // byte: at r1=509 no walk round is ever over budget, so nothing splits.
-    let r1 = env("SUB4_PP_R1", 292).min(rounds);
-    let r2 = env("SUB4_PP_R2", 608).min(rounds.saturating_sub(1));
-    let peak = env("SUB4_PP_PEAK", 1276);
+    let r1 = env("SUB4_PP_R1", 298).min(rounds);
+    let r2 = env("SUB4_PP_R2", 613).min(rounds.saturating_sub(1));
+    let peak = env("SUB4_PP_PEAK", 1278);
     Some(Plan { r1, r2, peak })
 }
 
@@ -1258,15 +1258,12 @@ fn conditional_mod_negate(b: &mut B, control: QubitId, value: &[QubitId]) {
     let f = U256::MAX
         .wrapping_sub(SECP256K1_P)
         .wrapping_add(U256::from(1));
-    // `f - 1` has bit 0 clear, so the low borrow run is dead from the
-    // constant alone.
-    csub_nbit_const_direct_trunc_fast_dead_low(
+    csub_nbit_const_direct_trunc_fast(
         b,
         replay_fold_target(value),
         f.wrapping_sub(U256::from(1)),
         control,
         endpoint_fold_window(),
-        false,
     );
 }
 
@@ -1839,14 +1836,12 @@ fn mod_halve_pm(b: &mut B, target: &[QubitId]) {
         .wrapping_add(U256::from(1));
     let parity = b.alloc_qubit();
     b.cx(target[0], parity);
-    // `parity` is a copy of target[0], hence !target[0] & parity = 0.
-    csub_nbit_const_direct_trunc_fast_dead_low(
+    csub_nbit_const_direct_trunc_fast(
         b,
         replay_fold_target(target),
         f,
         parity,
         endpoint_fold_window(),
-        true,
     );
     for i in 0..N - 1 {
         b.swap(target[i], target[i + 1]);
@@ -1865,14 +1860,12 @@ fn mod_double_pm(b: &mut B, target: &[QubitId]) {
     for i in (0..N - 1).rev() {
         b.swap(target[i], target[i + 1]);
     }
-    // The shift leaves target[0] at |0>, so the first carry is dead.
-    cadd_nbit_const_direct_trunc_fast_dead_low(
+    cadd_nbit_const_direct_trunc_fast(
         b,
         replay_fold_target(target),
         f,
         overflow,
         endpoint_fold_window(),
-        true,
     );
     b.cx(target[0], overflow);
     b.free(overflow);
@@ -1884,12 +1877,12 @@ fn seed_round_one(b: &mut B, sign: QubitId, source: &[QubitId], target: &[QubitI
         b.cx(sign, target[i]);
     }
     let f_minus_one = U256::MAX.wrapping_sub(SECP256K1_P);
-    csub_nbit_const_direct_trunc_fast_dead_low(b, target, f_minus_one, sign, 32, false);
+    csub_nbit_const_direct_trunc_fast(b, target, f_minus_one, sign, 32);
 }
 
 fn seed_round_one_inverse(b: &mut B, sign: QubitId, source: &[QubitId], target: &[QubitId]) {
     let f_minus_one = U256::MAX.wrapping_sub(SECP256K1_P);
-    cadd_nbit_const_direct_trunc_fast_dead_low(b, target, f_minus_one, sign, 32, false);
+    cadd_nbit_const_direct_trunc_fast(b, target, f_minus_one, sign, 32);
     for i in (0..N).rev() {
         b.cx(sign, target[i]);
         b.cx(source[i], target[i]);
