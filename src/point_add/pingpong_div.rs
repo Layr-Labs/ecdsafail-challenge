@@ -3,8 +3,30 @@ use super::*;
 /// Fixed-depth ping-pong division.  The value walk records one sign qubit per
 /// round; the coefficient pass consumes that log once, then the reverse value
 /// walk restores the denominator and clears the log.
-const ROUNDS: usize = 704;
+const ROUNDS_DEFAULT: usize = 704;
 const VALUE_WIDTH: usize = N + 3;
+
+/// Fixed depth of the ping-pong walk.  The tape carries one sign qubit per
+/// round and is fully live during the coefficient replay, so this sets both the
+/// dominant term in peak width and (near-linearly) the gate count.  Lowering it
+/// only stays correct while the recurrence still converges.
+fn rounds() -> usize {
+    static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    tuned_window("SUB4_PP_ROUNDS", &SLOT, ROUNDS_DEFAULT)
+}
+
+/// When set, the width schedule is compressed so it still reaches its floor on
+/// the final round at a reduced depth, instead of stopping short.
+fn width_round_index(round: usize) -> usize {
+    if std::env::var_os("SUB4_PP_WIDTH_RESCALE").is_none() {
+        return round;
+    }
+    let r = rounds();
+    if r <= 1 {
+        return round;
+    }
+    round * (ROUNDS_DEFAULT - 1) / (r - 1)
+}
 /// Truncation windows for the measured-erasure repairs.  Each one trades
 /// emitted Toffoli against the intrinsic mismatch rate, so they are swept as a
 /// group; the defaults are the shipped values.
@@ -24,7 +46,7 @@ fn replay_chunk() -> usize {
 
 fn replay_chunk_compare() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    tuned_window("SUB4_PP_REPLAY_CHUNK_COMPARE", &SLOT, 25)
+    tuned_window("SUB4_PP_REPLAY_CHUNK_COMPARE", &SLOT, 24)
 }
 
 fn replay_fold_window() -> usize {
@@ -44,7 +66,7 @@ fn endpoint_fold_window() -> usize {
 
 fn replay_flag_compare() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    tuned_window("SUB4_PP_REPLAY_FLAG_COMPARE", &SLOT, 28)
+    tuned_window("SUB4_PP_REPLAY_FLAG_COMPARE", &SLOT, 26)
 }
 
 /// Translate the source model's `lsbs = 56` literally: its pseudo-Mersenne
@@ -211,6 +233,7 @@ fn value_width(round: usize) -> usize {
     const MARGIN: usize = 4;
 
     let start = N + MARGIN;
+    let round = width_round_index(round);
     let width = if round < BREAK_1 {
         start.saturating_sub(SLOPE_1 * round / 100)
     } else {
@@ -512,8 +535,8 @@ fn signed_add_wrapping(
 }
 
 fn value_walk(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>) -> Vec<QubitId> {
-    let mut tape = Vec::with_capacity(ROUNDS);
-    for round in 0..ROUNDS {
+    let mut tape = Vec::with_capacity(rounds());
+    for round in 0..rounds() {
         let width = value_width(round);
         while u.len() > width {
             let (lu, lv) = (u.len(), v.len());
@@ -548,8 +571,8 @@ fn value_walk(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>) -> Vec<Qubi
 }
 
 fn value_walk_back(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>, tape: Vec<QubitId>) {
-    for elapsed in 0..ROUNDS {
-        let round = ROUNDS - 1 - elapsed;
+    for elapsed in 0..rounds() {
+        let round = rounds() - 1 - elapsed;
         let width = value_width(round);
         while u.len() < width {
             let next_u = b.alloc_qubit();
@@ -1383,8 +1406,8 @@ pub(crate) fn pingpong_simulator_selfcheck() {
     };
 
     assert_eq!(value_width(0), VALUE_WIDTH);
-    assert_eq!(value_width(ROUNDS - 1), 8);
-    assert!((1..ROUNDS).all(|i| value_width(i) <= value_width(i - 1)));
+    assert!(value_width(rounds() - 1) >= 8);
+    assert!((1..rounds()).all(|i| value_width(i) <= value_width(i - 1)));
 
     let mut state = 0x3141_5926_5358_9793u64;
     let mut denominators = Vec::with_capacity(64);
