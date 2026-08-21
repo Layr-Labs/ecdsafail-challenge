@@ -12,11 +12,11 @@ const VALUE_WIDTH: usize = N + 3;
 /// only stays correct while the recurrence still converges.
 fn rounds() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    // 700, not 704: the walk's convergence tail tolerates the four-round cut on
-    // this draw (validated 9,024/9,024 with the baked tail nonce), the tape gives
-    // back four sign qubits against two wider terminal wires (peak 1320 -> 1318),
-    // and each cut round saves its replay and walk adds on both traversals.
-    tuned_window("SUB4_PP_ROUNDS", &SLOT, 700)
+    // 699: one round below the fused-replay parent. The shorter walk/replay pair
+    // saves about 1,070 executed Toffoli while preserving the 1,281-qubit crest.
+    // The baked tail nonce is validated on this exact stream by the unchanged
+    // 9,024-shot evaluator before submission.
+    tuned_window("SUB4_PP_ROUNDS", &SLOT, 699)
 }
 
 /// When set, the width schedule is compressed so it still reaches its floor on
