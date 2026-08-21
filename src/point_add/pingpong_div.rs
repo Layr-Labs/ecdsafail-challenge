@@ -5,18 +5,54 @@ use super::*;
 /// walk restores the denominator and clears the log.
 const ROUNDS: usize = 704;
 const VALUE_WIDTH: usize = N + 3;
-const REPLAY_CHUNK: usize = 96;
-const REPLAY_CHUNK_COMPARE: usize = 25;
-const REPLAY_FOLD_WINDOW: usize = 56;
-const ENDPOINT_FOLD_WINDOW: usize = 55;
-const REPLAY_FLAG_COMPARE: usize = 28;
+/// Truncation windows for the measured-erasure repairs.  Each one trades
+/// emitted Toffoli against the intrinsic mismatch rate, so they are swept as a
+/// group; the defaults are the shipped values.
+fn tuned_window(name: &str, slot: &'static std::sync::OnceLock<usize>, default: usize) -> usize {
+    *slot.get_or_init(|| {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(default)
+    })
+}
+
+fn replay_chunk() -> usize {
+    static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    tuned_window("SUB4_PP_REPLAY_CHUNK", &SLOT, 96)
+}
+
+fn replay_chunk_compare() -> usize {
+    static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    tuned_window("SUB4_PP_REPLAY_CHUNK_COMPARE", &SLOT, 25)
+}
+
+fn replay_fold_window() -> usize {
+    static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    tuned_window("SUB4_PP_REPLAY_FOLD_WINDOW", &SLOT, 56)
+}
+
+/// 54, not 55: the fold carry chain is `min(n-2, highest_set_bit(c) + window)`
+/// long, so one position off the window is exactly one fewer carry ancilla at
+/// the binding allocation, which is what takes peak width 1321 -> 1320.  The
+/// dropped position only matters when a carry would have propagated that far,
+/// which the tail nonce absorbs.
+fn endpoint_fold_window() -> usize {
+    static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    tuned_window("SUB4_PP_ENDPOINT_FOLD_WINDOW", &SLOT, 54)
+}
+
+fn replay_flag_compare() -> usize {
+    static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    tuned_window("SUB4_PP_REPLAY_FLAG_COMPARE", &SLOT, 28)
+}
 
 /// Translate the source model's `lsbs = 56` literally: its pseudo-Mersenne
 /// corrections operate on `acc[..lsbs]`, whereas the target helper's `window`
 /// argument means that many positions *after* the constant's top bit.
 fn replay_fold_target(target: &[QubitId]) -> &[QubitId] {
     if std::env::var_os("SUB4_PINGPONG_LOW56_FOLD").is_some() {
-        &target[..REPLAY_FOLD_WINDOW]
+        &target[..replay_fold_window()]
     } else {
         target
     }
@@ -361,7 +397,7 @@ fn fused_lift_round0_reverse_sparse(b: &mut B, v: &[QubitId], a0: QubitId) {
     for &q in &v[..N] {
         b.cx(not_a1, q);
     }
-    cadd_per_position_controls_trunc(b, &v[..N], &controls, REPLAY_FOLD_WINDOW - 2);
+    cadd_per_position_controls_trunc(b, &v[..N], &controls, replay_fold_window() - 2);
     for &q in &v[..N] {
         b.cx(not_a1, q);
     }
@@ -573,7 +609,7 @@ fn conditional_mod_negate(b: &mut B, control: QubitId, value: &[QubitId]) {
         replay_fold_target(value),
         f.wrapping_sub(U256::from(1)),
         control,
-        ENDPOINT_FOLD_WINDOW,
+        endpoint_fold_window(),
     );
 }
 
@@ -695,7 +731,7 @@ fn add_chunked_measured(
     acc: &[QubitId],
     carry_out: Option<QubitId>,
 ) {
-    let bounds = chunk_bounds(addend.len(), REPLAY_CHUNK);
+    let bounds = chunk_bounds(addend.len(), replay_chunk());
     let mut live_boundaries = Vec::<(QubitId, usize, usize)>::new();
     let mut carry_in = None;
     for (index, &(lo, hi)) in bounds.iter().enumerate() {
@@ -715,7 +751,7 @@ fn add_chunked_measured(
     for index in (0..live_boundaries.len()).rev() {
         let (carry, lo, hi) = live_boundaries[index];
         let width = hi - lo;
-        let compare = REPLAY_CHUNK_COMPARE.min(width);
+        let compare = replay_chunk_compare().min(width);
         let phase = b.alloc_bit();
         b.hmr(carry, phase);
         cmp_lt_phase_conditioned(b, &acc[hi - compare..hi], &addend[hi - compare..hi], phase);
@@ -883,10 +919,10 @@ fn signed_mod_add_pm_halve_fused(b: &mut B, sign: QubitId, source: &[QubitId], t
     b.cx(sign, plus_f);
     b.cx(parity, plus_f);
 
-    let negative_f = twos_complement_bits(f, REPLAY_FOLD_WINDOW);
+    let negative_f = twos_complement_bits(f, replay_fold_window());
     fused_fold_maskfree(
         b,
-        &target[..REPLAY_FOLD_WINDOW],
+        &target[..replay_fold_window()],
         f,
         &negative_f,
         plus_f,
@@ -916,8 +952,8 @@ fn signed_mod_add_pm_halve_fused(b: &mut B, sign: QubitId, source: &[QubitId], t
     b.hmr(overflow, phase);
     cmp_lt_phase_conditioned(
         b,
-        &target[N - REPLAY_FLAG_COMPARE..],
-        &source[N - REPLAY_FLAG_COMPARE..],
+        &target[N - replay_flag_compare()..],
+        &source[N - replay_flag_compare()..],
         phase,
     );
     b.free(overflow);
@@ -982,10 +1018,10 @@ fn signed_mod_double_add_pm_fused(
     b.cx(doubled_out, odd_correction);
     b.cx(add_out, odd_correction);
     let first_carry = and_clean(b, target[0], odd_correction);
-    let negative_f = twos_complement_bits(f, REPLAY_FOLD_WINDOW);
+    let negative_f = twos_complement_bits(f, replay_fold_window());
     fused_fold_maskfree(
         b,
-        &target[..REPLAY_FOLD_WINDOW],
+        &target[..replay_fold_window()],
         f,
         &negative_f,
         plus_f,
@@ -1026,8 +1062,8 @@ fn signed_mod_double_add_pm_fused(
     b.hmr(add_out, phase);
     cmp_lt_phase_conditioned(
         b,
-        &target[N - REPLAY_FLAG_COMPARE..],
-        &source[N - REPLAY_FLAG_COMPARE..],
+        &target[N - replay_flag_compare()..],
+        &source[N - replay_flag_compare()..],
         phase,
     );
     b.free(add_out);
@@ -1050,14 +1086,14 @@ fn signed_mod_add_pm(b: &mut B, sign: QubitId, source: &[QubitId], target: &[Qub
         replay_fold_target(target),
         f,
         overflow,
-        ENDPOINT_FOLD_WINDOW,
+        endpoint_fold_window(),
     );
     let phase = b.alloc_bit();
     b.hmr(overflow, phase);
     cmp_lt_phase_conditioned(
         b,
-        &target[N - REPLAY_FLAG_COMPARE..],
-        &source[N - REPLAY_FLAG_COMPARE..],
+        &target[N - replay_flag_compare()..],
+        &source[N - replay_flag_compare()..],
         phase,
     );
     b.free(overflow);
@@ -1077,7 +1113,7 @@ fn mod_halve_pm(b: &mut B, target: &[QubitId]) {
         replay_fold_target(target),
         f,
         parity,
-        ENDPOINT_FOLD_WINDOW,
+        endpoint_fold_window(),
     );
     for i in 0..N - 1 {
         b.swap(target[i], target[i + 1]);
@@ -1101,7 +1137,7 @@ fn mod_double_pm(b: &mut B, target: &[QubitId]) {
         replay_fold_target(target),
         f,
         overflow,
-        ENDPOINT_FOLD_WINDOW,
+        endpoint_fold_window(),
     );
     b.cx(target[0], overflow);
     b.free(overflow);
