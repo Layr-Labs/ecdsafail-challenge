@@ -584,6 +584,200 @@ pub(crate) fn csub_nbit_const_direct_trunc_fast_borrowed_carries(
     b.free_vec(&owned_borrows);
 }
 
+/// Length of the leading run of carry/borrow positions that are *identically*
+/// zero on every basis state.
+///
+/// The ripple is `k[i] = MAJ(a_i, c_i*ctrl, k[i-1])` with `k[-1] = 0`, so
+/// `k[0] = c_0*ctrl*a_0` (add) or `c_0*ctrl*!a_0` (sub).  Two independent facts
+/// can force `k[0] = 0`:
+///
+///   * `c_0 = 0` — structural, visible from the constant alone; or
+///   * `first_carry_is_zero` — a call-site fact the caller has proved, e.g.
+///     `ctrl` is a copy of `acc[0]` (so `!a_0 & ctrl = 0` for a subtraction) or
+///     `acc[0]` is known `|0>` (so `a_0 & ctrl = 0` for an addition).
+///
+/// Once `k[i-1] = 0`, a clear constant bit gives `k[i] = a_i & 0 = 0`, so the
+/// dead run extends through the constant's low zero bits.  Every gate over that
+/// run writes 0 into 0 on every basis state, so dropping the qubits and the
+/// gates is exactly unitary-preserving, not a statistical approximation.
+fn dead_low_carry_run(c: U256, last: usize, first_carry_is_zero: bool) -> usize {
+    if !(first_carry_is_zero || !bit(c, 0)) {
+        return 0;
+    }
+    let mut dead = 1usize;
+    while dead <= last && !bit(c, dead) {
+        dead += 1;
+    }
+    dead
+}
+
+/// `cadd_nbit_const_direct_trunc_fast` with the provably-dead low carries
+/// elided.  Identical emitted semantics; strictly fewer qubits and gates.
+pub(crate) fn cadd_nbit_const_direct_trunc_fast_dead_low(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    ctrl: QubitId,
+    window: usize,
+    first_carry_is_zero: bool,
+) {
+    let n = acc.len();
+    if n == 0 {
+        return;
+    }
+    if n == 1 {
+        if bit(c, 0) {
+            b.cx(ctrl, acc[0]);
+        }
+        return;
+    }
+
+    let hi = highest_set_bit(c);
+    let last = core::cmp::min(n - 2, hi.saturating_add(window));
+    let dead = dead_low_carry_run(c, last, first_carry_is_zero);
+    if dead == 0 {
+        cadd_nbit_const_direct_trunc_fast(b, acc, c, ctrl, window);
+        return;
+    }
+    let maj2 = fold_maj2_enabled();
+    let carries = b.alloc_qubits(last + 1 - dead);
+    let carry_at = |i: usize| -> Option<QubitId> {
+        (i >= dead).then(|| carries[i - dead])
+    };
+
+    for i in dead..=last {
+        let target = carries[i - dead];
+        let carry_in = if i == 0 { None } else { carry_at(i - 1) };
+        if bit(c, i) {
+            if let Some(ci) = carry_in {
+                emit_fold_majority(b, acc[i], ctrl, ci, target, maj2);
+            } else {
+                b.ccx(acc[i], ctrl, target);
+            }
+        } else if let Some(ci) = carry_in {
+            b.ccx(acc[i], ci, target);
+        }
+    }
+
+    for i in 0..n {
+        if bit(c, i) {
+            b.cx(ctrl, acc[i]);
+        }
+        if i > 0 && i - 1 <= last {
+            if let Some(ci) = carry_at(i - 1) {
+                b.cx(ci, acc[i]);
+            }
+        }
+    }
+
+    for i in (dead..=last).rev() {
+        let m = b.alloc_bit();
+        b.hmr(carries[i - dead], m);
+        let carry_in = if i == 0 { None } else { carry_at(i - 1) };
+        if bit(c, i) {
+            b.x(acc[i]);
+            if let Some(ci) = carry_in {
+                b.cz_if(acc[i], ctrl, m);
+                b.cz_if(acc[i], ci, m);
+                b.x(acc[i]);
+                b.cz_if(ctrl, ci, m);
+            } else {
+                b.cz_if(acc[i], ctrl, m);
+                b.x(acc[i]);
+            }
+        } else if let Some(ci) = carry_in {
+            b.x(acc[i]);
+            b.cz_if(acc[i], ci, m);
+            b.x(acc[i]);
+        }
+    }
+
+    b.free_vec(&carries);
+}
+
+/// `csub_nbit_const_direct_trunc_fast` with the provably-dead low borrows
+/// elided.  Identical emitted semantics; strictly fewer qubits and gates.
+pub(crate) fn csub_nbit_const_direct_trunc_fast_dead_low(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    ctrl: QubitId,
+    window: usize,
+    first_borrow_is_zero: bool,
+) {
+    let n = acc.len();
+    if n == 0 {
+        return;
+    }
+    if n == 1 {
+        if bit(c, 0) {
+            b.cx(ctrl, acc[0]);
+        }
+        return;
+    }
+
+    let hi = highest_set_bit(c);
+    let last = core::cmp::min(n - 2, hi.saturating_add(window));
+    let dead = dead_low_carry_run(c, last, first_borrow_is_zero);
+    if dead == 0 {
+        csub_nbit_const_direct_trunc_fast(b, acc, c, ctrl, window);
+        return;
+    }
+    let maj2 = fold_maj2_enabled();
+    let borrows = b.alloc_qubits(last + 1 - dead);
+    let borrow_at = |i: usize| -> Option<QubitId> {
+        (i >= dead).then(|| borrows[i - dead])
+    };
+
+    for i in dead..=last {
+        let target = borrows[i - dead];
+        let borrow_in = if i == 0 { None } else { borrow_at(i - 1) };
+        if bit(c, i) {
+            b.x(acc[i]);
+            if let Some(bi) = borrow_in {
+                emit_fold_majority(b, acc[i], ctrl, bi, target, maj2);
+            } else {
+                b.ccx(acc[i], ctrl, target);
+            }
+            b.x(acc[i]);
+        } else if let Some(bi) = borrow_in {
+            b.x(acc[i]);
+            b.ccx(acc[i], bi, target);
+            b.x(acc[i]);
+        }
+    }
+
+    for i in 0..n {
+        if bit(c, i) {
+            b.cx(ctrl, acc[i]);
+        }
+        if i > 0 && i - 1 <= last {
+            if let Some(bi) = borrow_at(i - 1) {
+                b.cx(bi, acc[i]);
+            }
+        }
+    }
+
+    for i in (dead..=last).rev() {
+        let m = b.alloc_bit();
+        b.hmr(borrows[i - dead], m);
+        let borrow_in = if i == 0 { None } else { borrow_at(i - 1) };
+        if bit(c, i) {
+            if let Some(bi) = borrow_in {
+                b.cz_if(acc[i], ctrl, m);
+                b.cz_if(acc[i], bi, m);
+                b.cz_if(ctrl, bi, m);
+            } else {
+                b.cz_if(acc[i], ctrl, m);
+            }
+        } else if let Some(bi) = borrow_in {
+            b.cz_if(acc[i], bi, m);
+        }
+    }
+
+    b.free_vec(&borrows);
+}
+
 fn special_fold_park_low_carries() -> usize {
     std::env::var("DIALOG_GCD_SPECIAL_FOLD_PARK_LOW_CARRIES")
         .ok()

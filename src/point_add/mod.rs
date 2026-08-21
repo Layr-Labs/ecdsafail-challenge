@@ -22,12 +22,12 @@ pub(crate) use rounds::*;
 
 pub mod trailmix_ludicrous;
 mod pingpong_div;
-mod pp_profile;
 mod single_ccx_fanout;
 mod m60_dead_t10;
 mod d2_deep_strip;
 mod deep_strip_keys;
 mod dirtyscan;
+mod grind;
 
 thread_local! {
     pub(crate) static CUR_DIVSTEP: std::cell::Cell<u32> = std::cell::Cell::new(0xffff_ffff);
@@ -2528,11 +2528,28 @@ pub fn build() -> Vec<Op> {
             pingpong_div::pingpong_point_add_simulator_selfcheck();
             return Vec::new();
         }
+        if std::env::var_os("SUB4_GRIND_NONCE").is_some() {
+            let start = std::env::var("SUB4_GRIND_START")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            let count = std::env::var("SUB4_GRIND_COUNT")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(500000);
+            let raw_ops = pingpong_div::build_pingpong_point_add();
+            if let Some(w) = grind::run_parallel_nonce_grind(raw_ops, start, count) {
+                eprintln!("WINNING_NONCE={}", w);
+            } else {
+                eprintln!("No winning nonce found in range {}..{}", start, start + count);
+            }
+            return Vec::new();
+        }
         let mut ops = pingpong_div::build_pingpong_point_add();
         let nonce = std::env::var("SUB4_PINGPONG_TAIL_NONCE")
             .unwrap_or_default()
             .parse::<u64>()
-            .unwrap_or(1002365);
+            .unwrap_or(330);
         let mut x = Op::empty();
         x.kind = OperationType::X;
         x.q_target = QubitId(0);
