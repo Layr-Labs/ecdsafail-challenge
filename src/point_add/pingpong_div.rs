@@ -20,7 +20,7 @@ fn rounds_for(direction: PingPongDirection) -> usize {
             // tape puts both replay peaks at the same width.  Convergence
             // exposure of one round on one traversal is ~+0.05 lambda.
             static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-            tuned_window("SUB4_PP_ROUNDS_MUL", &SLOT, rounds() - 5)
+            tuned_window("SUB4_PP_ROUNDS_MUL", &SLOT, rounds() - 6)
         }
     }
 }
@@ -1139,21 +1139,16 @@ fn plan(rounds: usize) -> Option<Plan> {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(default)
     };
-    // 298, not 509: with the exact split walk adder (`walk_low_chunk`) a walk
-    // round no longer needs its full-width carry ladder, so the batch replay can
-    // run at a checkpoint where the tape is 200 rounds shorter and the walk
-    // registers, though wider, cost less than the tape saves.  That lifts the
-    // batch's chunk-ladder budget from 87 to 130 - the 129 a *two*-chunk layout
-    // needs - so the batch's ~296 replay rounds per traversal pay ONE 23-bit
-    // boundary repair instead of two, and the ~210 rounds now interleaved below
-    // the old r1 pay between one and two.  Net -2,848 executed Toffoli at the
-    // same 1,278 qubits, and 3,100 -> 2,405 truncated repairs per shot, so the
-    // measured-erasure exposure (lambda) goes down as well.
+    // The exact split walk adder (`walk_low_chunk`) lets the batch checkpoint
+    // move far below the old 509-round boundary without changing arithmetic.
+    // At a 1,277-qubit cap, r1=295 is the lowest-cost discrete chunk layout:
+    // nearby checkpoints either give the batch another repair boundary or pay
+    // more interleaved walk repairs.  The parent 1,278-qubit route used r1=298.
     // `SUB4_PP_R1=509 SUB4_PP_R2=610` restores the previous op stream byte for
     // byte: at r1=509 no walk round is ever over budget, so nothing splits.
-    let r1 = env("SUB4_PP_R1", 298).min(rounds);
+    let r1 = env("SUB4_PP_R1", 295).min(rounds);
     let r2 = env("SUB4_PP_R2", 613).min(rounds.saturating_sub(1));
-    let peak = env("SUB4_PP_PEAK", 1278);
+    let peak = env("SUB4_PP_PEAK", 1277);
     Some(Plan { r1, r2, peak })
 }
 
