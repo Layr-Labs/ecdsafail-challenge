@@ -134,6 +134,17 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
     let tape = value_walk(b, &mut u, &mut v);
     let coefficient = b.alloc_qubits(N);
 
+    // The fixed walk terminates with each signed value equal to +1 or -1.
+    // Therefore the penultimate bit is a copy of the sign bit.  It is idle
+    // throughout coefficient replay, which only observes the terminal sign,
+    // so clear and release this passenger across the replay peak.  Every
+    // scratch user returns it to |0>; reacquire and restore the sign extension
+    // before the reverse value walk consumes the terminal register again.
+    let terminal_sign = u[u.len() - 1];
+    let replay_loan = u[u.len() - 2];
+    b.cx(terminal_sign, replay_loan);
+    b.free(replay_loan);
+
     match direction {
         PingPongDirection::Divide => {
             // The emitted seed is genuinely (0,c), not a cost-model comment:
@@ -161,6 +172,9 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
             replay_doubling_inverse(b, &tape, &coefficient, numerator);
         }
     }
+
+    b.reacquire(replay_loan);
+    b.cx(terminal_sign, replay_loan);
 
     // Divide leaves two equal canonical outputs and clears one above;
     // multiply's inverse recurrence ends at (0,a*c).  Either way this is a
