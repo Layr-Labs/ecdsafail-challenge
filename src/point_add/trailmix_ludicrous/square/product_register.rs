@@ -25,7 +25,7 @@ const F_NAF: [(usize, bool); 5] = [
 /// 257-carry ladder of `tri_corr` was the square's peak owner (1287 qubits).
 const SQUARE_CHUNK_MIN: usize = 200;
 /// Live carry-ladder budget for those wide adds.
-const SQUARE_LADDER: usize = 248;
+const SQUARE_LADDER: usize = 245;
 fn add_full(circ: &mut B, addend: &[QubitId], acc: &[QubitId]) {
     assert_eq!(addend.len(), acc.len());
     let chunk_min = std::env::var("SUB4_SQUARE_CHUNK_MIN")
