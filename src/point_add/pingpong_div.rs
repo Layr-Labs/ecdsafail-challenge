@@ -66,7 +66,7 @@ fn endpoint_fold_window() -> usize {
 
 fn replay_flag_compare() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    tuned_window("SUB4_PP_REPLAY_FLAG_COMPARE", &SLOT, 25)
+    tuned_window("SUB4_PP_REPLAY_FLAG_COMPARE", &SLOT, 24)
 }
 
 /// Translate the source model's `lsbs = 56` literally: its pseudo-Mersenne
