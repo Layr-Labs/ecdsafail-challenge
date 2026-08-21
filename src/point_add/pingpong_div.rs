@@ -645,12 +645,15 @@ fn conditional_mod_negate(b: &mut B, control: QubitId, value: &[QubitId]) {
     let f = U256::MAX
         .wrapping_sub(SECP256K1_P)
         .wrapping_add(U256::from(1));
-    csub_nbit_const_direct_trunc_fast(
+    // `f - 1` has bit 0 clear (f is odd), so the first four borrows are
+    // identically zero from the constant alone and drop out exactly.
+    csub_nbit_const_direct_trunc_fast_dead_low(
         b,
         replay_fold_target(value),
         f.wrapping_sub(U256::from(1)),
         control,
         endpoint_fold_window(),
+        false,
     );
 }
 
@@ -765,39 +768,73 @@ fn chunk_bounds(width: usize, chunk: usize) -> Vec<(usize, usize)> {
     bounds
 }
 
+/// Measured erasure of one interior chunk boundary carry.
+///
+/// The repair reads only `acc[hi - compare..hi]` and `addend[hi - compare..hi]`.
+/// `acc` in chunk `k`'s own range is final the instant `chunk_add` for chunk `k`
+/// returns (later chunks write strictly higher positions) and `chunk_add`
+/// restores `addend` exactly, so this emits the same repair whether it runs
+/// immediately or after every chunk.  Running it early is what keeps at most one
+/// boundary carry live at a time.
+fn erase_boundary_carry(
+    b: &mut B,
+    carry: QubitId,
+    addend: &[QubitId],
+    acc: &[QubitId],
+    lo: usize,
+    hi: usize,
+) {
+    let width = hi - lo;
+    let compare = replay_chunk_compare().min(width);
+    let phase = b.alloc_bit();
+    b.hmr(carry, phase);
+    cmp_lt_phase_conditioned(b, &acc[hi - compare..hi], &addend[hi - compare..hi], phase);
+    b.free(carry);
+}
+
 /// Exact value add with approximate measurement-only erasure of chunk carries.
+///
+/// Two scheduling properties reduce peak width without changing a gate:
+///
+///   * the whole-register carry-out is allocated only when the final chunk
+///     actually needs it, instead of being held across every earlier chunk; and
+///   * each interior boundary carry is erased as soon as the following chunk has
+///     consumed it, instead of all of them being held to the end.
 fn add_chunked_measured(
     b: &mut B,
     addend: &[QubitId],
     acc: &[QubitId],
-    carry_out: Option<QubitId>,
-) {
+    want_carry_out: bool,
+) -> Option<QubitId> {
     let bounds = chunk_bounds(addend.len(), replay_chunk());
-    let mut live_boundaries = Vec::<(QubitId, usize, usize)>::new();
+    let mut pending: Option<(QubitId, usize, usize)> = None;
     let mut carry_in = None;
+    let mut carry_out = None;
     for (index, &(lo, hi)) in bounds.iter().enumerate() {
         let last = index + 1 == bounds.len();
         let next = if last {
-            carry_out
+            if want_carry_out {
+                carry_out = Some(b.alloc_qubit());
+                carry_out
+            } else {
+                None
+            }
         } else {
             Some(b.alloc_qubit())
         };
         chunk_add(b, &addend[lo..hi], &acc[lo..hi], carry_in, next);
+        if let Some((carry, plo, phi)) = pending.take() {
+            erase_boundary_carry(b, carry, addend, acc, plo, phi);
+        }
         if !last {
-            live_boundaries.push((next.expect("interior carry"), lo, hi));
+            pending = Some((next.expect("interior carry"), lo, hi));
         }
         carry_in = next;
     }
-
-    for index in (0..live_boundaries.len()).rev() {
-        let (carry, lo, hi) = live_boundaries[index];
-        let width = hi - lo;
-        let compare = replay_chunk_compare().min(width);
-        let phase = b.alloc_bit();
-        b.hmr(carry, phase);
-        cmp_lt_phase_conditioned(b, &acc[hi - compare..hi], &addend[hi - compare..hi], phase);
-        b.free(carry);
+    if let Some((carry, plo, phi)) = pending.take() {
+        erase_boundary_carry(b, carry, addend, acc, plo, phi);
     }
+    carry_out
 }
 
 fn twos_complement_bits(value: U256, width: usize) -> Vec<bool> {
@@ -939,8 +976,7 @@ fn signed_mod_add_pm_halve_fused(b: &mut B, sign: QubitId, source: &[QubitId], t
     for &q in target {
         b.cx(sign, q);
     }
-    let overflow = b.alloc_qubit();
-    add_chunked_measured(b, source, target, Some(overflow));
+    let overflow = add_chunked_measured(b, source, target, true).expect("carry out requested");
 
     let parity = b.alloc_qubit();
     b.cx(target[0], parity);
@@ -1036,8 +1072,7 @@ fn signed_mod_double_add_pm_fused(
     for &q in target {
         b.cx(sign, q);
     }
-    let add_out = b.alloc_qubit();
-    add_chunked_measured(b, source, target, Some(add_out));
+    let add_out = add_chunked_measured(b, source, target, true).expect("carry out requested");
 
     // In the complemented subtraction frame the correction multiple is
     // d+o when sign=0 and o-d when sign=1, hence {-1,0,+1,+2}.
@@ -1120,8 +1155,7 @@ fn signed_mod_add_pm(b: &mut B, sign: QubitId, source: &[QubitId], target: &[Qub
     for &q in target {
         b.cx(sign, q);
     }
-    let overflow = b.alloc_qubit();
-    add_chunked_measured(b, source, target, Some(overflow));
+    let overflow = add_chunked_measured(b, source, target, true).expect("carry out requested");
     cadd_nbit_const_direct_trunc_fast(
         b,
         replay_fold_target(target),
@@ -1149,12 +1183,17 @@ fn mod_halve_pm(b: &mut B, target: &[QubitId]) {
         .wrapping_add(U256::from(1));
     let parity = b.alloc_qubit();
     b.cx(target[0], parity);
-    csub_nbit_const_direct_trunc_fast(
+    // `parity` is an exact copy of `target[0]`, and `f` is odd, so the first
+    // borrow is `!acc[0] & ctrl = !target[0] & target[0] = 0` on every basis
+    // state.  `f = 2^32 + 977` has bits 1..3 clear, so four borrow qubits drop.
+    debug_assert!(f.bit(0), "endpoint fold constant must be odd");
+    csub_nbit_const_direct_trunc_fast_dead_low(
         b,
         replay_fold_target(target),
         f,
         parity,
         endpoint_fold_window(),
+        true,
     );
     for i in 0..N - 1 {
         b.swap(target[i], target[i + 1]);
@@ -1173,12 +1212,15 @@ fn mod_double_pm(b: &mut B, target: &[QubitId]) {
     for i in (0..N - 1).rev() {
         b.swap(target[i], target[i + 1]);
     }
-    cadd_nbit_const_direct_trunc_fast(
+    // The shift leaves `target[0] = |0>`, so the first carry is identically
+    // zero; low zero bits 1..3 of `f` extend the exact dead-carry run.
+    cadd_nbit_const_direct_trunc_fast_dead_low(
         b,
         replay_fold_target(target),
         f,
         overflow,
         endpoint_fold_window(),
+        true,
     );
     b.cx(target[0], overflow);
     b.free(overflow);
@@ -1190,12 +1232,12 @@ fn seed_round_one(b: &mut B, sign: QubitId, source: &[QubitId], target: &[QubitI
         b.cx(sign, target[i]);
     }
     let f_minus_one = U256::MAX.wrapping_sub(SECP256K1_P);
-    csub_nbit_const_direct_trunc_fast(b, target, f_minus_one, sign, 32);
+    csub_nbit_const_direct_trunc_fast_dead_low(b, target, f_minus_one, sign, 32, false);
 }
 
 fn seed_round_one_inverse(b: &mut B, sign: QubitId, source: &[QubitId], target: &[QubitId]) {
     let f_minus_one = U256::MAX.wrapping_sub(SECP256K1_P);
-    cadd_nbit_const_direct_trunc_fast(b, target, f_minus_one, sign, 32);
+    cadd_nbit_const_direct_trunc_fast_dead_low(b, target, f_minus_one, sign, 32, false);
     for i in (0..N).rev() {
         b.cx(sign, target[i]);
         b.cx(source[i], target[i]);
