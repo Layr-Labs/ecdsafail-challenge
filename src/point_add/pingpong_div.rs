@@ -10,6 +10,21 @@ const VALUE_WIDTH: usize = N + 3;
 /// round and is fully live during the coefficient replay, so this sets both the
 /// dominant term in peak width and (near-linearly) the gate count.  Lowering it
 /// only stays correct while the recurrence still converges.
+fn rounds_for(direction: PingPongDirection) -> usize {
+    match direction {
+        PingPongDirection::Divide => rounds(),
+        PingPongDirection::Multiply => {
+            // One round fewer on the multiply traversal: its fused doubling
+            // cell holds one more wire (the shifted-out top bit) during the
+            // chunked add than the divide cell does, so a one-bit shorter
+            // tape puts both replay peaks at the same width.  Convergence
+            // exposure of one round on one traversal is ~+0.05 lambda.
+            static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+            tuned_window("SUB4_PP_ROUNDS_MUL", &SLOT, rounds())
+        }
+    }
+}
+
 fn rounds() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     // 700, not 704: the walk's convergence tail tolerates the four-round cut on
@@ -65,7 +80,7 @@ fn replay_fold_window() -> usize {
 /// which the tail nonce absorbs.
 fn endpoint_fold_window() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    tuned_window("SUB4_PP_ENDPOINT_FOLD_WINDOW", &SLOT, 54)
+    tuned_window("SUB4_PP_ENDPOINT_FOLD_WINDOW", &SLOT, 40)
 }
 
 fn replay_flag_compare() -> usize {
@@ -131,7 +146,15 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
         Some(q)
     };
 
-    let tape = value_walk(b, &mut u, &mut v);
+    b.set_phase(match direction {
+        PingPongDirection::Divide => "pp_div_walk",
+        PingPongDirection::Multiply => "pp_mul_walk",
+    });
+    let tape = value_walk(b, &mut u, &mut v, rounds_for(direction));
+    b.set_phase(match direction {
+        PingPongDirection::Divide => "pp_div_replay",
+        PingPongDirection::Multiply => "pp_mul_replay",
+    });
     let coefficient = b.alloc_qubits(N);
 
     // The fixed walk terminates with each signed value equal to +1 or -1.
@@ -140,10 +163,33 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
     // so clear and release this passenger across the replay peak.  Every
     // scratch user returns it to |0>; reacquire and restore the sign extension
     // before the reverse value walk consumes the terminal register again.
+    // Generalised passenger loan: at the terminal state every bit of u and v
+    // below the sign is a copy of the sign (two's-complement +1 / -1), and
+    // bit 0 is the constant 1 (both values stay odd).  All of them are idle
+    // across the replay, which reads only the two sign wires.
     let terminal_sign = u[u.len() - 1];
-    let replay_loan = u[u.len() - 2];
-    b.cx(terminal_sign, replay_loan);
-    b.free(replay_loan);
+    let terminal_sign_v = v[v.len() - 1];
+    let loan_all = std::env::var_os("SUB4_PP_LOAN_ONE").is_none();
+    let mut loans: Vec<(QubitId, Option<QubitId>)> = Vec::new();
+    if loan_all {
+        for reg in [&u, &v] {
+            let sign = reg[reg.len() - 1];
+            for i in 1..reg.len() - 1 {
+                b.cx(sign, reg[i]);
+                b.free(reg[i]);
+                loans.push((reg[i], Some(sign)));
+            }
+            b.x(reg[0]);
+            b.free(reg[0]);
+            loans.push((reg[0], None));
+        }
+    } else {
+        let replay_loan = u[u.len() - 2];
+        b.cx(terminal_sign, replay_loan);
+        b.free(replay_loan);
+        loans.push((replay_loan, Some(terminal_sign)));
+    }
+    let _ = terminal_sign_v;
 
     match direction {
         PingPongDirection::Divide => {
@@ -173,14 +219,27 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
         }
     }
 
-    b.reacquire(replay_loan);
-    b.cx(terminal_sign, replay_loan);
+    for &(q, sign) in loans.iter().rev() {
+        b.reacquire(q);
+        match sign {
+            Some(sign) => b.cx(sign, q),
+            None => b.x(q),
+        }
+    }
 
     // Divide leaves two equal canonical outputs and clears one above;
     // multiply's inverse recurrence ends at (0,a*c).  Either way this is a
     // proved-zero register, never a fake free.
     b.free_vec(&coefficient);
+    b.set_phase(match direction {
+        PingPongDirection::Divide => "pp_div_walkback",
+        PingPongDirection::Multiply => "pp_mul_walkback",
+    });
     value_walk_back(b, &mut u, &mut v, tape);
+    b.set_phase(match direction {
+        PingPongDirection::Divide => "pp_div_restore",
+        PingPongDirection::Multiply => "pp_mul_restore",
+    });
     if let Some(even_lift) = even_lift {
         let even_lift = if recompute_lift {
             let q = b.alloc_qubit();
@@ -552,9 +611,9 @@ fn signed_add_wrapping(
     }
 }
 
-fn value_walk(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>) -> Vec<QubitId> {
-    let mut tape = Vec::with_capacity(rounds());
-    for round in 0..rounds() {
+fn value_walk(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>, rounds: usize) -> Vec<QubitId> {
+    let mut tape = Vec::with_capacity(rounds);
+    for round in 0..rounds {
         let width = value_width(round);
         while u.len() > width {
             let (lu, lv) = (u.len(), v.len());
@@ -589,8 +648,9 @@ fn value_walk(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>) -> Vec<Qubi
 }
 
 fn value_walk_back(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>, tape: Vec<QubitId>) {
-    for elapsed in 0..rounds() {
-        let round = rounds() - 1 - elapsed;
+    let rounds = tape.len();
+    for elapsed in 0..rounds {
+        let round = rounds - 1 - elapsed;
         let width = value_width(round);
         while u.len() < width {
             let next_u = b.alloc_qubit();
@@ -645,15 +705,12 @@ fn conditional_mod_negate(b: &mut B, control: QubitId, value: &[QubitId]) {
     let f = U256::MAX
         .wrapping_sub(SECP256K1_P)
         .wrapping_add(U256::from(1));
-    // `f - 1` has bit 0 clear (f is odd), so the first four borrows are
-    // identically zero from the constant alone and drop out exactly.
-    csub_nbit_const_direct_trunc_fast_dead_low(
+    csub_nbit_const_direct_trunc_fast(
         b,
         replay_fold_target(value),
         f.wrapping_sub(U256::from(1)),
         control,
         endpoint_fold_window(),
-        false,
     );
 }
 
@@ -768,73 +825,80 @@ fn chunk_bounds(width: usize, chunk: usize) -> Vec<(usize, usize)> {
     bounds
 }
 
-/// Measured erasure of one interior chunk boundary carry.
-///
-/// The repair reads only `acc[hi - compare..hi]` and `addend[hi - compare..hi]`.
-/// `acc` in chunk `k`'s own range is final the instant `chunk_add` for chunk `k`
-/// returns (later chunks write strictly higher positions) and `chunk_add`
-/// restores `addend` exactly, so this emits the same repair whether it runs
-/// immediately or after every chunk.  Running it early is what keeps at most one
-/// boundary carry live at a time.
-fn erase_boundary_carry(
-    b: &mut B,
-    carry: QubitId,
-    addend: &[QubitId],
-    acc: &[QubitId],
-    lo: usize,
-    hi: usize,
-) {
-    let width = hi - lo;
-    let compare = replay_chunk_compare().min(width);
-    let phase = b.alloc_bit();
-    b.hmr(carry, phase);
-    cmp_lt_phase_conditioned(b, &acc[hi - compare..hi], &addend[hi - compare..hi], phase);
-    b.free(carry);
-}
-
 /// Exact value add with approximate measurement-only erasure of chunk carries.
 ///
-/// Two scheduling properties reduce peak width without changing a gate:
-///
-///   * the whole-register carry-out is allocated only when the final chunk
-///     actually needs it, instead of being held across every earlier chunk; and
-///   * each interior boundary carry is erased as soon as the following chunk has
-///     consumed it, instead of all of them being held to the end.
-fn add_chunked_measured(
+/// Footprint discipline (the chunk ladder is the binding allocation at the
+/// replay peak): the final carry-out is allocated only when the last chunk
+/// starts, and each interior boundary carry is erased as soon as the chunk
+/// that consumed it as carry-in has completed, so at most two boundary wires
+/// are live at any time.
+pub(crate) fn add_chunked_measured(
     b: &mut B,
     addend: &[QubitId],
     acc: &[QubitId],
-    want_carry_out: bool,
+    carry_out: Option<QubitId>,
+) {
+    add_chunked_measured_with(b, addend, acc, carry_out, false);
+}
+
+/// Like [`add_chunked_measured`] but allocates the carry-out wire itself,
+/// only when the last chunk starts, and returns it.
+fn add_chunked_measured_late_carry(b: &mut B, addend: &[QubitId], acc: &[QubitId]) -> QubitId {
+    add_chunked_measured_with(b, addend, acc, None, true).expect("late carry-out allocated")
+}
+
+fn add_chunked_measured_with(
+    b: &mut B,
+    addend: &[QubitId],
+    acc: &[QubitId],
+    carry_out: Option<QubitId>,
+    late_carry_out: bool,
 ) -> Option<QubitId> {
     let bounds = chunk_bounds(addend.len(), replay_chunk());
-    let mut pending: Option<(QubitId, usize, usize)> = None;
-    let mut carry_in = None;
-    let mut carry_out = None;
+    let legacy = std::env::var_os("SUB4_PP_LEGACY_CHUNK_ORDER").is_some();
+    let erase = |b: &mut B, carry: QubitId, lo: usize, hi: usize| {
+        let width = hi - lo;
+        let compare = replay_chunk_compare().min(width);
+        let phase = b.alloc_bit();
+        b.hmr(carry, phase);
+        cmp_lt_phase_conditioned(b, &acc[hi - compare..hi], &addend[hi - compare..hi], phase);
+        b.free(carry);
+    };
+    let mut live_boundaries = Vec::<(QubitId, usize, usize)>::new();
+    let mut carry_in: Option<QubitId> = None;
+    let mut final_carry = carry_out;
     for (index, &(lo, hi)) in bounds.iter().enumerate() {
         let last = index + 1 == bounds.len();
         let next = if last {
-            if want_carry_out {
-                carry_out = Some(b.alloc_qubit());
-                carry_out
-            } else {
-                None
+            if final_carry.is_none() && late_carry_out {
+                final_carry = Some(b.alloc_qubit());
             }
+            final_carry
         } else {
             Some(b.alloc_qubit())
         };
         chunk_add(b, &addend[lo..hi], &acc[lo..hi], carry_in, next);
-        if let Some((carry, plo, phi)) = pending.take() {
-            erase_boundary_carry(b, carry, addend, acc, plo, phi);
+        if !legacy && index >= 1 {
+            // carry_in (boundary index-1) has now been fully consumed by this
+            // chunk, and the chunk below it is final: erase it immediately.
+            let pos = live_boundaries
+                .iter()
+                .position(|&(q, _, _)| Some(q) == carry_in)
+                .expect("consumed boundary is live");
+            let (carry, plo, phi) = live_boundaries.remove(pos);
+            erase(b, carry, plo, phi);
         }
         if !last {
-            pending = Some((next.expect("interior carry"), lo, hi));
+            live_boundaries.push((next.expect("interior carry"), lo, hi));
         }
         carry_in = next;
     }
-    if let Some((carry, plo, phi)) = pending.take() {
-        erase_boundary_carry(b, carry, addend, acc, plo, phi);
+
+    for index in (0..live_boundaries.len()).rev() {
+        let (carry, lo, hi) = live_boundaries[index];
+        erase(b, carry, lo, hi);
     }
-    carry_out
+    final_carry
 }
 
 fn twos_complement_bits(value: U256, width: usize) -> Vec<bool> {
@@ -976,7 +1040,13 @@ fn signed_mod_add_pm_halve_fused(b: &mut B, sign: QubitId, source: &[QubitId], t
     for &q in target {
         b.cx(sign, q);
     }
-    let overflow = add_chunked_measured(b, source, target, true).expect("carry out requested");
+    let overflow = if std::env::var_os("SUB4_PP_LEGACY_CHUNK_ORDER").is_some() {
+        let overflow = b.alloc_qubit();
+        add_chunked_measured(b, source, target, Some(overflow));
+        overflow
+    } else {
+        add_chunked_measured_late_carry(b, source, target)
+    };
 
     let parity = b.alloc_qubit();
     b.cx(target[0], parity);
@@ -1072,7 +1142,13 @@ fn signed_mod_double_add_pm_fused(
     for &q in target {
         b.cx(sign, q);
     }
-    let add_out = add_chunked_measured(b, source, target, true).expect("carry out requested");
+    let add_out = if std::env::var_os("SUB4_PP_LEGACY_CHUNK_ORDER").is_some() {
+        let add_out = b.alloc_qubit();
+        add_chunked_measured(b, source, target, Some(add_out));
+        add_out
+    } else {
+        add_chunked_measured_late_carry(b, source, target)
+    };
 
     // In the complemented subtraction frame the correction multiple is
     // d+o when sign=0 and o-d when sign=1, hence {-1,0,+1,+2}.
@@ -1155,7 +1231,8 @@ fn signed_mod_add_pm(b: &mut B, sign: QubitId, source: &[QubitId], target: &[Qub
     for &q in target {
         b.cx(sign, q);
     }
-    let overflow = add_chunked_measured(b, source, target, true).expect("carry out requested");
+    let overflow = b.alloc_qubit();
+    add_chunked_measured(b, source, target, Some(overflow));
     cadd_nbit_const_direct_trunc_fast(
         b,
         replay_fold_target(target),
@@ -1183,17 +1260,12 @@ fn mod_halve_pm(b: &mut B, target: &[QubitId]) {
         .wrapping_add(U256::from(1));
     let parity = b.alloc_qubit();
     b.cx(target[0], parity);
-    // `parity` is an exact copy of `target[0]`, and `f` is odd, so the first
-    // borrow is `!acc[0] & ctrl = !target[0] & target[0] = 0` on every basis
-    // state.  `f = 2^32 + 977` has bits 1..3 clear, so four borrow qubits drop.
-    debug_assert!(f.bit(0), "endpoint fold constant must be odd");
-    csub_nbit_const_direct_trunc_fast_dead_low(
+    csub_nbit_const_direct_trunc_fast(
         b,
         replay_fold_target(target),
         f,
         parity,
         endpoint_fold_window(),
-        true,
     );
     for i in 0..N - 1 {
         b.swap(target[i], target[i + 1]);
@@ -1212,15 +1284,12 @@ fn mod_double_pm(b: &mut B, target: &[QubitId]) {
     for i in (0..N - 1).rev() {
         b.swap(target[i], target[i + 1]);
     }
-    // The shift leaves `target[0] = |0>`, so the first carry is identically
-    // zero; low zero bits 1..3 of `f` extend the exact dead-carry run.
-    cadd_nbit_const_direct_trunc_fast_dead_low(
+    cadd_nbit_const_direct_trunc_fast(
         b,
         replay_fold_target(target),
         f,
         overflow,
         endpoint_fold_window(),
-        true,
     );
     b.cx(target[0], overflow);
     b.free(overflow);
@@ -1232,12 +1301,12 @@ fn seed_round_one(b: &mut B, sign: QubitId, source: &[QubitId], target: &[QubitI
         b.cx(sign, target[i]);
     }
     let f_minus_one = U256::MAX.wrapping_sub(SECP256K1_P);
-    csub_nbit_const_direct_trunc_fast_dead_low(b, target, f_minus_one, sign, 32, false);
+    csub_nbit_const_direct_trunc_fast(b, target, f_minus_one, sign, 32);
 }
 
 fn seed_round_one_inverse(b: &mut B, sign: QubitId, source: &[QubitId], target: &[QubitId]) {
     let f_minus_one = U256::MAX.wrapping_sub(SECP256K1_P);
-    cadd_nbit_const_direct_trunc_fast_dead_low(b, target, f_minus_one, sign, 32, false);
+    cadd_nbit_const_direct_trunc_fast(b, target, f_minus_one, sign, 32);
     for i in (0..N).rev() {
         b.cx(sign, target[i]);
         b.cx(source[i], target[i]);
@@ -1334,7 +1403,18 @@ pub(crate) fn build_pingpong_point_add() -> Vec<Op> {
     circ.declare_bit_register(&ox);
     circ.declare_bit_register(&oy);
     circ.b0_finalize();
-    circ.take_ops()
+    let ops = circ.take_ops();
+    if pp_profile::enabled() {
+        pp_profile::report(
+            &ops,
+            &circ.phase_transitions,
+            circ.peak_qubits,
+            circ.peak_ops_idx,
+            circ.peak_phase,
+            &circ.active_timeline,
+        );
+    }
+    ops
 }
 
 /// One bit-parallel batch through the complete affine-add candidate.  This is
@@ -1552,7 +1632,7 @@ pub(crate) fn pingpong_simulator_selfcheck() {
         let mut v = b.alloc_qubits(VALUE_WIDTH);
         let input_u = u.clone();
         let input_v = v.clone();
-        let _tape = value_walk(&mut b, &mut u, &mut v);
+        let _tape = value_walk(&mut b, &mut u, &mut v, rounds());
         let nq = b.next_qubit as usize;
         let nb = b.next_bit as usize;
         let ops = b.take_ops();

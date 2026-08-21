@@ -22,6 +22,7 @@ pub(crate) use rounds::*;
 
 pub mod trailmix_ludicrous;
 mod pingpong_div;
+mod pp_profile;
 mod single_ccx_fanout;
 mod m60_dead_t10;
 mod d2_deep_strip;
@@ -2531,7 +2532,7 @@ pub fn build() -> Vec<Op> {
         let nonce = std::env::var("SUB4_PINGPONG_TAIL_NONCE")
             .unwrap_or_default()
             .parse::<u64>()
-            .unwrap_or(191412);
+            .unwrap_or(1002365);
         let mut x = Op::empty();
         x.kind = OperationType::X;
         x.q_target = QubitId(0);
