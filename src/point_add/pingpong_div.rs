@@ -20,7 +20,7 @@ fn rounds_for(direction: PingPongDirection) -> usize {
             // tape puts both replay peaks at the same width.  Convergence
             // exposure of one round on one traversal is ~+0.05 lambda.
             static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-            tuned_window("SUB4_PP_ROUNDS_MUL", &SLOT, rounds() - 4)
+            tuned_window("SUB4_PP_ROUNDS_MUL", &SLOT, rounds() - 3)
         }
     }
 }
@@ -268,7 +268,9 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
                 if r >= rounds {
                     break;
                 }
+                set_walk_ladder_for_peak(&plan, r);
                 tape.push(walk_round(b, &mut u, &mut v, r));
+                clear_chunks();
                 if r + 1 < rounds {
                     shrink_to(b, &mut u, &mut v, value_width(r + 1));
                 }
@@ -325,7 +327,9 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
                 clear_chunks();
                 let sign = tape.pop().expect("tape has round r");
                 assert_eq!(tape.len(), r);
+                set_walk_ladder_for_peak(&plan, r);
                 walk_back_round(b, &mut u, &mut v, r, sign);
+                clear_chunks();
             }
             set_chunks(pick_chunks(&plan, plan.r1.min(rounds), u.len()));
             for r in (0..plan.r1.min(rounds)).rev() {
@@ -704,6 +708,19 @@ fn signed_add_wrapping(
     target: &[QubitId],
     target0_is_one: bool,
 ) {
+    // A peak-constrained interleaved walk can replace its full live carry
+    // ladder with the exact-leading chunk layout used by coefficient replay.
+    // The override is installed only for walk rounds that exceed the plan.
+    if ladder_target_now().is_some() {
+        for &q in target {
+            b.cx(sign, q);
+        }
+        add_chunked_measured(b, source, target, None);
+        for &q in target {
+            b.cx(sign, q);
+        }
+        return;
+    }
     if std::env::var_os("SUB4_PINGPONG_GENERIC_WALK").is_none() {
         return signed_add_wrapping_sigma(b, sign, source, target, target0_is_one);
     }
@@ -987,9 +1004,9 @@ fn plan(rounds: usize) -> Option<Plan> {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(default)
     };
-    let r1 = env("SUB4_PP_R1", 509).min(rounds);
-    let r2 = env("SUB4_PP_R2", 610).min(rounds.saturating_sub(1));
-    let peak = env("SUB4_PP_PEAK", 1278);
+    let r1 = env("SUB4_PP_R1", 504).min(rounds);
+    let r2 = env("SUB4_PP_R2", 608).min(rounds.saturating_sub(1));
+    let peak = env("SUB4_PP_PEAK", 1277);
     Some(Plan { r1, r2, peak })
 }
 
@@ -998,6 +1015,23 @@ fn plan(rounds: usize) -> Option<Plan> {
 /// current width.
 fn allowance(plan: &Plan, tape_len: usize, walk_width: usize) -> usize {
     plan.peak.saturating_sub(tape_len + 2 * N + 2 * walk_width)
+}
+
+/// Constrain only interleaved walk adds whose modeled live carry ladder would
+/// exceed the plan peak.  This keeps all non-binding rounds on the established
+/// sigma adder; the lower-qubit override remains explicitly opt-out.
+fn set_walk_ladder_for_peak(plan: &Plan, round: usize) {
+    clear_chunks();
+    if std::env::var_os("SUB4_PP_DISABLE_WALK_CHUNK_TO_PEAK").is_some() {
+        return;
+    }
+    let width = value_width(round);
+    let full_ladder = width.saturating_sub(1);
+    let modeled_peak = round + 3 * width + 2 * N;
+    let excess = modeled_peak.saturating_sub(plan.peak);
+    if excess > 0 {
+        set_ladder(full_ladder.saturating_sub(excess));
+    }
 }
 
 fn value_walk(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>, rounds: usize) -> Vec<QubitId> {
