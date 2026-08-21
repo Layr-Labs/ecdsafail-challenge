@@ -3,7 +3,7 @@ use super::*;
 /// Fixed-depth ping-pong division.  The value walk records one sign qubit per
 /// round; the coefficient pass consumes that log once, then the reverse value
 /// walk restores the denominator and clears the log.
-const ROUNDS_DEFAULT: usize = 704;
+const ROUNDS_DEFAULT: usize = 703;
 const VALUE_WIDTH: usize = N + 3;
 
 /// Fixed depth of the ping-pong walk.  The tape carries one sign qubit per
@@ -66,7 +66,7 @@ fn endpoint_fold_window() -> usize {
 
 fn replay_flag_compare() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    tuned_window("SUB4_PP_REPLAY_FLAG_COMPARE", &SLOT, 24)
+    tuned_window("SUB4_PP_REPLAY_FLAG_COMPARE", &SLOT, 25)
 }
 
 /// Translate the source model's `lsbs = 56` literally: its pseudo-Mersenne
