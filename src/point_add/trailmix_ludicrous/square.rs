@@ -3,6 +3,8 @@ use super::arith::{self, cuccaro_carry, mod_add_lowpeak, mod_add_shifted_low, mo
 use super::{B, BExt};
 use crate::circuit::{QubitId};
 
+mod product_register;
+
 const N: usize = 256;
 
 fn clear_and(circ: &mut B, t: &QubitId, a: &QubitId, b: &QubitId) {
@@ -495,6 +497,12 @@ pub fn mod_square_sub_pm_secp256k1_symmetric(circ: &mut B, lambda: &[QubitId], o
     assert_eq!(lambda.len(), n, "lambda must be n=256 bits (< q)");
     assert_eq!(output_reg.len(), n, "output must be n=256 bits (< q)");
 
+    if std::env::var_os("SUB4_LEGACY_SQUARE").is_none() {
+        circ.set_phase("square_product_register");
+        product_register::square_sub(circ, lambda, output_reg);
+        return;
+    }
+
     circ.set_phase("square_sum_hi_lo");
     let sum = build_sum_hi_lo(circ, lambda);
 
@@ -530,6 +538,10 @@ pub fn mod_square_sub_pm_secp256k1_symmetric(circ: &mut B, lambda: &[QubitId], o
 
     circ.set_phase("square_sum_hi_lo_unbuild");
     unbuild_sum_hi_lo(circ, lambda, sum);
+}
+
+pub(crate) fn product_register_selfcheck() {
+    product_register::selfcheck();
 }
 
 pub fn shifted128_low_miter() -> Result<usize, String> {

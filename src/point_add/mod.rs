@@ -21,6 +21,7 @@ mod rounds;
 pub(crate) use rounds::*;
 
 pub mod trailmix_ludicrous;
+mod pingpong_div;
 mod single_ccx_fanout;
 mod m60_dead_t10;
 mod d2_deep_strip;
@@ -2517,6 +2518,27 @@ pub fn build() -> Vec<Op> {
     set_default_env("TLM_FFG_INVERSE_TOP29_MAX_CALL", "180");
     set_default_env("TLM_FUSED_CLEAN_FOLD_SKIP_TOP31", "1");
     set_default_env("TLM_GIDNEY_SKIP_SMALL_RESIDUAL_DEAD", "1");
+    if std::env::var_os("SUB4_PRODUCT_SQUARE_SELFTEST").is_some() {
+        trailmix_ludicrous::product_register_square_selfcheck();
+        return Vec::new();
+    }
+    if std::env::var_os("SUB4_LEGACY_POINT_ADD").is_none() {
+        if std::env::var_os("SUB4_PINGPONG_POINT_ADD_SELFTEST").is_some() {
+            pingpong_div::pingpong_point_add_simulator_selfcheck();
+            return Vec::new();
+        }
+        let mut ops = pingpong_div::build_pingpong_point_add();
+        let nonce = std::env::var("SUB4_PINGPONG_TAIL_NONCE")
+            .unwrap_or_default()
+            .parse::<u64>()
+            .unwrap_or(82);
+        let mut x = Op::empty();
+        x.kind = OperationType::X;
+        x.q_target = QubitId(0);
+        ops.extend(std::iter::repeat_n(x, 96));
+        ops = apply_tail_nonce(ops, nonce);
+        return ops;
+    }
     let mut ops = trailmix_ludicrous::build_trailmix_ludicrous_ops();
 
     if let Ok(k) = std::env::var("TLM_SEED_PERTURB").unwrap_or_default().parse::<usize>() {

@@ -11,6 +11,10 @@ mod mcx;
 pub mod schedule;
 mod square;
 
+pub(crate) fn product_register_square_selfcheck() {
+    square::product_register_selfcheck();
+}
+
 pub use schedule::PAD;
 
 use super::B;
@@ -348,7 +352,7 @@ fn widen_sched_blocks<T: Copy>(base: &[T], blocks: &SchedBlocks) -> Vec<T> {
     out.extend_from_slice(&base[at..]);
     out
 }
-fn load_schedule() {
+pub(crate) fn load_schedule() {
     reset_schedule_fit_call_indices();
     arith::reset_ffg_call_index();
     comparator::reset_compare_call_index();
