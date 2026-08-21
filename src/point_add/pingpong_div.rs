@@ -6,7 +6,7 @@ use super::*;
 const ROUNDS: usize = 704;
 const VALUE_WIDTH: usize = N + 3;
 const REPLAY_CHUNK: usize = 96;
-const REPLAY_CHUNK_COMPARE: usize = 26;
+const REPLAY_CHUNK_COMPARE: usize = 25;
 const REPLAY_FOLD_WINDOW: usize = 56;
 const ENDPOINT_FOLD_WINDOW: usize = 55;
 const REPLAY_FLAG_COMPARE: usize = 28;
