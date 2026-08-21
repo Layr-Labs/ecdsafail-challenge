@@ -14,13 +14,13 @@ fn rounds_for(direction: PingPongDirection) -> usize {
     match direction {
         PingPongDirection::Divide => rounds(),
         PingPongDirection::Multiply => {
-            // Two rounds fewer on the multiply traversal. The first balances
-            // its fused cell's extra shifted-out wire; the second is a narrow
-            // depth cut that keeps the 1,279-qubit crest and saves about 350
-            // executed Toffoli. The baked nonce is validated on all 9,024
-            // trusted shots for this exact asymmetric stream.
+            // One round fewer on the multiply traversal: its fused doubling
+            // cell holds one more wire (the shifted-out top bit) during the
+            // chunked add than the divide cell does, so a one-bit shorter
+            // tape puts both replay peaks at the same width.  Convergence
+            // exposure of one round on one traversal is ~+0.05 lambda.
             static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-            tuned_window("SUB4_PP_ROUNDS_MUL", &SLOT, rounds() - 2)
+            tuned_window("SUB4_PP_ROUNDS_MUL", &SLOT, rounds() - 1)
         }
     }
 }
@@ -196,7 +196,20 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
     };
     let pick_chunks = |plan: &Plan, tape_len: usize, walk_width: usize| -> usize {
         let a = allowance(plan, tape_len, walk_width);
-        chunks_for_allowance(a, cell_extra).unwrap_or(8)
+        if legacy_ladder() {
+            // Legacy: a chunk *count*, translated to a width by `set_chunks`.
+            return N.div_ceil(chunks_for_allowance(a, cell_extra).unwrap_or(8));
+        }
+        ladder_for_allowance(a, cell_extra)
+    };
+    // `pick_chunks` returns a chunk width in legacy mode and a ladder budget
+    // otherwise; both are consumed by `set_ladder`/`set_chunks_width`.
+    let set_chunks = |v: usize| {
+        if legacy_ladder() {
+            set_chunks_width(v)
+        } else {
+            set_ladder(v)
+        }
     };
 
     let coefficient: Vec<QubitId>;
@@ -239,10 +252,18 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
                 tape.push(walk_round(b, &mut u, &mut v, r));
             }
             phase(b, "pp_div_replay", "pp_mul_replay");
+            // `walk_round(r1)` would shrink to `value_width(r1)` anyway; doing
+            // it before the batch replay costs the same ops and takes two
+            // wires off the batch's footprint.
+            if plan.r1 < rounds {
+                shrink_to(b, &mut u, &mut v, value_width(plan.r1));
+            }
             coefficient = b.alloc_qubits(N);
+            set_chunks(pick_chunks(&plan, plan.r1.min(rounds), u.len()));
             for r in 0..plan.r1.min(rounds) {
                 replay_halving_round(b, r, tape[r], &coefficient, numerator);
             }
+            clear_chunks();
             for r in plan.r1..=plan.r2.min(rounds - 1) {
                 if r >= rounds {
                     break;
@@ -306,9 +327,11 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
                 assert_eq!(tape.len(), r);
                 walk_back_round(b, &mut u, &mut v, r, sign);
             }
+            set_chunks(pick_chunks(&plan, plan.r1.min(rounds), u.len()));
             for r in (0..plan.r1.min(rounds)).rev() {
                 replay_doubling_round(b, r, tape[r], &coefficient, numerator);
             }
+            clear_chunks();
             b.free_vec(&coefficient);
             for r in (0..plan.r1.min(rounds)).rev() {
                 let sign = tape.pop().expect("tape has round r");
@@ -695,16 +718,118 @@ fn signed_add_wrapping(
 
 
 thread_local! {
-    static CHUNK_OVERRIDE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    /// Live-ladder budget for the chunked adder, in qubits.  `None` = use the
+    /// default chunk width.
+    static LADDER_TARGET: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
-fn replay_chunk_now() -> usize {
-    CHUNK_OVERRIDE.with(|c| c.get()).unwrap_or_else(replay_chunk)
+fn ladder_target_now() -> Option<usize> {
+    LADDER_TARGET.with(|c| c.get())
 }
-fn set_chunks(k: usize) {
-    CHUNK_OVERRIDE.with(|c| c.set(Some(N.div_ceil(k))));
+fn set_ladder(target: usize) {
+    LADDER_TARGET.with(|c| c.set(Some(target)));
 }
 fn clear_chunks() {
-    CHUNK_OVERRIDE.with(|c| c.set(None));
+    LADDER_TARGET.with(|c| c.set(None));
+}
+
+fn set_chunks_width(width: usize) {
+    LADDER_TARGET.with(|c| c.set(Some(usize::MAX - width)));
+}
+
+/// Legacy encoding: `usize::MAX - width` carries an explicit chunk width.
+fn legacy_width(v: usize) -> Option<usize> {
+    (v > usize::MAX / 2).then(|| usize::MAX - v)
+}
+
+fn legacy_ladder() -> bool {
+    std::env::var_os("SUB4_PP_LEGACY_LADDER").is_some()
+}
+
+/// Exact live footprint of chunk `j` of `k` inside [`add_chunked_measured_with`]:
+/// the incoming boundary carry (j>0), the outgoing one (if this chunk has a
+/// successor or the caller wants a carry-out), and the chunk's own `w-1` owned
+/// Gidney carries.
+fn chunk_live(j: usize, k: usize, w: usize, final_carry: bool) -> usize {
+    let has_next = j + 1 < k || final_carry;
+    usize::from(j > 0) + usize::from(has_next) + w.saturating_sub(1)
+}
+
+fn layout_ladder(sizes: &[usize], final_carry: bool) -> usize {
+    let k = sizes.len();
+    sizes
+        .iter()
+        .enumerate()
+        .map(|(j, &w)| chunk_live(j, k, w, final_carry))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Chunk layout whose live ladder fits `target`, using as few *approximate*
+/// boundary repairs as possible.
+///
+/// A boundary is repaired by comparing the top `min(REPLAY_CHUNK_COMPARE, w)`
+/// bits of the chunk that produced it, so the repair is only approximate when
+/// the producing chunk is wider than the comparison window.  Chunk 0 has no
+/// carry-in, so if it is no wider than the window its repair is
+/// `sum < addend` over the *whole* chunk, i.e. EXACT and lambda-free.  Adding
+/// such a leading chunk therefore buys `window` extra bits of capacity for
+/// (almost) no gates, which lets a given number of wide boundaries reach a
+/// ~22-bit-narrower ladder than an equal split can.
+fn chunk_layout(n: usize, target: usize, final_carry: bool) -> Option<Vec<(usize, usize)>> {
+    let window = replay_chunk_compare();
+    let to_bounds = |sizes: &[usize]| -> Vec<(usize, usize)> {
+        let mut out = Vec::with_capacity(sizes.len());
+        let mut lo = 0;
+        for &w in sizes {
+            out.push((lo, lo + w));
+            lo += w;
+        }
+        out
+    };
+    // `wide` = number of boundaries whose repair is approximate, i.e. the gate
+    // cost.  Prefer the cheapest, and within that the narrowest leading chunk.
+    for wide in 0..=12usize {
+        // (a) equal split into `wide + 1` chunks: every boundary is wide.
+        let k = wide + 1;
+        if k <= n {
+            let bounds = chunk_bounds(n, n.div_ceil(k));
+            let sizes: Vec<usize> = bounds.iter().map(|&(lo, hi)| hi - lo).collect();
+            if layout_ladder(&sizes, final_carry) <= target {
+                return Some(bounds);
+            }
+        }
+        // (b) exact-repair leading chunk plus `wide + 1` further chunks.
+        let k = wide + 2;
+        if k > n {
+            continue;
+        }
+        let mut cap: Vec<usize> = (0..k)
+            .map(|j| {
+                let overhead = usize::from(j > 0) + usize::from(j + 1 < k || final_carry);
+                (target + 1).saturating_sub(overhead)
+            })
+            .collect();
+        cap[0] = cap[0].min(window);
+        if cap.iter().any(|&c| c == 0) || cap.iter().sum::<usize>() < n {
+            continue;
+        }
+        let mut sizes = cap;
+        let mut excess = sizes.iter().sum::<usize>() - n;
+        // Shrink the leading chunk first (its repair is the one we pay for),
+        // then the wide chunks from the top down.
+        for j in std::iter::once(0).chain((1..k).rev()) {
+            if excess == 0 {
+                break;
+            }
+            let cut = excess.min(sizes[j] - 1);
+            sizes[j] -= cut;
+            excess -= cut;
+        }
+        if excess == 0 && layout_ladder(&sizes, final_carry) <= target {
+            return Some(to_bounds(&sizes));
+        }
+    }
+    None
 }
 
 /// Live carry ladder of the chunked 256-bit adder with `k` chunks (late
@@ -734,6 +859,11 @@ fn ladder_for_chunks(k: usize) -> usize {
 /// the allowance; `None` if even the finest tried schedule does not fit.
 fn chunks_for_allowance(allowance: usize, extra: usize) -> Option<usize> {
     (3..=8).find(|&k| ladder_for_chunks(k) + extra <= allowance)
+}
+
+/// Live-ladder budget left for the chunked adder at an interleaved round.
+fn ladder_for_allowance(allowance: usize, extra: usize) -> usize {
+    allowance.saturating_sub(extra)
 }
 
 fn shrink_to(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>, width: usize) {
@@ -857,9 +987,9 @@ fn plan(rounds: usize) -> Option<Plan> {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(default)
     };
-    let r1 = env("SUB4_PP_R1", 503).min(rounds);
+    let r1 = env("SUB4_PP_R1", 509).min(rounds);
     let r2 = env("SUB4_PP_R2", 610).min(rounds.saturating_sub(1));
-    let peak = env("SUB4_PP_PEAK", 1279);
+    let peak = env("SUB4_PP_PEAK", 1278);
     Some(Plan { r1, r2, peak })
 }
 
@@ -1100,6 +1230,20 @@ pub(crate) fn add_chunked_measured(
     add_chunked_measured_with(b, addend, acc, carry_out, false);
 }
 
+/// [`add_chunked_measured`] under an explicit live-ladder budget.
+pub(crate) fn add_chunked_measured_budgeted(
+    b: &mut B,
+    addend: &[QubitId],
+    acc: &[QubitId],
+    carry_out: Option<QubitId>,
+    budget: usize,
+) {
+    let saved = ladder_target_now();
+    set_ladder(budget);
+    add_chunked_measured_with(b, addend, acc, carry_out, false);
+    LADDER_TARGET.with(|c| c.set(saved));
+}
+
 /// Like [`add_chunked_measured`] but allocates the carry-out wire itself,
 /// only when the last chunk starts, and returns it.
 fn add_chunked_measured_late_carry(b: &mut B, addend: &[QubitId], acc: &[QubitId]) -> QubitId {
@@ -1113,7 +1257,16 @@ fn add_chunked_measured_with(
     carry_out: Option<QubitId>,
     late_carry_out: bool,
 ) -> Option<QubitId> {
-    let bounds = chunk_bounds(addend.len(), replay_chunk_now());
+    let n = addend.len();
+    let final_carry = carry_out.is_some() || late_carry_out;
+    let bounds = match ladder_target_now() {
+        None => chunk_bounds(n, replay_chunk()),
+        Some(v) => match legacy_width(v) {
+            Some(width) => chunk_bounds(n, width),
+            None => chunk_layout(n, v, final_carry)
+                .unwrap_or_else(|| chunk_bounds(n, n.div_ceil(12))),
+        },
+    };
     let legacy = std::env::var_os("SUB4_PP_LEGACY_CHUNK_ORDER").is_some();
     let erase = |b: &mut B, carry: QubitId, lo: usize, hi: usize| {
         let width = hi - lo;
