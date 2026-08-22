@@ -3,8 +3,6 @@ use super::arith::{self, cuccaro_carry, mod_add_lowpeak, mod_add_shifted_low, mo
 use super::{B, BExt};
 use crate::circuit::{QubitId};
 
-mod product_register;
-
 const N: usize = 256;
 
 fn clear_and(circ: &mut B, t: &QubitId, a: &QubitId, b: &QubitId) {
@@ -419,31 +417,15 @@ fn apply_f_times_value(circ: &mut B, value: &[QubitId], output_reg: &[QubitId], 
 fn apply_shifted_128_tagged(circ: &mut B, value: &[QubitId], output_reg: &[QubitId], op: ShiftOp, tag: &str) {
     assert!(value.len() <= N + 2, "128-shifted half product must be at most 258 bits");
     let low_len = value.len().min(128);
-    if env_tag_enabled("TLM_SQUARE_SHIFTED128_LOW_TAGS", tag) {
-        // Preserve the full-width allocator/free-pool schedule for the downstream
-        // identity-keyed strip. Removing these unused pads makes 4,486 keys stale.
-        let low_pads = alloc_zeroes(circ, 128);
-        let high_pads = alloc_zeroes(circ, 128 - low_len);
-        let mut operand = Vec::with_capacity(128);
-        operand.extend_from_slice(&value[..low_len]);
-        operand.extend_from_slice(&high_pads);
-        match op {
-            ShiftOp::Add => mod_add_shifted_low(circ, &operand, output_reg, 128),
-            ShiftOp::Sub => mod_sub_shifted_low(circ, &operand, output_reg, 128),
-        }
-        free_zeroes(circ, high_pads);
-        free_zeroes(circ, low_pads);
-    } else {
-        let low_pads = alloc_zeroes(circ, 128);
-        let high_pads = alloc_zeroes(circ, 128 - low_len);
-        let mut operand = Vec::with_capacity(N);
-        operand.extend_from_slice(&low_pads);
-        operand.extend_from_slice(&value[..low_len]);
-        operand.extend_from_slice(&high_pads);
-        apply_full_width(circ, &operand, output_reg, op);
-        free_zeroes(circ, high_pads);
-        free_zeroes(circ, low_pads);
-    }
+    let low_pads = alloc_zeroes(circ, 128);
+    let high_pads = alloc_zeroes(circ, 128 - low_len);
+    let mut operand = Vec::with_capacity(N);
+    operand.extend_from_slice(&low_pads);
+    operand.extend_from_slice(&value[..low_len]);
+    operand.extend_from_slice(&high_pads);
+    apply_full_width(circ, &operand, output_reg, op);
+    free_zeroes(circ, high_pads);
+    free_zeroes(circ, low_pads);
 
     if value.len() > 128 {
         if matches!(tag, "a" | "b" | "c") {
@@ -461,13 +443,7 @@ fn build_sum_hi_lo(circ: &mut B, lambda: &[QubitId]) -> Vec<QubitId> {
     for i in 0..128 {
         circ.cx(lambda[i], sum[i]);
     }
-    // Vented square-sum carry (exact; -128 emitted CCX here, -127 net after the fanout
-    // give-back). Default ON; TLM_SQUARE_SUM_VENTED=0 restores the recomputing Cuccaro.
-    if std::env::var("TLM_SQUARE_SUM_VENTED").ok().as_deref() == Some("0") {
-        cuccaro_carry(circ, None, &lambda[128..N], &sum[..128], None, Some(&sum[128]));
-    } else {
-        arith::cuccaro_carry_vented(circ, &lambda[128..N], &sum[..128], Some(&sum[128]));
-    }
+    cuccaro_carry(circ, None, &lambda[128..N], &sum[..128], None, Some(&sum[128]));
     sum
 }
 
@@ -496,12 +472,6 @@ pub fn mod_square_sub_pm_secp256k1_symmetric(circ: &mut B, lambda: &[QubitId], o
     let n = N;
     assert_eq!(lambda.len(), n, "lambda must be n=256 bits (< q)");
     assert_eq!(output_reg.len(), n, "output must be n=256 bits (< q)");
-
-    if std::env::var_os("SUB4_LEGACY_SQUARE").is_none() {
-        circ.set_phase("square_product_register");
-        product_register::square_sub(circ, lambda, output_reg);
-        return;
-    }
 
     circ.set_phase("square_sum_hi_lo");
     let sum = build_sum_hi_lo(circ, lambda);
@@ -538,219 +508,4 @@ pub fn mod_square_sub_pm_secp256k1_symmetric(circ: &mut B, lambda: &[QubitId], o
 
     circ.set_phase("square_sum_hi_lo_unbuild");
     unbuild_sum_hi_lo(circ, lambda, sum);
-}
-
-pub(crate) fn product_register_selfcheck() {
-    product_register::selfcheck();
-}
-
-pub fn shifted128_low_miter() -> Result<usize, String> {
-    use crate::point_add::SECP256K1_P;
-    use crate::sim::Simulator;
-    use alloy_primitives::U256;
-    use sha3::{
-        digest::{ExtendableOutput, Update, XofReader},
-        Shake256,
-    };
-
-    struct HelperCircuit {
-        ops: Vec<crate::circuit::Op>,
-        source: Vec<QubitId>,
-        accumulator: Vec<QubitId>,
-        qubits: usize,
-        bits: usize,
-    }
-
-    fn build_helper(shifted: bool, op: ShiftOp) -> HelperCircuit {
-        let mut circ = B::new();
-        let source = circ.alloc_qubits(128);
-        let accumulator = circ.alloc_qubits(N);
-        if shifted {
-            match op {
-                ShiftOp::Add => mod_add_shifted_low(&mut circ, &source, &accumulator, 128),
-                ShiftOp::Sub => mod_sub_shifted_low(&mut circ, &source, &accumulator, 128),
-            }
-        } else {
-            let low_pads = alloc_zeroes(&mut circ, 128);
-            let mut operand = Vec::with_capacity(N);
-            operand.extend_from_slice(&low_pads);
-            operand.extend_from_slice(&source);
-            apply_full_width(&mut circ, &operand, &accumulator, op);
-            free_zeroes(&mut circ, low_pads);
-        }
-        HelperCircuit {
-            ops: circ.ops,
-            source,
-            accumulator,
-            qubits: circ.next_qubit as usize,
-            bits: circ.next_bit as usize,
-        }
-    }
-
-    fn subtract_mod(lhs: U256, rhs: U256) -> U256 {
-        if lhs >= rhs {
-            lhs - rhs
-        } else {
-            SECP256K1_P - (rhs - lhs)
-        }
-    }
-
-    fn run_helper(
-        circuit: &HelperCircuit,
-        source_values: &[U256; 64],
-        accumulator_values: &[U256; 64],
-        seed_label: &[u8],
-    ) -> Result<[U256; 64], String> {
-        let mut seed = Shake256::default();
-        seed.update(b"shifted128-low-helper-miter");
-        seed.update(seed_label);
-        let mut xof = seed.finalize_xof();
-        let mut sim = Simulator::new(circuit.qubits, circuit.bits, &mut xof);
-        sim.clear_for_shot();
-        for shot in 0..64 {
-            for bit in 0..128 {
-                if source_values[shot].bit(bit) {
-                    *sim.qubit_mut(circuit.source[bit]) |= 1u64 << shot;
-                }
-            }
-            for bit in 0..N {
-                if accumulator_values[shot].bit(bit) {
-                    *sim.qubit_mut(circuit.accumulator[bit]) |= 1u64 << shot;
-                }
-            }
-        }
-        sim.apply_iter(circuit.ops.iter());
-        if sim.phase != 0 {
-            return Err(format!("phase garbage 0x{:016x}", sim.phase));
-        }
-
-        let mut outputs = [U256::ZERO; 64];
-        for shot in 0..64 {
-            let mut source_after = U256::ZERO;
-            let mut output = U256::ZERO;
-            for bit in 0..128 {
-                if (sim.qubit(circuit.source[bit]) >> shot) & 1 == 1 {
-                    source_after |= U256::from(1u64) << bit;
-                }
-            }
-            for bit in 0..N {
-                if (sim.qubit(circuit.accumulator[bit]) >> shot) & 1 == 1 {
-                    output |= U256::from(1u64) << bit;
-                }
-            }
-            if source_after != source_values[shot] {
-                return Err(format!(
-                    "shot {shot}: source changed from {:#x} to {source_after:#x}",
-                    source_values[shot]
-                ));
-            }
-            outputs[shot] = output;
-        }
-
-        for q in 0..circuit.qubits as u64 {
-            if circuit.source.iter().any(|source| source.0 == q)
-                || circuit.accumulator.iter().any(|accumulator| accumulator.0 == q)
-            {
-                continue;
-            }
-            let value = sim.qubit(QubitId(q));
-            if value != 0 {
-                return Err(format!("ancilla qubit {q} not clean: 0x{value:016x}"));
-            }
-        }
-        Ok(outputs)
-    }
-
-    struct RestoreSquareMiterEnv {
-        no_vent_reduce: Option<std::ffi::OsString>,
-        vent_shifted: Option<std::ffi::OsString>,
-    }
-
-    impl Drop for RestoreSquareMiterEnv {
-        fn drop(&mut self) {
-            unsafe {
-                match self.no_vent_reduce.take() {
-                    Some(value) => std::env::set_var("TLM_SQUARE_NO_VENT_REDUCE", value),
-                    None => std::env::remove_var("TLM_SQUARE_NO_VENT_REDUCE"),
-                }
-                match self.vent_shifted.take() {
-                    Some(value) => std::env::set_var("TLM_SQUARE_VENT_SHIFTED", value),
-                    None => std::env::remove_var("TLM_SQUARE_VENT_SHIFTED"),
-                }
-            }
-        }
-    }
-
-    let _restore_env = RestoreSquareMiterEnv {
-        no_vent_reduce: std::env::var_os("TLM_SQUARE_NO_VENT_REDUCE"),
-        vent_shifted: std::env::var_os("TLM_SQUARE_VENT_SHIFTED"),
-    };
-    unsafe {
-        std::env::set_var("TLM_SQUARE_NO_VENT_REDUCE", "1");
-        std::env::remove_var("TLM_SQUARE_VENT_SHIFTED");
-    }
-    let mut checked = 0usize;
-    for (op_index, op) in [ShiftOp::Add, ShiftOp::Sub].into_iter().enumerate() {
-        let full = build_helper(false, op);
-        let shifted = build_helper(true, op);
-        for batch in 0u64..32 {
-            let mut input_seed = Shake256::default();
-            input_seed.update(b"shifted128-low-inputs");
-            input_seed.update(&(op_index as u64).to_le_bytes());
-            input_seed.update(&batch.to_le_bytes());
-            let mut inputs = input_seed.finalize_xof();
-            let mut source_values = [U256::ZERO; 64];
-            let mut accumulator_values = [U256::ZERO; 64];
-            let mut bytes = [0u8; 32];
-            for shot in 0..64 {
-                inputs.read(&mut bytes);
-                bytes[16..].fill(0);
-                source_values[shot] = U256::from_le_bytes(bytes);
-                inputs.read(&mut bytes);
-                accumulator_values[shot] = U256::from_le_bytes(bytes) % SECP256K1_P;
-            }
-
-            let mut label = [0u8; 24];
-            label[..8].copy_from_slice(&(op_index as u64).to_le_bytes());
-            label[8..16].copy_from_slice(&batch.to_le_bytes());
-            let full_outputs = run_helper(&full, &source_values, &accumulator_values, &label)
-                .map_err(|error| {
-                    format!("full helper op={op_index} batch={batch}: {error}")
-                })?;
-            let shifted_outputs =
-                run_helper(&shifted, &source_values, &accumulator_values, &label).map_err(
-                    |error| format!("shifted helper op={op_index} batch={batch}: {error}"),
-                )?;
-
-            for shot in 0..64 {
-                let operand = source_values[shot] << 128;
-                let expected = match op {
-                    ShiftOp::Add => {
-                        accumulator_values[shot].add_mod(operand, SECP256K1_P)
-                    }
-                    ShiftOp::Sub => subtract_mod(accumulator_values[shot], operand),
-                };
-                if full_outputs[shot] != expected {
-                    return Err(format!(
-                        "full helper op={op_index} batch={batch} shot={shot}: got {:#x}, expected {expected:#x}",
-                        full_outputs[shot]
-                    ));
-                }
-                if shifted_outputs[shot] != expected {
-                    return Err(format!(
-                        "shifted helper op={op_index} batch={batch} shot={shot}: got {:#x}, expected {expected:#x}",
-                        shifted_outputs[shot]
-                    ));
-                }
-                if shifted_outputs[shot] != full_outputs[shot] {
-                    return Err(format!(
-                        "miter op={op_index} batch={batch} shot={shot}: full={:#x}, shifted={:#x}",
-                        full_outputs[shot], shifted_outputs[shot]
-                    ));
-                }
-                checked += 1;
-            }
-        }
-    }
-    Ok(checked)
 }
