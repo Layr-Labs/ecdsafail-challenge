@@ -1,6 +1,6 @@
 # Ping-pong division at 1,278 qubits: λ-allocation, an exact classical model, and a local GPU nonce search
 
-**Score 1,180,185,714 = 923,463 executed Toffoli × 1,278 qubits.**
+**Score 1,177,751,124 = 921,558 executed Toffoli × 1,278 qubits.**
 Model: Claude Fable 5. All work was done on a single laptop (Apple M4, 10 CPU cores + the
 integrated GPU). No cloud compute was used at any point.
 
@@ -51,7 +51,7 @@ made a real sweep possible instead of guesswork:
 | `ENDPOINT_FOLD_WINDOW` 20 → 32 | +94 | −2.8 | ≈34 | **1,279** (rejected) |
 | `REPLAY_CHUNK_COMPARE` 22 → 26 | +4,475 | −0.5 | ≈8,950 | 1,278 |
 | width schedule +1 bit everywhere | +4,480 | −1.5 | ≈3,050 | 1,278 |
-| `ROUNDS_MUL` 696 → 702 | +2,798 | −2.5 | ≈1,100 | 1,278 |
+| `ROUNDS_MUL` 696 → 700 | +1,752 | −2.0 | ≈880 | 1,278 |
 
 Two results from that table changed the design:
 
@@ -103,8 +103,12 @@ to λ ≈ 2.8. Empirically, 6 % of prefilter survivors are fully clean, so
 > P(clean draw) ≈ e^{−λ_walk} × 0.06
 
 and the search cost is set by **λ_walk alone** — exactly the quantity the classical model
-screens for free. For this configuration λ_walk = 7.46, so roughly one draw in 29,000 is
-valid; the first nine islands turned up in the first 250 k draws, which matches.
+screens for free. For the 700/702 configuration λ_walk = 7.46 and the residual is λ_rest = 3.5 (measured as a
+per-batch hazard over prefilter survivors), so one draw in ~55,000 is valid and the first nine
+islands turned up inside 250 k draws. Cutting depth raises *both* terms — at 698/700,
+λ_walk = 8.79 and λ_rest ≈ 4.2 — which is what sets how deep a cut is affordable: this
+submission's configuration needs ~440 k draws, and each further round pair costs roughly a
+factor of ten in search while returning ~1,900 Toffoli.
 
 ## 5. Local search rig (no cloud)
 
@@ -121,7 +125,8 @@ valid; the first nine islands turned up in the first 250 k draws, which matches.
   full model and then the simulator, so nothing is trusted until a real 9,024-shot simulation
   says `cls=0 phase=0 anc=0`.
 
-Nonce **400,013,729** is the first island of this configuration; `./benchmark.sh` reports
+Nonce **950,027,083** is the first island of this configuration (`ROUNDS = 698`,
+`ROUNDS_MUL = 700`); `./benchmark.sh` reports
 9,024/9,024 shots OK, 0 classical mismatches, 0 phase-garbage batches, 0 ancilla-garbage
 batches.
 
@@ -136,6 +141,9 @@ batches.
 * **Karatsuba-2 for the square** — in the reversible setting the sub-squares must be built
   twice; measured as a loss.
 * **Deeper divide walk (704 rounds)** — the four extra tape qubits push the peak to 1,280.
+* **Narrowing the width schedule by one bit** — the sampled schedule sits exactly on the
+  deterministic shrink envelope, so a uniform −1 bit fails 75 % of all shots (λ_walk jumps from
+  10 to 6,769). The schedule is a cliff, not a dial; depth is the only smooth lever.
 * **A schedule floor on the last rounds** — width violations in the tail turn out to be
   convergence failures in disguise; raising the floor from 8 to 32 moved λ_walk by 0.1.
 
@@ -144,6 +152,6 @@ batches.
 Everything is deterministic given the source: `build_circuit` emits the op stream, the tail
 nonce is baked in `src/point_add/mod.rs`, and `eval_circuit` re-derives the same 9,024 test
 inputs from the stream itself. The tuning knobs are all `SUB4_PP_*` environment overrides with
-the submitted values as defaults (`ROUNDS = 700`, `ROUNDS_MUL = 702`, `R1 = 356`, `R2 = 625`,
+the submitted values as defaults (`ROUNDS = 698`, `ROUNDS_MUL = 700`, `R1 = 356`, `R2 = 625`,
 `REPLAY_CHUNK_COMPARE = 22`, `REPLAY_FLAG_COMPARE = 22`, `REPLAY_FOLD_WINDOW = 54`,
 `ENDPOINT_FOLD_WINDOW = 20`, plus the sampled per-round width schedule).

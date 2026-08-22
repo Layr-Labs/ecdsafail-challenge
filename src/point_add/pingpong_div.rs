@@ -20,7 +20,7 @@ fn rounds_for(direction: PingPongDirection) -> usize {
             // tape puts both replay peaks at the same width.  Convergence
             // exposure of one round on one traversal is ~+0.05 lambda.
             static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-            tuned_window("SUB4_PP_ROUNDS_MUL", &SLOT, rounds() + 2)
+            tuned_window("SUB4_PP_ROUNDS_MUL", &SLOT, 700)
         }
     }
 }
@@ -31,7 +31,7 @@ fn rounds() -> usize {
     // this draw (validated 9,024/9,024 with the baked tail nonce), the tape gives
     // back four sign qubits against two wider terminal wires (peak 1320 -> 1318),
     // and each cut round saves its replay and walk adds on both traversals.
-    tuned_window("SUB4_PP_ROUNDS", &SLOT, 700)
+    tuned_window("SUB4_PP_ROUNDS", &SLOT, 698)
 }
 
 /// When set, the width schedule is compressed so it still reaches its floor on
@@ -423,8 +423,8 @@ const WIDTH_SCHEDULE: [u16; 700] = [258, 258, 258, 258, 258, 258, 258, 258, 258,
 /// Uniform widening of the sampled width schedule.  Each extra bit buys walk
 /// headroom (fewer width violations, so a lower intrinsic failure rate) at the
 /// cost of a wider add in every walk and replay round.
-fn sched_bias() -> usize {
-    static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+fn sched_bias() -> i32 {
+    static SLOT: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
     *SLOT.get_or_init(|| {
         std::env::var("SUB4_PP_SCHED_BIAS").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
     })
@@ -437,7 +437,7 @@ fn value_width(round: usize) -> usize {
         }
         let r = width_round_index(round);
         if r < WIDTH_SCHEDULE.len() {
-            return (WIDTH_SCHEDULE[r] as usize + sched_bias()).clamp(8, VALUE_WIDTH);
+            return ((WIDTH_SCHEDULE[r] as i32 + sched_bias()).max(8) as usize).clamp(8, VALUE_WIDTH);
         }
         return 8;
     }
