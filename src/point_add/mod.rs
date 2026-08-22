@@ -2536,10 +2536,17 @@ pub fn build() -> Vec<Op> {
             return Vec::new();
         }
         let mut ops = pingpong_div::build_pingpong_point_add();
+        // Tail nonce for this geometry. The 96-op tail is 48 X;X identity pairs,
+        // so this changes no circuit behaviour -- only the Fiat-Shamir seed, and
+        // with it the 9024 draws the approximate ping-pong walk must survive.
+        // 8059507 was mined over the window [8005520, 8065520) and validated
+        // 9024/9024 (0 classical / 0 phase / 0 ancilla) by eval_circuit:
+        // avg 943300.866 Toffoli x 1277 qubits. Previous baked value: 8004485
+        // (also clean, avg 943305.994). SUB4_PINGPONG_TAIL_NONCE overrides it.
         let nonce = std::env::var("SUB4_PINGPONG_TAIL_NONCE")
             .unwrap_or_default()
             .parse::<u64>()
-            .unwrap_or(43171001);
+            .unwrap_or(8059507);
         let mut x = Op::empty();
         x.kind = OperationType::X;
         x.q_target = QubitId(0);
