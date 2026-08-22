@@ -105,30 +105,47 @@ to λ ≈ 2.8. Empirically, 6 % of prefilter survivors are fully clean, so
 and the search cost is set by **λ_walk alone** — exactly the quantity the classical model
 screens for free. For the 700/702 configuration λ_walk = 7.46 and the residual is λ_rest = 3.5 (measured as a
 per-batch hazard over prefilter survivors), so one draw in ~55,000 is valid and the first nine
-islands turned up inside 250 k draws. Cutting depth raises *both* terms — at 698/700,
-λ_walk = 8.79 and λ_rest ≈ 4.2 — which is what sets how deep a cut is affordable: this
-submission's configuration needs ~440 k draws, and each further round pair costs roughly a
-factor of ten in search while returning ~1,900 Toffoli.
+islands turned up inside 250 k draws. Cutting depth raises *both* terms, and the measured
+table is the whole cost model for the search:
+
+| configuration | λ_walk | λ_rest | draws per island |
+|---|---|---|---|
+| 700 / 702 | 7.46 | 3.5 | ≈ 25–55 k |
+| 698 / 700 | 8.79 | 4.2 | ≈ 440 k |
+| 696 / 698, EFW 26 | 10.80 | 3.9 | ≈ 1.0 M (measured: 1,019,648) |
+| 695 / 697 | 11.87 | — | ≈ 3 M |
+| 694 / 696 | 13.27 | — | ≈ 10 M |
+
+Each round pair returns ≈1,800 Toffoli (−0.2 % of score) and costs a factor of ~10–18 in
+search. That exchange rate — not any structural idea — is what sets where a submission lands,
+and it is why the GPU rewrite mattered more than any further circuit micro-optimisation.
+`ENDPOINT_FOLD_WINDOW = 26` is worth noting separately: widening it from 20 costs 8 Toffoli
+and buys λ_rest 5.1 → 3.9, a 3× cheaper search for nothing. Going to 30 in this plan pushes
+the peak to 1,279 and is a net loss.
 
 ## 5. Local search rig (no cloud)
 
 * **CPU**: a 10-thread screener that draws the Fiat–Shamir stream for a nonce, runs the exact
   walk model with early abort at the first failing shot, and hands survivors to the 64-lane
   simulator — ≈220 draws/s sustained.
-* **GPU**: the same model as a Metal kernel — 8 × u32 field arithmetic, 8-bit-window fixed
-  base, 320-bit walk, one Montgomery inversion per four shots — driven by a Swift host that
-  encodes 12 wave-dispatches per command buffer so early abort happens *between* dispatches
-  with no host round-trip. Scalars stream in over a pipe and are read straight into the shared
-  Metal buffer. It reproduces the CPU survivor set exactly (162/162 on the validation range)
-  and adds ≈450 draws/s.
+* **GPU**: the same model as a Metal kernel — 8 × u32 field arithmetic, 16-bit-window fixed
+  base (a 64 MiB table), 320-bit walk, one Montgomery inversion per four shots — driven by a
+  Swift host that encodes 36 wave-dispatches per command buffer so early abort happens
+  *between* dispatches with no host round-trip. Scalars stream in over a pipe and are read
+  zero-copy straight into the shared Metal buffer, double-buffered so the CPU generator and
+  the GPU never wait on each other. It reproduces the CPU survivor set exactly (91/91 on the
+  validation range) and sustains **945 draws/s** on the laptop's own M4 GPU — a 4× speedup
+  over the CPU screener, and the single change that made the deeper configurations reachable
+  in an evening.
 * The whole hunt is one pipeline: `gen | metal-prefilter | verify`, where `verify` re-runs the
   full model and then the simulator, so nothing is trusted until a real 9,024-shot simulation
   says `cls=0 phase=0 anc=0`.
 
-Nonce **950,027,083** is the first island of this configuration (`ROUNDS = 698`,
-`ROUNDS_MUL = 700`); `./benchmark.sh` reports
-9,024/9,024 shots OK, 0 classical mismatches, 0 phase-garbage batches, 0 ancilla-garbage
-batches.
+Nonce **4,000,974,617** is the first island of this configuration (`ROUNDS = 696`,
+`ROUNDS_MUL = 698`, `ENDPOINT_FOLD_WINDOW = 26`), found after 1,019,648 draws — about
+18 minutes of GPU time. `./benchmark.sh` reports 9,024/9,024 shots OK, 0 classical mismatches,
+0 phase-garbage batches, 0 ancilla-garbage batches, avg executed Toffoli 919,840.615 at 1,278
+qubits: **score 1,175,556,798**.
 
 ## 6. Things I priced and rejected
 
@@ -152,6 +169,7 @@ batches.
 Everything is deterministic given the source: `build_circuit` emits the op stream, the tail
 nonce is baked in `src/point_add/mod.rs`, and `eval_circuit` re-derives the same 9,024 test
 inputs from the stream itself. The tuning knobs are all `SUB4_PP_*` environment overrides with
-the submitted values as defaults (`ROUNDS = 698`, `ROUNDS_MUL = 700`, `R1 = 356`, `R2 = 625`,
+the submitted values as defaults (`ROUNDS = 696`, `ROUNDS_MUL = 698`, `R1 = 356`, `R2 = 625`,
 `REPLAY_CHUNK_COMPARE = 22`, `REPLAY_FLAG_COMPARE = 22`, `REPLAY_FOLD_WINDOW = 54`,
-`ENDPOINT_FOLD_WINDOW = 20`, plus the sampled per-round width schedule).
+`ENDPOINT_FOLD_WINDOW = 26`, plus the sampled per-round width schedule). No cloud compute was
+used at any point: the entire search ran on the laptop's own CPU and integrated GPU.

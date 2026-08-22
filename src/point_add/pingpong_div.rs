@@ -20,7 +20,7 @@ fn rounds_for(direction: PingPongDirection) -> usize {
             // tape puts both replay peaks at the same width.  Convergence
             // exposure of one round on one traversal is ~+0.05 lambda.
             static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-            tuned_window("SUB4_PP_ROUNDS_MUL", &SLOT, 696)
+            tuned_window("SUB4_PP_ROUNDS_MUL", &SLOT, 698)
         }
     }
 }
@@ -31,7 +31,7 @@ fn rounds() -> usize {
     // this draw (validated 9,024/9,024 with the baked tail nonce), the tape gives
     // back four sign qubits against two wider terminal wires (peak 1320 -> 1318),
     // and each cut round saves its replay and walk adds on both traversals.
-    tuned_window("SUB4_PP_ROUNDS", &SLOT, 698)
+    tuned_window("SUB4_PP_ROUNDS", &SLOT, 696)
 }
 
 /// When set, the width schedule is compressed so it still reaches its floor on
@@ -80,7 +80,7 @@ fn replay_fold_window() -> usize {
 /// which the tail nonce absorbs.
 fn endpoint_fold_window() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    tuned_window("SUB4_PP_ENDPOINT_FOLD_WINDOW", &SLOT, 20)
+    tuned_window("SUB4_PP_ENDPOINT_FOLD_WINDOW", &SLOT, 26)
 }
 
 fn replay_flag_compare() -> usize {
