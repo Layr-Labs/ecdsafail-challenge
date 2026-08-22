@@ -20,7 +20,7 @@ fn rounds_for(direction: PingPongDirection) -> usize {
             // tape puts both replay peaks at the same width.  Convergence
             // exposure of one round on one traversal is ~+0.05 lambda.
             static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-            tuned_window("SUB4_PP_ROUNDS_MUL", &SLOT, rounds() - 6)
+            tuned_window("SUB4_PP_ROUNDS_MUL", &SLOT, rounds() - 7)
         }
     }
 }
@@ -85,7 +85,7 @@ fn endpoint_fold_window() -> usize {
 
 fn replay_flag_compare() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    tuned_window("SUB4_PP_REPLAY_FLAG_COMPARE", &SLOT, 21)
+    tuned_window("SUB4_PP_REPLAY_FLAG_COMPARE", &SLOT, 20)
 }
 
 /// Translate the source model's `lsbs = 56` literally: its pseudo-Mersenne
@@ -1151,9 +1151,9 @@ fn plan(rounds: usize) -> Option<Plan> {
     // measured-erasure exposure (lambda) goes down as well.
     // `SUB4_PP_R1=509 SUB4_PP_R2=610` restores the previous op stream byte for
     // byte: at r1=509 no walk round is ever over budget, so nothing splits.
-    let r1 = env("SUB4_PP_R1", 283).min(rounds);
-    let r2 = env("SUB4_PP_R2", 589).min(rounds.saturating_sub(1));
-    let peak = env("SUB4_PP_PEAK", 1273);
+    let r1 = env("SUB4_PP_R1", 280).min(rounds);
+    let r2 = env("SUB4_PP_R2", 608).min(rounds.saturating_sub(1));
+    let peak = env("SUB4_PP_PEAK", 1271);
     Some(Plan { r1, r2, peak })
 }
 
