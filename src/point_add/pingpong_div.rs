@@ -27,11 +27,10 @@ fn rounds_for(direction: PingPongDirection) -> usize {
 
 fn rounds() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    // 700, not 704: the walk's convergence tail tolerates the four-round cut on
-    // this draw (validated 9,024/9,024 with the baked tail nonce), the tape gives
-    // back four sign qubits against two wider terminal wires (peak 1320 -> 1318),
-    // and each cut round saves its replay and walk adds on both traversals.
-    tuned_window("SUB4_PP_ROUNDS", &SLOT, 698)
+    // The 0.1% campaign uses the public 694-round depth point. The shorter walk
+    // increases convergence exposure, so this geometry requires a fresh tail
+    // nonce and the complete 9,024-shot acceptance benchmark before submission.
+    tuned_window("SUB4_PP_ROUNDS", &SLOT, 694)
 }
 
 /// When set, the width schedule is compressed so it still reaches its floor on
@@ -73,14 +72,12 @@ fn replay_fold_window() -> usize {
     tuned_window("SUB4_PP_REPLAY_FOLD_WINDOW", &SLOT, 54)
 }
 
-/// 54, not 55: the fold carry chain is `min(n-2, highest_set_bit(c) + window)`
-/// long, so one position off the window is exactly one fewer carry ancilla at
-/// the binding allocation, which is what takes peak width 1321 -> 1320.  The
-/// dropped position only matters when a carry would have propagated that far,
-/// which the tail nonce absorbs.
+/// The 26-bit endpoint window is the low-cost residual-risk allocation for the
+/// shallower walk. Public measurements price 20 -> 26 at about eight executed
+/// Toffoli while materially improving nonce-search odds and retaining Q1278.
 fn endpoint_fold_window() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    tuned_window("SUB4_PP_ENDPOINT_FOLD_WINDOW", &SLOT, 20)
+    tuned_window("SUB4_PP_ENDPOINT_FOLD_WINDOW", &SLOT, 26)
 }
 
 fn replay_flag_compare() -> usize {

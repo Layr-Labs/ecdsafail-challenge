@@ -2539,7 +2539,7 @@ pub fn build() -> Vec<Op> {
         let nonce = std::env::var("SUB4_PINGPONG_TAIL_NONCE")
             .unwrap_or_default()
             .parse::<u64>()
-            .unwrap_or(68367898080254);
+            .unwrap_or(1400958);
         let mut x = Op::empty();
         x.kind = OperationType::X;
         x.q_target = QubitId(0);
