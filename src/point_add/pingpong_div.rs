@@ -31,7 +31,7 @@ fn rounds() -> usize {
     // this draw (validated 9,024/9,024 with the baked tail nonce), the tape gives
     // back four sign qubits against two wider terminal wires (peak 1320 -> 1318),
     // and each cut round saves its replay and walk adds on both traversals.
-    tuned_window("SUB4_PP_ROUNDS", &SLOT, 698)
+    tuned_window("SUB4_PP_ROUNDS", &SLOT, 696)
 }
 
 /// The width schedule is compressed so it still reaches its floor on the
@@ -489,7 +489,7 @@ fn width_repair(r: usize) -> i32 {
     if std::env::var("SUB4_PP_WIDTH_RESCALE").is_ok_and(|v| v == "0") {
         return 0;
     }
-    if r <= u16::MAX as usize && WIDTH_REPAIR.binary_search(&(r as u16)).is_ok() {
+    if false && r <= u16::MAX as usize && WIDTH_REPAIR.binary_search(&(r as u16)).is_ok() {
         1
     } else {
         0
@@ -1260,7 +1260,7 @@ fn plan(rounds: usize) -> Option<Plan> {
     // layouts by a few rounds in both directions.
     let r1 = env("SUB4_PP_R1", 340).min(rounds);
     let r2 = env("SUB4_PP_R2", 628).min(rounds.saturating_sub(1));
-    let peak = env("SUB4_PP_PEAK", 1274);
+    let peak = env("SUB4_PP_PEAK", 1273);
     Some(Plan { r1, r2, peak })
 }
 
