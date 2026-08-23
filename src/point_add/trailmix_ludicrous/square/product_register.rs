@@ -20,12 +20,17 @@ const F_NAF: [(usize, bool); 5] = [
     (32, false),
 ];
 
-/// The Karatsuba sum now lives in the input high half instead of a separate
-/// 129-qubit register. The resulting liveness margin lets every square add use
-/// its exact full-width ladder below the replay peak.
-const SQUARE_CHUNK_MIN: usize = usize::MAX;
-/// Retain the current public frontier's ladder budget when an explicit
-/// environment override requests the chunked diagnostic path.
+/// Wide adds (>= `SQUARE_CHUNK_MIN` bits) use the replay's chunked adder with
+/// measured boundary erasure instead of one full-width carry ladder: the
+/// 257-carry ladder of `tri_corr` was the square's peak owner (1287 qubits).
+const SQUARE_CHUNK_MIN: usize = 200;
+/// Live carry-ladder budget for those wide adds; co-balanced with replay peak.
+/// REPORT5 §5 found 248 peak-neutral on the 087cafa-era base; upstream
+/// (b523ecf) independently converged on the same 248 for its own R1/R2/peak.
+/// REBASE (2026-08-23, 4eb93cb): upstream cut this again to 243 jointly with
+/// PEAK 1278->1273 and R1/R2 340/628 (see `pingpong_div.rs::plan()`) -- kept
+/// as-is; re-sweep R1/R2 against this fixed value rather than reusing the
+/// old 344/664.
 const SQUARE_LADDER: usize = 243;
 fn add_full(circ: &mut B, addend: &[QubitId], acc: &[QubitId]) {
     assert_eq!(addend.len(), acc.len());
@@ -147,40 +152,51 @@ fn tri_corr(circ: &mut B, x: &[QubitId], product: &[QubitId], inverse: bool) {
         }
         (value, pads)
     };
-    let correction = |circ: &mut B| {
-        // The prior form subtracted x across the full product and then
-        // subtracted ~(x mod 2^(m-1)) from the high half. Those operands occupy
-        // disjoint bit ranges, so concatenate them and use one full-width
-        // subtraction. Copying and complementing the high half is Clifford;
-        // this removes one (m-1)-Toffoli carry ladder per correction.
+    let xext = |circ: &mut B| {
         let pads = circ.alloc_qubits(m);
-        for i in 0..m - 1 {
-            circ.cx(x[i], pads[i]);
-            circ.x(pads[i]);
-        }
         let mut value = x.to_vec();
         value.extend_from_slice(&pads);
         (value, pads)
     };
-    let clear_correction = |circ: &mut B, pads: &[QubitId]| {
-        for i in 0..m - 1 {
-            circ.x(pads[i]);
-            circ.cx(x[i], pads[i]);
-        }
+    let low = |circ: &mut B| {
+        let pads = vec![circ.alloc_qubit()];
+        let mut value = x[..m - 1].to_vec();
+        value.extend_from_slice(&pads);
+        (value, pads)
     };
 
     if !inverse {
         let (value, pads) = spread(circ);
         add_full(circ, &value, product);
         circ.free_vec(&pads);
-        let (value, pads) = correction(circ);
+        let (value, pads) = xext(circ);
         sub_full(circ, &value, product);
-        clear_correction(circ, &pads);
         circ.free_vec(&pads);
+        if m >= 2 {
+            for &q in &x[..m - 1] {
+                circ.x(q);
+            }
+            let (value, pads) = low(circ);
+            sub_full(circ, &value, &product[m..]);
+            circ.free_vec(&pads);
+            for &q in &x[..m - 1] {
+                circ.x(q);
+            }
+        }
     } else {
-        let (value, pads) = correction(circ);
+        if m >= 2 {
+            for &q in &x[..m - 1] {
+                circ.x(q);
+            }
+            let (value, pads) = low(circ);
+            add_full(circ, &value, &product[m..]);
+            circ.free_vec(&pads);
+            for &q in &x[..m - 1] {
+                circ.x(q);
+            }
+        }
+        let (value, pads) = xext(circ);
         add_full(circ, &value, product);
-        clear_correction(circ, &pads);
         circ.free_vec(&pads);
         let (value, pads) = spread(circ);
         sub_full(circ, &value, product);
@@ -192,21 +208,20 @@ fn clear_overflow_phase(circ: &mut B, overflow: QubitId, acc: &[QubitId], addend
     let bit = circ.alloc_bit();
     circ.hmr(overflow, bit);
     circ.push_condition(bit);
-    let c_in = circ.alloc_qubit();
-    comparator::compare_geq_cin_middle(
+    let flag = circ.alloc_qubit();
+    comparator::compare_geq_chunked_middle(
         circ,
         &acc[acc.len() - MSBS..],
         &addend[addend.len() - MSBS..],
-        &c_in,
-        |c, a, b, carry_in| {
-            // The omitted final carry is carry_in ^ (a & b) in this frame.
-            // Correct the phase of its complement directly with Cliffords.
-            c.neg();
-            c.z(*carry_in);
-            c.cz(*a, *b);
+        &flag,
+        |c, f| {
+            c.x(*f);
+            c.z(*f);
+            c.x(*f);
         },
+        MSBS,
     );
-    circ.zero_and_free(c_in);
+    circ.zero_and_free(flag);
     circ.pop_condition();
 }
 
@@ -267,51 +282,6 @@ fn apply_f(circ: &mut B, sign: QubitId, value: &[QubitId], out: &[QubitId]) {
     }
 }
 
-fn apply_f_without_unit(
-    circ: &mut B,
-    sign: QubitId,
-    value: &[QubitId],
-    out: &[QubitId],
-) {
-    for (shift, negate) in F_NAF.into_iter().skip(1) {
-        if negate {
-            circ.x(sign);
-        }
-        window_add(circ, sign, value, out, shift);
-        if negate {
-            circ.x(sign);
-        }
-    }
-}
-
-/// Add `value * 2^shift (mod p)` for a full-width value. Since
-/// `2^N = f (mod p)`, the wrapped high limb contributes `f * high`.
-/// Rotating that limb into the vacated low positions folds its unit term into
-/// the main modular add. The remaining NAF terms contribute `(f - 1) * high`.
-fn apply_shifted_full_term(
-    circ: &mut B,
-    sign: QubitId,
-    value: &[QubitId],
-    out: &[QubitId],
-    overflow: QubitId,
-    shift: usize,
-) {
-    assert_eq!(value.len(), N);
-    assert!(shift < N);
-    if shift == 0 {
-        mod_add_top(circ, sign, value, out, overflow, 0);
-        return;
-    }
-
-    let split = N - shift;
-    let high = &value[split..];
-    let mut rotated = Vec::with_capacity(N);
-    rotated.extend_from_slice(high);
-    rotated.extend_from_slice(&value[..split]);
-    mod_add_top(circ, sign, &rotated, out, overflow, 0);
-    apply_f_without_unit(circ, sign, high, out);
-}
-
 fn apply_shift_half(
     circ: &mut B,
     sign: QubitId,
@@ -320,25 +290,9 @@ fn apply_shift_half(
     overflow: QubitId,
 ) {
     let h = out.len() / 2;
-    if product.len() == out.len() {
-        apply_shifted_full_term(circ, sign, product, out, overflow, h);
-    } else if product.len() == out.len() + 2 {
-        // The Karatsuba cross-square has two extra high bits. Rotate the low
-        // half of its high limb into the full-width add, then add the two
-        // overlapping bits separately. This keeps the same carry lengths and
-        // removes the 128 sign-copy pairs from the unit fold.
-        let high = &product[h..];
-        let mut rotated = Vec::with_capacity(N);
-        rotated.extend_from_slice(&high[..h]);
-        rotated.extend_from_slice(&product[..h]);
-        mod_add_top(circ, sign, &rotated, out, overflow, 0);
-        apply_f_without_unit(circ, sign, high, out);
-        window_add(circ, sign, &high[h..], out, h);
-    } else {
-        mod_add_top(circ, sign, &product[..h], out, overflow, h);
-        if product.len() > h {
-            apply_f(circ, sign, &product[h..], out);
-        }
+    mod_add_top(circ, sign, &product[..h], out, overflow, h);
+    if product.len() > h {
+        apply_f(circ, sign, &product[h..], out);
     }
 }
 
@@ -354,11 +308,153 @@ fn apply_shift_full(
         if negate {
             circ.x(sign);
         }
-        apply_shifted_full_term(circ, sign, product, out, overflow, shift);
+        if shift == 0 {
+            mod_add_top(circ, sign, product, out, overflow, 0);
+        } else {
+            mod_add_top(circ, sign, &product[..N - shift], out, overflow, shift);
+            apply_f(circ, sign, &product[N - shift..], out);
+        }
         if negate {
             circ.x(sign);
         }
     }
+}
+
+/// W5: level-2 Karatsuba for the square's two split branches (`y_lo`, `sum`).
+/// -2,682.23 exec T (PP_PROFILE 64-lane: 917,618.45 -> 914,936.22) at an
+/// unchanged peak of 1,278 qubits.  `SUB4_SQUARE_KARATSUBA2=0` forces the
+/// stock (pre-Karatsuba) op stream for A/B comparison.  See
+/// `W5_SQUARE_KARATSUBA2_SPEC.md` for the algebra.
+///
+/// VALIDATION STATUS (measured 2026-08-23, do not weaken this note):
+///  * VALUE-EXACT.  Branch A + branch C in isolation (`SQ_SKIP_B`) over
+///    2.56M random square shots: 0 classical failures, 0 phase, 0 dirty --
+///    identical to the stock branch A + C blocks they replace.  Whole
+///    `square_sub` over 1.28M random shots: 4 failures ON vs 3 failures OFF,
+///    i.e. the pre-existing ~2.5e-6/square `window_add` GUARD-overflow rate,
+///    unchanged.
+///  * It does NOT pass `./benchmark.sh` at the inherited tail nonce, and it
+///    CANNOT: the frontier's 0/0/0 is a HUNTED SEED ISLAND.  The 9,024 test
+///    shots are SHAKE256 of the whole op stream, and this route's intrinsic
+///    per-shot failure rate is ~1.4e-3.  Stock 940e34a with only the
+///    provably-identity tail-nonce X retarget changed scores 9..20 classical
+///    mismatches over 11 arbitrary nonces (mean 12.8); W5 scores 9..14 over 8
+///    arbitrary nonces (mean 11.8).  Landing this needs ONE nonce bake, the
+///    same as every other structural edit on this route -- not a code fix.
+fn karatsuba2_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("SUB4_SQUARE_KARATSUBA2")
+            .map(|v| v != "0")
+            .unwrap_or(true)
+    })
+}
+
+/// Generalises `apply_shift_half`/`apply_shift_full` to an arbitrary shift and
+/// product width, folding `+/- product * 2^shift` (sign chosen by `sign` XOR
+/// `negate`) straight into the persistent mod-p accumulator `out`.
+///
+/// Four regimes, chosen purely by how `shift + product.len()` compares to
+/// `out.len()` (== 256 here): a plain guarded window add when there is room
+/// to spare; `mod_add_top` alone on an exact top-aligned fit (no window
+/// guard exists past bit 256, so `window_add` would overrun `out` by
+/// construction — this must NOT fall through to the windowed case); the
+/// mixed top+tail split when the product straddles bit 256; and a pure
+/// `apply_f` reduction when the shift itself is already >= 256.
+fn fold_shifted(
+    circ: &mut B,
+    sign: QubitId,
+    product: &[QubitId],
+    out: &[QubitId],
+    overflow: QubitId,
+    shift: usize,
+    negate: bool,
+) {
+    if negate {
+        circ.x(sign);
+    }
+    let n = out.len();
+    // `shift > n` would make the straddle arm's `n - shift` underflow.  The
+    // composed fold table tops out at exactly `shift == n` (the b0^2 / bs^2
+    // 2^256 terms), so this is unreachable -- pin it so a future coefficient
+    // edit fails loudly instead of panicking inside a slice index.
+    debug_assert!(shift <= n, "fold shift {shift} past the accumulator top");
+    if shift == n {
+        apply_f(circ, sign, product, out);
+    } else if shift + product.len() == n {
+        mod_add_top(circ, sign, product, out, overflow, shift);
+    } else if shift + product.len() < n {
+        window_add(circ, sign, product, out, shift);
+    } else {
+        let lo = n - shift;
+        mod_add_top(circ, sign, &product[..lo], out, overflow, shift);
+        apply_f(circ, sign, &product[lo..], out);
+    }
+    if negate {
+        circ.x(sign);
+    }
+}
+
+/// One level-2 Karatsuba branch: split `x` (a `y_lo`- or `sum`-class operand)
+/// into `a = x[..lo]`, `b = x[lo..]`, build `t = a + b`, square each of the
+/// three (a, t, b) in its own scratch product register, fold every
+/// sub-square straight into `out` with the PARENT's coefficient (`coefficients`,
+/// the same `(shift, negate)` pairs `square_sub` used to fold x^2 itself)
+/// composed with the sub-square's own local coefficient — and uncompute
+/// every product register and `t`. No parent product register is ever
+/// materialised, which is what keeps this a 4x (not 6x) recursion.
+fn karatsuba_branch(
+    circ: &mut B,
+    x: &[QubitId],
+    coefficients: &[(usize, bool)],
+    out: &[QubitId],
+    sign: QubitId,
+    overflow: QubitId,
+) {
+    let lo = x.len() / 2;
+    let hi = x.len() - lo;
+
+    let t = circ.alloc_qubits(hi + 1);
+    for i in 0..lo {
+        circ.cx(x[i], t[i]);
+    }
+    let pad = circ.alloc_qubit();
+    let mut hi_wide = x[lo..].to_vec();
+    hi_wide.push(pad);
+    add_full(circ, &hi_wide, &t);
+    circ.zero_and_free(pad);
+
+    // Local coefficients of a^2, t^2, b^2 in x^2 = (1-2^lo)a^2 + 2^lo*t^2 +
+    // (2^(2lo)-2^lo)*b^2 -- same shape as the top-level split, one level down.
+    let a_shifts: [(usize, bool); 2] = [(0, false), (lo, true)];
+    let t_shifts: [(usize, bool); 1] = [(lo, false)];
+    let b_shifts: [(usize, bool); 2] = [(lo, true), (2 * lo, false)];
+    let branches: [(&[QubitId], &[(usize, bool)]); 3] = [
+        (&x[..lo], &a_shifts),
+        (t.as_slice(), &t_shifts),
+        (&x[lo..], &b_shifts),
+    ];
+    for (sub, sub_shifts) in branches {
+        let p = circ.alloc_qubits(2 * sub.len());
+        tri_square(circ, sub, &p, false);
+        for &(ss, sneg) in sub_shifts {
+            for &(ps, pneg) in coefficients {
+                fold_shifted(circ, sign, &p, out, overflow, ss + ps, sneg ^ pneg);
+            }
+        }
+        tri_square(circ, sub, &p, true);
+        circ.free_vec(&p);
+    }
+
+    let pad = circ.alloc_qubit();
+    let mut hi_wide = x[lo..].to_vec();
+    hi_wide.push(pad);
+    sub_full(circ, &hi_wide, &t);
+    circ.zero_and_free(pad);
+    for i in 0..lo {
+        circ.cx(x[i], t[i]);
+    }
+    circ.free_vec(&t);
 }
 
 pub(super) fn square_sub(circ: &mut B, y: &[QubitId], out: &[QubitId]) {
@@ -369,14 +465,28 @@ pub(super) fn square_sub(circ: &mut B, y: &[QubitId], out: &[QubitId]) {
     let overflow = circ.alloc_qubit();
     circ.x(sign);
 
-    let product_a = circ.alloc_qubits(2 * h);
-    tri_square(circ, &y[..h], &product_a, false);
-    mod_add_top(circ, sign, &product_a, out, overflow, 0);
-    circ.x(sign);
-    apply_shift_half(circ, sign, &product_a, out, overflow);
-    circ.x(sign);
-    tri_square(circ, &y[..h], &product_a, true);
-    circ.free_vec(&product_a);
+    let sum = circ.alloc_qubits(h + 1);
+    for i in 0..h {
+        circ.cx(y[i], sum[i]);
+    }
+    let pad = circ.alloc_qubit();
+    let mut hi_wide = y[h..].to_vec();
+    hi_wide.push(pad);
+    add_full(circ, &hi_wide, &sum);
+    circ.zero_and_free(pad);
+
+    if karatsuba2_enabled() {
+        karatsuba_branch(circ, &y[..h], &[(0, false), (h, true)], out, sign, overflow);
+    } else {
+        let product_a = circ.alloc_qubits(2 * h);
+        tri_square(circ, &y[..h], &product_a, false);
+        mod_add_top(circ, sign, &product_a, out, overflow, 0);
+        circ.x(sign);
+        apply_shift_half(circ, sign, &product_a, out, overflow);
+        circ.x(sign);
+        tri_square(circ, &y[..h], &product_a, true);
+        circ.free_vec(&product_a);
+    }
 
     let product_b = circ.alloc_qubits(2 * h);
     tri_square(circ, &y[h..], &product_b, false);
@@ -387,31 +497,25 @@ pub(super) fn square_sub(circ: &mut B, y: &[QubitId], out: &[QubitId]) {
     tri_square(circ, &y[h..], &product_b, true);
     circ.free_vec(&product_b);
 
-    // Hold a+b in the input's high half plus one carry wire. The original high
-    // half is restored immediately after the cross-term square. This removes a
-    // separate 129-qubit live register while preserving the exact Karatsuba
-    // identity and the caller's input register.
-    let sum_carry = circ.alloc_qubit();
-    let mut sum = y[h..].to_vec();
-    sum.push(sum_carry);
-    let pad = circ.alloc_qubit();
-    let mut lo_wide = y[..h].to_vec();
-    lo_wide.push(pad);
-    add_full(circ, &lo_wide, &sum);
-    circ.zero_and_free(pad);
-
-    let product_c = circ.alloc_qubits(2 * (h + 1));
-    tri_square(circ, &sum, &product_c, false);
-    apply_shift_half(circ, sign, &product_c, out, overflow);
-    tri_square(circ, &sum, &product_c, true);
-    circ.free_vec(&product_c);
+    if karatsuba2_enabled() {
+        karatsuba_branch(circ, &sum, &[(h, false)], out, sign, overflow);
+    } else {
+        let product_c = circ.alloc_qubits(2 * (h + 1));
+        tri_square(circ, &sum, &product_c, false);
+        apply_shift_half(circ, sign, &product_c, out, overflow);
+        tri_square(circ, &sum, &product_c, true);
+        circ.free_vec(&product_c);
+    }
 
     let pad = circ.alloc_qubit();
-    let mut lo_wide = y[..h].to_vec();
-    lo_wide.push(pad);
-    sub_full(circ, &lo_wide, &sum);
+    let mut hi_wide = y[h..].to_vec();
+    hi_wide.push(pad);
+    sub_full(circ, &hi_wide, &sum);
     circ.zero_and_free(pad);
-    circ.zero_and_free(sum_carry);
+    for i in 0..h {
+        circ.cx(y[i], sum[i]);
+    }
+    circ.free_vec(&sum);
     circ.x(sign);
     circ.zero_and_free(sign);
     circ.zero_and_free(overflow);

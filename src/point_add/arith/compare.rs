@@ -403,31 +403,15 @@ pub(crate) fn cmp_lt_phase_conditioned_with_cin_borrowed_carries(
     let n = u.len();
     assert_eq!(v.len(), n);
     assert!(n > 0);
-    assert!(carries.len() >= n - 1);
+    assert!(carries.len() >= n);
 
     b.push_condition(phase);
     for &q in u {
         b.x(q);
     }
-    let last = n - 1;
-    if last > 0 {
-        cmp_lt_fast_prefix_window_forward(
-            b,
-            &u[..last],
-            &v[..last],
-            c_in,
-            carries,
-            c_in,
-            &[],
-        );
-    }
-    let carry_in = if last == 0 { c_in } else { u[last - 1] };
-    b.cz(u[last], v[last]);
-    b.cz(u[last], carry_in);
-    b.cz(v[last], carry_in);
-    if last > 0 {
-        cmp_lt_fast_prefix_window_inverse(b, &u[..last], &v[..last], c_in, carries);
-    }
+    cmp_lt_fast_prefix_window_forward(b, u, v, c_in, carries, c_in, &[]);
+    b.cz(u[n - 1], u[n - 1]);
+    cmp_lt_fast_prefix_window_inverse(b, u, v, c_in, carries);
     for &q in u {
         b.x(q);
     }
@@ -444,54 +428,38 @@ pub(crate) fn cmp_lt_phase_conditioned(
     assert_eq!(v.len(), n);
     assert!(n > 0);
 
-    let carries = b.alloc_qubits(n - 1);
+    let c_in = b.alloc_qubit();
     b.push_condition(phase);
     for &q in u {
         b.x(q);
     }
-    let last = n - 1;
-    if last > 0 {
-        // The implicit carry-in is zero. After the first CX, u[0] has the
-        // exact value that the old circuit copied into a clean c_in wire, so
-        // use it directly as the first nonlinear control.
-        b.cx(u[0], v[0]);
-        b.ccx(u[0], v[0], carries[0]);
-        b.cx(carries[0], u[0]);
-        for i in 1..last {
-            b.cx(u[i], v[i]);
-            b.cx(u[i], u[i - 1]);
-            b.ccx(u[i - 1], v[i], carries[i]);
-            b.cx(carries[i], u[i]);
-        }
+    if n >= 2 {
+        // The top carry is only ever consumed by a plain Z on u[n-1]. Since
+        // (-1)^(a XOR b) = (-1)^a * (-1)^b, that phase factors exactly into
+        // Z(u[n-1]) * CZ(u[n-2], v[n-1]) -- both Clifford, both free. So the
+        // top AND is never materialised: no CCX, no carry ancilla, no erase.
+        let carries = b.alloc_qubits(n - 1);
+        cmp_lt_fast_prefix_window_forward(b, &u[..n - 1], &v[..n - 1], c_in, &carries, c_in, &[]);
+        b.cx(u[n - 1], v[n - 1]);
+        b.cx(u[n - 1], u[n - 2]);
+        b.cz(u[n - 1], u[n - 1]);
+        b.cz(u[n - 2], v[n - 1]);
+        b.cx(u[n - 1], u[n - 2]);
+        b.cx(u[n - 1], v[n - 1]);
+        cmp_lt_fast_prefix_window_inverse(b, &u[..n - 1], &v[..n - 1], c_in, &carries);
+        b.free_vec(&carries);
+    } else {
+        let carries = b.alloc_qubits(n);
+        cmp_lt_fast_prefix_window_forward(b, u, v, c_in, &carries, c_in, &[]);
+        b.cz(u[n - 1], u[n - 1]);
+        cmp_lt_fast_prefix_window_inverse(b, u, v, c_in, &carries);
+        b.free_vec(&carries);
     }
-    b.cz(u[last], v[last]);
-    if last > 0 {
-        let carry_in = u[last - 1];
-        b.cz(u[last], carry_in);
-        b.cz(v[last], carry_in);
-    }
-    if last > 0 {
-        for i in (1..last).rev() {
-            b.cx(carries[i], u[i]);
-            let m = b.alloc_bit();
-            b.hmr(carries[i], m);
-            b.cz_if(u[i - 1], v[i], m);
-            b.cx(u[i], u[i - 1]);
-            b.cx(u[i], v[i]);
-        }
-        b.cx(carries[0], u[0]);
-        let m0 = b.alloc_bit();
-        b.hmr(carries[0], m0);
-        // u[0] is now the old clean c_in value, so it also supplies the
-        // measurement phase correction before the final restoring CX.
-        b.cz_if(u[0], v[0], m0);
-        b.cx(u[0], v[0]);
-    }
-    b.free_vec(&carries);
     for &q in u {
         b.x(q);
     }
     b.pop_condition();
+    b.free(c_in);
 }
 
 pub(crate) fn ccx_cmp_lt_into_fast_prefix_targets_split(
