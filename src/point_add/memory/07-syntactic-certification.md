@@ -5,6 +5,19 @@ Sections 1 and 3 are measured on the certified frontier `cf5aa02` — the promot
 (score `1,486,468,554`) and has **not** been re-measured here; it says so where its numbers appear. Every
 conclusion below was checked on both heads and none differs — only counts.
 
+**Scope note, added 2026-08-23.** The counts here are measured on the 1,154-qubit trailmix/dialog
+construction, which is now legacy and gated behind `SUB4_LEGACY_POINT_ADD`; the shipping path is
+`pingpong_div.rs` at 1,278 qubits. Treat the specific figures below (46,286 dead CCX, the score
+targets, the qubit counts) as a record of that circuit.
+
+The central argument is not construction-specific and still holds. The 9,024 test inputs are a
+SHAKE256 hash of the whole op stream, so any edit that changes the stream re-rolls every shot, and
+"never fired on this draw" cannot survive its own use. That was re-confirmed independently on the
+ping-pong construction on 2026-08-23: its width schedule carries 800 to 1,693 bit-rounds of unused
+slack, worth roughly 8,000 Toffoli at the measured 4.7 to 4.9 Toffoli per bit-round, and none of it
+is collectable. Tightening the schedule to a draw's own envelope changes the op stream, which
+re-rolls the draw the tightening was justified by. Same obstacle, different construction.
+
 The §1 instrument independently reproduces four entries of `06-research-status.md`'s certified table, which is
 what licenses the rest:
 
