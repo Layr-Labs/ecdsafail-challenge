@@ -163,6 +163,15 @@ fn replay_fold_window() -> usize {
     tuned_window("SUB4_PP_REPLAY_FOLD_WINDOW", &SLOT, 54)
 }
 
+fn replay_fold_window_mul() -> usize {
+    static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    tuned_window(
+        "SUB4_PP_REPLAY_FOLD_WINDOW_MUL",
+        &SLOT,
+        replay_fold_window(),
+    )
+}
+
 /// 54, not 55: the fold carry chain is `min(n-2, highest_set_bit(c) + window)`
 /// long, so one position off the window is exactly one fewer carry ancilla at
 /// the binding allocation, which is what takes peak width 1321 -> 1320.  The
@@ -184,6 +193,14 @@ fn replay_flag_compare() -> usize {
 fn replay_fold_target(target: &[QubitId]) -> &[QubitId] {
     if std::env::var_os("SUB4_PINGPONG_LOW56_FOLD").is_some() {
         &target[..replay_fold_window()]
+    } else {
+        target
+    }
+}
+
+fn replay_fold_target_mul(target: &[QubitId]) -> &[QubitId] {
+    if std::env::var_os("SUB4_PINGPONG_LOW56_FOLD").is_some() {
+        &target[..replay_fold_window_mul()]
     } else {
         target
     }
@@ -305,7 +322,7 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
 
     let coefficient: Vec<QubitId>;
     let mut tape: Vec<QubitId>;
-    match (direction, plan(rounds)) {
+    match (direction, plan(direction, rounds)) {
         (_, None) => {
             phase(b, "pp_div_walk", "pp_mul_walk");
             tape = value_walk(b, &mut u, &mut v, rounds);
@@ -354,7 +371,7 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
                 shrink_to(b, &mut u, &mut v, value_width(plan.r1));
             }
             coefficient = b.alloc_qubits(N);
-            set_walk_peak(plan.peak);
+            set_walk_peak(walk_peak(&plan));
             set_chunks(pick_chunks(&plan, plan.r1.min(rounds), u.len()));
             for r in 0..plan.r1.min(rounds) {
                 replay_halving_round(b, r, tape[r], &coefficient, numerator);
@@ -415,7 +432,7 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
             clear_chunks();
             restore(b, &loans);
             phase(b, "pp_div_walkback", "pp_mul_walkback");
-            set_walk_peak(plan.peak);
+            set_walk_peak(walk_peak(&plan));
             for r in ((plan.r2 + 1).max(plan.r1)..rounds).rev() {
                 let sign = tape.pop().expect("tape has round r");
                 assert_eq!(tape.len(), r);
@@ -581,7 +598,7 @@ fn width_repair(r: usize) -> i32 {
     if std::env::var("SUB4_PP_WIDTH_RESCALE").is_ok_and(|v| v == "0") {
         return 0;
     }
-    if false && r <= u16::MAX as usize && WIDTH_REPAIR.binary_search(&(r as u16)).is_ok() {
+    if r <= u16::MAX as usize && WIDTH_REPAIR.binary_search(&(r as u16)).is_ok() {
         1
     } else {
         0
@@ -1168,7 +1185,12 @@ fn signed_add_wrapping_sigma_split(
     // close over the second-to-last high-chunk carry (or `boundary` itself,
     // when the high chunk is a single position).
     let high = n - 1 - low;
-    let high_loop_end = if top_skip { high - 1 } else { high };
+    debug_assert!(high >= 1, "low + 2 <= n leaves a final high carry");
+    // MERGE: the retained high chain always stops one position short. Under
+    // `top_skip` that last AND is provably zero (ours); otherwise the last
+    // carry is synthesized straight into the top sum bit (theirs). Either way
+    // only `high - 1` carry wires are ever live.
+    let high_loop_end = high - 1;
     let c_hi = b.alloc_qubits(high_loop_end);
     for j in 0..high_loop_end {
         let i = low + j;
@@ -1179,20 +1201,27 @@ fn signed_add_wrapping_sigma_split(
         b.cx(previous, c_hi[j]);
     }
     if top_skip {
-        let prev = if high_loop_end > 0 {
-            c_hi[high_loop_end - 1]
-        } else {
-            boundary
-        };
+        // REPORT5 3: C_{n-2} == C_{n-3} on this round, so both top sum bits
+        // close over the SAME carry-in and no CCX is emitted at all.
+        let prev = c_hi.last().copied().unwrap_or(boundary);
         b.cx(prev, target[n - 2]);
         b.cx(source[n - 2], target[n - 2]);
         b.cx(prev, target[n - 1]);
         b.cx(source[n - 1], target[n - 1]);
     } else {
-        let top = if high > 0 { c_hi[high - 1] } else { boundary };
-        b.cx(top, target[n - 1]);
+        // The final high carry is consumed only as an XOR into the top sum
+        // bit. Synthesize it directly into that output and retain no wire.
+        let i = n - 2;
+        let previous = c_hi.last().copied().unwrap_or(boundary);
+        b.cx(previous, source[i]);
+        b.cx(previous, target[i]);
+        b.ccx(source[i], target[i], target[n - 1]);
+        b.cx(previous, target[n - 1]);
         b.cx(source[n - 1], target[n - 1]);
+        b.cx(previous, source[i]);
+        b.cx(source[i], target[i]);
     }
+
     for j in (0..high_loop_end).rev() {
         let i = low + j;
         let previous = if j == 0 { boundary } else { c_hi[j - 1] };
@@ -1207,10 +1236,58 @@ fn signed_add_wrapping_sigma_split(
 
     // `target[..low]` now holds the low bits of the complemented-frame sum and
     // `source[..low]` the untouched addend, so this comparison is the boundary
-    // carry itself.
+    // carry itself. On the forward walk, target[0] is one and
+    // sign=target[1]^source[1]. On walk-back, target[1:0] is 10 after undoing
+    // the halving rotation. Since source[0] is one in both cases, the borrow
+    // from the first two positions is exactly source[1]. Start the comparator
+    // at bit 2 with that live carry-in and omit two nonlinear stages exactly.
     let phase = b.alloc_bit();
     b.hmr(boundary, phase);
-    cmp_lt_phase_conditioned(b, &target[..low], &source[..low], phase);
+    // The final comparator stage is needed only as a phase oracle. If q is
+    // the complemented sum bit, a the source bit and x the incoming borrow,
+    // its outgoing borrow is majority(q,a,x) = q*a ^ q*x ^ a*x. Apply that
+    // phase with three Clifford CZ gates and ripple only through earlier bits.
+    let cmp_target = &target[2..low];
+    let cmp_source = &source[2..low];
+    let last = cmp_target.len() - 1;
+    let compare_carries = b.alloc_qubits(last);
+    b.push_condition(phase);
+    for &q in cmp_target {
+        b.x(q);
+    }
+    if last > 0 {
+        cmp_lt_fast_prefix_window_forward(
+            b,
+            &cmp_target[..last],
+            &cmp_source[..last],
+            source[1],
+            &compare_carries,
+            source[1],
+            &[],
+        );
+    }
+    let carry_in = if last == 0 {
+        source[1]
+    } else {
+        cmp_target[last - 1]
+    };
+    b.cz(cmp_target[last], cmp_source[last]);
+    b.cz(cmp_target[last], carry_in);
+    b.cz(cmp_source[last], carry_in);
+    if last > 0 {
+        cmp_lt_fast_prefix_window_inverse(
+            b,
+            &cmp_target[..last],
+            &cmp_source[..last],
+            source[1],
+            &compare_carries,
+        );
+    }
+    for &q in cmp_target {
+        b.x(q);
+    }
+    b.pop_condition();
+    b.free_vec(&compare_carries);
     b.free(boundary);
 
     for &q in target {
@@ -1264,7 +1341,12 @@ fn signed_add_wrapping_sigma(
     // sequence on `sign`/`source[1]` directly (all Clifford; zero Toffoli
     // change). `carries` holds only the real AND-chain, old indices
     // `2..n-1`, stored at `carries[i - 2]`.
-    let carries = b.alloc_qubits(if top_skip { n - 4 } else { n - 3 });
+    // MERGE: the merged terminal stage retains one fewer wire than either
+    // side did alone -- `top_skip` (ours) and the direct final carry
+    // (theirs) both stop the chain at n-3, so this is n-4 in every case
+    // the guard admits. n == 4 keeps the original n-3 form.
+    let direct_terminal = n >= 5;
+    let carries = b.alloc_qubits(if direct_terminal { n - 4 } else { n - 3 });
 
     b.cx(sign, source[1]);
     if target0_is_one {
@@ -1296,10 +1378,12 @@ fn signed_add_wrapping_sigma(
         b.x(carries[0]);
     }
 
-    // `loop_end` is the (exclusive) bound of the AND-chain loop: n-1
-    // normally, or n-2 when the last position's AND is provably zero and is
-    // skipped -- one fewer CCX, allocated ancilla, and measured erasure.
-    let loop_end = if top_skip { n - 2 } else { n - 1 };
+    // MERGE: `loop_end` is the (exclusive) bound of the AND-chain loop. It is
+    // n-2 whenever the merged terminal stage applies -- either the top AND is
+    // provably zero (`top_skip`, ours: no CCX at all) or the final carry is
+    // synthesized straight into target[n-1] (theirs: CCX but no retained
+    // wire). n-1 only on the tiny n == 4 fallback.
+    let loop_end = if direct_terminal { n - 2 } else { n - 1 };
     for i in 3..loop_end {
         b.cx(carries[i - 3], source[i]);
         b.cx(carries[i - 3], target[i]);
@@ -1307,19 +1391,26 @@ fn signed_add_wrapping_sigma(
         b.cx(carries[i - 3], carries[i - 2]);
     }
 
-    if top_skip {
+    if !direct_terminal {
+        b.cx(carries[n - 4], target[n - 1]);
+        b.cx(source[n - 1], target[n - 1]);
+    } else if top_skip {
         // carries[n-5] = C_{n-3}; the proof gives C_{n-2} == C_{n-3} on this
         // round, so both top sum bits close over the SAME carry-in.
-        // `source`/`target` at n-2 are still raw (the skipped iteration
-        // never ran), so this is exactly the closed form the dropped
-        // erasure step would have produced.
         b.cx(carries[n - 5], target[n - 2]);
         b.cx(source[n - 2], target[n - 2]);
         b.cx(carries[n - 5], target[n - 1]);
         b.cx(source[n - 1], target[n - 1]);
     } else {
-        b.cx(carries[n - 4], target[n - 1]);
+        let i = n - 2;
+        let previous = carries[n - 5];
+        b.cx(previous, source[i]);
+        b.cx(previous, target[i]);
+        b.ccx(source[i], target[i], target[n - 1]);
+        b.cx(previous, target[n - 1]);
         b.cx(source[n - 1], target[n - 1]);
+        b.cx(previous, source[i]);
+        b.cx(source[i], target[i]);
     }
 
     for i in (3..loop_end).rev() {
@@ -1683,7 +1774,7 @@ struct Plan {
     peak: usize,
 }
 
-fn plan(rounds: usize) -> Option<Plan> {
+fn plan(direction: PingPongDirection, rounds: usize) -> Option<Plan> {
     if std::env::var_os("SUB4_PP_NO_INTERLEAVE").is_some() {
         return None;
     }
@@ -1711,18 +1802,17 @@ fn plan(rounds: usize) -> Option<Plan> {
     // whose narrower interleaved walk registers move the cheapest chunk
     // layouts by a few rounds in both directions.
     //
-    // REBASE (2026-08-23, 4eb93cb): our own R1=344/R2=664/PEAK=1278 (found
-    // against upstream's PRIOR defaults 298/613/1278 and SQUARE_LADDER=248)
-    // is stale on this base for the same reason it was stale on b523ecf --
-    // upstream independently retuned this triple again, this time paired
-    // with SQUARE_LADDER 248->243 (product_register.rs) and PEAK 1278->1273,
-    // and (R1,R2,SQUARE_LADDER,PEAK) is a non-convex, non-separable, jagged
-    // landscape on every base so far. Kept upstream's 340/628/1273 here
-    // pending a fresh coordinate-ascent re-sweep on THIS base (SQUARE_LADDER
-    // fixed at 243) -- see the rebase report for the result; do not reuse
-    // 344/664 without re-measuring.
-    let r1 = env("SUB4_PP_R1", 341).min(rounds);
-    let r2 = env("SUB4_PP_R2", 628).min(rounds.saturating_sub(1));
+    // REBASE (2026-08-23, 4eb93cb): our own R1=344/R2=664/PEAK=1278 is stale
+    // on this base; kept upstream's triple pending a fresh coordinate-ascent
+    // re-sweep. MERGE: R1 is now per-direction (theirs), so the multiply
+    // traversal can sit at its own checkpoint via `SUB4_PP_R1_MUL`.
+    let r1 = match direction {
+        PingPongDirection::Divide => env("SUB4_PP_R1", 341),
+        PingPongDirection::Multiply => env("SUB4_PP_R1_MUL", env("SUB4_PP_R1", 341)),
+    };
+    let r2 = env("SUB4_PP_R2", 628);
+    let r1 = r1.min(rounds);
+    let r2 = r2.min(rounds.saturating_sub(1));
     let peak = env("SUB4_PP_PEAK", 1273);
     Some(Plan { r1, r2, peak })
 }
@@ -1732,6 +1822,13 @@ fn plan(rounds: usize) -> Option<Plan> {
 /// current width.
 fn allowance(plan: &Plan, tape_len: usize, walk_width: usize) -> usize {
     plan.peak.saturating_sub(tape_len + 2 * N + 2 * walk_width)
+}
+
+fn walk_peak(plan: &Plan) -> usize {
+    std::env::var("SUB4_PP_WALK_PEAK")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(plan.peak)
 }
 
 fn value_walk(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>, rounds: usize) -> Vec<QubitId> {
@@ -2126,8 +2223,10 @@ fn fused_fold_maskfree(
     }
 
     let start = 1;
-    let num_carries = width - 1 - start;
-    let operand = b.alloc_qubit();
+    // The final carry is needed only as an XOR into the top output bit. Emit
+    // it directly there, matching the exact terminal stage used by the split
+    // walk adder, and retain carry wires only through position width - 3.
+    let num_carries = width - 3;
     let carries = b.alloc_qubits(num_carries);
 
     for offset in 0..num_carries {
@@ -2143,7 +2242,10 @@ fn fused_fold_maskfree(
             b.ccx(previous, acc[i], carries[offset]);
             b.cx(previous, carries[offset]);
         } else {
-            for &control in &selectors {
+            // A selector can hold their XOR while the carry is synthesized.
+            // All selectors are restored before the next position.
+            let operand = selectors[0];
+            for &control in &selectors[1..] {
                 b.cx(control, operand);
             }
             b.cx(previous, operand);
@@ -2151,13 +2253,34 @@ fn fused_fold_maskfree(
             b.ccx(operand, acc[i], carries[offset]);
             b.cx(previous, carries[offset]);
             b.cx(previous, operand);
-            for &control in &selectors {
+            for &control in selectors[1..].iter().rev() {
                 b.cx(control, operand);
             }
         }
     }
 
-    b.cx(carries[num_carries - 1], acc[width - 1]);
+    let i = width - 2;
+    let previous = carries.last().copied().unwrap_or(first_carry);
+    let selectors = controls(i);
+    if selectors.is_empty() {
+        b.cx(previous, acc[i]);
+        b.ccx(previous, acc[i], acc[width - 1]);
+        b.cx(previous, acc[width - 1]);
+    } else {
+        let operand = selectors[0];
+        for &control in &selectors[1..] {
+            b.cx(control, operand);
+        }
+        b.cx(previous, operand);
+        b.cx(previous, acc[i]);
+        b.ccx(operand, acc[i], acc[width - 1]);
+        b.cx(previous, acc[width - 1]);
+        b.cx(previous, operand);
+        b.cx(operand, acc[i]);
+        for &control in selectors[1..].iter().rev() {
+            b.cx(control, operand);
+        }
+    }
     for control in controls(width - 1) {
         b.cx(control, acc[width - 1]);
     }
@@ -2176,7 +2299,8 @@ fn fused_fold_maskfree(
             b.hmr(carries[offset], measured);
             b.cz_if(previous, acc[i], measured);
         } else {
-            for &control in &selectors {
+            let operand = selectors[0];
+            for &control in &selectors[1..] {
                 b.cx(control, operand);
             }
             b.cx(previous, carries[offset]);
@@ -2186,13 +2310,12 @@ fn fused_fold_maskfree(
             b.cz_if(operand, acc[i], measured);
             b.cx(previous, operand);
             b.cx(operand, acc[i]);
-            for &control in &selectors {
+            for &control in selectors[1..].iter().rev() {
                 b.cx(control, operand);
             }
         }
     }
     b.free_vec(&carries);
-    b.free(operand);
 }
 
 fn signed_mod_add_pm_halve_fused(b: &mut B, sign: QubitId, source: &[QubitId], target: &[QubitId]) {
@@ -2223,27 +2346,33 @@ fn signed_mod_add_pm_halve_fused(b: &mut B, sign: QubitId, source: &[QubitId], t
     let minus_f = and_clean(b, overflow, not_sign_and_parity);
     b.x(overflow);
     let plus_2f = and_clean(b, overflow, sign_and_parity);
-    let plus_f = b.alloc_qubit();
-    b.cx(minus_f, plus_f);
-    b.cx(sign, plus_f);
-    b.cx(parity, plus_f);
-
+    // The fold only needs plus_2f, while its selector remains a Clifford
+    // function of two live wires. Release it across the carry ladder and
+    // recompute it when plus_2f is measurement-uncomputed.
+    b.cx(not_sign_and_parity, sign_and_parity);
+    b.cx(parity, sign_and_parity);
+    b.free(sign_and_parity);
+    // plus_f = parity ^ sign ^ minus_f. The fold does not otherwise use
+    // parity, so hold plus_f in that wire and restore parity afterwards.
+    b.cx(sign, parity);
+    b.cx(minus_f, parity);
     let negative_f = twos_complement_bits(f, replay_fold_window());
     fused_fold_maskfree(
         b,
         &target[..replay_fold_window()],
         f,
         &negative_f,
-        plus_f,
+        parity,
         Some(plus_2f),
         minus_f,
         not_sign_and_parity,
     );
 
-    b.cx(minus_f, plus_f);
-    b.cx(sign, plus_f);
-    b.cx(parity, plus_f);
-    b.free(plus_f);
+    b.cx(minus_f, parity);
+    b.cx(sign, parity);
+    let sign_and_parity = b.alloc_qubit();
+    b.cx(parity, sign_and_parity);
+    b.cx(not_sign_and_parity, sign_and_parity);
     and_uncompute(b, plus_2f, overflow, sign_and_parity);
     b.x(overflow);
     and_uncompute(b, minus_f, overflow, not_sign_and_parity);
@@ -2529,32 +2658,46 @@ fn signed_mod_double_add_pm_fused(
     b.cx(sign, sign_xor_add);
     b.cx(add_out, sign_xor_add);
     let routed = and_clean(b, doubled_out, sign_xor_add);
+    b.cx(add_out, sign_xor_add);
+    b.cx(sign, sign_xor_add);
+    b.free(sign_xor_add);
     let minus_f = and_clean(b, routed, sign);
     let plus_2f = b.alloc_qubit();
     b.cx(routed, plus_2f);
     b.cx(minus_f, plus_2f);
-    let plus_f = b.alloc_qubit();
-    b.cx(doubled_out, plus_f);
-    b.cx(add_out, plus_f);
-    b.cx(minus_f, plus_f);
 
     // +/-f is odd and +2f is even, so d^o selects the only bit-0 carry.
     let odd_correction = b.alloc_qubit();
     b.cx(doubled_out, odd_correction);
     b.cx(add_out, odd_correction);
     let first_carry = and_clean(b, target[0], odd_correction);
-    let negative_f = twos_complement_bits(f, replay_fold_window());
+    // The fold retains first_carry and does not read odd_correction. Clear and
+    // release this Clifford-derived flag across the binding carry ladder, then
+    // reconstruct it for the measurement uncompute below.
+    b.cx(add_out, odd_correction);
+    b.cx(doubled_out, odd_correction);
+    b.release_clean(odd_correction);
+    // plus_f = add_out ^ doubled_out ^ minus_f. The carry above captures
+    // every use of add_out during the fold, so use that wire for plus_f.
+    b.cx(doubled_out, add_out);
+    b.cx(minus_f, add_out);
+    let negative_f = twos_complement_bits(f, replay_fold_window_mul());
     fused_fold_maskfree(
         b,
-        &target[..replay_fold_window()],
+        &target[..replay_fold_window_mul()],
         f,
         &negative_f,
-        plus_f,
+        add_out,
         Some(plus_2f),
         minus_f,
         first_carry,
     );
 
+    b.cx(minus_f, add_out);
+    b.cx(doubled_out, add_out);
+    let odd_correction = b.alloc_qubit();
+    b.cx(doubled_out, odd_correction);
+    b.cx(add_out, odd_correction);
     b.cx(odd_correction, target[0]);
     and_uncompute(b, first_carry, target[0], odd_correction);
     b.cx(odd_correction, target[0]);
@@ -2562,14 +2705,13 @@ fn signed_mod_double_add_pm_fused(
     b.cx(add_out, odd_correction);
     b.free(odd_correction);
 
-    b.cx(doubled_out, plus_f);
-    b.cx(add_out, plus_f);
-    b.cx(minus_f, plus_f);
-    b.free(plus_f);
     b.cx(minus_f, plus_2f);
     b.cx(routed, plus_2f);
     b.free(plus_2f);
     and_uncompute(b, minus_f, routed, sign);
+    let sign_xor_add = b.alloc_qubit();
+    b.cx(sign, sign_xor_add);
+    b.cx(add_out, sign_xor_add);
     and_uncompute(b, routed, doubled_out, sign_xor_add);
     b.cx(add_out, sign_xor_add);
     b.cx(sign, sign_xor_add);
@@ -2608,7 +2750,7 @@ fn signed_mod_add_pm(b: &mut B, sign: QubitId, source: &[QubitId], target: &[Qub
     add_chunked_measured(b, source, target, Some(overflow));
     cadd_nbit_const_direct_trunc_fast(
         b,
-        replay_fold_target(target),
+        replay_fold_target_mul(target),
         f,
         overflow,
         endpoint_fold_window(),
@@ -2633,13 +2775,14 @@ fn mod_halve_pm(b: &mut B, target: &[QubitId]) {
         .wrapping_add(U256::from(1));
     let parity = b.alloc_qubit();
     b.cx(target[0], parity);
-    csub_nbit_const_direct_trunc_fast_dead_low(
+    // parity is an exact copy of target[0], so applying the bit-0 subtraction
+    // early makes target[0] a clean host for the final measured borrow.
+    csub_nbit_const_direct_trunc_fast_dead_low_ctrl_low0_host(
         b,
         replay_fold_target(target),
         f,
         parity,
         endpoint_fold_window(),
-        true,
     );
     for i in 0..N - 1 {
         b.swap(target[i], target[i + 1]);
@@ -2660,7 +2803,7 @@ fn mod_double_pm(b: &mut B, target: &[QubitId]) {
     }
     cadd_nbit_const_direct_trunc_fast_dead_low(
         b,
-        replay_fold_target(target),
+        replay_fold_target_mul(target),
         f,
         overflow,
         endpoint_fold_window(),
@@ -3131,7 +3274,6 @@ pub(crate) fn pingpong_simulator_selfcheck() {
 fn divide_and_multiply_preserve_the_abi_and_clean_ancillas() {
     pingpong_simulator_selfcheck();
 }
-
 /// Diagnostic: print the per-round value-width schedule for both the base
 /// (identity index, `SUB4_PP_WIDTH_RESCALE=0`) and rescaled (default-on
 /// `round*697/697` compression) traversals, through the real `value_width`
@@ -3145,5 +3287,36 @@ pub(crate) fn dump_width_schedule() {
     println!("round,base,rescale");
     for r in 0..700 {
         println!("{},{},{}", r, base[r], resc[r]);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn sigma_split_low_two_compare_reduction_is_exact() {
+    for width in 3..=10usize {
+        let modulus = 1usize << width;
+        let mask = modulus - 1;
+        let check = |source: usize, target: usize, sign: usize| {
+            let complemented = target ^ (sign * mask);
+            let sum = complemented.wrapping_add(source) & mask;
+            let full_borrow = sum < source;
+            let low_borrow = (sum & 3) < (source & 3);
+            assert_eq!(low_borrow, ((source >> 1) & 1) != 0);
+            let high_with_borrow = (sum >> 2) < ((source >> 2) + usize::from(low_borrow));
+            assert_eq!(full_borrow, high_with_borrow);
+        };
+        for source in (1..modulus).step_by(2) {
+            for target in 0..modulus {
+                if target & 1 != 0 {
+                    let sign = ((target >> 1) ^ (source >> 1)) & 1;
+                    check(source, target, sign);
+                }
+                if target & 3 == 2 {
+                    for sign in 0..=1 {
+                        check(source, target, sign);
+                    }
+                }
+            }
+        }
     }
 }
