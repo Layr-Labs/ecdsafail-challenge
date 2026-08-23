@@ -8,7 +8,26 @@ Fiat–Shamir seed moves, and with it the 9024 test inputs.
 
 That makes the nonce a clean experimental handle: vary it and you resample the test set from the same circuit.
 
-## The current figure — `6909d15`, n=199
+## Scope: this measures the trailmix construction, not what ships today
+
+**Added 2026-08-23.** Everything below was measured on the 1,154-qubit trailmix/dialog circuit, at
+`6909d15`, score `1,486,468,554`. That construction is now legacy: it is gated behind
+`SUB4_LEGACY_POINT_ADD`, and the shipping path is `pingpong_div.rs`, a fixed-depth ping-pong division
+at 1,278 qubits. `WAYFINDER.md` makes the same point about notes 01 to 06, and this file belongs in
+that group. The numbers here are kept as the record of what was measured then, not as a claim about
+the circuit that ships today.
+
+What carries over unchanged is the setup above and the method. The tail nonce is a clean handle on the
+test set for **any** construction, and the four method gates below apply to any lambda sweep on this
+harness. The sudo env-strip gate in particular is filed as issue #23 and is still live.
+
+For orientation, the same quantity on the current ping-pong circuit is about **18.75 classical
+mismatches per draw** (n=8, sd 6.0, measured 2026-08-23 at `SUB4_PP_ROUNDS=698` /
+`SUB4_PP_ROUNDS_MUL=696`), against the 17.126 recorded below for trailmix. The two are not directly
+comparable, since the constructions differ in every other respect, but the order of magnitude is the
+same and neither admits a clean seed by luck.
+
+## The measurement — `6909d15`, n=199
 
 Measured 2026-08-04 on `upstream/main` `6909d15`, score `1,486,468,554`, whose `src/` tree is identical to accepted
 submission `ed4b529`. 202 trials, each a full build plus a 9,024-shot `eval_circuit` — **no custom screen**
