@@ -2539,7 +2539,8 @@ pub fn build() -> Vec<Op> {
         let nonce = std::env::var("SUB4_PINGPONG_TAIL_NONCE")
             .unwrap_or_default()
             .parse::<u64>()
-            .unwrap_or(251000962439);
+            // Exact g1000 island. The environment knob remains an opt-out.
+            .unwrap_or(135608492183);
         let mut x = Op::empty();
         x.kind = OperationType::X;
         x.q_target = QubitId(0);
