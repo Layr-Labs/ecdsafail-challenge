@@ -451,15 +451,6 @@ impl B {
         if self.active_qubits > self.peak_qubits {
             self.peak_qubits = self.active_qubits;
             self.peak_ops_idx = self.current_ops_len();
-            if std::env::var_os("PP_LIVESET").is_some() {
-                use std::io::Write;
-                let mut freed: Vec<u32> = self.free_qubits.clone();
-                freed.sort_unstable();
-                if let Ok(mut f) = std::fs::File::create("liveset.txt") {
-                    writeln!(f, "peak_active={} next_qubit={} ops_idx={} phase={}", self.active_qubits, self.next_qubit, self.current_ops_len(), self.phase).ok();
-                    writeln!(f, "free_ids={:?}", freed).ok();
-                }
-            }
             self.peak_phase = self.phase;
             if std::env::var("TRACE_EACH_PEAK").is_ok() {
                 eprintln!(
@@ -2246,6 +2237,12 @@ fn ccz_self_inverse_cancel_conservative(ops: Vec<Op>) -> Vec<Op> {
 }
 
 pub fn build() -> Vec<Op> {
+    // Diagnostic: dump the width schedule (base + rescaled) and exit without
+    // emitting.  Byte-neutral to the shipped stream (gated, default-off).
+    if std::env::var_os("SUB4_DUMP_WSCHED").is_some() {
+        pingpong_div::dump_width_schedule();
+        return Vec::new();
+    }
     // Reproduce the exact source parent used by the q1150 route.  These are
     // intentionally forced instead of defaults so the benchmark environment
     // cannot select a different geometry.
@@ -2548,7 +2545,7 @@ pub fn build() -> Vec<Op> {
         let nonce = std::env::var("SUB4_PINGPONG_TAIL_NONCE")
             .unwrap_or_default()
             .parse::<u64>()
-            .unwrap_or(81327465284);
+            .unwrap_or(100000045835813);
         let mut x = Op::empty();
         x.kind = OperationType::X;
         x.q_target = QubitId(0);
