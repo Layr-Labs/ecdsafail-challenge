@@ -259,12 +259,6 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
                 shrink_to(b, &mut u, &mut v, value_width(plan.r1));
             }
             coefficient = b.alloc_qubits(N);
-            if std::env::var_os("PP_IDMAP").is_some() {
-                eprintln!("PP_IDMAP u=[{}..{}] len={} v=[{}..{}] len={} coeff=[{}..{}] num=[{}..{}] tape_len={} tape0={} tapeN={}",
-                    u[0].0, u[u.len()-1].0, u.len(), v[0].0, v[v.len()-1].0, v.len(),
-                    coefficient[0].0, coefficient[N-1].0, numerator[0].0, numerator[N-1].0,
-                    tape.len(), tape[0].0, tape[tape.len()-1].0);
-            }
             set_walk_peak(plan.peak);
             set_chunks(pick_chunks(&plan, plan.r1.min(rounds), u.len()));
             for r in 0..plan.r1.min(rounds) {
@@ -417,12 +411,21 @@ fn restore_wire_layout(
 }
 
 fn value_width(round: usize) -> usize {
-    const BREAK_1: usize = 30;
-    const BREAK_2: usize = 304;
-    const SLOPE_1: usize = 17;
-    const SLOPE_2: usize = 34;
-    const SLOPE_3: usize = 40;
-    const MARGIN: usize = 4;
+    static S_B1: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    static S_B2: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    static S_S1: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    static S_S2: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    static S_S3: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    static S_MG: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let break_1 = tuned_window("VW_BREAK1", &S_B1, 40);
+    let break_2 = tuned_window("VW_BREAK2", &S_B2, 304);
+    let slope_1 = tuned_window("VW_SLOPE1", &S_S1, 17);
+    let slope_2 = tuned_window("VW_SLOPE2", &S_S2, 34);
+    let slope_3 = tuned_window("VW_SLOPE3", &S_S3, 40);
+    let margin  = tuned_window("VW_MARGIN", &S_MG, 4);
+    #[allow(non_snake_case)] let BREAK_1 = break_1; #[allow(non_snake_case)] let BREAK_2 = break_2;
+    #[allow(non_snake_case)] let SLOPE_1 = slope_1; #[allow(non_snake_case)] let SLOPE_2 = slope_2;
+    #[allow(non_snake_case)] let SLOPE_3 = slope_3; #[allow(non_snake_case)] let MARGIN  = margin;
 
     let start = N + MARGIN;
     let round = width_round_index(round);
@@ -1090,10 +1093,6 @@ fn walk_back_round(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>, round:
         None => signed_add_wrapping(b, sign, source, target, false),
     }
     b.x(sign);
-    if tail_share_active() && round > tail_share_k() {
-        // aliased tail wire: owned by round tail_share_k(), do not touch it here
-        return;
-    }
     b.cx(target[1], sign);
     b.cx(source[1], sign);
     b.free(sign);
@@ -1176,17 +1175,6 @@ fn allowance(plan: &Plan, tape_len: usize, walk_width: usize) -> usize {
     plan.peak.saturating_sub(tape_len + 2 * N + 2 * walk_width)
 }
 
-/// Tail-share: post-convergence the sign is provably CONSTANT (measured 19,986/19,986),
-/// so every round at or above K can alias ONE wire instead of owning its own.
-/// Frees (rounds-1-K) tape qubits. Breaks only for inputs converging after K.
-fn tail_share_k() -> usize {
-    static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *SLOT.get_or_init(|| {
-        std::env::var("PP_TAIL_SHARE").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0)
-    })
-}
-fn tail_share_active() -> bool { tail_share_k() > 0 }
-
 fn value_walk(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>, rounds: usize) -> Vec<QubitId> {
     let mut tape = Vec::with_capacity(rounds);
     for round in 0..rounds {
@@ -1209,15 +1197,9 @@ fn value_walk(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>, rounds: usi
         } else {
             (&v[..width], &u[..width])
         };
-        let k = tail_share_k();
-        let sign = if tail_share_active() && round > k && !tape.is_empty() {
-            tape[k]
-        } else {
-            let s = b.alloc_qubit();
-            b.cx(target[1], s);
-            b.cx(source[1], s);
-            s
-        };
+        let sign = b.alloc_qubit();
+        b.cx(target[1], sign);
+        b.cx(source[1], sign);
         signed_add_wrapping(b, sign, source, target, true);
         tape.push(sign);
 
