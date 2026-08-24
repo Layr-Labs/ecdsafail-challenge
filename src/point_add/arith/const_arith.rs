@@ -692,53 +692,6 @@ pub(crate) fn csub_nbit_const_direct_trunc_fast_dead_low(
     window: usize,
     first_borrow_is_zero: bool,
 ) {
-    csub_nbit_const_direct_trunc_fast_dead_low_impl(
-        b,
-        acc,
-        c,
-        ctrl,
-        window,
-        first_borrow_is_zero,
-        None,
-        false,
-    );
-}
-
-/// Variant for a controlled odd subtraction whose low accumulator bit equals
-/// `ctrl` at entry. Clearing that bit applies its sum update early and turns it
-/// into a clean host for the final borrow. The host is HMR-cleared back to the
-/// required zero output after the final borrow has updated the next sum bit.
-pub(crate) fn csub_nbit_const_direct_trunc_fast_dead_low_ctrl_low0_host(
-    b: &mut B,
-    acc: &[QubitId],
-    c: U256,
-    ctrl: QubitId,
-    window: usize,
-) {
-    assert!(acc.len() > 1 && bit(c, 0));
-    b.cx(ctrl, acc[0]);
-    csub_nbit_const_direct_trunc_fast_dead_low_impl(
-        b,
-        acc,
-        c,
-        ctrl,
-        window,
-        true,
-        Some(acc[0]),
-        true,
-    );
-}
-
-fn csub_nbit_const_direct_trunc_fast_dead_low_impl(
-    b: &mut B,
-    acc: &[QubitId],
-    c: U256,
-    ctrl: QubitId,
-    window: usize,
-    first_borrow_is_zero: bool,
-    last_borrow_host: Option<QubitId>,
-    low0_sum_preapplied: bool,
-) {
     let n = acc.len();
     if n == 0 {
         return;
@@ -754,18 +707,11 @@ fn csub_nbit_const_direct_trunc_fast_dead_low_impl(
     let last = core::cmp::min(n - 2, hi.saturating_add(window));
     let dead = dead_low_carry_run(c, last, first_borrow_is_zero);
     if dead == 0 {
-        assert!(last_borrow_host.is_none() && !low0_sum_preapplied);
         csub_nbit_const_direct_trunc_fast(b, acc, c, ctrl, window);
         return;
     }
     let maj2 = fold_maj2_enabled();
-    let hosted = usize::from(last_borrow_host.is_some());
-    let owned_borrows = b.alloc_qubits(last + 1 - dead - hosted);
-    let mut borrows = owned_borrows.clone();
-    if let Some(host) = last_borrow_host {
-        assert!(last >= dead && host != ctrl && !acc[dead..].contains(&host));
-        borrows.push(host);
-    }
+    let borrows = b.alloc_qubits(last + 1 - dead);
     let borrow_at = |i: usize| -> Option<QubitId> {
         (i >= dead).then(|| borrows[i - dead])
     };
@@ -789,7 +735,7 @@ fn csub_nbit_const_direct_trunc_fast_dead_low_impl(
     }
 
     for i in 0..n {
-        if bit(c, i) && !(low0_sum_preapplied && i == 0) {
+        if bit(c, i) {
             b.cx(ctrl, acc[i]);
         }
         if i > 0 && i - 1 <= last {
@@ -816,7 +762,7 @@ fn csub_nbit_const_direct_trunc_fast_dead_low_impl(
         }
     }
 
-    b.free_vec(&owned_borrows);
+    b.free_vec(&borrows);
 }
 
 fn special_fold_park_low_carries() -> usize {

@@ -945,9 +945,9 @@ pub fn compare_geq_cin_middle<F: FnOnce(&mut B, &QubitId, &QubitId, &QubitId)>(
 /// behaviour.
 ///
 /// `drops = None` disables the drops entirely. A caller that changes the *value* of the carry chain
-/// For example, truncating the window forces carry-in 0 where the fitted circuit had a real
-/// carry-in. Such callers MUST use `None`: the census established those gates
-/// never fire in the untruncated chain, and that evidence does not transfer.
+/// — e.g. by truncating the window, which forces carry-in 0 where the fitted circuit had a real
+/// carry-in — MUST use `None`: the census established those gates never fire in the untruncated
+/// chain, and that evidence does not transfer.
 pub fn compare_geq_cin_middle_keyed<F: FnOnce(&mut B, &QubitId, &QubitId, &QubitId)>(
     circ: &mut B,
     a: &[QubitId],

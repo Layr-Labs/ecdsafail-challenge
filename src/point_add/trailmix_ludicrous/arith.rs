@@ -457,7 +457,7 @@ pub const MSBS: usize = PAD;
 pub fn msbs() -> usize {
     static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
-        std::env::var("TLM_MSBS").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(PAD)
+        std::env::var("TLM_MSBS").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(48)
     })
 }
 
@@ -1474,6 +1474,9 @@ fn controlled_lt_msbs_conditional(circ: &mut B, ctrl: Option<&QubitId>, a: &[Qub
     let ctrl = ctrl.copied();
     circ.push_condition(bit);
 
+    // Keep the predecessor's clean flag allocation live so the headroom-capped
+    // comparator selects the same k/split and preserves call/bit census geometry.
+    let headroom_guard = circ.alloc_qubit();
     super::comparator::compare_geq_chunked_middle_complement_phase(
         circ,
         &a_top,
@@ -1481,6 +1484,7 @@ fn controlled_lt_msbs_conditional(circ: &mut B, ctrl: Option<&QubitId>, a: &[Qub
         ctrl.as_ref(),
         k,
     );
+    circ.zero_and_free(headroom_guard);
     circ.pop_condition();
 }
 
@@ -1495,6 +1499,8 @@ fn controlled_add_carry_msbs_conditional(circ: &mut B, ctrl: Option<&QubitId>, a
     }
 
     let ctrl = ctrl.copied();
+    // Preserve the old flag-reserved headroom while omitting only the final carry.
+    let headroom_guard = circ.alloc_qubit();
     super::comparator::compare_geq_chunked_middle_complement_phase(
         circ,
         &b_top,
@@ -1502,6 +1508,7 @@ fn controlled_add_carry_msbs_conditional(circ: &mut B, ctrl: Option<&QubitId>, a
         ctrl.as_ref(),
         k,
     );
+    circ.zero_and_free(headroom_guard);
     for q in &b_top {
         circ.x(*q);
     }

@@ -497,7 +497,7 @@ pub fn mod_square_sub_pm_secp256k1_symmetric(circ: &mut B, lambda: &[QubitId], o
     assert_eq!(lambda.len(), n, "lambda must be n=256 bits (< q)");
     assert_eq!(output_reg.len(), n, "output must be n=256 bits (< q)");
 
-    if std::env::var_os("SUB4_LEGACY_SQUARE").is_none() {
+    if std::env::var_os("SUB4_LEGACY_SQUARE").is_some_and(|v| v == "0") {
         circ.set_phase("square_product_register");
         product_register::square_sub(circ, lambda, output_reg);
         return;
