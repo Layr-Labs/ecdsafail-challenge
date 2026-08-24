@@ -373,9 +373,11 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
             coefficient = b.alloc_qubits(N);
             set_walk_peak(walk_peak(&plan));
             set_chunks(pick_chunks(&plan, plan.r1.min(rounds), u.len()));
+            let odd_passengers = loan_interleaved_odd_passengers(b, &u, &v);
             for r in 0..plan.r1.min(rounds) {
                 replay_halving_round(b, r, tape[r], &coefficient, numerator);
             }
+            restore_interleaved_odd_passengers(b, odd_passengers);
             clear_chunks();
             for r in plan.r1..=plan.r2.min(rounds - 1) {
                 if r >= rounds {
@@ -386,7 +388,9 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
                     shrink_to(b, &mut u, &mut v, value_width(r + 1));
                 }
                 set_chunks(pick_chunks(&plan, tape.len(), u.len()));
+                let odd_passengers = loan_interleaved_odd_passengers(b, &u, &v);
                 replay_halving_round(b, r, tape[r], &coefficient, numerator);
+                restore_interleaved_odd_passengers(b, odd_passengers);
                 clear_chunks();
             }
             for r in (plan.r2 + 1).max(plan.r1)..rounds {
@@ -440,16 +444,20 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
             }
             for r in (plan.r1..=plan.r2.min(rounds - 1)).rev() {
                 set_chunks(pick_chunks(&plan, r + 1, u.len()));
+                let odd_passengers = loan_interleaved_odd_passengers(b, &u, &v);
                 replay_doubling_round(b, r, tape[r], &coefficient, numerator);
+                restore_interleaved_odd_passengers(b, odd_passengers);
                 clear_chunks();
                 let sign = tape.pop().expect("tape has round r");
                 assert_eq!(tape.len(), r);
                 walk_back_round(b, &mut u, &mut v, r, sign, rounds);
             }
             set_chunks(pick_chunks(&plan, plan.r1.min(rounds), u.len()));
+            let odd_passengers = loan_interleaved_odd_passengers(b, &u, &v);
             for r in (0..plan.r1.min(rounds)).rev() {
                 replay_doubling_round(b, r, tape[r], &coefficient, numerator);
             }
+            restore_interleaved_odd_passengers(b, odd_passengers);
             clear_chunks();
             b.free_vec(&coefficient);
             clear_walk_peak();
@@ -1829,6 +1837,31 @@ fn walk_peak(plan: &Plan) -> usize {
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(plan.peak)
+}
+
+/// Loan the source-proven odd low bits while replay uses only the tape and
+/// coefficient registers. Terminal replay already applies this identity to
+/// the complete terminal walk state; this is its nonterminal counterpart.
+fn loan_interleaved_odd_passengers(
+    b: &mut B,
+    u: &[QubitId],
+    v: &[QubitId],
+) -> [QubitId; 2] {
+    assert!(!u.is_empty() && !v.is_empty());
+    let passengers = [u[0], v[0]];
+    assert_ne!(passengers[0], passengers[1]);
+    for &q in &passengers {
+        b.x(q);
+        b.release_clean(q);
+    }
+    passengers
+}
+
+fn restore_interleaved_odd_passengers(b: &mut B, passengers: [QubitId; 2]) {
+    for &q in passengers.iter().rev() {
+        b.reacquire(q);
+        b.x(q);
+    }
 }
 
 fn value_walk(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>, rounds: usize) -> Vec<QubitId> {
