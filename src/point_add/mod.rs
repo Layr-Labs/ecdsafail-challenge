@@ -2461,7 +2461,7 @@ pub fn build() -> Vec<Op> {
     // externally overridable for focused reliability experiments. The
     // pingpong tail nonce intentionally remains at the frontier fallback.
     set_default_env("SUB4_PINGPONG_LOW56_FOLD", "1");
-    set_default_env("SUB4_PP_ROUNDS", "696");
+    set_default_env("SUB4_PP_ROUNDS", "694");
     // Keep one additional multiply traversal round as a bounded reliability
     // purchase. The extra tape wire raises this composition from Q1267 to
     // Q1268 while retaining a projected score improvement above 0.1%.
@@ -2581,7 +2581,7 @@ pub fn build() -> Vec<Op> {
         let nonce = std::env::var("SUB4_PINGPONG_TAIL_NONCE")
             .unwrap_or_default()
             .parse::<u64>()
-            .unwrap_or(900613964630);
+            .unwrap_or(1200595782693);
         let mut x = Op::empty();
         x.kind = OperationType::X;
         x.q_target = QubitId(0);
