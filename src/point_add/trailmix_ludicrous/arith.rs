@@ -1474,13 +1474,23 @@ fn controlled_lt_msbs_conditional(circ: &mut B, ctrl: Option<&QubitId>, a: &[Qub
     let ctrl = ctrl.copied();
     circ.push_condition(bit);
 
-    super::comparator::compare_geq_chunked_middle_complement_phase(
+    let lt_flag = circ.alloc_qubit();
+    super::comparator::compare_geq_chunked_middle(
         circ,
         &a_top,
         &b_top,
-        ctrl.as_ref(),
+        &lt_flag,
+        |c, flag| {
+            c.x(*flag);
+            match &ctrl {
+                Some(ct) => c.cz(*ct, *flag),
+                None => c.z(*flag),
+            }
+            c.x(*flag);
+        },
         k,
     );
+    circ.zero_and_free(lt_flag);
     circ.pop_condition();
 }
 
@@ -1495,13 +1505,16 @@ fn controlled_add_carry_msbs_conditional(circ: &mut B, ctrl: Option<&QubitId>, a
     }
 
     let ctrl = ctrl.copied();
-    super::comparator::compare_geq_chunked_middle_complement_phase(
-        circ,
-        &b_top,
-        &a_top,
-        ctrl.as_ref(),
-        k,
-    );
+    let lt_flag = circ.alloc_qubit();
+    super::comparator::compare_geq_chunked_middle(circ, &b_top, &a_top, &lt_flag, |c, flag| {
+        c.x(*flag);
+        match &ctrl {
+            Some(ct) => c.cz(*ct, *flag),
+            None => c.z(*flag),
+        }
+        c.x(*flag);
+    }, k);
+    circ.zero_and_free(lt_flag);
     for q in &b_top {
         circ.x(*q);
     }
