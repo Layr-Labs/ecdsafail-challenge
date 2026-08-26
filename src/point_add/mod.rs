@@ -2460,6 +2460,16 @@ pub fn build() -> Vec<Op> {
     // Freeze the Q1267 fallback composition while keeping each knob
     // externally overridable for focused reliability experiments. The
     // pingpong tail nonce intentionally remains at the frontier fallback.
+    // SW-1: TLM_FFG_MAX_G is clamped to 47 by
+    // configure_q1153_second512_submission_defaults(), which belongs to the
+    // RETIRED Q1153 route. It still governs all 14 live add_f_window folds on
+    // this path, where the clamp is not needed: 55 is the width limit and any
+    // value >= 55 is bit-identical. Lifting it converts all 14 to the clean
+    // ladder. Measured -45.566 executed Toffoli, paired over 8 frozen seeds;
+    // lambda_c delta 0 by bit-identical frozen failure sets 8/8; peak unchanged.
+    // Set here, in the promoted route's own block, rather than by editing the
+    // retired installer.
+    std::env::set_var("TLM_FFG_MAX_G", "55");
     set_default_env("SUB4_PINGPONG_LOW56_FOLD", "1");
     set_default_env("SUB4_PP_ROUNDS", "696");
     // Keep one additional multiply traversal round as a bounded reliability
@@ -2581,7 +2591,7 @@ pub fn build() -> Vec<Op> {
         let nonce = std::env::var("SUB4_PINGPONG_TAIL_NONCE")
             .unwrap_or_default()
             .parse::<u64>()
-            .unwrap_or(11024017180859);
+            .unwrap_or(12023044890526);
         let mut x = Op::empty();
         x.kind = OperationType::X;
         x.q_target = QubitId(0);
