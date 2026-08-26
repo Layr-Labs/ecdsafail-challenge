@@ -2477,9 +2477,20 @@ pub fn build() -> Vec<Op> {
     // Q1268 while retaining a projected score improvement above 0.1%.
     set_default_env("SUB4_PP_ROUNDS_MUL", "694");
     set_default_env("SUB4_PP_R1", "335");
-    set_default_env("SUB4_PP_R1_MUL", "315");
+    // R1MUL-326: multiply-side round-1 split point. The response curve is JAGGED, not
+    // monotone (324 -> -189 CCX, 325 -> +113, 326 -> -231, 327 -> +74), so this is a discrete
+    // schedule boundary and a true local minimum rather than a failure-budget purchase.
+    // -231 CCX deterministic on every seed; peak unchanged. Measured lambda-free.
+    set_default_env("SUB4_PP_R1_MUL", "326");
     set_default_env("SUB4_PP_R2", "645");
-    set_default_env("SUB4_PP_PEAK", "1267");
+    // PP-1268: raise the ping-pong peak governor by one. At the SHIPPED ROUNDS=696 the
+    // realized peak floor is max(ROUNDS, ROUNDS_MUL) + 570 = 1266, and the ladder quantizes so
+    // that PEAK=1268 does NOT move the realized peak (1269 does; so does 1268 with WALK=1268).
+    // The extra unit of allowance lets the headroom-scheduled primitives take a cheaper
+    // ladder: -952 CCX deterministic, peak unchanged at 1266. Previously retracted as a dead
+    // end when the shipped config was ROUNDS=694, where PEAK=1268 realizes peak 1268 and costs
+    // two qubits; restoring ROUNDS to 696 revived it.
+    set_default_env("SUB4_PP_PEAK", "1268");
     set_default_env("SUB4_PP_WALK_PEAK", "1267");
     set_default_env("SUB4_PP_REPLAY_CHUNK", "96");
     set_default_env("SUB4_PP_REPLAY_CHUNK_COMPARE", "22");
@@ -2591,7 +2602,7 @@ pub fn build() -> Vec<Op> {
         let nonce = std::env::var("SUB4_PINGPONG_TAIL_NONCE")
             .unwrap_or_default()
             .parse::<u64>()
-            .unwrap_or(12023044890526);
+            .unwrap_or(41032007408473);
         let mut x = Op::empty();
         x.kind = OperationType::X;
         x.q_target = QubitId(0);
