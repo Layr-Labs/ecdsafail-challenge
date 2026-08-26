@@ -478,13 +478,17 @@ fn karatsuba_branch(
     ];
     for (sub, sub_shifts) in branches {
         let p = circ.alloc_qubits(2 * sub.len());
-        tri_square(circ, sub, &p, false);
+        // SQUARE-DEEPENING: this sub-product register IS materialised (the
+        // folds below consume it as an operand), so the in-place split
+        // licence applies here exactly as it does to branch B. Retention
+        // spans only this sub's folds and is released before the next sub.
+        let ret = tri_square_k2r(circ, sub, &p, ack2_min());
         for &(ss, sneg) in sub_shifts {
             for &(ps, pneg) in coefficients {
                 fold_shifted(circ, sign, &p, out, overflow, ss + ps, sneg ^ pneg);
             }
         }
-        tri_square(circ, sub, &p, true);
+        tri_square_k2r_inv(circ, sub, &p, ret);
         circ.free_vec(&p);
     }
 
@@ -499,6 +503,226 @@ fn karatsuba_branch(
     circ.free_vec(&t);
 }
 
+/// NEW-ROUTES prototype (2026-08-26): in-place level-2 Karatsuba for branch B
+/// (`y_hi^2`), keeping the materialized 256-bit product register and every
+/// parent fold byte-identical. `a^2` and `b^2` are built by `tri_square`
+/// directly into the two DISJOINT halves of the zeroed product register; the
+/// cross term `2ab = t^2 - a^2 - b^2` is built in a retained 130-qubit scratch
+/// and rippled in at shift 64 with one full-width exact add. The scratch (and
+/// `t`) stay live across the parent folds so the inverse direction never
+/// recomputes a sub-square.
+///
+/// Lambda: every new primitive is an exact full-width add/subtract
+/// (`add_full`/`sub_full` at the non-chunked width; measurement-based carry
+/// erasure is exact). Zero truncated comparisons, zero windowed folds, zero
+/// measured chunk boundaries are added or removed, so the per-shot failure
+/// site count is unchanged in both channels by construction.
+/// `SUB4_SQUARE_B_LOCAL_K2=1` enables; default off (A/B measurement).
+///
+/// SQUARE-DEEPENING extension (2026-08-26): the same in-place split is made
+/// RECURSIVE and width-thresholded. Any materialised tri_square of width
+/// >= the threshold gets the local split; its `a^2` / `b^2` land in halves of
+/// an already-materialised register and therefore carry the same licence one
+/// level down, as does `t^2` inside its own retained scratch. Two scopes,
+/// controlled separately so the peak cost of retention can be measured per
+/// scope:
+///   SUB4_SQUARE_BK2_MIN=<w>  — branch B (`y_hi^2`) recursion threshold.
+///     128 reproduces route N-1 exactly; 64 adds level 3; default off.
+///     SUB4_SQUARE_B_LOCAL_K2=1 is kept as an alias for BK2_MIN=128.
+///   SUB4_SQUARE_ACK2_MIN=<w> — threshold for the six materialised
+///     sub-squares inside branches A/C's `karatsuba_branch` (widths 64..66).
+///     64 gives them each one local level; default off.
+fn env_width(name: &str) -> Option<usize> {
+    std::env::var(name).ok().and_then(|v| v.parse::<usize>().ok())
+}
+
+fn bk2_min() -> usize {
+    static MIN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *MIN.get_or_init(|| {
+        if let Some(w) = env_width("SUB4_SQUARE_BK2_MIN") {
+            return w;
+        }
+        let legacy = std::env::var_os("SUB4_SQUARE_B_LOCAL_K2")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        if legacy {
+            128
+        } else {
+            usize::MAX
+        }
+    })
+}
+
+fn ack2_min() -> usize {
+    static MIN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *MIN.get_or_init(|| env_width("SUB4_SQUARE_ACK2_MIN").unwrap_or(usize::MAX))
+}
+
+/// Q3 decomposition probe: materialise branch A (`y_lo^2`) / branch C
+/// (`sum^2`) like branch B instead of the W5 no-materialisation
+/// `karatsuba_branch` composition. Trades A's 10 (C's 5) composed narrow
+/// folds — several of which straddle bit 256 and pay a 5-term `apply_f` on
+/// their high parts — for 2 (1) wide folds plus the in-place-K2 assembly
+/// overhead and 195/198 retained qubits across that branch's folds.
+/// `SUB4_SQUARE_A_MAT=1` / `SUB4_SQUARE_C_MAT=1`; default off.
+fn a_mat_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("SUB4_SQUARE_A_MAT")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+    })
+}
+
+fn c_mat_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("SUB4_SQUARE_C_MAT")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+    })
+}
+
+/// Scratch retained across the consumer's folds by one level of the in-place
+/// split, plus whatever the recursion below it retained. Everything in here
+/// stays live from the forward call to the matching inverse call.
+struct K2Retained {
+    t: Vec<QubitId>,
+    p_t: Vec<QubitId>,
+    sub_a: Option<Box<K2Retained>>,
+    sub_b: Option<Box<K2Retained>>,
+    sub_t: Option<Box<K2Retained>>,
+}
+
+/// Forward triangular square of `x` into the materialised `product`, applying
+/// the retained in-place Karatsuba split recursively while `x.len() >=
+/// min_width`. Returns the retained scratch (None = plain tri_square, no
+/// retention). Op-order at min_width=128 on a 128-wide operand is identical
+/// to route N-1's `tri_square_local_k2_forward`.
+fn tri_square_k2r(
+    circ: &mut B,
+    x: &[QubitId],
+    product: &[QubitId],
+    min_width: usize,
+) -> Option<Box<K2Retained>> {
+    let m = x.len();
+    assert_eq!(product.len(), 2 * m);
+    if m < min_width {
+        tri_square(circ, x, product, false);
+        return None;
+    }
+    let lo = m / 2;
+    let hi = m - lo;
+    let a = &x[..lo];
+    let bs = &x[lo..];
+    // a^2 and b^2 straight into the disjoint halves of the zeroed product.
+    let sub_a = tri_square_k2r(circ, a, &product[..2 * lo], min_width);
+    let sub_b = tri_square_k2r(circ, bs, &product[2 * lo..], min_width);
+    // t = a + b, hi+1 bits.
+    let t = circ.alloc_qubits(hi + 1);
+    for i in 0..lo {
+        circ.cx(a[i], t[i]);
+    }
+    let pad = circ.alloc_qubit();
+    let mut b_wide = bs.to_vec();
+    b_wide.push(pad);
+    add_full(circ, &b_wide, &t[..hi + 1]);
+    circ.zero_and_free(pad);
+    // p_t = t^2, then subtract the still-pure halves: p_t = 2ab. Both
+    // intermediates are nonnegative (t^2 - a^2 = 2ab + b^2 >= 0), so the
+    // two's-complement frame never wraps at this width.
+    let p_t = circ.alloc_qubits(2 * (hi + 1));
+    let sub_t = tri_square_k2r(circ, &t, &p_t, min_width);
+    let pads = circ.alloc_qubits(p_t.len() - 2 * lo);
+    let mut a2_wide = product[..2 * lo].to_vec();
+    a2_wide.extend_from_slice(&pads);
+    sub_full(circ, &a2_wide, &p_t);
+    circ.free_vec(&pads);
+    let pads = circ.alloc_qubits(p_t.len() - 2 * hi);
+    let mut b2_wide = product[2 * lo..].to_vec();
+    b2_wide.extend_from_slice(&pads);
+    sub_full(circ, &b2_wide, &p_t);
+    circ.free_vec(&pads);
+    // product += 2ab << lo, exact full ripple to the top (x^2 < 2^(2m), so
+    // the top never overflows).
+    let acc_hi = &product[lo..];
+    let pads = circ.alloc_qubits(acc_hi.len() - p_t.len());
+    let mut pt_wide = p_t.to_vec();
+    pt_wide.extend_from_slice(&pads);
+    add_full(circ, &pt_wide, acc_hi);
+    circ.free_vec(&pads);
+    Some(Box::new(K2Retained {
+        t,
+        p_t,
+        sub_a,
+        sub_b,
+        sub_t,
+    }))
+}
+
+/// Inverse of `tri_square_k2r`, consuming its retained scratch. Requires
+/// `product` to hold exactly `x^2` (i.e. every consumer fold undone).
+fn tri_square_k2r_inv(
+    circ: &mut B,
+    x: &[QubitId],
+    product: &[QubitId],
+    retained: Option<Box<K2Retained>>,
+) {
+    let m = x.len();
+    assert_eq!(product.len(), 2 * m);
+    let Some(ret) = retained else {
+        tri_square(circ, x, product, true);
+        return;
+    };
+    let K2Retained {
+        t,
+        p_t,
+        sub_a,
+        sub_b,
+        sub_t,
+    } = *ret;
+    let lo = m / 2;
+    let a = &x[..lo];
+    let bs = &x[lo..];
+    // product -= 2ab << lo: the halves are pure a^2 / b^2 again.
+    let acc_hi = &product[lo..];
+    let pads = circ.alloc_qubits(acc_hi.len() - p_t.len());
+    let mut pt_wide = p_t.to_vec();
+    pt_wide.extend_from_slice(&pads);
+    sub_full(circ, &pt_wide, acc_hi);
+    circ.free_vec(&pads);
+    // p_t: 2ab -> t^2, then clear it with the inverse triangular square.
+    let pads = circ.alloc_qubits(p_t.len() - 2 * hi_len(m));
+    let mut b2_wide = product[2 * lo..].to_vec();
+    b2_wide.extend_from_slice(&pads);
+    add_full(circ, &b2_wide, &p_t);
+    circ.free_vec(&pads);
+    let pads = circ.alloc_qubits(p_t.len() - 2 * lo);
+    let mut a2_wide = product[..2 * lo].to_vec();
+    a2_wide.extend_from_slice(&pads);
+    add_full(circ, &a2_wide, &p_t);
+    circ.free_vec(&pads);
+    tri_square_k2r_inv(circ, &t, &p_t, sub_t);
+    circ.free_vec(&p_t);
+    // Uncompute t = a + b.
+    let pad = circ.alloc_qubit();
+    let mut b_wide = bs.to_vec();
+    b_wide.push(pad);
+    sub_full(circ, &b_wide, &t);
+    circ.zero_and_free(pad);
+    for i in 0..lo {
+        circ.cx(a[i], t[i]);
+    }
+    circ.free_vec(&t);
+    // Clear the pure halves.
+    tri_square_k2r_inv(circ, bs, &product[2 * lo..], sub_b);
+    tri_square_k2r_inv(circ, a, &product[..2 * lo], sub_a);
+}
+
+fn hi_len(m: usize) -> usize {
+    m - m / 2
+}
+
 pub(super) fn square_sub(circ: &mut B, y: &[QubitId], out: &[QubitId]) {
     assert_eq!(y.len(), N);
     assert_eq!(out.len(), N);
@@ -507,7 +731,19 @@ pub(super) fn square_sub(circ: &mut B, y: &[QubitId], out: &[QubitId]) {
     let overflow = circ.alloc_qubit();
     circ.x(sign);
 
-    if karatsuba2_enabled() {
+    if a_mat_enabled() {
+        // Q3 probe: branch A materialised, N-1-style in-place K2, same fold
+        // semantics as the legacy path (+A at shift 0, -A at shift h).
+        let product_a = circ.alloc_qubits(2 * h);
+        let amin = env_width("SUB4_SQUARE_AMAT_MIN").unwrap_or(128);
+        let ret = tri_square_k2r(circ, &y[..h], &product_a, amin);
+        mod_add_top(circ, sign, &product_a, out, overflow, 0);
+        circ.x(sign);
+        apply_shift_half(circ, sign, &product_a, out, overflow);
+        circ.x(sign);
+        tri_square_k2r_inv(circ, &y[..h], &product_a, ret);
+        circ.free_vec(&product_a);
+    } else if karatsuba2_enabled() {
         karatsuba_branch(circ, &y[..h], &[(0, false), (h, true)], out, sign, overflow);
     } else {
         let product_a = circ.alloc_qubits(2 * h);
@@ -521,12 +757,12 @@ pub(super) fn square_sub(circ: &mut B, y: &[QubitId], out: &[QubitId]) {
     }
 
     let product_b = circ.alloc_qubits(2 * h);
-    tri_square(circ, &y[h..], &product_b, false);
+    let retained = tri_square_k2r(circ, &y[h..], &product_b, bk2_min());
     circ.x(sign);
     apply_shift_half(circ, sign, &product_b, out, overflow);
     circ.x(sign);
     apply_shift_full(circ, sign, &product_b, out, overflow);
-    tri_square(circ, &y[h..], &product_b, true);
+    tri_square_k2r_inv(circ, &y[h..], &product_b, retained);
     circ.free_vec(&product_b);
 
     // MERGE: hold a+b in the input's high half plus one carry wire (theirs).
@@ -543,7 +779,16 @@ pub(super) fn square_sub(circ: &mut B, y: &[QubitId], out: &[QubitId]) {
     add_full(circ, &lo_wide, &sum);
     circ.zero_and_free(pad);
 
-    if karatsuba2_enabled() {
+    if c_mat_enabled() {
+        // Q3 probe: branch C materialised (258-wide product, the
+        // `apply_shift_half` straddle case), in-place K2.
+        let product_c = circ.alloc_qubits(2 * (h + 1));
+        let cmin = env_width("SUB4_SQUARE_CMAT_MIN").unwrap_or(128);
+        let ret = tri_square_k2r(circ, &sum, &product_c, cmin);
+        apply_shift_half(circ, sign, &product_c, out, overflow);
+        tri_square_k2r_inv(circ, &sum, &product_c, ret);
+        circ.free_vec(&product_c);
+    } else if karatsuba2_enabled() {
         karatsuba_branch(circ, &sum, &[(h, false)], out, sign, overflow);
     } else {
         let product_c = circ.alloc_qubits(2 * (h + 1));
@@ -582,54 +827,105 @@ pub(super) fn selfcheck() {
     let peak_qubits = circ.peak_qubits;
     let ops = circ.take_ops();
 
-    let mut input_seed = Shake256::default();
-    input_seed.update(b"product-register-square-inputs");
-    let mut input_reader = input_seed.finalize_xof();
-    let mut sources = [U256::ZERO; 64];
-    let mut accumulators = [U256::ZERO; 64];
-    let mut expected = [U256::ZERO; 64];
-    let mut bytes = [0u8; 32];
-    for shot in 0..64 {
-        input_reader.read(&mut bytes);
-        sources[shot] = U256::from_le_bytes(bytes) % SECP256K1_P;
-        input_reader.read(&mut bytes);
-        accumulators[shot] = U256::from_le_bytes(bytes) % SECP256K1_P;
-        let square = sources[shot].mul_mod(sources[shot], SECP256K1_P);
-        expected[shot] = if accumulators[shot] >= square {
-            accumulators[shot] - square
-        } else {
-            SECP256K1_P - (square - accumulators[shot])
-        };
-    }
-
-    let mut sim_seed = Shake256::default();
-    sim_seed.update(b"product-register-square-simulator");
-    let mut sim_reader = sim_seed.finalize_xof();
-    let mut sim = Simulator::new(num_qubits, num_bits, &mut sim_reader);
+    let batches: usize = std::env::var("SQ_SELFTEST_BATCHES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
     let source_reg: Vec<QubitOrBit> = source.iter().copied().map(QubitOrBit::Qubit).collect();
     let accumulator_reg: Vec<QubitOrBit> = accumulator
         .iter()
         .copied()
         .map(QubitOrBit::Qubit)
         .collect();
-    for shot in 0..64 {
-        sim.set_register(&source_reg, sources[shot], shot);
-        sim.set_register(&accumulator_reg, accumulators[shot], shot);
-    }
-    sim.apply_iter(ops.iter());
+    for batch in 0..batches {
+        let mut input_seed = Shake256::default();
+        input_seed.update(b"product-register-square-inputs");
+        input_seed.update(&(batch as u64).to_le_bytes());
+        let mut input_reader = input_seed.finalize_xof();
+        let mut sources = [U256::ZERO; 64];
+        let mut accumulators = [U256::ZERO; 64];
+        let mut expected = [U256::ZERO; 64];
+        let mut bytes = [0u8; 32];
+        for shot in 0..64 {
+            input_reader.read(&mut bytes);
+            sources[shot] = U256::from_le_bytes(bytes) % SECP256K1_P;
+            input_reader.read(&mut bytes);
+            accumulators[shot] = U256::from_le_bytes(bytes) % SECP256K1_P;
+            let square = sources[shot].mul_mod(sources[shot], SECP256K1_P);
+            expected[shot] = if accumulators[shot] >= square {
+                accumulators[shot] - square
+            } else {
+                SECP256K1_P - (square - accumulators[shot])
+            };
+        }
 
-    for shot in 0..64 {
-        assert_eq!(sim.get_register(&source_reg, shot), sources[shot]);
-        assert_eq!(sim.get_register(&accumulator_reg, shot), expected[shot]);
-    }
-    assert_eq!(sim.phase, 0, "phase garbage in product-register square");
-    for q in 0..num_qubits as u64 {
-        let q = QubitId(q);
-        if source.contains(&q) || accumulator.contains(&q) {
+        let mut sim_seed = Shake256::default();
+        sim_seed.update(b"product-register-square-simulator");
+        sim_seed.update(&(batch as u64).to_le_bytes());
+        let mut sim_reader = sim_seed.finalize_xof();
+        let mut sim = Simulator::new(num_qubits, num_bits, &mut sim_reader);
+        for shot in 0..64 {
+            sim.set_register(&source_reg, sources[shot], shot);
+            sim.set_register(&accumulator_reg, accumulators[shot], shot);
+        }
+        sim.apply_iter(ops.iter());
+
+        let counting = std::env::var_os("SQ_SELFTEST_COUNT").is_some();
+        for shot in 0..64 {
+            let src_ok = sim.get_register(&source_reg, shot) == sources[shot];
+            let acc_ok = sim.get_register(&accumulator_reg, shot) == expected[shot];
+            if counting {
+                if !src_ok || !acc_ok {
+                    let got = sim.get_register(&accumulator_reg, shot);
+                    eprintln!(
+                        "SQ_FAIL batch={batch} shot={shot} src_ok={src_ok} acc_ok={acc_ok} diff_bits={}",
+                        if acc_ok { String::from("-") } else {
+                            let (g, e) = (got, expected[shot]);
+                            let d = if e > g { e - g } else { g - e };
+                            format!("{:x}", d)
+                        }
+                    );
+                }
+            } else {
+                assert!(src_ok, "source register mismatch batch {batch} shot {shot}");
+                assert!(acc_ok, "accumulator mismatch batch {batch} shot {shot}");
+            }
+        }
+        if counting {
+            if sim.phase != 0 {
+                eprintln!("SQ_PHASE batch={batch} word={:x}", sim.phase);
+            }
+        } else {
+            assert_eq!(sim.phase, 0, "phase garbage in product-register square");
+        }
+        for q in 0..num_qubits as u64 {
+            let q = QubitId(q);
+            if source.contains(&q) || accumulator.contains(&q) {
+                continue;
+            }
+            if counting {
+                if sim.qubit(q) != 0 {
+                    eprintln!("SQ_DIRTY batch={batch} q={q:?}");
+                }
+            } else {
+                assert_eq!(sim.qubit(q), 0, "dirty product-square ancilla {q:?}");
+            }
+        }
+        if batch % 5000 == 0 {
+            eprintln!("sq-selftest batch {batch}/{batches} clean-so-far");
+        }
+        if batch + 1 < batches {
             continue;
         }
-        assert_eq!(sim.qubit(q), 0, "dirty product-square ancilla {q:?}");
     }
+    {
+    // final-batch stats reporting uses the last sim below via a fresh run
+    }
+    let mut sim_seed = Shake256::default();
+    sim_seed.update(b"product-register-square-simulator");
+    let mut sim_reader = sim_seed.finalize_xof();
+    let mut sim = Simulator::new(num_qubits, num_bits, &mut sim_reader);
+    sim.apply_iter(ops.iter());
 
     let emitted = ops
         .iter()
