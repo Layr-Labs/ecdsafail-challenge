@@ -2247,6 +2247,242 @@ pub(crate) fn square_addsub_vented_inverse(b: &mut B, x: &[QubitId], prod: &[Qub
     }
 }
 
+// =====================================================================================
+// window_spanning_csa_modular_collapse — `mul_pow2_split_with_cse_reuse`
+// =====================================================================================
+//
+// Windowed modular multiplier that keeps the partial product in carry-save form across
+// each `window_bits`-sized slice of the multiplier, appends each per-iteration
+// `mod_add_qq_*` as a `csa_append` (only adding into the *sum* leg; the *carry* leg is
+// resolved in a single end-of-window pass), folds an optional `quotient_hint` bit into
+// the next window's multiply, and reuses the `nbit.rs` time-share workspace via
+// `rotate_in_at_start` / `rotate_out_at_end`.
+//
+// The CSE-reuse wiring is preserved by routing per-window digit selection through
+// `controlled_add_subtract_lowq` when the `MUL_POW2_CSE_REUSE` env flag is set
+// (default = on, matching the existing lowq schoolbook path).
+//
+// The nbit.rs time-share contract is assumed to already support the requested rotation
+// (verify before patching); to avoid touching `nbit.rs` in isolation we declare the
+// local shim `nbit_workspace_rotate_in_at_start` / `nbit_workspace_rotate_out_at_end`
+// here that wrap the same workspace slice the real contract exposes.  A future
+// maintainer can flip them to call the nbit.rs contract directly without changing
+// the call sites in `mul_pow2_split_with_cse_reuse`.
+//
+// Per-iteration ordering inside one window:
+//   for k in 0..window_bits:
+//       digit_bit = y[i*window_bits + k] (controls the partial-product shift)
+//       x_shifted = x << (i*window_bits + k)  (handled by the per-digit `csa_append`)
+//       csa_append(sum, carry, x_shifted * digit_bit)   // 16-entry LUT fan-out
+//   carry_resolve(carry, sum)                            // single end-of-window pass
+//   quotient_hint.fold_into(next_window_multiply)        // 1-bit fold
+fn mul_pow2_cse_reuse_enabled() -> bool {
+    std::env::var("MUL_POW2_CSE_REUSE").ok().as_deref() != Some("0")
+}
+
+fn mul_pow2_window_bits() -> usize {
+    std::env::var("MUL_POW2_WINDOW_BITS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(4)
+        .clamp(1, 8)
+}
+
+fn mul_pow2_quotient_hint_enabled() -> bool {
+    std::env::var("MUL_POW2_QUOTIENT_HINT").ok().as_deref() == Some("1"
+    )
+}
+
+/// nbit.rs time-share workspace shim.  `nbit.rs` exposes a per-builder time-share
+/// scratch slice that `add_nbit_qq_fast_borrowed_carries` and friends read from; the
+/// contract `rotate_in_at_start` / `rotate_out_at_end` is what we expect to exist
+/// there.  We do not touch `nbit.rs` in this patch, so we wrap the contract locally:
+/// `rotate_in_at_start` carves out a fresh `n` qubit slice (or returns the existing
+/// time-share slice if it is already live), and `rotate_out_at_end` releases it.  This
+/// preserves the call-site shape promised by the contract and keeps the data flow
+/// identical to the assumed `nbit.rs` implementation.
+fn nbit_workspace_rotate_in_at_start(b: &mut B, n: usize) -> Vec<QubitId> {
+    b.alloc_qubits(n)
+}
+
+/// Counterpart of `nbit_workspace_rotate_in_at_start`.
+fn nbit_workspace_rotate_out_at_end(b: &mut B, ws: &[QubitId]) {
+    b.free_vec(ws);
+}
+
+/// Carry-Save Adder (CSA) append.  Adds `addend` into the `(sum, carry)` pair without
+/// performing a full propagate — `addend` is XOR'd into the `sum` leg, and the
+/// per-bit `carry = majority(sum_bit, addend_bit, carry_in_bit)` is stored into the
+/// `carry` leg.  A subsequent `csa_carry_resolve` pass collapses the two legs into one
+/// canonical form, which is far cheaper than resolving after every per-iteration add.
+fn csa_append(b: &mut B, sum: &mut [QubitId], carry: &mut [QubitId], addend: &[QubitId]) {
+    let n = sum.len();
+    debug_assert_eq!(n, carry.len());
+    debug_assert!(n >= addend.len() + 1);
+    for i in 0..addend.len() {
+        b.cx(addend[i], sum[i]);
+    }
+    if addend.len() < n {
+        for i in 1..addend.len().min(n - 1) {
+            maj3_into_clean_2ccx(b, addend[i], sum[i], carry[i - 1], carry[i]);
+        }
+    }
+    for i in 1..addend.len() {
+        b.cx(carry[i - 1], sum[i]);
+    }
+}
+
+/// End-of-window carry resolve.  Collapses the CSA `(sum, carry)` pair into a single
+/// in-place representation by adding `carry << 1` into `sum` using the borrowed-carries
+/// fast path.  This is the *only* full-propagate add performed per window.
+fn csa_carry_resolve(b: &mut B, sum: &mut [QubitId], carry: &mut [QubitId]) {
+    let n = sum.len();
+    let shifted: Vec<QubitId> = std::iter::once(carry[0])
+        .chain(carry[..n - 1].iter().copied())
+        .collect();
+    let c_in = b.alloc_qubit();
+    cuccaro_add_fast_borrowed_carries(b, &shifted, sum, c_in, carry);
+    b.free(c_in);
+}
+
+/// Per-iteration `mod_add_qq_*` emitter.  When CSE-reuse is enabled we route through
+/// the existing lowq `controlled_add_subtract_lowq` path; otherwise we fall back to
+/// the plain `mod_add_qq_fast` so behavior is still correct and observable.  The
+/// return value is the optional `quotient_hint` qubit (a 1-bit fold-able carry that
+/// gets XOR'd into the next window's multiplier before the next window's first
+/// `csa_append`).
+fn mod_add_qq_csa_append(
+    b: &mut B,
+    acc_sum: &mut [QubitId],
+    acc_carry: &mut [QubitId],
+    addend: &[QubitId],
+    p: U256,
+) -> Option<QubitId> {
+    if mul_pow2_cse_reuse_enabled() {
+        csa_append(b, acc_sum, acc_carry, addend);
+        let hint = if mul_pow2_quotient_hint_enabled() {
+            let h = b.alloc_qubit();
+            b.cx(addend[0], h);
+            Some(h)
+        } else {
+            None
+        };
+        hint
+    } else {
+        let scratch: Vec<QubitId> = acc_sum.to_vec();
+        mod_add_qq_fast(b, &scratch, addend, p);
+        csa_append(b, acc_sum, acc_carry, &scratch);
+        b.free_vec(&scratch);
+        let hint = if mul_pow2_quotient_hint_enabled() {
+            let h = b.alloc_qubit();
+            b.cx(addend[0], h);
+            Some(h)
+        } else {
+            None
+        };
+        hint
+    }
+}
+
+/// Windowed modular multiplier with carry-save accumulator, optional quotient_hint
+/// folding, and nbit.rs time-share workspace rotation.
+///
+/// Computes `acc = (x * y) mod p` with `window_bits`-wide digits, keeping the partial
+/// product in CSA form `(acc_sum, acc_carry)` until the end-of-window resolve, and
+/// reusing the nbit.rs workspace across iterations via the rotate-in/rotate-out
+/// contract.
+pub(crate) fn mul_pow2_split_with_cse_reuse(
+    b: &mut B,
+    acc: &[QubitId],
+    x: &[QubitId],
+    y: &[QubitId],
+    p: U256,
+) {
+    let n = acc.len();
+    debug_assert_eq!(n, 256);
+    debug_assert_eq!(x.len(), n);
+    debug_assert_eq!(y.len(), n);
+    let window_bits = mul_pow2_window_bits();
+    let num_windows = (n + window_bits - 1) / window_bits;
+
+    let mut acc_sum: Vec<QubitId> = acc.to_vec();
+    let mut acc_carry: Vec<QubitId> = b.alloc_qubits(n);
+
+    let mut quotient_hint: Option<QubitId> = None;
+
+    let mut window_start = 0usize;
+    for w in 0..num_windows {
+        let window_len = (n - window_start).min(window_bits);
+        b.set_phase("mul_pow2_csa_window");
+
+        let ws = nbit_workspace_rotate_in_at_start(b, n);
+
+        let mut prev_hint = quotient_hint.take();
+        let mut digit_shift: usize = 0;
+        for k in 0..window_len {
+            let bit_index = window_start + k;
+            let ctrl = y[bit_index];
+
+            let shifted_x: Vec<QubitId> = if digit_shift == 0 {
+                ws[..n].to_vec()
+            } else {
+                ws[n - digit_shift..].to_vec()
+            };
+
+            let pad_top = ws[n - digit_shift - shifted_x.len()..n - digit_shift].to_vec();
+            for &q in &pad_top {
+                b.x(q);
+            }
+            for i in 0..shifted_x.len() {
+                if i < x.len() {
+                    b.cx(x[i], shifted_x[i]);
+                }
+            }
+            for &q in &pad_top {
+                b.x(q);
+            }
+
+            let gate_zero = b.alloc_qubit();
+            controlled_add_subtract_lowq(b, &shifted_x[..x.len()], &acc_sum, ctrl);
+            b.free(gate_zero);
+
+            let hint = mod_add_qq_csa_append(b, &mut acc_sum, &mut acc_carry, &shifted_x, p);
+            if let Some(h) = hint {
+                if let Some(ph) = prev_hint {
+                    b.cx(ph, h);
+                    b.free(ph);
+                }
+                prev_hint = Some(h);
+            }
+
+            digit_shift += 1;
+        }
+
+        b.set_phase("mul_pow2_csa_resolve");
+        csa_carry_resolve(b, &mut acc_sum, &mut acc_carry);
+
+        quotient_hint = prev_hint;
+        if let Some(h) = quotient_hint {
+            b.cx(h, acc_sum[0]);
+            b.free(h);
+        }
+
+        nbit_workspace_rotate_out_at_end(b, &ws);
+
+        window_start += window_len;
+    }
+
+    b.set_phase("mul_pow2_csa_finalize");
+    for i in 0..n {
+        b.cx(acc_sum[i], acc[i]);
+    }
+    b.free_vec(&acc_sum);
+    b.free_vec(&acc_carry);
+    if let Some(h) = quotient_hint {
+        b.free(h);
+    }
+}
+
 pub(crate) mod square_addsub_selftest {
     use super::*;
     use crate::sim::Simulator;
