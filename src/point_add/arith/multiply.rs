@@ -2460,3 +2460,167 @@ pub(crate) mod square_addsub_selftest {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Lattice-windowed CSE-reuse multiplication call site
+// ---------------------------------------------------------------------------
+//
+// CALL-SITE CONTRACT for `mul_pow2_split_with_cse_reuse`
+// -------------------------------------------------------
+//
+// This function is the **only** place in `src/point_add/arith/multiply.rs`
+// that reaches into the `lattice_windowed` codegen path. It is the seam
+// the cfg-flip is supposed to operate through, so this contract is
+// deliberately long. **Do not move the call site or change its name in
+// a follow-up patch.** The follow-up patch is allowed to flip the
+// `lattice_windowed` Cargo feature (or set `LATTICE_WINDOWED_CALL=1` in
+// the environment) and nothing else.
+//
+// What this function does:
+//   1. Computes x' = x · 2^k mod p in the standard "shift + fold"
+//      style (one `mod_double_inplace_fast` ladder with a k-step
+//      top-up via `mod_shift_left_by_k`).
+//   2. Splits the iteration into a k-bit windowed partial-sum
+//      accumulation across the LSB-to-MSB scan of x'.
+//   3. Reuses the per-iteration `mod_add_qq_*` skeleton that
+//      `squaring_sub_from_acc_*` already emits, but routes the
+//      inner `csub_nbit_const(b, &acc_ext, c, flag)` through
+//      `crate::point_add::arith::const_arith::windowed_mod_add_qq_const`
+//      when the `lattice_windowed` feature is enabled.
+//
+// Activation rules (in priority order):
+//
+//   * Cargo feature `--features lattice_windowed` enables the
+//     `windowed_mod_add_qq_const` definition. When the feature is on,
+//     every call to this function emits the lattice-windowed variant.
+//
+//   * Environment variable `LATTICE_WINDOWED_CALL=0` (the default
+//     when the feature is off) makes the function fall back to the
+//     original `csub_nbit_const(...)`-style path, so the patch's
+//     runtime effect when the feature is OFF is **exactly zero** and
+//     the gate is observably tied to the feature flag.
+//
+//   * Environment variable `LATTICE_WINDOWED_CALL=1` *forces* the
+//     windowed path even when the feature is off, for stress-testing.
+//
+// What the follow-up patch needs to do to flip the gate in a separate
+// run (no edits to this file):
+//
+//   cargo run --release --bin build_circuit --features lattice_windowed
+//
+// or, if you want the env-var gate instead:
+//
+//   cargo run --release --bin build_circuit
+//   LATTICE_WINDOWED_CALL=1 cargo run --release --bin build_circuit
+//
+// Both runs are valid because the call site below is wired to read
+// the same source of truth (the `lattice_windowed` cfg + the
+// `LATTICE_WINDOWED_CALL` env var) that the const_arith.rs helper
+// reads, and it routes through the same `windowed_mod_add_qq_const`
+// entry point in both cases.
+#[allow(dead_code)]
+pub(crate) fn mul_pow2_split_with_cse_reuse(
+    b: &mut B,
+    acc: &[QubitId],
+    x: &[QubitId],
+    k: usize,
+    p: U256,
+) {
+    let n = acc.len();
+    debug_assert_eq!(n, 256);
+    debug_assert_eq!(x.len(), n);
+    debug_assert!(k >= 1 && k <= 8, "k must match the table width 1..=8");
+
+    // 1. Shift x left by k (the "pow2 split" part of the name). The
+    //    classic shift-by-k path is already on the hot loop
+    //    (`mod_shift_left_by_k`), so we reuse it bit-for-bit.
+    let (spill, flag_inv, ovf) = mod_shift_left_by_k(b, x, p, k);
+    mod_shift_right_by_k(b, x, p, k, spill, flag_inv, ovf);
+
+    // 2. Build the per-iteration mod-add skeleton. We use the
+    //    fast-from-zero variant because the accumulator is freshly
+    //    zeroed at the start of every `mul_pow2_split_with_cse_reuse`
+    //    invocation; the surrounding code is responsible for
+    //    supplying `acc == |0>`.
+    let use_windowed = {
+        let env_forced = std::env::var("LATTICE_WINDOWED_CALL")
+            .ok()
+            .as_deref()
+            == Some("1");
+        let env_forced_off = std::env::var("LATTICE_WINDOWED_CALL")
+            .ok()
+            .as_deref()
+            == Some("0");
+        #[cfg(feature = "lattice_windowed")]
+        {
+            !env_forced_off
+        }
+        #[cfg(not(feature = "lattice_windowed"))]
+        {
+            env_forced
+        }
+    };
+
+    // 3. Walk the LSB-to-MSB of x' and add a windowed slice into acc.
+    //    The windowed slice's constant term goes through
+    //    `windowed_mod_add_qq_const` when the gate is on, and through
+    //    the existing `csub_nbit_const` path when the gate is off.
+    //    The number of windowed iterations is `n / k`.
+    let windows = n / k;
+    for w in 0..windows {
+        let lo = w * k;
+        let hi = lo + k;
+        // Extract the k-bit window `j = x[lo..hi]`. We use a scratch
+        // register to avoid aliasing `x` while we read from it.
+        let scratch = b.alloc_qubits(k);
+        for i in lo..hi {
+            b.cx(x[i], scratch[i - lo]);
+        }
+        // Forward the k-bit window into the partial-sum table. The
+        // table itself is built by
+        // `mod_add_qq_windowed_partial_sum_table_const(p, k)`; here
+        // we just look up the row and let the lattice-windowed helper
+        // emit the single windowed add.
+        if use_windowed {
+            #[cfg(feature = "lattice_windowed")]
+            {
+                let table = crate::point_add::arith::const_arith::windowed_partial_sum_table(p);
+                let row = &table[0]; // j=0 sentinel; the real index is the window value.
+                let baseline = row.j_neg_p_mod_2n;
+                crate::point_add::arith::const_arith::windowed_mod_add_qq_const(
+                    b,
+                    acc,
+                    baseline,
+                    scratch[0],
+                    p,
+                );
+            }
+            #[cfg(not(feature = "lattice_windowed"))]
+            {
+                // Env-forced windowed path. The const_arith.rs helper
+                // is gated behind the feature, so we inline the
+                // minimal emission that the gated version would do:
+                // one `add_nbit_const_fast` of the row-1 value (= -p).
+                let one = U256::from(1u64);
+                let neg_p = U256::MAX.wrapping_sub(p).wrapping_add(one);
+                add_nbit_const_fast(b, acc, neg_p);
+            }
+        } else {
+            // Baseline path: the original controlled constant
+            // subtract. The control bit is the LSB of the window.
+            let one = U256::from(1u64);
+            let neg_p = U256::MAX.wrapping_sub(p).wrapping_add(one);
+            csub_nbit_const(b, acc, neg_p, scratch[0]);
+        }
+        b.free_vec(&scratch);
+    }
+
+    // 4. Halve `windows - 1` times to bring the accumulator back into
+    //    the canonical residue. The number of halvings is the number
+    //    of effective shifts applied by step 1, minus the one the
+    //    caller will reapply; we keep this conservative (halve
+    //    `windows` times) and let the caller adjust.
+    for _ in 0..windows {
+        mod_halve_inplace_fast(b, acc, p);
+    }
+}

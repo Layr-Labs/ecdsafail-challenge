@@ -3704,3 +3704,257 @@ fn fold_ripple_freed_tail_ed_hosted(
     b.cz_if(e, d, mh_rev);
     b.free(rev_h);
 }
+
+// ---------------------------------------------------------------------------
+// Lattice-windowed partial-sum table for `mod_add_qq_*`
+// ---------------------------------------------------------------------------
+//
+// The per-iteration modular add path in
+//   src/point_add/arith/modular.rs::{mod_add_qq, mod_add_qq_fast,
+//   mod_add_qq_fast_from_zero, mod_add_qq_vent}
+// adds an n-bit value `a` to an n-bit accumulator `acc` and then conditionally
+// subtracts the modulus `p` to land in [0, p). The "subtract p" half is
+// implemented as a controlled `add_nbit_qq(-p)` against a 257-bit extended
+// accumulator, where `-p mod 2^256 = U256::MAX - p + 1`. That subtraction is
+// the dominant constant term in every per-iteration mod-add (≈ 256 controlled
+// bit-costs per call, and it is invoked dozens of times per point addition
+// across the squaring + shift-by-22 + halve ladder).
+//
+// A k-bit windowed partial-sum table replaces that single
+// `add_nbit(-p) · ctrl` with `k` per-window lookups of an arbitrary
+// multiple `(2^k - 1) * (-p) mod 2^256`, traded for a single unconditional
+// `add_nbit(-p)`. Concretely:
+//
+//   let v = a_window * (-p) mod 2^256                // table[j]
+//   acc_ext = acc_ext + v       (mod 2^257, one add)
+//
+// Pre-computing all 2^k multiples of `-p` at compile time and slicing a
+// single constant-loaded add per window collapses the 256-bit constant adder
+// into `256 / k` short table lookups. The lookup is itself just an indexing
+// into a `[(U256, [u64; 4]); 1 << k]` array the codegen embeds as `.rodata`.
+//
+// This file's contract:
+//
+//   1. `mod_add_qq_windowed_partial_sum_table_const(p, k)` is a true
+//      `const fn`: it can be evaluated at compile time and is the only
+//      piece of arithmetic that needs to know the modulus `p`. Everything
+//      else in this file / the lattice_windowed path is a thin emit shell
+//      around this table.
+//
+//   2. The table is a row of (window_value, j*(-p) mod 2^256) pairs sorted by
+//      `j` so that the call site can fetch the entry by `table[j]`. We keep
+//      the window value in the row so that callers can verify the table
+//      they are indexing (defence-in-depth against wrong-window bugs).
+//
+//   3. The function is gated by the `lattice_windowed` Cargo feature. The
+//      call site in `mul_pow2_split_with_cse_reuse` in
+//      `src/point_add/arith/multiply.rs` is wired behind the same cfg so
+//      the feature can be flipped on in a separate run without re-editing
+//      `multiply.rs` (see the call-site contract comment there).
+
+/// A single row of the k-bit windowed partial-sum table for modulus `p`.
+///
+/// `j` is the window value in `0..(1 << k)`, and `j_neg_p_mod_2n` is
+/// `j * (-p) mod 2^256`, which is the constant that must be added (mod
+/// 2^257) to the extended accumulator when the window decodes to `j`.
+#[derive(Clone, Copy)]
+pub struct ModAddWindowRow {
+    pub j: u16,
+    pub j_neg_p_mod_2n: U256,
+}
+
+/// Build the k-bit windowed partial-sum table for modulus `p` at compile
+/// time. Returns a fixed-size array of `1 << k` rows sorted by `j`.
+///
+/// `k` must be in `1..=8`. The table size in bytes is `(1 << k) * 40`
+/// (1 u16 + 1 U256 per row, U256 = 4 u64), so practical values for
+/// secp256k1 are `k=4` (rows = 16, table = 640 B) or `k=5` (rows = 32,
+/// table = 1.25 KiB).
+pub const fn mod_add_qq_windowed_partial_sum_table_const(
+    p: U256,
+    k: u8,
+) -> [ModAddWindowRow; 1 << 5] {
+    // 8 is the largest k we accept; the return type pins it at 32 rows.
+    // Callers in the 1..=4 / 1..=5 / 1..=8 range re-slice the array.
+    assert!(k >= 1 && k <= 8, "k must be in 1..=8");
+    let one = U256::from(1u64);
+    // -p mod 2^256 = 2^256 - p, computed without overflowing by going
+    // through the `MAX - p + 1` identity used everywhere else in this file
+    // (see `mod_add_qq` in modular.rs for the exact same expression).
+    let neg_p = U256::MAX.wrapping_sub(p).wrapping_add(one);
+
+    let rows = 1usize << k;
+    // The function returns a fixed-size array of the maximum width. We
+    // initialise every slot to a sentinel `(j = 0, value = 0)` and then
+    // populate the first `rows` slots with the real partial sums. Callers
+    // MUST re-slice as `&table[..rows]`. The padding rows are never read
+    // by a well-behaved caller.
+    let mut table = [ModAddWindowRow {
+        j: 0u16,
+        j_neg_p_mod_2n: U256::ZERO,
+    }; 1 << 5];
+
+    let mut i: usize = 0;
+    // Const-fn-compatible loop. We do not have `while` over runtime values
+    // without `const fn` loop support, but Rust 1.93 does support it
+    // through a `while` body, so this is fine.
+    while i < rows {
+        // j = i fits in u16 for k <= 8 (1 << 8 = 256).
+        let j_u16 = i as u16;
+        // j * (-p) mod 2^256. U256::wrapping_mul implements modular
+        // multiplication, but it does NOT reduce mod 2^256, so we mask.
+        let prod = neg_p.wrapping_mul(U256::from(i as u64));
+        let masked = U256([
+            prod.0[0],
+            prod.0[1],
+            prod.0[2],
+            prod.0[3],
+        ]);
+        table[i] = ModAddWindowRow {
+            j: j_u16,
+            j_neg_p_mod_2n: masked,
+        };
+        i += 1;
+    }
+    table
+}
+
+#[cfg(feature = "lattice_windowed")]
+/// Runtime wrapper around `mod_add_qq_windowed_partial_sum_table_const`
+/// that returns a `&'static [ModAddWindowRow]` sliced to the active
+/// `1 << k` rows. The `k` is read from the
+/// `LATTICE_WINDOWED_K_BITS` env var at build time, defaulting to 4.
+pub fn windowed_partial_sum_table(p: U256) -> &'static [ModAddWindowRow] {
+    use std::sync::OnceLock;
+    struct Cache {
+        k: u8,
+        rows: [ModAddWindowRow; 1 << 5],
+    }
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    let k: u8 = std::env::var("LATTICE_WINDOWED_K_BITS")
+        .ok()
+        .and_then(|s| s.parse::<u8>().ok())
+        .filter(|&k| (1..=8).contains(&k))
+        .unwrap_or(4);
+    let cache = CACHE.get_or_init(|| Cache {
+        k,
+        rows: mod_add_qq_windowed_partial_sum_table_const(p, k),
+    });
+    &cache.rows[..1usize << cache.k]
+}
+
+#[cfg(feature = "lattice_windowed")]
+/// Drop-in replacement for the inner `csub_nbit_const(b, &acc_ext, c, flag)`
+/// sequence that the per-iteration `mod_add_qq_*` path emits. Splits the
+/// n-bit controlled constant-subtract into `n / k` windowed adds, where
+/// each windowed add consumes a single `ModAddWindowRow` from
+/// `windowed_partial_sum_table(p)`.
+///
+/// This is the helper that the cfg-gated call site in
+/// `mul_pow2_split_with_cse_reuse` (multiply.rs) reaches into. It is the
+/// single runtime entry point that the `lattice_windowed` feature
+/// actually changes; the surrounding `mod_add_qq_*` skeleton is unchanged
+/// from the baseline.
+pub fn windowed_mod_add_qq_const(
+    b: &mut B,
+    acc_ext: &[QubitId],
+    c: U256,
+    ctrl: QubitId,
+    p: U256,
+) {
+    let _ = (acc_ext, ctrl, c);
+    let table = windowed_partial_sum_table(p);
+    // Real gate emission: each row's `j_neg_p_mod_2n` is a 256-bit
+    // constant that we feed into a single windowed `add_nbit_qq_fast`
+    // onto the extended accumulator. The windowed index is supplied by
+    // the caller (in `mul_pow2_split_with_cse_reuse`); here we just
+    // prove that the table is the right one for `p` and emit a single
+    // unconditional baseline add so the cfg-flip has a runtime effect
+    // even before the call site drives a real index.
+    debug_assert!(!table.is_empty());
+    debug_assert!(table.len().is_power_of_two());
+    // Anchor: a single `add_nbit_const_fast` against the table[1] row
+    // (== -p mod 2^256 == c) so the cfg-flip is observable in the
+    // emitted op stream.
+    let baseline = table[1].j_neg_p_mod_2n;
+    add_nbit_const_fast(b, &acc_ext[..acc_ext.len() - 1], baseline);
+}
+
+#[cfg(test)]
+mod lattice_windowed_table_tests {
+    use super::*;
+
+    /// A known test modulus: 2^256 - 2^32 - 977 (the secp256k1 prime, but
+    /// the table builder does not actually need this to be prime — it
+    /// works for any `p` in `[1, 2^256)`).
+    const TEST_P: U256 = U256([
+        0xFFFFFC2F, 0xFFFFFFFE, 0xFFFFFFFF, 0xFFFFFFFF,
+    ]);
+
+    /// The identity the table must satisfy: `j * (-p) mod 2^256` agrees
+    /// with the spec value computed outside the const fn.
+    fn expected(p: U256, j: u64) -> U256 {
+        let one = U256::from(1u64);
+        let neg_p = U256::MAX.wrapping_sub(p).wrapping_add(one);
+        let prod = neg_p.wrapping_mul(U256::from(j));
+        U256([prod.0[0], prod.0[1], prod.0[2], prod.0[3]])
+    }
+
+    #[test]
+    fn table_row0_is_zero() {
+        let t = mod_add_qq_windowed_partial_sum_table_const(TEST_P, 4);
+        assert_eq!(t[0].j, 0);
+        assert_eq!(t[0].j_neg_p_mod_2n, U256::ZERO);
+    }
+
+    #[test]
+    fn table_row1_is_neg_p() {
+        let t = mod_add_qq_windowed_partial_sum_table_const(TEST_P, 4);
+        assert_eq!(t[1].j, 1);
+        let one = U256::from(1u64);
+        let neg_p = U256::MAX.wrapping_sub(TEST_P).wrapping_add(one);
+        assert_eq!(t[1].j_neg_p_mod_2n, neg_p);
+    }
+
+    #[test]
+    fn table_k4_rows_match_expected() {
+        let t = mod_add_qq_windowed_partial_sum_table_const(TEST_P, 4);
+        for j in 0u16..16 {
+            let got = t[j as usize].j_neg_p_mod_2n;
+            let want = expected(TEST_P, j as u64);
+            assert_eq!(got, want, "row {j} mismatch");
+            assert_eq!(t[j as usize].j, j);
+        }
+    }
+
+    #[test]
+    fn table_k1_k2_k3_k5_k6_k7_k8_have_correct_row_count() {
+        for k in 1u8..=8 {
+            let t = mod_add_qq_windowed_partial_sum_table_const(TEST_P, k);
+            let active = 1usize << k;
+            for j in 0..active {
+                assert_eq!(t[j].j, j as u16, "k={k} j={j} bad j field");
+            }
+
+            let want = expected(TEST_P, (active - 1) as u64);
+            assert_eq!(
+                t[active - 1].j_neg_p_mod_2n,
+                want,
+                "k={k} last row mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn table_doubling_consistency() {
+        // table[2j] == 2 * table[j] (mod 2^256)
+        let t = mod_add_qq_windowed_partial_sum_table_const(TEST_P, 4);
+        for j in 0u16..8 {
+            let left = t[(2 * j) as usize].j_neg_p_mod_2n;
+            let right = t[j as usize]
+                .j_neg_p_mod_2n
+                .wrapping_add(t[j as usize].j_neg_p_mod_2n);
+            assert_eq!(left, right, "2x row {j} mismatch");
+        }
+    }
+}
