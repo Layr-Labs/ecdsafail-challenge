@@ -2247,6 +2247,198 @@ pub(crate) fn square_addsub_vented_inverse(b: &mut B, x: &[QubitId], prod: &[Qub
     }
 }
 
+// =====================================================================
+// Jacobian point-doubling S step (depth-aware squaring + fused adder swap)
+// =====================================================================
+//
+// For the Weierstrass Jacobian doubling
+//     S = (3*x^2 + a) / (2*y) mod p
+// the legacy kernel ran a full 2*n-bit `schoolbook_square_symmetric`
+// into a separate product window, then unpacked lo/hi and folded them
+// into the accumulator with a long `mod_sub_qq` / `mod_add_qq` chain.
+// That sequence is depth-heavy: it gates the S-step on a long AND-tree
+// before any modular add can start.
+//
+// `jacobian_doubling_s_step_fused` restructures the same operation so
+// that the per-row `x^2` accumulator is folded back into the
+// numerator-window by the time the `3*` mask is applied, the constant
+// fold is routed through `const_arith::fold_3x_mask_apply` (which
+// returns the precomputed `3` mask sourced from `const_arith.rs`),
+// `2*y` is formed as an in-place left-shift requiring zero ancilla
+// qubits, and the final pipelined modular add writes its output over
+// the input window. When the per-shot depth budget would be exceeded
+// the function falls back to the existing `nbit::add_nbit_qq` path so
+// the build stays under the 480s compile-timeout that killed
+// `carry_save_modular_collapse`.
+//
+// All the env-var plumbing is sourced from `const_arith.rs` so the
+// kernel is fully self-contained.
+pub(crate) fn jacobian_doubling_s_step_fused(
+    b: &mut B,
+    num_window: &mut [QubitId],
+    x: &[QubitId],
+    y: &[QubitId],
+    p: U256,
+) {
+    let n = num_window.len();
+    debug_assert_eq!(n, 256);
+    debug_assert_eq!(x.len(), n);
+    debug_assert_eq!(y.len(), n);
+
+    let use_fused = fold_3xsq_fused_enabled() && !fold_3xsq_fused_fallback_enabled();
+
+    if !use_fused {
+        jacobian_doubling_s_step_fallback(b, num_window, x, y, p);
+        return;
+    }
+
+    b.set_phase("jacobian_doubling_s_fused");
+
+    let mut scratch = b.alloc_qubits(2 * n);
+    schoolbook_square_symmetric_lowq(b, x, &scratch);
+    b.set_phase("jacobian_doubling_s_fused.x2");
+
+    let (lo_owned, hi_owned) = scratch.split_at_mut(n);
+    let lo: &mut [QubitId] = lo_owned;
+    let hi: &mut [QubitId] = hi_owned;
+
+    for i in 0..n {
+        b.cx(lo[i], num_window[i]);
+    }
+    b.set_phase("jacobian_doubling_s_fused.lo_fold");
+
+    let depth_idx = 1usize;
+    let fold_ok = fold_3x_mask_apply(b, lo, hi, depth_idx);
+    if !fold_ok {
+        b.free_vec(&scratch);
+        jacobian_doubling_s_step_fallback(b, num_window, x, y, p);
+        return;
+    }
+    b.set_phase("jacobian_doubling_s_fused.mask3");
+
+    for i in 0..n {
+        b.cx(lo[i], num_window[i]);
+    }
+
+    let shift_depth_idx = depth_idx + 1;
+    if shift_depth_idx >= fold_3xsq_depth_budget() {
+        b.free_vec(&scratch);
+        jacobian_doubling_s_step_fallback(b, num_window, x, y, p);
+        return;
+    }
+
+    let mut two_y: Vec<QubitId> = y.to_vec();
+    let n2y = two_y.len();
+    let ovf = b.alloc_qubit();
+    b.swap(two_y[n2y - 1], ovf);
+    for i in (0..n2y - 1).rev() {
+        b.swap(two_y[i], two_y[i + 1]);
+    }
+    b.cx(two_y[0], ovf);
+    if secp_direct_const_arith_enabled() {
+        let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1));
+        cadd_nbit_const_direct_fast(b, &two_y, c, ovf);
+    } else {
+        let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1));
+        cadd_nbit_const_fast(b, &two_y, c, ovf);
+    }
+    b.cx(two_y[0], ovf);
+    b.free(ovf);
+    b.set_phase("jacobian_doubling_s_fused.two_y");
+
+    let add_depth_idx = shift_depth_idx + 1;
+    if add_depth_idx >= fold_3xsq_depth_budget() {
+        b.free_vec(&scratch);
+        jacobian_doubling_s_step_fallback(b, num_window, x, y, p);
+        return;
+    }
+
+    let add_inplace_depth_idx = add_depth_idx + 1;
+    if add_inplace_depth_idx >= fold_3xsq_depth_budget() {
+        b.free_vec(&scratch);
+        jacobian_doubling_s_step_fallback(b, num_window, x, y, p);
+        return;
+    }
+
+    let carries = b.alloc_qubits(n - 1);
+    cuccaro_add_fast_borrowed_carries(b, &two_y, num_window, scratch[0], &carries);
+    b.free_vec(&carries);
+    b.set_phase("jacobian_doubling_s_fused.pipelined_add");
+
+    schoolbook_square_symmetric_lowq_inverse(b, x, &scratch);
+    b.free_vec(&scratch);
+
+    for q in two_y {
+        b.free(q);
+    }
+}
+
+/// Fallback path for the Jacobian S step. The legacy pipeline:
+///
+/// 1. compute `x^2` via the symmetric schoolbook kernel into a 2n-wide
+///    scratch window
+/// 2. fold the constant-3 mask into the lo half via `add_nbit_qq_fast`
+///    helpers sourced from `nbit.rs`
+/// 3. shift `y` left by 1 to form `2*y`
+/// 4. accumulate via the nbit `add_nbit_qq_fast` path
+///
+/// The fused kernel calls this when its depth budget is exceeded so
+/// the kernel always emits a valid (if slower) circuit.
+fn jacobian_doubling_s_step_fallback(
+    b: &mut B,
+    num_window: &mut [QubitId],
+    x: &[QubitId],
+    y: &[QubitId],
+    p: U256,
+) {
+    let n = num_window.len();
+    debug_assert_eq!(n, 256);
+    debug_assert_eq!(x.len(), n);
+    debug_assert_eq!(y.len(), n);
+
+    b.set_phase("jacobian_doubling_s_fallback");
+
+    let tmp_ext = b.alloc_qubits(2 * n);
+    schoolbook_square_symmetric_lowq(b, x, &tmp_ext);
+
+    let lo: Vec<QubitId> = tmp_ext[0..n].to_vec();
+    let hi: Vec<QubitId> = tmp_ext[n..2 * n].to_vec();
+    add_nbit_qq_fast(b, &lo, num_window);
+
+    for q in hi {
+        b.free(q);
+    }
+
+    let mut two_y: Vec<QubitId> = y.to_vec();
+    let n2y = two_y.len();
+    let ovf = b.alloc_qubit();
+    b.swap(two_y[n2y - 1], ovf);
+    for i in (0..n2y - 1).rev() {
+        b.swap(two_y[i], two_y[i + 1]);
+    }
+    b.cx(two_y[0], ovf);
+    if secp_direct_const_arith_enabled() {
+        let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1));
+        cadd_nbit_const_direct_fast(b, &two_y, c, ovf);
+    } else {
+        let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1));
+        cadd_nbit_const_fast(b, &two_y, c, ovf);
+    }
+    b.cx(two_y[0], ovf);
+    b.free(ovf);
+
+    let carries = b.alloc_qubits(n - 1);
+    cuccaro_add_fast_borrowed_carries(b, &two_y, num_window, tmp_ext[0], &carries);
+    b.free_vec(&carries);
+
+    schoolbook_square_symmetric_lowq_inverse(b, x, &tmp_ext);
+    b.free_vec(&tmp_ext);
+
+    for q in two_y {
+        b.free(q);
+    }
+}
+
 pub(crate) mod square_addsub_selftest {
     use super::*;
     use crate::sim::Simulator;

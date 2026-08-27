@@ -3704,3 +3704,101 @@ fn fold_ripple_freed_tail_ed_hosted(
     b.cz_if(e, d, mh_rev);
     b.free(rev_h);
 }
+
+/// Toggle: when `FOLD_3XSQ_FUSED=1`, the Jacobian point-doubling S step
+/// (S = (3*x^2 + a) * (2*y)^-1 mod p) reuses the in-flight `x^2` scratch
+/// window as the carries bus for the constant-3 fold, eliminating a
+/// dedicated carry allocation that the unfused path requires. This is the
+/// env var consulted by `multiply::jacobian_doubling_s_step_fused`.
+pub(crate) fn fold_3xsq_fused_enabled() -> bool {
+    std::env::var("FOLD_3XSQ_FUSED").ok().as_deref() == Some("1")
+}
+
+/// Toggle: when set, forces the depth-aware fused S kernel to fall back to
+/// the legacy `nbit::add_nbit_qq` / `sub_nbit_qq` path even when the fused
+/// kernel would otherwise be selected. Used to keep the build under the
+/// 480s compile-timeout when the per-shot depth budget is exceeded.
+pub(crate) fn fold_3xsq_fused_fallback_enabled() -> bool {
+    std::env::var("FOLD_3XSQ_FUSED_FALLBACK").ok().as_deref() == Some("1")
+}
+
+/// Toggle: maximum tolerated depth-budget (in O(n) cuccaro add layers) for
+/// the fused Jacobian S step. When the actual layer count for `n` would
+/// exceed the budget, the kernel must fall back. Defaults to 8 (a value
+/// chosen so that the on-paper 2*y-shift + 3x^2-fold + 2 mod adds stay
+/// below the kernel timeout).
+pub(crate) fn fold_3xsq_depth_budget() -> usize {
+    std::env::var("FOLD_3XSQ_DEPTH_BUDGET")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(8)
+}
+
+/// Returns the precomputed 3x fold mask sourced from `const_arith.rs`.
+///
+/// In the Jacobian point-doubling step
+///     S = (3*x^2 + a) / (2*y) mod p
+/// the numerator term `3 * x^2` is formed by computing `x^2` in-place
+/// into a scratch window and then folding the precomputed constant `3`
+/// into that same window. The mask is the small U256 integer `3` (bit
+/// 0 and bit 1 set, all higher bits zero). The caller routes this
+/// constant through the borrowed-carries direct-const-add path
+/// (`cadd_nbit_const_direct_trunc_fast_borrowed_carries`) using the
+/// scratch window itself as the carries lane, so the fold costs no
+/// additional ancilla qubits and writes its output back over the input
+/// window. The mask is precomputed (host-side, zero qubit cost) and
+/// sourced from `const_arith.rs` so the fused kernel stays free of any
+/// ad-hoc host-side U256 construction.
+pub(crate) fn fold_3x_mask() -> U256 {
+    U256::from(3u64)
+}
+
+/// Returns true when the constant-3 fold should use the borrowed-carries
+/// direct path with the scratch window as the carries bus, instead of
+/// allocating a fresh carry window.
+pub(crate) fn fold_3x_mask_uses_borrowed_carries() -> bool {
+    std::env::var("FOLD_3XSQ_BORROWED")
+        .ok()
+        .as_deref()
+        != Some("0")
+}
+
+/// Folds the precomputed constant-3 mask into `acc_window` in-place, using
+/// the supplied `scratch_carry_lane` as the carries bus for the
+/// borrowed-carries direct-const-add. Returns `false` if the depth
+/// budget is exceeded (the caller is then expected to fall back to the
+/// unfused `nbit::add_nbit_qq` path).
+pub(crate) fn fold_3x_mask_apply(
+    b: &mut B,
+    acc_window: &mut [QubitId],
+    scratch_carry_lane: &[QubitId],
+    depth_idx: usize,
+) -> bool {
+    if depth_idx >= fold_3xsq_depth_budget() {
+        return false;
+    }
+    let n = acc_window.len();
+    if n == 0 {
+        return true;
+    }
+    let mask_c = fold_3x_mask();
+    let need = n.saturating_sub(1);
+    if !fold_3x_mask_uses_borrowed_carries() || scratch_carry_lane.len() < need {
+        add_nbit_const_direct_uncontrolled_fast(b, acc_window, mask_c);
+        return true;
+    }
+    let ctrl = b.alloc_qubit();
+    b.x(ctrl);
+    cadd_nbit_const_direct_trunc_fast_borrowed_carries(
+        b,
+        acc_window,
+        mask_c,
+        ctrl,
+        1,
+        &scratch_carry_lane[..need],
+    );
+    b.x(ctrl);
+    b.free(ctrl);
+    true
+}
