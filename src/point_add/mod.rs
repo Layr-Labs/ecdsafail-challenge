@@ -2493,7 +2493,7 @@ pub fn build() -> Vec<Op> {
     set_default_env("SUB4_PP_PEAK", "1268");
     set_default_env("SUB4_PP_WALK_PEAK", "1267");
     set_default_env("SUB4_PP_REPLAY_CHUNK", "96");
-    set_default_env("SUB4_PP_REPLAY_CHUNK_COMPARE", "22");
+    set_default_env("SUB4_PP_REPLAY_CHUNK_COMPARE", "21");
     set_default_env("SUB4_PP_REPLAY_FOLD_WINDOW", "54");
     set_default_env("SUB4_PP_REPLAY_FOLD_WINDOW_MUL", "53");
     set_default_env("SUB4_PP_ENDPOINT_FOLD_WINDOW", "26");
@@ -2602,7 +2602,7 @@ pub fn build() -> Vec<Op> {
         let nonce = std::env::var("SUB4_PINGPONG_TAIL_NONCE")
             .unwrap_or_default()
             .parse::<u64>()
-            .unwrap_or(1562067597);
+            .unwrap_or(75787140768792);
         let mut x = Op::empty();
         x.kind = OperationType::X;
         x.q_target = QubitId(0);
