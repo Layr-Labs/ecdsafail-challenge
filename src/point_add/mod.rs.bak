@@ -2502,7 +2502,7 @@ pub fn build() -> Vec<Op> {
     // are exactly what pins the peak at 1273. Canonical residues cost ~628 T
     // and buy the peak down to 1267 -- 105 T/wire against a ~716 break-even.
     set_default_env("SUB4_PP_SIGNED_FRAME", "0");
-    set_default_env("SUB4_PP_REPLAY_FLAG_COMPARE", "20");
+    set_default_env("SUB4_PP_REPLAY_FLAG_COMPARE", "22");
     set_default_env("SUB4_SQUARE_CHUNK_MIN", "18446744073709551615");
     set_default_env("SUB4_SQUARE_LADDER", "243");
 
@@ -2602,7 +2602,7 @@ pub fn build() -> Vec<Op> {
         let nonce = std::env::var("SUB4_PINGPONG_TAIL_NONCE")
             .unwrap_or_default()
             .parse::<u64>()
-            .unwrap_or(1562067597);
+            .unwrap_or(41032007408473);
         let mut x = Op::empty();
         x.kind = OperationType::X;
         x.q_target = QubitId(0);
