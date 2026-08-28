@@ -1484,6 +1484,9 @@ fn configure_ecdsafail_submission_route() {
     set_default_env("DIALOG_GCD_FUSED_BRANCH_BITS", "1");
 
     set_default_env("DIALOG_GCD_ODD_U_LOWBIT_FASTPATH", "1");
+
+    set_default_env("JACOBIAN_DOUBLE_ADD_KERNEL", "1");
+    set_default_env("JACOBIAN_KERNEL_ANCILLA_CAP", "8");
 }
 
 pub fn build_builder() -> B {
@@ -1533,6 +1536,24 @@ pub fn build_builder() -> B {
         for _ in 0..k {
             b.x(tx[1]);
             b.x(tx[1]);
+        }
+    }
+
+    if crate::point_add::arith::const_arith::fold_jacobian_double_add_kernel_enabled() {
+        let folded = crate::point_add::arith::const_arith::FoldedJacobianDoubleAdd::new(
+            p,
+            U256::from(0u64),
+            U256::from(1u64),
+        );
+        b.set_phase("jacobian_double_add_probe");
+        let probe = b.alloc_qubits(N);
+        crate::point_add::arith::const_arith::fold_jacobian_double_add_kernel(
+            b,
+            &folded,
+            &probe,
+        );
+        for q in probe {
+            b.free(q);
         }
     }
 

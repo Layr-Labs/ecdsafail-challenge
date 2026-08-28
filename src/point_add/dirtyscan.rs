@@ -352,3 +352,27 @@ pub(crate) fn scan(ops: &[Op], transitions: &[(usize, &'static str)]) {
         eprintln!("DIRTY_FREE_Q qubit={q} events={n} max_lanes={mx}");
     }
 }
+
+/// Ancilla quota derived from a toffoli plan and the kernel's pre-folded
+/// `lambda_num`.  Returns the number of *clean* ancilla qubits the kernel
+/// is allowed to allocate.  The number scales with the toffoli count and
+/// is reduced when the pre-folded `lambda_num` is zero (the kernel takes
+/// the no-rotate path, which has no live ancilla requirements past the
+/// base scratch).
+///
+/// The cap is governed by `JACOBIAN_KERNEL_ANCILLA_CAP` and defaults to
+/// 6.  A higher value gives the kernel more breathing room for the
+/// modular-reduction back-end; a lower value forces the kernel to pack
+/// its temporaries more tightly.
+pub(crate) fn ancilla_quota_for_toffolis(toffoli_count: usize, lambda_num: alloy_primitives::U256) -> usize {
+    let cap: usize = std::env::var("JACOBIAN_KERNEL_ANCILLA_CAP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(6);
+    let base = toffoli_count.min(cap);
+    if lambda_num.is_zero() {
+        base
+    } else {
+        (base + 1).min(cap)
+    }
+}

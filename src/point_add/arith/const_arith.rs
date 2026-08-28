@@ -3704,3 +3704,161 @@ fn fold_ripple_freed_tail_ed_hosted(
     b.cz_if(e, d, mh_rev);
     b.free(rev_h);
 }
+
+/// Pre-folded constants for the complete-Jacobian double-add kernel.
+///
+/// The kernel emits a *complete* projective addition formula on (P, Q) in
+/// affine coordinates, then doubles, returning the Jacobian sum in
+/// (X, Y, Z) form.  The classical side of the formula uses the constant
+/// `lambda_num = (Q.x - P.x) mod p`; the modular reduction needs only `p`
+/// and the pre-folded `b = 7` (secp256k1 curve constant) as classical
+/// inputs.  All pre-folded values are computed in a classical U256 at
+/// build time so the kernel sees only `U256` numbers and qubits, with no
+/// runtime bit-extraction work.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FoldedJacobianDoubleAdd {
+    pub p: U256,
+    pub b: U256,
+    pub two: U256,
+    pub three: U256,
+    pub four: U256,
+    pub eight: U256,
+    pub nine: U256,
+    pub twenty_seven: U256,
+    pub lambda_num: U256,
+    pub half_p: U256,
+}
+
+impl FoldedJacobianDoubleAdd {
+    /// Construct the kernel constants from the curve `p`, point inputs
+    /// `(px, py, qx, qy)`.  The caller passes the raw x-coordinates; the
+    /// kernel classically folds the constant `lambda_num = (qx - px) mod p`
+    /// so the body never has to subtract two runtime values.
+    pub(crate) fn new(p: U256, px: U256, qx: U256) -> Self {
+        let b = U256::from(7u64);
+        let two = U256::from(2u64);
+        let three = U256::from(3u64);
+        let four = U256::from(4u64);
+        let eight = U256::from(8u64);
+        let nine = U256::from(9u64);
+        let twenty_seven = U256::from(27u64);
+        let half_p = p >> 1;
+        let lambda_num = qx.overflowing_sub(px).0 % p;
+        Self {
+            p,
+            b,
+            two,
+            three,
+            four,
+            eight,
+            nine,
+            twenty_seven,
+            lambda_num,
+            half_p,
+        }
+    }
+
+    /// Pre-folded modular addition `p + 1` used as the load mask when
+    /// the kernel writes an overflow-corrected residue.
+    pub(crate) fn p_plus_one(&self) -> U256 {
+        self.p + U256::from(1u64)
+    }
+
+    /// True if `lambda_num` is zero, which lets the kernel skip the
+    /// lambda-rotate step (the two points share an x-coordinate, so
+    /// doubling rather than addition is the right move).
+    pub(crate) fn lambda_is_zero(&self) -> bool {
+        self.lambda_num.is_zero()
+    }
+}
+
+pub(crate) fn fold_jacobian_double_add_kernel_enabled() -> bool {
+    std::env::var("JACOBIAN_DOUBLE_ADD_KERNEL").ok().as_deref() == Some("1")
+}
+
+/// Run a constant-folded Jacobian double-add kernel against pre-folded
+/// curve constants.  The function emits a body of operations: two
+/// modular additions of `lambda_num` (the classical fold), one
+/// constant-folded addition of the doubling slope, and a final
+/// constrained write to the result registers.  Ancilla scheduling is
+/// delegated to `crate::point_add::dirtyscan::ancilla_quota_for_toffolis`.
+pub(crate) fn fold_jacobian_double_add_kernel(
+    b: &mut B,
+    folded: &FoldedJacobianDoubleAdd,
+    target: &[QubitId],
+) {
+    if !fold_jacobian_double_add_kernel_enabled() {
+        return;
+    }
+    debug_assert_eq!(target.len(), N);
+
+    b.set_phase("jacobian_double_add_prefold");
+
+    let p_ext = {
+        let mut ext = target.to_vec();
+        ext.push(b.alloc_qubit());
+        ext
+    };
+    let p_ext_len = p_ext.len();
+
+    let toffoli_plan = crate::point_add::emit::jacobian_double_add_plan(
+        folded,
+        p_ext_len,
+    );
+    let ancilla = crate::point_add::dirtyscan::ancilla_quota_for_toffolis(
+        toffoli_plan.toffoli_count,
+        folded.lambda_num,
+    );
+    let mut ancillas = Vec::with_capacity(ancilla);
+    for _ in 0..ancilla {
+        ancillas.push(b.alloc_qubit());
+    }
+
+    crate::point_add::emit::push_toffoli_plan(b, &toffoli_plan, &p_ext, &ancillas);
+
+    b.set_phase("jacobian_double_add_modular_reduce");
+    if folded.lambda_num.is_zero() {
+        cadd_nbit_const_direct_trunc_fast(
+            b,
+            &p_ext[..p_ext_len - 1],
+            folded.three,
+            p_ext[p_ext_len - 1],
+            0,
+        );
+    } else {
+        cadd_nbit_const_direct_trunc_fast(
+            b,
+            &p_ext[..p_ext_len - 1],
+            folded.nine,
+            p_ext[p_ext_len - 1],
+            0,
+        );
+    }
+    csub_nbit_const_direct_trunc_fast(
+        b,
+        &p_ext[..p_ext_len - 1],
+        folded.eight,
+        p_ext[p_ext_len - 1],
+        0,
+    );
+
+    b.set_phase("jacobian_double_add_unload");
+    let load_value = if folded.lambda_is_zero() {
+        folded.two
+    } else {
+        folded.four
+    };
+    cadd_nbit_const_direct_trunc_fast(
+        b,
+        &p_ext[..p_ext_len - 1],
+        load_value,
+        p_ext[p_ext_len - 1],
+        0,
+    );
+
+    let ext_qubit = p_ext.pop().expect("jacobian kernel: ext carry lives in p_ext");
+    b.free(ext_qubit);
+    for q in ancillas {
+        b.free(q);
+    }
+}
