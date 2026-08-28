@@ -108,6 +108,9 @@ pub(crate) fn mod_sub_qq_fast(b: &mut B, acc: &[QubitId], a: &[QubitId], p: U256
         );
         b.free(q_clean2[0]);
         b.free(q_clean2[1]);
+    } else if let Some(w) = double_carry_trunc_window() {
+
+        csub_nbit_const_direct_trunc_fast(b, &acc_ext[..n], c, flag, w);
     } else if secp_direct_const_arith_enabled() {
         csub_nbit_const_direct_fast(b, &acc_ext[..n], c, flag);
     } else {

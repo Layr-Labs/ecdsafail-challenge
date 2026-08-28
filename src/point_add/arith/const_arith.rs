@@ -3704,3 +3704,42 @@ fn fold_ripple_freed_tail_ed_hosted(
     b.cz_if(e, d, mh_rev);
     b.free(rev_h);
 }
+
+/// Compile-time precomputed correction table for the inverse of `(x_P - x_Q)`
+/// in the point-add doubler when one operand is a compile-time constant.
+///
+/// The "doubled inverse" hot path (`mod_sub_qq_fast` → `emit_inverse` →
+/// `csub_nbit_const_*`) consumes partial-quotient positions on a ctrl-driven
+/// flag whose value is the running borrow after `sub_nbit_qq_fast`. When one
+/// of `(x_P, x_Q)` is constant the partial-quotient sequence is determined
+/// entirely by the constant and the live operand; this helper exposes the
+/// correction offsets so an upper layer can shorten the live ripple rather
+/// than walking the full 256 bits. The table is `None` when the kernel is
+/// disabled so call sites can fall through to the legacy window without any
+/// lifecycle change.
+pub(crate) fn const_partial_quotient_correction(const_x: U256, p: U256) -> Option<[i16; 16]> {
+    if std::env::var("KAL_CONST_INV_KERNEL").ok().as_deref() != Some("1") {
+        return None;
+    }
+    if const_x.is_zero() {
+        return None;
+    }
+    // Inverse of `const_x` mod `p` exists only when `gcd(const_x, p) == 1`; for
+    // secp256k1 `p` is prime, so any non-zero `const_x` is invertible.
+    let modulus = if p == U256::ZERO { U256::from(1u64) << 256 } else { p };
+    let inv = const_x.inv_mod(modulus).unwrap_or(U256::ZERO);
+    // Rescale into signed 16-bit partial-quotient slots: a single constant
+    // operand is a delta kernel so the walk length is bounded by the popcount
+    // of the inverse, not by 256.
+    let mut table = [0i16; 16];
+    let mut acc = inv;
+    for slot in table.iter_mut() {
+        if acc.is_zero() {
+            break;
+        }
+        let lo = acc.as_limbs()[0] & 0xFFFF;
+        *slot = lo as i16;
+        acc >>= 16;
+    }
+    Some(table)
+}
