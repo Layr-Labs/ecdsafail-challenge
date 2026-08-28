@@ -1,5 +1,48 @@
 use super::*;
 
+use crate::point_add::SECP256K1_P;
+
+/// Two's-complement of the secp256k1 prime expressed as a 4-limb u64 array
+/// representing `2^256 - q`. The high limb is the carry-out of the +1 that
+/// finishes the two's-complement of `q`; because `q` is just below `2^256`,
+/// the result lives in the low half of the 256-bit space and its top bit
+/// is clear. Storing the constant here (rather than re-deriving it in every
+/// call site) guarantees every complement-add reduction sees the same
+/// 256-bit value.
+pub const MODULUS_COMPLEMENT_256: [u64; 4] = {
+    let mut out = [0u64; 4];
+    let mut carry: u64 = 1;
+    let mut i = 0;
+    while i < 4 {
+        let limb = SECP256K1_P.as_limbs()[i];
+        let not_limb = (!limb) & 0xFFFF_FFFF_FFFF_FFFFu64;
+        let sum = (not_limb as u128) + (carry as u128);
+        out[i] = sum as u64;
+        carry = (sum >> 64) as u64;
+        i += 1;
+    }
+    // carry into the non-existent 5th limb must be 0 (else the complement
+    // wouldn't fit in 256 bits, which contradicts q < 2^256).
+    let _ = carry;
+    out
+};
+
+const _: () = {
+    let mut carry: u128 = 0;
+    let mut i = 0;
+    while i < 4 {
+        let sum = (MODULUS_COMPLEMENT_256[i] as u128) + (SECP256K1_P.as_limbs()[i] as u128) + carry;
+        if i < 3 {
+            carry = sum >> 64;
+        } else {
+            // q + (2^256 - q) == 2^256; the top 64 bits of that must be 1
+            // and we must consume the carry to keep the constant 256-bit.
+            assert!(sum == (1u128 << 64), "MODULUS_COMPLEMENT_256 does not satisfy 2^256 - q");
+        }
+        i += 1;
+    }
+};
+
 #[inline]
 fn maj1_inputs_distinct(a: QubitId, k: QubitId, carry: QubitId, target: QubitId) -> bool {
     a != k && a != carry && a != target && k != carry && k != target && carry != target

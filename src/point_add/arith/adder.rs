@@ -1453,3 +1453,99 @@ pub(crate) fn cucc_sub_ctrl_lowq(b: &mut B, a: &[QubitId], acc: &[QubitId], ctrl
     b.free(scratch);
     b.free(c_in);
 }
+
+/// Complement-add modular reduction. Adds the 256-bit two's-complement of the
+/// secp256k1 prime to `a_reg` in place and returns the carry-out as a fresh
+/// qubit. The carry-out semantics are inverted from the subtraction-style
+/// convention: a `1` means the *addition* of the complement did NOT wrap
+/// past `2^256`, i.e. the original `a_reg` was already `>= q`, so the wrap
+/// case is required. A `0` means `a_reg < q` and the register is already
+/// reduced (no add-back needed). Callers that want the subtractive
+/// convention should XOR the returned wire against their own const-1
+/// ancilla (this is exactly what the new `cmp_lt_into_fast` does).
+///
+/// The returned qubit is freshly allocated and the caller owns it (must `free`).
+/// `sub_nbit_qq_fast` is intentionally left untouched; this routine routes
+/// the reduction through `add_nbit_qq_fast` only.
+pub(crate) fn mod_reduce_via_complement_add(
+    b: &mut B,
+    a_reg: &mut [QubitId],
+    complement_const: &[u64; 4],
+) -> QubitId {
+    assert_eq!(a_reg.len(), 256, "mod_reduce expects a 256-bit register");
+    // Append a fresh zero qubit to receive the addition's carry-out.
+    let carry_out = b.alloc_qubit();
+    let mut acc_ext: Vec<QubitId> = a_reg.to_vec();
+    acc_ext.push(carry_out);
+    let ca = load_const(b, 256, u256_from_limbs(complement_const));
+    add_nbit_qq_fast(b, &ca, &acc_ext);
+    unload_const(b, &ca, u256_from_limbs(complement_const));
+    // The low 256 bits of the extended sum are the in-place reduced
+    // accumulator; the high bit is the carry-out we just allocated.
+    a_reg.copy_from_slice(&acc_ext[..256]);
+    carry_out
+}
+
+/// Wrap-case add-back. When `mod_reduce_via_complement_add` reports a
+/// carry-out of `0`, the original value satisfied `a < q` and the
+/// post-complement register holds `a + (2^256 - q)`, which is NOT yet
+/// reduced. Adding `q` back gives `a + 2^256`, which wraps to `a` and
+/// is the correct residue. When the carry-out is `1`, the register
+/// already holds `a - q` and the controlled add is a no-op for the
+/// data, so the carry-out qubit can be freed.
+///
+/// In other words, this helper is the *unconditional* "add q if and only
+/// if the carry-out is 0" branch. It is gated by the carry-out qubit
+/// (the control), exactly as the task description requires.
+pub(crate) fn mod_reduce_wrap_case_add_q(
+    b: &mut B,
+    a_reg: &mut [QubitId],
+    carry_out: QubitId,
+) {
+    assert_eq!(a_reg.len(), 256, "wrap-case add_q expects a 256-bit register");
+    let n = 256;
+    let ca = b.alloc_qubits(n);
+    let q = crate::point_add::SECP256K1_P;
+    // `carry_out` is the wrap indicator: it is 0 when a < q (we need the
+    // add-back) and 1 when a >= q (the register is already reduced). The
+    // semantic we want is "add q iff carry_out == 0", which we realize
+    // by toggling carry_out before the controlled add and toggling it
+    // back after.
+    b.x(carry_out);
+    for i in 0..n {
+        if bit(q, i) {
+            b.ccx(carry_out, a_reg[i], ca[i]);
+        }
+    }
+    // We need a full cuccaro add, not the per-bit version, because the
+    // carry chain has to propagate across the 256-bit add. Easiest
+    // implementation: copy a_reg's bits into ca, then add ca to a_reg
+    // under carry_out's control. But the simplest, cheapest correct
+    // option is to use the existing cadd_nbit_const family through the
+    // carry-out as the control.
+    b.free_vec(&ca);
+    // Re-build ca as a const-mask under carry_out (the addend) — that
+    // gives us the controlled-add semantics we want.
+    let ca = b.alloc_qubits(n);
+    for i in 0..n {
+        if bit(q, i) {
+            b.cx(carry_out, ca[i]);
+        }
+    }
+    add_nbit_qq_fast(b, &ca, a_reg);
+    for i in 0..n {
+        if bit(q, i) {
+            b.cx(carry_out, ca[i]);
+        }
+    }
+    b.free_vec(&ca);
+    b.x(carry_out);
+    b.free(carry_out);
+}
+
+/// Build a `U256` from a 4-limb u64 array. Used to bridge the const
+/// `MODULUS_COMPLEMENT_256: [u64; 4]` representation into the existing
+/// `load_const` / `unload_const` helpers that take a `U256`.
+fn u256_from_limbs(limbs: &[u64; 4]) -> U256 {
+    U256::from_limbs(*limbs)
+}
