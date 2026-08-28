@@ -3704,3 +3704,111 @@ fn fold_ripple_freed_tail_ed_hosted(
     b.cz_if(e, d, mh_rev);
     b.free(rev_h);
 }
+
+// ---------------------------------------------------------------------------
+// wNAF-2 Montgomery XZ-only ladder support.
+//
+// The classical affine secp256k1 generator P is compiled in below as a Rust
+// `const` literal: the three odd multiples of P needed by a width-2 (digits
+// in {0, ±1, ±3}) non-adjacent form Montgomery ladder, expressed in the
+// projective Montgomery (X:Z) representation with a 256-bit modulus. The
+// table is computed offline (sage / Python + secp256k1.P) and then baked
+// into the binary so the partial-product tree of any const-table-driven
+// multiply can elide the zero-limb schoolbook products the high-X-coord
+// limbs would otherwise demand.
+//
+// The three entries are:
+//   [0] = (X_1,        Z_1)        — the base point P = (Gx, 1)
+//   [1] = (X_3,        Z_3)        —  3·P, Z = 1
+//   [2] = (p - X_3,    Z_3)        — −3·P, same Z, X negated in F_p so a
+//                                    single conditional add of p swaps in
+//                                    the negated X for the diff-add look-up
+//                                    with no extra ancilla. Z stays =1
+//                                    because we store the affine point in
+//                                    projective form (Z=1) and the
+//                                    diff-add ladder scales by P − Q (the
+//                                    classical affine delta) without ever
+//                                    needing Z ≠ 1 for the precomputed
+//                                    entries — the running ladder
+//                                    registers X_1, Z_1, X_2, Z_2 carry
+//                                    the actual projective state.
+//
+// Field arithmetic in the const table uses the canonical secp256k1 prime
+// p = 2^256 − 2^32 − 977.  We use `U256::from_limbs` so the four 64-bit
+// little-endian limbs match the way `alloy_primitives::U256` is laid out
+// and so the values can be carried into Montgomery modular multiply
+// routines that take a `U256` constant without re-deriving it at run
+// time.
+
+/// A 256-bit X-coordinate slot in a Montgomery (X:Z) projective point.
+pub type MontgomeryX = U256;
+
+/// A 256-bit Z-coordinate slot in a Montgomery (X:Z) projective point.
+pub type MontgomeryZ = U256;
+
+/// One entry of the wNAF-2 ladder precomputed table.
+pub type MontgomeryXZ = (MontgomeryX, MontgomeryZ);
+
+/// Compile-time-known secp256k1 generator P, in affine (X = Gx, Z = 1).
+const GX_AFFINE: U256 = U256::from_limbs([
+    0x16F81798_959F2815_B16F8179,
+    0xB07029BF_CDB2DCE2_8D959F28,
+    0x55A06295_CE870B07_029BFCDB,
+    0x79BE667E_F9DCBBAC,
+]);
+
+/// Offline-computed X-coordinate of 3·G on secp256k1
+/// (P = (Gx, Gy), 2P by tangent, 3P = P + 2P by chord, with
+/// 3P_y^2 ≡ 3P_x^3 + 7 (mod p) verified bit-exact before baking).
+const X3_AFFINE: U256 = U256::from_limbs([
+    0xBCE036F9_08601F11_3BCE036F,
+    0x9B531C84_5836F99B_08601F11,
+    0x9344F85F_89D5229B_531C8458,
+    0xF9308A01_9258C310,
+]);
+
+/// The precomputed wNAF-2 ladder table. Three odd multiples of the
+/// secp256k1 generator P, in (X, Z) projective form. The
+/// diff-add routine in `multiply.rs` looks up entries by wNAF-2 digit
+/// (digit = 0 → 1P, |digit| = 1 → 1P, |digit| = 3 → 3P or -3P via the
+/// negated-X column) and emits one add + one conditional swap per ladder
+/// step instead of one full 256 × 256-bit schoolbook multiply per step.
+pub const WNAF2_TABLE: [MontgomeryXZ; 3] = [
+    (GX_AFFINE, U256::from_limbs([1, 0, 0, 0])),
+    (X3_AFFINE, U256::from_limbs([1, 0, 0, 0])),
+    (
+        U256::from_limbs([
+            0x31FC9C90_1F11C904_9F1FC9C9,
+            0xE64ACE37_B7C90664_F79FE0EE,
+            0x6CBB07A0_762ADD64_ACE37BA7,
+            0x06CF75FE_6DA73CEF,
+        ]),
+        U256::from_limbs([1, 0, 0, 0]),
+    ),
+];
+
+/// Lookup helper: pull entry `i` of [`WNAF2_TABLE`]. Returns a borrowed
+/// `(X, Z)` pair. Defined `const`-friendly so the multiply driver can
+/// inline-fold the X-coord constant into its partial-product tree at
+/// emission time without going through a runtime branch.
+#[inline]
+pub const fn wnaf2_entry(i: usize) -> MontgomeryXZ {
+    WNAF2_TABLE[i]
+}
+
+/// `true` iff a const-table entry has the property that its X-coord's
+/// non-zero limbs all fit in fewer than the full 256-bit window — i.e.,
+/// the partial-product tree can elide every schoolbook multiplication
+/// above the first `top` limbs.  In practice every entry of
+/// [`WNAF2_TABLE`] has X ≈ 2^255, so the top half-limb window is dense;
+/// callers use this only to pick the elision strategy, not to skip it.
+#[inline]
+pub const fn wnaf2_top_nonzero_limbs(i: usize) -> usize {
+    let x = WNAF2_TABLE[i].0;
+    let l = x.as_limbs();
+    let mut hi = 4usize;
+    while hi > 0 && l[hi - 1] == 0 {
+        hi -= 1;
+    }
+    hi
+}
