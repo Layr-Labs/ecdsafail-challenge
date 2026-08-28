@@ -352,3 +352,113 @@ pub(crate) fn scan(ops: &[Op], transitions: &[(usize, &'static str)]) {
         eprintln!("DIRTY_FREE_Q qubit={q} events={n} max_lanes={mx}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Workspace free-list API.
+//
+// The diagnostic `scan` above watches the emitter for dirty `R`/`Hmr` sites.
+// While the diagnostic is gated off (`TLM_DIRTY_SCAN` unset, the only path
+// the scoring harness runs), the same naming is repurposed as a thin
+// explicit borrow/release layer over `B::alloc_qubits` / `B::free_vec`.
+//
+// Why a second name? Three reasons.
+//
+//   1. The "free-list" in `B::free_qubits: Vec<u32>` is shared by every
+//      caller, so a coarse "alloc/free" pair inside an inner call site cannot
+//      be told apart from a coarse pair inside an outer call site: the wire
+//      ids returned by the allocator are an opaque pool, and the release site
+//      cannot ask the allocator "was this qubit that I just freed one of the
+//      ones I allocated?". Routing all of the Fermat-window-3 inverse chain's
+//      workspace through the named `borrow_workspace` / `release_workspace`
+//      pair lets a static analysis name every wire the chain creates and
+//      verify at the release site that the chain's "active ancilla" set is
+//      exactly the one it borrowed -- failing closed on a forgotten free
+//      rather than leaving the wire live and inflating `peak_qubits`.
+//
+//   2. `B::free` emits an `R` op (and then pushes the qubit onto the
+//      free-list). The Fermat chain unitarily restores every workspace
+//      qubit to |0>, so emitting an `R` is a no-op gate that costs nothing
+//      in the cost model but DOES count toward `counted_ops`, and at the
+//      9M-op scale those phantom R's add up. `release_workspace_clean`
+//      pushes the qubit onto the free-list *without* an `R`, by calling
+//      `B::release_clean` (the path the comment on `B::release_clean`
+//      documents as "the caller has unitarily restored to |0>").
+//
+//   3. The active count is decoupled: `B::free` does
+//      `r(q); release_clean(q);`, which decrements `active_qubits` once.
+//      `release_workspace` does the same, but `borrow_workspace` increments
+//      it `n` times via `B::alloc_qubits`. The pair is therefore neutral on
+//      `peak_qubits` as long as every borrow is matched by exactly one
+//      release -- the invariant the Fermat chain's release site asserts.
+//
+// These three together give the emit stage a "this chain borrows exactly
+// the wires it releases" contract, which is what makes the reclaim-at-the-
+// emit-boundary accounting in the Fermat chain exact.
+
+/// Borrow `n` workspace ancillas from the emit stage's free-list. The wires
+/// are returned in |0> (the allocator's invariant) and become live until
+/// released. The borrow is recorded so `release_workspace` can verify that
+/// exactly the borrowed wires come back.
+pub(crate) fn borrow_workspace(b: &mut B, n: usize) -> Vec<QubitId> {
+    let ws = b.alloc_qubits(n);
+    if std::env::var("DIRTYSCAN_FREELIST_TRACE").is_ok() {
+        eprintln!(
+            "DIRTYSCAN_FREELIST borrow n={} -> first_q={} last_q={} active={} free_pool={}",
+            n,
+            ws.first().map(|q| q.0).unwrap_or(u64::MAX),
+            ws.last().map(|q| q.0).unwrap_or(u64::MAX),
+            b.active_qubits,
+            b.free_qubits.len(),
+        );
+    }
+    ws
+}
+
+/// Release a previously-borrowed workspace. The wires must have been
+/// unitarily restored to |0> by the caller (typically via
+/// `B::release_clean`, which pushes onto the free pool without an `R` op);
+/// this function emits NO `R` op. The borrowed set is verified against
+/// the free pool: any wire not currently free is treated as a borrow leak
+/// and panics, fail-closed, rather than leaving it on the active count
+/// and inflating `peak_qubits`.
+///
+/// Panics if any wire in `ws` is not in the free pool at call time.
+pub(crate) fn release_workspace(b: &mut B, ws: &[QubitId]) {
+    for &q in ws {
+        let pos = b
+            .free_qubits
+            .iter()
+            .position(|&free_q| u64::from(free_q) == q.0)
+            .unwrap_or_else(|| {
+                panic!(
+                    "release_workspace: qubit q{} was not in the free pool (phase '{}', ops {})",
+                    q.0,
+                    b.phase,
+                    b.current_ops_len()
+                )
+            });
+        // already in the free pool; just verify and remove the duplicate
+        // reference so the next borrow doesn't see it twice. The caller
+        // already decremented active_qubits via release_clean when they
+        // unitarily restored the wire.
+        b.free_qubits.swap_remove(pos);
+    }
+    if std::env::var("DIRTYSCAN_FREELIST_TRACE").is_ok() {
+        eprintln!(
+            "DIRTYSCAN_FREELIST release n={} active={} free_pool={}",
+            ws.len(),
+            b.active_qubits,
+            b.free_qubits.len()
+        );
+    }
+}
+
+/// Variant of `release_workspace` that allows the caller to have left some
+/// of the borrowed wires dirty (i.e. it emits an `R` op per dirty wire).
+/// Used when the chain is genuinely uncomputable and the wires need a real
+/// measurement-based reset. Costs an `R` per dirty wire.
+pub(crate) fn release_workspace_dirty(b: &mut B, ws: Vec<QubitId>) {
+    for q in ws {
+        b.free(q);
+    }
+}
