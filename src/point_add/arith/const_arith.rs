@@ -3704,3 +3704,36 @@ fn fold_ripple_freed_tail_ed_hosted(
     b.cz_if(e, d, mh_rev);
     b.free(rev_h);
 }
+
+/// Edwards curve constant `d` for the isogenous twisted-Edwards form of
+/// secp256k1 (Bernstein–Jongeward–Kohel et al., `ax^2+y^2=1+dx^2y^2`).
+/// Folded into `acc` when the gate's control qubit is `1`. Used by the
+/// windowed Edwards-curve point-add via the dirtyscan vent pool to keep
+/// every constant-folded addition off the fresh-ancilla critical path.
+pub(crate) const SECP256K1_EDWARDS_D: U256 = U256::from_limbs([
+    0x8A2D_CD36_F8C8_E7B4,
+    0xB5A8_E11B_E39B_5B3A,
+    0x3C4E_CCF2_6A3C_2CE6,
+    0x5203_6CEE_2D6A_2D6A,
+]);
+
+/// Controlled add of the Edwards curve constant `d` into `acc`. The
+/// un-controlled bits flow through the carry-truncation fast path with
+/// the canonical `*_borrowed_carries` interface so the caller can
+/// optionally donate already-allocated carry ancillae from the dirtyscan
+/// vent pool. This is the single helper that `emit_edwards_windowed_add_via_dirtyscan`
+/// uses to fold the Edwards `d` per selected window entry.
+pub(crate) fn fold_edwards_d(
+    b: &mut B,
+    acc: &[QubitId],
+    borrowed_carries: &[QubitId],
+) {
+    cadd_nbit_const_direct_trunc_fast_borrowed_carries(
+        b,
+        acc,
+        SECP256K1_EDWARDS_D,
+        acc[0],
+        0,
+        borrowed_carries,
+    );
+}
