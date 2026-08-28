@@ -116,17 +116,17 @@ pub(crate) fn mod_sub_qq_fast(b: &mut B, acc: &[QubitId], a: &[QubitId], p: U256
 
     b.x(flag);
     mod_neg_inplace_fast(b, &a_ext[..n], p);
+    unext_reg(b, a_ovf);
     if std::env::var("MOD_FAST_FLAG_CONDITIONAL_REPLAY").ok().as_deref() == Some("1") {
         let phase = b.alloc_bit();
         b.hmr(flag, phase);
         cmp_lt_phase_conditioned(b, &acc_ext[..n], &a_ext[..n], phase);
     } else {
-        cmp_lt_into_fast(b, &acc_ext[..n], &a_ext[..n], flag);
+        cmp_lt_into_fast(b, &acc_ext[..n], &a_ext[..n], a_ovf, flag);
     }
     mod_neg_inplace_fast(b, &a_ext[..n], p);
     b.free(flag);
 
-    unext_reg(b, a_ovf);
     unext_reg(b, acc_ovf);
     let _ = (acc_ext, a_ext);
 }
@@ -979,7 +979,9 @@ pub(crate) fn mod_add_qq_fast(b: &mut B, acc: &[QubitId], a: &[QubitId], p: U256
         b.hmr(flag, phase);
         cmp_lt_phase_conditioned(b, &acc_ext[..n], &a_ext[..n], phase);
     } else {
-        cmp_lt_into_fast(b, &acc_ext[..n], &a_ext[..n], flag);
+        let c_in_cmp = b.alloc_qubit();
+        cmp_lt_into_fast(b, &acc_ext[..n], &a_ext[..n], c_in_cmp, flag);
+        b.free(c_in_cmp);
     }
     b.free(flag);
 
@@ -1062,7 +1064,9 @@ pub(crate) fn mod_add_qq_fast_from_zero(b: &mut B, acc: &[QubitId], a: &[QubitId
         b.hmr(flag, phase);
         cmp_lt_phase_conditioned(b, &acc_ext[..n], &a_ext[..n], phase);
     } else {
-        cmp_lt_into_fast(b, &acc_ext[..n], &a_ext[..n], flag);
+        let c_in_cmp = b.alloc_qubit();
+        cmp_lt_into_fast(b, &acc_ext[..n], &a_ext[..n], c_in_cmp, flag);
+        b.free(c_in_cmp);
     }
     b.free(flag);
 

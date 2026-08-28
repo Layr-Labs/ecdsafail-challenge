@@ -44,7 +44,9 @@ pub(crate) fn dialog_gcd_cmp_gt_truncated_into_width(
     assert!(!u.is_empty());
     let compare_bits = compare_bits.min(u.len()).max(1);
     let start = u.len() - compare_bits;
-    cmp_lt_into_fast(b, &v[start..], &u[start..], flag);
+    let c_in = b.alloc_qubit();
+    cmp_lt_into_fast(b, &v[start..], &u[start..], c_in, flag);
+    b.free(c_in);
 }
 
 pub(crate) fn dialog_gcd_ccx_cmp_gt_truncated_into_width(
@@ -1213,7 +1215,9 @@ pub(crate) fn dialog_gcd_cmod_add_materialized_pseudomersenne_with_clean_scratch
     b.set_phase("dialog_gcd_materialized_special_overflow_clean");
     if dialog_gcd_raw_apply_truncated_clean_enabled() {
         let compare_start = N - dialog_gcd_special_overflow_clean_compare_bits(step);
-        cmp_lt_into_fast(b, &acc[compare_start..], &f[compare_start..], acc_ovf);
+        let c_in_cmp = b.alloc_qubit();
+        cmp_lt_into_fast(b, &acc[compare_start..], &f[compare_start..], c_in_cmp, acc_ovf);
+        b.free(c_in_cmp);
     } else {
         cmp_lt_into(b, acc, &f, acc_ovf);
     }
@@ -2363,7 +2367,9 @@ pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_with_clean_scratch
     } else {
         b.x(acc_ovf);
         mod_neg_inplace_fast(b, &f, p);
-        cmp_lt_into_fast(b, acc, &f, acc_ovf);
+        let c_in_cmp = b.alloc_qubit();
+        cmp_lt_into_fast(b, acc, &f, c_in_cmp, acc_ovf);
+        b.free(c_in_cmp);
         mod_neg_inplace_fast(b, &f, p);
     }
     unext_reg(b, acc_ovf);
@@ -2526,7 +2532,9 @@ pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_borrowed_subtrahen
     } else {
         b.x(acc_ovf);
         mod_neg_inplace_fast(b, f, p);
-        cmp_lt_into_fast(b, acc, f, acc_ovf);
+        let c_in_cmp = b.alloc_qubit();
+        cmp_lt_into_fast(b, acc, f, c_in_cmp, acc_ovf);
+        b.free(c_in_cmp);
         mod_neg_inplace_fast(b, f, p);
     }
     unext_reg(b, acc_ovf);

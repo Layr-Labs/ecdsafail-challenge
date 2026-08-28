@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn cmp_lt_into_fast(b: &mut B, u: &[QubitId], v: &[QubitId], flag: QubitId) {
+pub(crate) fn cmp_lt_into_fast(b: &mut B, u: &[QubitId], v: &[QubitId], c_in: QubitId, flag: QubitId) {
 
     if kal_vent_modadd_enabled() {
         cmp_lt_into(b, u, v, flag);
@@ -8,7 +8,9 @@ pub(crate) fn cmp_lt_into_fast(b: &mut B, u: &[QubitId], v: &[QubitId], flag: Qu
     }
     let n = u.len();
     assert_eq!(n, v.len());
-    let c_in = b.alloc_qubit();
+    assert!(!u.contains(&c_in));
+    assert!(!v.contains(&c_in));
+    assert_ne!(c_in, flag);
     let carries = b.alloc_qubits(n);
     for i in 0..n {
         b.x(u[i]);
@@ -46,7 +48,6 @@ pub(crate) fn cmp_lt_into_fast(b: &mut B, u: &[QubitId], v: &[QubitId], flag: Qu
         b.x(u[i]);
     }
     b.free_vec(&carries);
-    b.free(c_in);
 }
 
 pub(crate) fn cmp_lt_into_fast_with_cin(
