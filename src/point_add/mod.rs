@@ -135,6 +135,21 @@ pub struct B {
 
     pub k2_shift2_log: Vec<QubitId>,
 
+    /// Qubits whose classical-addend value is known at build time because
+    /// `load_bits` wrote them from a classical bit register and no quantum
+    /// operation has touched them since. The set is consumed by
+    /// `mod_add_qq` / `mod_sub_qq` / `mod_mul` const-fold: when the entire
+    /// addend is classical, the controlled-gate add is replaced by a single
+    /// const-add, dropping the per-bit CCX and CX fanout. The tag is dropped
+    /// the first time a quantum operation writes the qubit, and again at
+    /// `free` / `release_clean`, so the fold only fires for short, well-
+    /// contained addend regions.
+    pub classical_ancilla: std::collections::HashSet<u32>,
+    /// Stack of dirty-ancilla acquisitions deferred by the emit-clean
+    /// fusion. Each pending acquire is satisfied by the next freed clean
+    /// ancilla instead of bumping `peak_qubits`; see `emit.rs`.
+    pub dirty_acquire_fusion_pool: Vec<QubitId>,
+
     pub b0: B0Census,
 }
 
@@ -207,6 +222,8 @@ impl B {
             phase_transitions: Vec::new(),
             active_timeline: Vec::new(),
             k2_shift2_log: Vec::new(),
+            classical_ancilla: std::collections::HashSet::new(),
+            dirty_acquire_fusion_pool: Vec::new(),
             b0: {
                 let lo = std::env::var("B0_WIN_LO")
                     .ok()
