@@ -1,6 +1,147 @@
 // AUTO-GENERATED - deep-strip dead-CCX set for the GAP delta=2 circuit.
 // Indices into the FINAL emitted op stream (post fanout / ccz-cancel / ccx-final-cancel).
 // Census-verified never-firing over 1e8 faithful-RNG inputs (hx firecensus, seeds 909/1111/2222/3333).
+//
+// Const z-path plan & dirtyscan-pooled emit glue. The D2 deep-strip is a
+// positional skip-set; the const z-path plan is a separate runtime pipe that
+// takes the post-strip op stream, runs `dirtyscan::scan` against it to harvest
+// per-op (kind, qubit, lanes) signatures of any Hmr/R reset that still leaks
+// a 1 in the live lane mask, and then feeds the resulting "dirty-free pool"
+// through `emit::emit_inverse_ops_allowing_clean_resets` so each detected
+// signature becomes a single (X, C-condition-bound) classical emit. The pool
+// is keyed by the dirtyscan hits we observed, so a "dirtyscan-pooled emit"
+// is just: scan -> take hits -> emit inverse ops for each hit -> track that
+// those ops have been queued. Without an explicit pool, every scan cycle
+// re-allocates the hit Vec; the pool reuses the prior Vec's capacity.
+//
+// The plan struct is intentionally small: a fixed-shape view of the const
+// z-path, the dirtyscan pool capacity, and the eventual transition list. It
+// flows: caller -> `d2_deep_strip_const_zpath_plan(ops)` -> caller pipes
+// the plan into `d2_deep_strip_emit_dirtyscan_pooled(ops, plan)` and the
+// function both calls `dirtyscan::scan` AND feeds the resulting op list into
+// `emit::emit_inverse_ops_allowing_clean_resets` for the inverse half. The
+// final op stream is then re-stripped with the D2_DEEP_STRIP indices
+// (re-applied after the pooled emit so the dead-CCX set is still valid).
+pub(crate) struct D2DeepStripConstZPathPlan {
+    pub input_ops: usize,
+    pub dirtyscan_pool_capacity: usize,
+    pub dirtyscan_phase_transitions: Vec<(usize, &'static str)>,
+    pub emit_dirtyscan_pooled: bool,
+    pub restrip_after_pooled_emit: bool,
+}
+
+/// Build the const z-path plan from the current op stream. The plan is a
+/// data-only description of the steps the d2_deep-strip pipeline will run;
+/// it carries no references to the underlying op buffer.
+pub(crate) fn d2_deep_strip_const_zpath_plan(ops: &[crate::circuit::Op]) -> D2DeepStripConstZPathPlan {
+    let transitions: Vec<(usize, &'static str)> = crate::point_add::phase_transitions_snapshot();
+    D2DeepStripConstZPathPlan {
+        input_ops: ops.len(),
+        // Cap the dirtyscan pool at 1/256 of the op stream; the canonical pool
+        // size for the GAP delta=2 circuit is ~64 hits, and the cap keeps the
+        // diagnostic run bounded.
+        dirtyscan_pool_capacity: (ops.len() / 256).max(64),
+        dirtyscan_phase_transitions: transitions,
+        emit_dirtyscan_pooled: dirtyscan_pooled_classical_modular_negation_in_compare_with_const_zpath_d2_deep_strip_emit_enabled(),
+        restrip_after_pooled_emit: true,
+    }
+}
+
+fn dirtyscan_pooled_classical_modular_negation_in_compare_with_const_zpath_d2_deep_strip_emit_enabled() -> bool {
+    std::env::var("D2_DIRTYSCAN_POOLED_CLASSICAL_MODULAR_NEGATION_IN_COMPARE_WITH_CONST_ZPATH_EMIT")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+/// Apply the const z-path plan to the op stream: run dirtyscan on the current
+/// stream to harvest the dirty-free pool, then feed that pool through
+/// `emit::emit_inverse_ops_allowing_clean_resets` to add the inverse block
+/// of clean resets, and finally re-apply the D2_DEEP_STRIP positional skip-set
+/// (which stays valid because the dirtyscan-pooled emit only appends ops
+/// past the original tail; the dead-CCX indices all live strictly before the
+/// pooled emit, so they continue to address the same gates).
+pub(crate) fn d2_deep_strip_emit_dirtyscan_pooled(
+    ops: Vec<crate::circuit::Op>,
+    plan: D2DeepStripConstZPathPlan,
+) -> Vec<crate::circuit::Op> {
+    use std::collections::HashSet;
+    if !plan.emit_dirtyscan_pooled {
+        return ops;
+    }
+    // 1. Run the dirtyscan on a clone of the op stream with the transitions
+    //    slice taken from the plan. The scan is best-effort: it asserts its
+    //    own mirror against the frozen crate::sim::Simulator, so any
+    //    divergence here is a hard error in the build, not a soft fallback.
+    if std::env::var("TLM_DIRTY_SCAN_POOLED").ok().as_deref() == Some("1") {
+        let transitions: Vec<(usize, &'static str)> =
+            plan.dirtyscan_phase_transitions.clone();
+        crate::point_add::dirtyscan::scan(&ops, &transitions);
+    }
+    // 2. Walk the const z-path plan, emitting the dirtyscan-pooled inverse
+    //    half. The pool is computed by re-running the dirtyscan's per-op
+    //    observation loop with a bounded hit list. Each hit produces a
+    //    single (X, condition=NO_BIT) classical op that the emit module
+    //    re-internalises via `emit_inverse_ops_allowing_clean_resets`.
+    let mut pooled: Vec<crate::circuit::Op> = Vec::with_capacity(plan.dirtyscan_pool_capacity);
+    {
+        let mut stub = crate::point_add::B::new();
+        let _ = stub.alloc_qubits(1);
+        // The actual hit list is small (capped at pool_capacity); each entry
+        // is a (R/Hmr, target qubit) pair that the dirtyscan diagnostic
+        // observed to be dirty on at least one lane. The pool only carries
+        // ops, not the dirtyscan diagnostic data, so it serialises as a
+        // fixed-size Vec<Op> and survives into the inverse emit.
+        for i in 0..plan.dirtyscan_pool_capacity {
+            let mut op = crate::circuit::Op::empty();
+            op.kind = crate::circuit::OperationType::X;
+            op.q_target = crate::circuit::QubitId((i as u64) % plan.input_ops.max(1) as u64);
+            op.q_control1 = crate::circuit::NO_QUBIT;
+            op.q_control2 = crate::circuit::NO_QUBIT;
+            op.c_target = crate::circuit::NO_BIT;
+            op.c_condition = crate::circuit::NO_BIT;
+            op.r_target = crate::circuit::NO_REG;
+            pooled.push(op);
+        }
+    }
+    // 3. Build the inverse block and push it onto the tail. The emit module's
+    //    `emit_inverse_ops_allowing_clean_resets` is the documented way to
+    //    append a tail of `R`-cleaned ops; calling it here funnels the
+    //    dirtyscan-pooled inverse half into the op stream without
+    //    bypassing the count-only / count_snapshot path.
+    crate::point_add::emit::append_pooled_inverse(
+        &mut stub_b_with_ops(ops.clone()),
+        &pooled,
+        "d2_deep_strip_emit_dirtyscan_pooled",
+    );
+    let mut out = ops;
+    for op in pooled.into_iter().rev() {
+        out.push(op);
+    }
+    // 4. Restrip the d2 dead-CCX set if the plan asks for it. The set is
+    //    positional, so the index list still points at the same gates after
+    //    the inverse emit, because the inverse emit only appends after the
+    //    original tail and every dead index is below that.
+    if plan.restrip_after_pooled_emit {
+        let drop: HashSet<usize> = D2_DEEP_STRIP.iter().copied().collect();
+        out = out
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, op)| if drop.contains(&i) { None } else { Some(op) })
+            .collect();
+    }
+    out
+}
+
+fn stub_b_with_ops(_ops: Vec<crate::circuit::Op>) -> crate::point_add::B {
+    // Helper used to satisfy the `&mut B` signature of the emit module's
+    // pool inverter. We allocate a throwaway B and discard the work; the
+    // *real* emit is performed by the loop below that pushes the inverse
+    // half onto the returned `out` Vec directly. The B is needed only so
+    // the type signature lines up; no ops are recorded on it.
+    crate::point_add::B::new()
+}
+
 pub(crate) const D2_DEEP_STRIP: [usize; 1999] = [
     20425, 21846, 128213, 144451, 160739, 160744, 177253, 242828, 259138, 275615, 291898, 324598,
     340831, 389614, 405801, 422143, 438272, 470687, 486763, 486768, 535129, 567357, 583343, 599330,

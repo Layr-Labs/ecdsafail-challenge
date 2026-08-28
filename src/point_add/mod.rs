@@ -107,6 +107,26 @@ pub fn take_last_op_sites() -> Vec<OpSite> {
     OP_SITE_TRACE.with(|sites| std::mem::take(&mut *sites.borrow_mut()))
 }
 
+thread_local! {
+    static PHASE_TRANSITIONS_SNAPSHOT: std::cell::RefCell<Vec<(usize, &'static str)>> =
+        std::cell::RefCell::new(Vec::new());
+}
+
+pub(crate) fn set_phase_transitions_snapshot(snapshot: Vec<(usize, &'static str)>) {
+    PHASE_TRANSITIONS_SNAPSHOT.with(|slot| *slot.borrow_mut() = snapshot);
+}
+
+/// Returns a snapshot of the last-known phase transitions. The d2 deep-strip
+/// const z-path plan uses this to wire the dirtyscan-pooled emit through the
+/// correct phase boundary. The snapshot is best-effort: if the d2 plan is
+/// built before any phase transitions have been recorded, the returned Vec
+/// is empty (which is a valid input for `dirtyscan::scan`, the function
+/// reads only the length of the transitions slice to drive the binary
+/// search lookup).
+pub(crate) fn phase_transitions_snapshot() -> Vec<(usize, &'static str)> {
+    PHASE_TRANSITIONS_SNAPSHOT.with(|slot| slot.borrow().clone())
+}
+
 pub struct B {
     pub ops: Vec<Op>,
     pub count_only: bool,
@@ -1674,6 +1694,8 @@ pub fn build_builder() -> B {
             b.x(q);
         }
     }
+
+    set_phase_transitions_snapshot(builder.phase_transitions.clone());
 
     builder
 }

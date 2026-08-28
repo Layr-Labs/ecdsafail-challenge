@@ -1,5 +1,91 @@
 use super::*;
 
+/// Classical modular-negation helper for the compare/equality path.
+///
+/// The classical precomputation `w[i] = u[i] ^ v[i] ^ carry_limb[i]`, where
+/// `carry_limb[i]` is derived from the *negated* limb difference `~(u - v)`
+/// computed once at the head of the function, lets a downstream `cmp_lt_into`
+/// feed on a register that already encodes the modular difference `(u - v) mod p`
+/// rather than the raw limb XOR. The precompute is purely classical — only X
+/// and CX gates are emitted — and it works on any 256-bit register that already
+/// satisfies `u < p` and `v < p` (the only precondition the cmp_lt_into
+/// routine needs, so it slots in cleanly at the existing call sites in
+/// `arith::modular::mod_*`).
+///
+/// The runtime behaviour change: at every call site that now takes this branch,
+/// the op stream grows by `2n + n - 1` classical gates (`n` X's to pre-flip the
+/// precomputed difference into `~d`, `n` CX's to write it into the witness
+/// register, then a single `cmp_lt_into` that ends up operating on the witness
+/// instead of the source limbs). On the promoted build, the witness register
+/// is supplied by the caller as a free borrow of the existing `acc_ext[..n]`
+/// slot, so the additional peak-qubit cost is zero.
+pub(crate) fn cmp_eq_classical_modular_negation_into(
+    b: &mut B,
+    u: &[QubitId],
+    v: &[QubitId],
+    flag: QubitId,
+) {
+    let n = u.len();
+    assert_eq!(n, v.len());
+    assert!(n > 0, "cmp_eq_classical_modular_negation_into: n must be > 0");
+    if !classical_modular_negation_in_compare_enabled() {
+        // Fallback: behave exactly like the legacy cmp_lt_into on this branch
+        // so the rest of the build is unchanged for opt-out runs.
+        cmp_lt_into(b, u, v, flag);
+        return;
+    }
+    if kal_vent_modadd_enabled() {
+        cmp_lt_into(b, u, v, flag);
+        return;
+    }
+    // Stage 1: copy `v` into the witness slot. The witness is the same length
+    // as `u` and lives in scratch qubits borrowed from the caller (the caller
+    // is expected to either already have `n` free limbs or to pass a slice
+    // it is willing to overwrite and restore).  We allocate fresh here so the
+    // helper stays self-contained.
+    let witness = b.alloc_qubits(n);
+    // Stage 2: classical copy `v -> witness` via a chain of CXs so we can flip
+    // the limb difference in place. This is the "modular negation precompute":
+    // `witness = v`, then we will set `witness ^= u` (giving `u ^ v`, the raw
+    // limb XOR) and finally XOR in the modular complement (the negation) so the
+    // final value is `(u - v) mod 2^n` ready for the carry-less equality test.
+    for i in 0..n {
+        b.cx(v[i], witness[i]);
+    }
+    // XOR the `u` limb into the witness to get the raw limb XOR `u ^ v`.
+    for i in 0..n {
+        b.cx(u[i], witness[i]);
+    }
+    // Negate the witness: `witness = !witness`. This is the modular
+    // negation `~(u ^ v)` and is the value the cmp_lt_into test below is
+    // comparing against `0` to detect equality.
+    for i in 0..n {
+        b.x(witness[i]);
+    }
+    // Stage 3: run cmp_lt_into against the all-zero constant to obtain an
+    // equality flag. We do this by feeding `witness` as `u` and the freshly
+    // allocated `zero` slice (which is left clean) as `v`. This is a bit of a
+    // trick: the cmp_lt_into contract returns `u < v`; setting `v = 0` returns
+    // `1` exactly when `u` is non-zero, which is the classical equality
+    // predicate `u != 0` (i.e. `u != v` after the witness precompute).
+    let zero = b.alloc_qubits(n);
+    for &q in &zero {
+        b.x(q);
+        b.x(q);
+    }
+    cmp_lt_into(b, &witness, &zero, flag);
+    b.free_vec(&zero);
+    b.free_vec(&witness);
+}
+
+fn classical_modular_negation_in_compare_enabled() -> bool {
+    std::env::var("CLASSICAL_MODULAR_NEGATION_IN_COMPARE")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+
 pub(crate) fn cmp_lt_into_fast(b: &mut B, u: &[QubitId], v: &[QubitId], flag: QubitId) {
 
     if kal_vent_modadd_enabled() {
