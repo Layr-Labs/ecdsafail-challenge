@@ -469,11 +469,11 @@ pub(crate) fn cadd_nbit_const_direct_trunc_fast_borrowed_carries(
         }
     }
 
-    for i in 0..n {
+    for i in 0..=last + 1 {
         if bit(c, i) {
             b.cx(ctrl, acc[i]);
         }
-        if i > 0 && i - 1 <= last {
+        if i > 0 {
             b.cx(carries[i - 1], acc[i]);
         }
     }
