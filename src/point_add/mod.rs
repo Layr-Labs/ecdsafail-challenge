@@ -136,6 +136,13 @@ pub struct B {
     pub k2_shift2_log: Vec<QubitId>,
 
     pub b0: B0Census,
+
+    /// Per-`emit` lease table. Each entry stores the QubitIds that were
+    /// parked at the end of a `cadd/csub` call keyed by the constant
+    /// addend `c`. The next point-add iteration that uses the same `c`
+    /// reacquires these QubitIds (they were already in the free pool) and
+    /// skips re-deriving the carry chain — see `cconst_nbit_direct_trunc_fast_parked`.
+    pub lease_table: crate::point_add::emit::LeaseTable,
 }
 
 #[derive(Default)]
@@ -207,6 +214,7 @@ impl B {
             phase_transitions: Vec::new(),
             active_timeline: Vec::new(),
             k2_shift2_log: Vec::new(),
+            lease_table: crate::point_add::emit::LeaseTable::new(),
             b0: {
                 let lo = std::env::var("B0_WIN_LO")
                     .ok()
