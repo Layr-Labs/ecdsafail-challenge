@@ -2460,3 +2460,85 @@ pub(crate) mod square_addsub_selftest {
         }
     }
 }
+
+/// Compute the EC slope `lambda = (Y2 - Y1) * (X2 - X1)^-1 mod p` once, into a fresh
+/// 256-qubit register, and invoke `consume_lambda` with the live `lambda` register.
+/// The `Y2 - Y1` and `X2 - X1` partials are computed once each (using
+/// `mod_sub_qq_fast`) into disposable ancilla and are **eagerly uncomputed** along with
+/// the inverse intermediates the moment the fused kernel returns — *before* the caller's
+/// point-reconstruction code runs, so the public tape (the input points, the output
+/// `lambda`, and the destination `X3`/`Y3` registers) is the only state that survives
+/// this call. The fused kernel itself is the pebbled depth-2 ancilla Montgomery segment
+/// from `fused_inverse_multiply_mont_segment`; this wrapper is responsible only for
+/// staging the two differences and tearing the intermediate tape down.
+pub(crate) fn compute_lambda_fused<F: FnOnce(&mut B, &[QubitId])>(
+    b: &mut B,
+    y2: &[QubitId],
+    y1: &[QubitId],
+    x2: &[QubitId],
+    x1: &[QubitId],
+    p: U256,
+    consume_lambda: F,
+) -> Vec<QubitId> {
+    let n = 256usize;
+    assert_eq!(y2.len(), n);
+    assert_eq!(y1.len(), n);
+    assert_eq!(x2.len(), n);
+    assert_eq!(x1.len(), n);
+
+    b.set_phase("compute_lambda_fused");
+
+    let mut lambda = b.alloc_qubits(n);
+    for i in 0..n {
+        b.reset(lambda[i]);
+    }
+    let mut dy = b.alloc_qubits(n);
+    let mut dx = b.alloc_qubits(n);
+
+    b.set_phase("compute_lambda_fused/dy");
+    for i in 0..n {
+        b.cx(y2[i], dy[i]);
+    }
+    mod_sub_qq_fast(b, &dy, y1, p);
+
+    b.set_phase("compute_lambda_fused/dx");
+    for i in 0..n {
+        b.cx(x2[i], dx[i]);
+    }
+    mod_sub_qq_fast(b, &dx, x1, p);
+
+    b.set_phase("compute_lambda_fused/fused_kernel");
+    {
+        let mut acc: Vec<QubitId> = lambda.clone();
+        fused_inverse_multiply_mont_segment(b, &mut acc, &dx, &dy, p);
+
+        for i in 0..n {
+            b.cx(acc[i], lambda[i]);
+        }
+        for &q in &acc {
+            b.reset(q);
+        }
+    }
+
+    b.set_phase("compute_lambda_fused/consume");
+    consume_lambda(b, &lambda);
+
+    b.set_phase("compute_lambda_fused/eager_uncompute");
+    for i in 0..n {
+        b.cx(x1[i], dx[i]);
+    }
+    for &q in &dx {
+        b.reset(q);
+    }
+    b.free_vec(&dx);
+    for i in 0..n {
+        b.cx(y1[i], dy[i]);
+    }
+    for &q in &dy {
+        b.reset(q);
+    }
+    b.free_vec(&dy);
+
+    b.set_phase("compute_lambda_fused/done");
+    lambda
+}

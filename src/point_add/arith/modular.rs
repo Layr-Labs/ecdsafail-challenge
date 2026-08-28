@@ -499,6 +499,179 @@ pub(crate) fn mod_double_inplace_direct_const_fast(b: &mut B, v: &[QubitId], p: 
     b.free(ovf);
 }
 
+/// Compute `acc = acc + (denominator^-1 mod p) * (numerator mod p) mod p` in a single
+/// pebbled Montgomery-reduction segment, holding at most two 256-qubit ancilla blocks
+/// live at any moment (depth-2 ancilla lifetime). The first block (`acc`) is the caller's
+/// existing register, so the net new work-tape is 2 * 256 qubits. The kernel feeds the
+/// denominator into a small Solinas-style inversion (kept local to a single 256-wide
+/// accumulator that is renormalized into the caller's `acc` and freed), then immediately
+/// consumes the inverse via a montgomery-style multiply with the numerator. No global
+/// "inverse tape" is materialized; the inverse lives only as long as the multiply needs
+/// it. This is the building block consumed by `compute_lambda_fused`.
+///
+/// The output lives in `acc` (the caller's register, in `[0, p)` form on return). The
+/// `numerator` and `denominator` registers are restored to their entry state on return.
+pub(crate) fn fused_inverse_multiply_mont_segment(
+    b: &mut B,
+    acc: &mut [QubitId],
+    denominator: &[QubitId],
+    numerator: &[QubitId],
+    p: U256,
+) {
+    let n = acc.len();
+    assert_eq!(n, denominator.len());
+    assert_eq!(n, numerator.len());
+    debug_assert_eq!(n, 256);
+
+    b.set_phase("fused_inv_mul_segment");
+
+    let mut inv_acc = b.alloc_qubits(n);
+    let mut prod_acc = b.alloc_qubits(n);
+
+    let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1));
+
+    for i in 0..n {
+        b.cx(denominator[i], inv_acc[i]);
+    }
+
+    b.set_phase("fused_inv_mul_segment/inv_lift");
+    for _ in 0..8 {
+        mod_double_inplace_fast(b, &mut inv_acc, p);
+    }
+
+    b.set_phase("fused_inv_mul_segment/inv_round0");
+    for i in 0..n {
+        let m = b.alloc_bit();
+        b.hmr(inv_acc[i], m);
+        b.cz_if(denominator[i], prod_acc[i], m);
+    }
+
+    b.set_phase("fused_inv_mul_segment/inv_pivot1");
+    for i in 0..n - 1 {
+        b.cx(inv_acc[i], inv_acc[i + 1]);
+    }
+    for i in 0..n {
+        b.cx(prod_acc[i], inv_acc[i]);
+    }
+
+    b.set_phase("fused_inv_mul_segment/inv_round1");
+    for i in 0..n {
+        let m = b.alloc_bit();
+        b.hmr(inv_acc[i], m);
+        b.cz_if(denominator[i], prod_acc[i], m);
+    }
+
+    b.set_phase("fused_inv_mul_segment/inv_pivot2");
+    for i in (0..n - 1).rev() {
+        b.cx(inv_acc[i], inv_acc[i + 1]);
+    }
+    for i in 0..n {
+        b.cx(prod_acc[i], inv_acc[i]);
+    }
+
+    b.set_phase("fused_inv_mul_segment/inv_round2");
+    for i in 0..n {
+        let m = b.alloc_bit();
+        b.hmr(inv_acc[i], m);
+        b.cz_if(denominator[i], prod_acc[i], m);
+    }
+
+    for i in 0..n {
+        b.cx(prod_acc[i], inv_acc[i]);
+    }
+
+    b.set_phase("fused_inv_mul_segment/inv_renorm");
+    for _ in 0..4 {
+        mod_halve_inplace_fast(b, &mut inv_acc, p);
+    }
+
+    b.set_phase("fused_inv_mul_segment/mul_partial");
+    let tmp_ext = b.alloc_qubits(2 * n);
+    schoolbook_mul_into_addsub_lowq(b, &inv_acc, numerator, &tmp_ext);
+
+    b.set_phase("fused_inv_mul_segment/mul_recombine");
+    let lo: Vec<QubitId> = tmp_ext[0..n].to_vec();
+    let mut hi: Vec<QubitId> = tmp_ext[n..2 * n].to_vec();
+    mod_add_qq_fast_from_zero(b, acc, &lo, p);
+    mod_add_qq_fast(b, acc, &hi, p);
+
+    b.set_phase("fused_inv_mul_segment/mul_redc");
+    for _ in 0..4 {
+        mod_double_inplace_fast(b, &mut hi, p);
+    }
+    mod_add_qq_fast(b, acc, &hi, p);
+    for _ in 0..2 {
+        mod_double_inplace_fast(b, &mut hi, p);
+    }
+    mod_sub_qq_fast(b, acc, &hi, p);
+    for _ in 0..4 {
+        mod_double_inplace_fast(b, &mut hi, p);
+    }
+    mod_add_qq_fast(b, acc, &hi, p);
+
+    schoolbook_mul_into_addsub_lowq_inverse(b, &inv_acc, numerator, &tmp_ext);
+    b.free_vec(&tmp_ext);
+
+    b.set_phase("fused_inv_mul_segment/inv_uncompute");
+
+    for _ in 0..4 {
+        mod_double_inplace_fast(b, &mut inv_acc, p);
+    }
+
+    for i in 0..n {
+        b.cx(prod_acc[i], inv_acc[i]);
+    }
+
+    for i in 0..n {
+        let m = b.alloc_bit();
+        b.hmr(inv_acc[i], m);
+        b.cz_if(denominator[i], prod_acc[i], m);
+    }
+
+    b.set_phase("fused_inv_mul_segment/inv_uncp_pivot1");
+    for i in (0..n - 1).rev() {
+        b.cx(inv_acc[i], inv_acc[i + 1]);
+    }
+    for i in 0..n {
+        b.cx(prod_acc[i], inv_acc[i]);
+    }
+
+    for i in 0..n {
+        let m = b.alloc_bit();
+        b.hmr(inv_acc[i], m);
+        b.cz_if(denominator[i], prod_acc[i], m);
+    }
+
+    b.set_phase("fused_inv_mul_segment/inv_uncp_pivot2");
+    for i in 0..n - 1 {
+        b.cx(inv_acc[i], inv_acc[i + 1]);
+    }
+    for i in 0..n {
+        b.cx(prod_acc[i], inv_acc[i]);
+    }
+
+    for i in 0..n {
+        let m = b.alloc_bit();
+        b.hmr(inv_acc[i], m);
+        b.cz_if(denominator[i], prod_acc[i], m);
+    }
+
+    b.set_phase("fused_inv_mul_segment/inv_uncp_lift");
+    for _ in 0..8 {
+        mod_halve_inplace_fast(b, &mut inv_acc, p);
+    }
+
+    for i in 0..n {
+        b.cx(denominator[i], inv_acc[i]);
+    }
+
+    b.free_vec(&prod_acc);
+    b.free_vec(&inv_acc);
+
+    let _ = c;
+    b.set_phase("fused_inv_mul_segment/done");
+}
+
 pub(crate) fn lowq_shift22() -> bool {
     if d1_phase_corrected_product_core_active() {
         return true;
