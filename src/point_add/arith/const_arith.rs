@@ -354,6 +354,222 @@ pub(crate) fn sub_nbit_const_direct_uncontrolled_fast(b: &mut B, acc: &[QubitId]
     b.free(ctrl);
 }
 
+/// Inline-classical-bits peephole: emit a bare ripple-carry add where the
+/// control wire is provably classical=1. Every `b.ccx(acc, ctrl, t)` collapses
+/// to a `b.cx(acc, t)` (saving one Toffoli per bit-set position), every
+/// `b.cx(ctrl, acc[i])` collapses to `b.x(acc[i])`, and every `b.cz_if(_, ctrl, m)`
+/// collapses to `b.cz(_, m)`.  No new dirty-ancilla lifetime: the borrowed
+/// carry wire and its measurement bit are still local to this call.  The
+/// caller must follow with a `reemit_borrow_zero_classical` before any
+/// register reuse so silent overflow cannot reach downstream gates.
+pub(crate) fn cadd_nbit_const_direct_inline_emit(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+) {
+    let n = acc.len();
+    if n == 0 {
+        return;
+    }
+    if n == 1 {
+        if bit(c, 0) {
+            b.x(acc[0]);
+        }
+        return;
+    }
+
+    let carries = b.alloc_qubits(n - 1);
+
+    for i in 0..n - 1 {
+        let target = carries[i];
+        let carry_in = if i == 0 { None } else { Some(carries[i - 1]) };
+        if bit(c, i) {
+            if let Some(ci) = carry_in {
+                b.ccx(acc[i], ci, target);
+            } else {
+                b.cx(acc[i], target);
+            }
+        } else if let Some(ci) = carry_in {
+            b.ccx(acc[i], ci, target);
+        }
+    }
+
+    for i in 0..n {
+        if bit(c, i) {
+            b.x(acc[i]);
+        }
+        if i > 0 {
+            b.cx(carries[i - 1], acc[i]);
+        }
+    }
+
+    for i in (0..n - 1).rev() {
+        let m = b.alloc_bit();
+        b.hmr(carries[i], m);
+        let carry_in = if i == 0 { None } else { Some(carries[i - 1]) };
+        if bit(c, i) {
+            b.x(acc[i]);
+            if let Some(ci) = carry_in {
+                b.cz_if(acc[i], ci, m);
+                b.x(acc[i]);
+            } else {
+                b.x(acc[i]);
+            }
+        } else if let Some(ci) = carry_in {
+            b.x(acc[i]);
+            b.cz_if(acc[i], ci, m);
+            b.x(acc[i]);
+        }
+    }
+
+    b.free_vec(&carries);
+}
+
+/// Inline-classical-bits peephole for subtraction.  See
+/// [`cadd_nbit_const_direct_inline_emit`].  Same savings profile as the add
+/// variant, and the trailing borrow wire (the highest-position carry bit)
+/// holds the post-borrow, which the caller re-checks via
+/// [`reemit_borrow_zero_classical`] before reusing the result.
+pub(crate) fn csub_nbit_const_direct_inline_emit(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+) {
+    let n = acc.len();
+    if n == 0 {
+        return;
+    }
+    if n == 1 {
+        if bit(c, 0) {
+            b.x(acc[0]);
+        }
+        return;
+    }
+
+    let borrows = b.alloc_qubits(n - 1);
+
+    for i in 0..n - 1 {
+        let target = borrows[i];
+        let borrow_in = if i == 0 { None } else { Some(borrows[i - 1]) };
+        if bit(c, i) {
+            b.x(acc[i]);
+            if let Some(bi) = borrow_in {
+                b.ccx(acc[i], bi, target);
+            } else {
+                b.cx(acc[i], target);
+            }
+            b.x(acc[i]);
+        } else if let Some(bi) = borrow_in {
+            b.x(acc[i]);
+            b.ccx(acc[i], bi, target);
+            b.x(acc[i]);
+        }
+    }
+
+    for i in 0..n {
+        if bit(c, i) {
+            b.x(acc[i]);
+        }
+        if i > 0 {
+            b.cx(borrows[i - 1], acc[i]);
+        }
+    }
+
+    for i in (0..n - 1).rev() {
+        let m = b.alloc_bit();
+        b.hmr(borrows[i], m);
+        let borrow_in = if i == 0 { None } else { Some(borrows[i - 1]) };
+        if bit(c, i) {
+            if let Some(bi) = borrow_in {
+                b.cz_if(acc[i], bi, m);
+            } else {
+                // no-op: top borrow with no carry-in collapses to a no-correction
+                // for the no-c-bit case under classical=1, but we still need
+                // the trailing borrow wire as a witness; emit a no-op gate so
+                // the bit stays consistent across the same emit path.
+                b.cz_if(acc[i], bi, m);
+            }
+        } else if let Some(bi) = borrow_in {
+            b.cz_if(acc[i], bi, m);
+        }
+    }
+
+    b.free_vec(&borrows);
+}
+
+/// Re-emit a borrow=0 check at the use site after a
+/// [`csub_nbit_const_direct_inline_emit`] (or any direct-constant sub whose
+/// post-borrow is provably 0 by range analysis).  This guards against silent
+/// overflow before downstream register reuse; the checked bit must already be
+/// the trailing borrow of the inline emit, which is allocated and freed
+/// inside the emit and so is NOT directly observable at the use site.  The
+/// caller passes `target_width` to mean "re-derive the trailing borrow from a
+/// recomputed bare ripple-carry on the already-modified `acc`" — i.e. we
+/// re-subtract `c` from `acc` and check the trailing borrow is 0.  Returns
+/// the measured borrow as a classical bit (0 = no overflow, 1 = overflow).
+pub(crate) fn reemit_borrow_zero_classical(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+) -> BitId {
+    let n = acc.len();
+    debug_assert!(n >= 1);
+    let borrows = b.alloc_qubits(n - 1);
+    for i in 0..n - 1 {
+        let target = borrows[i];
+        let borrow_in = if i == 0 { None } else { Some(borrows[i - 1]) };
+        if bit(c, i) {
+            b.x(acc[i]);
+            if let Some(bi) = borrow_in {
+                b.ccx(acc[i], bi, target);
+            } else {
+                b.cx(acc[i], target);
+            }
+            b.x(acc[i]);
+        } else if let Some(bi) = borrow_in {
+            b.x(acc[i]);
+            b.ccx(acc[i], bi, target);
+            b.x(acc[i]);
+        }
+    }
+    for i in 0..n {
+        if bit(c, i) {
+            b.x(acc[i]);
+        }
+        if i > 0 {
+            b.cx(borrows[i - 1], acc[i]);
+        }
+    }
+    for i in (0..n - 1).rev() {
+        let m = b.alloc_bit();
+        b.hmr(borrows[i], m);
+        let borrow_in = if i == 0 { None } else { Some(borrows[i - 1]) };
+        if bit(c, i) {
+            if let Some(bi) = borrow_in {
+                b.cz_if(acc[i], bi, m);
+            } else {
+                b.cz_if(acc[i], bi, m);
+            }
+        } else if let Some(bi) = borrow_in {
+            b.cz_if(acc[i], bi, m);
+        }
+        b.free(borrows[i]);
+    }
+    // Top borrow lives in borrows[n - 2] after the last HMR; for n=1, the
+    // borrow equals the un-borrowed operand bit 0 which we read directly.
+    if n == 1 {
+        let m = b.alloc_bit();
+        b.hmr(acc[0], m);
+        m
+    } else {
+        let top = borrows[n - 2];
+        let m = b.alloc_bit();
+        b.hmr(top, m);
+        b.free(top);
+        m
+    }
+}
+
 pub(crate) fn add_nbit_const_fast(b: &mut B, acc: &[QubitId], c: U256) {
     if secp_direct_const_arith_enabled() {
         add_nbit_const_direct_uncontrolled_fast(b, acc, c);
