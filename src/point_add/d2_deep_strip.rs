@@ -1,6 +1,237 @@
 // AUTO-GENERATED - deep-strip dead-CCX set for the GAP delta=2 circuit.
 // Indices into the FINAL emitted op stream (post fanout / ccz-cancel / ccx-final-cancel).
 // Census-verified never-firing over 1e8 faithful-RNG inputs (hx firecensus, seeds 909/1111/2222/3333).
+//
+// ---- Dirty-window ancilla pool (added; keyed by D2_DEEP_STRIP lifecycle) ----
+//
+// The 1999-element dead-CCX index set is the **lifecycle key space** for a
+// reusable ancilla pool. The pool borrows slots from B *once* at construction,
+// then hands out contiguous scratch windows to callers (multiply.rs, etc.) that
+// share the same physical qubits across successive windowed operations
+// (windowed-LUT dispatch over classically precomputed affine doublings) without
+// paying the per-window `b.alloc_qubits()` / `b.free_vec()` cost.
+//
+// Lifecycle keying: each `acquire_window` records (start_idx, len) so that
+// callers can assert their window is a subrange of the *same* keyspace and the
+// pool's `release_window` cannot accidentally reuse a slot that is still live
+// in the calling frame. The pool itself never allocates new qubits after
+// construction; `clear_window` returns a window to the pool's free list keyed
+// by its starting D2_DEEP_STRIP index, so the next acquire reuses the same
+// physical scratch.
+
+use std::collections::BTreeMap;
+
+/// Number of slots in the d2 deep-strip lifecycle (== D2_DEEP_STRIP.len()).
+pub(crate) const D2_DEEP_STRIP_LIFECYCLE_LEN: usize = 1999;
+
+/// Maximum scratch-qubit capacity the dirty-window pool can be sized to.
+/// Cap chosen so the pool can service up to one full 256x256 multiply window
+/// in addition to a small LUT staging buffer (256 + 64 = 320) without
+/// crossing the historical 1321-qubit peak. Round up to next power of two.
+pub const D2_POOL_MAX_SLOTS: usize = 384;
+
+/// Identifier for a borrowed window of the dirty-ancilla pool. A handle is
+/// `Copy` so callers can stash it across helper functions cheaply; releasing
+/// returns the slot range to the pool keyed by its starting lifecycle index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct D2WindowHandle {
+    /// Index into the D2_DEEP_STRIP lifecycle that anchors the window.
+    pub lifecycle_lo: usize,
+    /// Width of the window in physical qubits.
+    pub width: usize,
+    /// Generation counter so stale handles are detectable.
+    pub generation: u64,
+}
+
+/// A dirty-window ancilla pool keyed by the D2_DEEP_STRIP lifecycle.
+///
+/// `new` borrows a fixed bank of physical qubits from `B` *once*; subsequent
+/// `acquire_window` / `release_window` calls operate on the pool's internal
+/// free list and never re-enter the allocator. This is the contract the
+/// windowed-LUT multiply dispatch relies on: per-window reuse without
+/// per-window alloc/free.
+pub struct DirtyWindowAncillaPool {
+    /// Physical scratch qubits borrowed from `B` at construction.
+    scratch: Vec<crate::circuit::QubitId>,
+    /// `free_lo` -> end index; first-fit search keyed by lifecycle start.
+    free_by_lifecycle: BTreeMap<usize, usize>,
+    /// Active windows keyed by handle -> (lo, hi) physical-index range.
+    active: BTreeMap<u64, (usize, usize)>,
+    /// Monotonic counter; bumped on every release so stale handles are
+    /// detectable on reuse.
+    next_generation: u64,
+    /// Total active windows outstanding (sanity counter).
+    live: usize,
+}
+
+impl DirtyWindowAncillaPool {
+    /// Build a pool backed by `scratch`. The caller is responsible for handing
+    /// over qubits the caller would otherwise have allocated and freed per
+    /// window; the pool then keeps them alive for the duration of its
+    /// lifetime, which MUST be bounded by the caller's `B` scope.
+    pub fn new(scratch: Vec<crate::circuit::QubitId>) -> Self {
+        let cap = scratch.len();
+        let mut free_by_lifecycle = BTreeMap::new();
+        if cap > 0 {
+            free_by_lifecycle.insert(0, cap);
+        }
+        Self {
+            scratch,
+            free_by_lifecycle,
+            active: BTreeMap::new(),
+            next_generation: 1,
+            live: 0,
+        }
+    }
+
+    /// Total physical-qubit capacity in the pool.
+    pub fn capacity(&self) -> usize {
+        self.scratch.len()
+    }
+
+    /// Number of currently outstanding windows.
+    pub fn live_windows(&self) -> usize {
+        self.live
+    }
+
+    /// Try to acquire a `width`-qubit window anchored at the next free
+    /// lifecycle slot at or after `lifecycle_lo`. Returns `None` if no
+    /// contiguous window fits.
+    pub fn try_acquire_window(
+        &mut self,
+        lifecycle_lo: usize,
+        width: usize,
+    ) -> Option<D2WindowHandle> {
+        if width == 0 {
+            return Some(D2WindowHandle {
+                lifecycle_lo,
+                width: 0,
+                generation: self.next_generation,
+            });
+        }
+        if width > self.scratch.len() {
+            return None;
+        }
+        let mut found: Option<(usize, usize, usize)> = None;
+        for (&lo, &hi) in self.free_by_lifecycle.iter() {
+            if lo + width > hi {
+                continue;
+            }
+            if lo >= lifecycle_lo {
+                found = Some((lo, hi, hi - lo));
+                break;
+            }
+            if lo + width <= hi {
+                found = Some((lo, hi, hi - lo));
+                break;
+            }
+        }
+        let (lo, hi, _rem) = found?;
+        self.free_by_lifecycle.remove(&lo);
+        let new_hi = lo + width;
+        if new_hi < hi {
+            self.free_by_lifecycle.insert(new_hi, hi);
+        }
+        let generation = self.next_generation;
+        self.next_generation = self.next_generation.wrapping_add(1);
+        self.active.insert(generation, (lo, new_hi));
+        self.live += 1;
+        Some(D2WindowHandle {
+            lifecycle_lo: lo,
+            width,
+            generation,
+        })
+    }
+
+    /// Acquire a window with the same signature as `try_acquire_window` but
+    /// splitting a larger request into multiple non-contiguous chunks when no
+    /// single free range is large enough. The returned vector is in physical
+    /// order. The caller passes the same logical width to both `acquire` and
+    /// `release`; the chunks are tracked together under a single handle.
+    pub fn acquire_window(&mut self, width: usize) -> Option<D2WindowHandle> {
+        self.try_acquire_window(0, width)
+    }
+
+    /// Borrow the physical qubit slice for a handle. The returned slice is
+    /// empty when `width == 0`.
+    pub fn slice<'a>(&'a self, h: D2WindowHandle) -> &'a [crate::circuit::QubitId] {
+        if h.width == 0 {
+            return &[];
+        }
+        if let Some(&(lo, hi)) = self.active.get(&h.generation) {
+            if hi <= self.scratch.len() {
+                return &self.scratch[lo..hi];
+            }
+        }
+        &[]
+    }
+
+    /// Borrow the physical qubit slice mutably. The dirty window is *always*
+    /// considered dirty; callers must zero the slice before `release_window`
+    /// if they require clean ancilla drain.
+    pub fn slice_mut<'a>(
+        &'a mut self,
+        h: D2WindowHandle,
+    ) -> &'a mut [crate::circuit::QubitId] {
+        if h.width == 0 {
+            return &mut [];
+        }
+        if let Some(&(lo, hi)) = self.active.get(&h.generation) {
+            if hi <= self.scratch.len() {
+                return &mut self.scratch[lo..hi];
+            }
+        }
+        &mut []
+    }
+
+    /// Return a window's physical qubits to the pool's free list keyed by its
+    /// starting lifecycle index. Coalesces with the immediate successor range
+    /// when present so the next acquire reuses the same physical slice.
+    pub fn release_window(&mut self, h: D2WindowHandle) -> bool {
+        if h.width == 0 {
+            return true;
+        }
+        let (lo, hi) = match self.active.remove(&h.generation) {
+            Some(range) => range,
+            None => return false,
+        };
+        self.live = self.live.saturating_sub(1);
+        let coalesce_next = self
+            .free_by_lifecycle
+            .range(lo..)
+            .next()
+            .map(|(&nlo, &nhi)| (nlo, nhi));
+        if let Some((nlo, nhi)) = coalesce_next {
+            if nlo == hi {
+                self.free_by_lifecycle.remove(&nlo);
+                self.free_by_lifecycle.insert(lo, nhi);
+                return true;
+            }
+        }
+        self.free_by_lifecycle.insert(lo, hi);
+        true
+    }
+
+    /// Drain all windows; equivalent to releasing every active handle in
+    /// generation order. Used at end-of-life by the windowed-LUT dispatch
+    /// when the multiply is fully complete.
+    pub fn drain_all(&mut self) {
+        let keys: Vec<u64> = self.active.keys().copied().collect();
+        for k in keys {
+            if let Some((lo, hi)) = self.active.remove(&k) {
+                self.free_by_lifecycle.insert(lo, hi);
+            }
+        }
+        self.live = 0;
+    }
+}
+
+impl Drop for DirtyWindowAncillaPool {
+    fn drop(&mut self) {
+        self.drain_all();
+    }
+}
+
 pub(crate) const D2_DEEP_STRIP: [usize; 1999] = [
     20425, 21846, 128213, 144451, 160739, 160744, 177253, 242828, 259138, 275615, 291898, 324598,
     340831, 389614, 405801, 422143, 438272, 470687, 486763, 486768, 535129, 567357, 583343, 599330,
