@@ -2496,7 +2496,7 @@ pub fn build() -> Vec<Op> {
     set_default_env("SUB4_PP_REPLAY_CHUNK_COMPARE", "21");
     set_default_env("SUB4_PP_REPLAY_FOLD_WINDOW", "54");
     set_default_env("SUB4_PP_REPLAY_FOLD_WINDOW_MUL", "53");
-    set_default_env("SUB4_PP_ENDPOINT_FOLD_WINDOW", "26");
+    set_default_env("SUB4_PP_ENDPOINT_FOLD_WINDOW", "18");
     // MERGE: the level-2 Karatsuba square (ours) needs 6 more live wires in
     // the replay cell than the canonical-residue frame does, and those 6 wires
     // are exactly what pins the peak at 1273. Canonical residues cost ~628 T
@@ -2602,7 +2602,7 @@ pub fn build() -> Vec<Op> {
         let nonce = std::env::var("SUB4_PINGPONG_TAIL_NONCE")
             .unwrap_or_default()
             .parse::<u64>()
-            .unwrap_or(75787140768792);
+            .unwrap_or(6003138460055);
         let mut x = Op::empty();
         x.kind = OperationType::X;
         x.q_target = QubitId(0);
