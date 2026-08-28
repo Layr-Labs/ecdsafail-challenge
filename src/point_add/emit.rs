@@ -1,5 +1,15 @@
 use super::*;
 
+/// Static-plan entry point for the mixed-affine point addition. The
+/// `Plan` itself lives in `d2_deep_strip.rs` (sibling-visible through
+/// `use super::*`) and contains every Toffoli gate of the algorithm
+/// in compile-time form, with all curve-side constants pre-folded via
+/// `arith/const_arith.rs` and the modular inverse routed through
+/// `arith/modular.rs`.
+pub fn emit() -> &'static Plan {
+    &PLAN
+}
+
 pub(crate) fn emit_inverse<F: FnOnce(&mut B)>(b: &mut B, f: F) {
     if b.count_only {
         let snap = b.count_snapshot();
