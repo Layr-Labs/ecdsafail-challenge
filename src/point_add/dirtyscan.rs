@@ -352,3 +352,120 @@ pub(crate) fn scan(ops: &[Op], transitions: &[(usize, &'static str)]) {
         eprintln!("DIRTY_FREE_Q qubit={q} events={n} max_lanes={mx}");
     }
 }
+
+//! Pooled dirty-ancilla ring used by the wNAF-2 scalar multiplier.
+//!
+//! Every acquired slice must be released exactly once.  The ring is
+//! allocated once at the start of the call site and re-used for the
+//! forward + reverse passes, so the qubit width is fixed at compile
+//! time and no free-list churn happens inside the multiplier.
+pub(crate) mod dirty_ring {
+    use crate::circuit::QubitId;
+
+    pub(crate) struct DirtyRing {
+        pool: Vec<QubitId>,
+        // Handed-out ranges, kept in LIFO order.  The head of `live`
+        // always points at the next free slot, like a stack.
+        in_use: Vec<bool>,
+        cursor: usize,
+    }
+
+    impl DirtyRing {
+        pub(crate) fn new(b: &mut super::B, cap: usize) -> Self {
+            let pool = b.alloc_qubits(cap);
+            let in_use = vec![false; cap];
+            DirtyRing {
+                pool,
+                in_use,
+                cursor: 0,
+            }
+        }
+
+        pub(crate) fn len(&self) -> usize {
+            self.pool.len()
+        }
+
+        pub(crate) fn in_use(&self) -> usize {
+            self.in_use.iter().filter(|x| **x).count()
+        }
+
+        /// Hand out a contiguous slice of `n` dirty ancillae.  Returns
+        /// `None` if there is no free contiguous block of that size at the
+        /// cursor position; caller must `release` the most recently
+        /// acquired slice before retrying.
+        pub(crate) fn acquire(&mut self, n: usize) -> Option<Vec<QubitId>> {
+            if n == 0 {
+                return Some(Vec::new());
+            }
+            if self.cursor + n > self.pool.len() {
+                return None;
+            }
+            // Find a free run of `n` starting at `self.cursor`.
+            for i in self.cursor..=self.pool.len() - n {
+                if self.in_use[i..i + n].iter().any(|x| *x) {
+                    continue;
+                }
+                for j in i..i + n {
+                    self.in_use[j] = true;
+                }
+                self.cursor = i + n;
+                return Some(self.pool[i..i + n].to_vec());
+            }
+            None
+        }
+
+        /// Mark the slice as no longer in use.  The caller must have
+        /// consumed (forward + inverse) the slice before releasing, so
+        /// the qubits are clean-to-zero by Gidney's temp-AND contract.
+        pub(crate) fn release(&mut self, qs: &[QubitId]) {
+            for q in qs {
+                let pos = self
+                    .pool
+                    .iter()
+                    .position(|p| *p == *q)
+                    .expect("release: qubit not in pool");
+                debug_assert!(self.in_use[pos], "release: qubit not in_use");
+                self.in_use[pos] = false;
+            }
+            // Rewind cursor to the lowest free prefix.  This keeps the
+            // ring LIFO-friendly and the next `acquire` cheap.
+            let mut new_cursor = self.cursor;
+            while new_cursor > 0 && !self.in_use[new_cursor - 1] {
+                new_cursor -= 1;
+            }
+            self.cursor = new_cursor;
+        }
+    }
+
+    fn ring_selftest_enabled() -> bool {
+        std::env::var("DIRTY_RING_SELFTEST").ok().as_deref() == Some("1")
+    }
+
+    /// Bit-exact round-trip: acquire a slice, release it, acquire again,
+    /// confirm the second slice is the same `QubitId`s.
+    pub(crate) fn selftest() {
+        if !ring_selftest_enabled() {
+            return;
+        }
+        let mut b = super::B::new();
+        let mut ring = DirtyRing::new(&mut b, 32);
+        let s1 = ring.acquire(7).expect("first acquire(7)");
+        assert_eq!(s1.len(), 7);
+        assert_eq!(ring.in_use(), 7);
+        ring.release(&s1);
+        assert_eq!(ring.in_use(), 0);
+        let s2 = ring.acquire(7).expect("second acquire(7)");
+        assert_eq!(s1, s2, "ring re-uses the same qubits on second acquire");
+        ring.release(&s2);
+        let s3 = ring.acquire(32).expect("acquire full pool");
+        assert_eq!(s3.len(), 32);
+        ring.release(&s3);
+        let s4 = ring.acquire(8).expect("acquire after full release");
+        assert_eq!(s4.len(), 8);
+        ring.release(&s4);
+        eprintln!("DIRTY_RING_SELFTEST ok cap=32 reused={}", ring.len());
+    }
+}
+
+#[doc(hidden)]
+pub(crate) use dirty_ring::DirtyRing;
