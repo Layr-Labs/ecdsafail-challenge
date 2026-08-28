@@ -1,5 +1,22 @@
 use super::*;
 
+/// Classical secp256k1 modulus P = 2^256 - 2^32 - 977, as a `U256` const so
+/// ladder and multiplication callers can splice it in as a const input to
+/// `cadd_nbit_const` / `csub_nbit_const` / `add_nbit_const_fast` /
+/// `sub_nbit_const_fast` without re-importing from `point_add::mod`.
+pub(crate) const SECP_MODULUS_P: U256 = U256::from_limbs([
+    0xFFFFFFFEFFFFFC2F,
+    0xFFFFFFFFFFFFFFFF,
+    0xFFFFFFFFFFFFFFFF,
+    0xFFFFFFFFFFFFFFFF,
+]);
+
+/// Weierstrass `a` coefficient of secp256k1 (y^2 = x^3 + a x + b mod P).
+pub(crate) const SECP_COEFF_A: U256 = U256::ZERO;
+
+/// Weierstrass `b` coefficient of secp256k1 (y^2 = x^3 + a x + b mod P).
+pub(crate) const SECP_COEFF_B: U256 = U256::from(7u64);
+
 #[inline]
 fn maj1_inputs_distinct(a: QubitId, k: QubitId, carry: QubitId, target: QubitId) -> bool {
     a != k && a != carry && a != target && k != carry && k != target && carry != target

@@ -1,6 +1,15 @@
 // AUTO-GENERATED - deep-strip dead-CCX set for the GAP delta=2 circuit.
 // Indices into the FINAL emitted op stream (post fanout / ccz-cancel / ccx-final-cancel).
 // Census-verified never-firing over 1e8 faithful-RNG inputs (hx firecensus, seeds 909/1111/2222/3333).
+
+/// Hand the deep-strip dead-gate indices off to the ancilla pool as a heap
+/// handle, instead of letting the const array be silently iterated and dropped
+/// at the call site. The returned `Vec` owns a copy that the pool can register
+/// or recycle across the ladder pass.
+pub(crate) fn emit() -> Vec<usize> {
+    D2_DEEP_STRIP.to_vec()
+}
+
 pub(crate) const D2_DEEP_STRIP: [usize; 1999] = [
     20425, 21846, 128213, 144451, 160739, 160744, 177253, 242828, 259138, 275615, 291898, 324598,
     340831, 389614, 405801, 422143, 438272, 470687, 486763, 486768, 535129, 567357, 583343, 599330,
