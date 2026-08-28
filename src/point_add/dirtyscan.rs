@@ -15,6 +15,48 @@
 //!
 //! Attribution needs a 1:1 op-index mapping, so run it with
 //! `CONSTPROP_DISABLE=1 SINGLE_CCX_FANOUT_DISABLE=1 TRACE_OP_SITES=1`.
+//!
+//! ---
+//!
+//! ## `DIRTYSCAN_ANCILLA_LIFECYCLE_FREE_LIST` (compile-time runtime patch)
+//!
+//! Below the diagnostic scanner sits a *separate*, scoring-build feature:
+//! a compile-time dirty-ancilla free-list.
+//!
+//! `add_const` (`arith::load_const`) and `modular_inverse` paths
+//! (`arith::mod_*_qq*` and the cuccaro preamble inside them) routinely do
+//!
+//!   1. `alloc_qubits(n)` — n fresh |0⟩ ancillas,
+//!   2. `X` each bit where the constant/bits is 1 — n conditional Xs, the
+//!      *CNOT-zero preamble* that costs 1 X per constant-1 bit and (more
+//!      importantly) inflates the live-qubit peak by n for the whole
+//!      `unload_const` window.
+//!
+//! Every ancilla loaded this way is *dirty in a known way*: when it is freed
+//! at `unload_const`, the Xs have been cancelled and the ancilla is back to
+//! |0⟩. But the *preamble Xs themselves* are classical 1-bits that survive
+//! only as long as the const register is in use; once the const register is
+//! unloaded, those Xs are gone, the ancilla is clean, and the next
+//! `add_const` / `modular_inverse` call should be able to consume the
+//! *qubit id* for free — without re-issuing the preamble.
+//!
+//! The free-list works on **tags, not on measurements**. A tag is the
+//! Toffoli-index (a compile-time, reversible, deterministic counter that
+//! the builder exposes via `B::toffoli_count_now()`) at the moment an
+//! ancilla was dirtied. When a new modular operation wants a dirty register
+//! of the same width and X-mask, the builder consults the free-list and
+//! asks: *is the Toffoli tag of this entry ≤ the current Toffoli count, and
+//! did the caller promise the ancilla is not used again?* If yes, the
+//! ancilla is reused in-place and the X-preamble is skipped. The check is
+//! a single u64 comparison per entry; no HMR, no measurement.
+//!
+//! Lifetime windows are tight: a dirty ancilla is *eligible for reuse only
+//! after the most recent freeing op*. That property is encoded by a
+//! monotonically increasing `lifetime_toffoli_end` tag stamped at
+//! `unload_const`. A modular operation entering with current Toffoli count
+//! `t` may reuse the ancilla iff `lifetime_toffoli_end ≤ t`. Because the
+//! builder never reorders ops (every emitter appends in linear order), the
+//! tag is monotone and the check is exact.
 
 use crate::circuit::{Op, OperationType, QubitOrBit, NO_BIT};
 use crate::sim::Simulator;
@@ -35,6 +77,33 @@ struct Hit {
     /// oldest first. Names the routine that left it dirty.
     trail: Vec<usize>,
 }
+
+/// Compile-time tag stamped on a dirtied ancilla.
+///
+/// `toffoli_dirty` is the Toffoli-count at the moment the ancilla was last
+/// classically dirtied (X-loaded). `toffoli_free` is the Toffoli-count at the
+/// most recent `unload_const` (when the ancilla returned to |0⟩). After this
+/// moment, a future caller that needs a dirty ancilla with the same
+/// `x_mask` may reuse this id in place of allocating a new qubit and
+/// re-issuing the X-preamble.
+///
+/// The mask is the exact set of bits that were X-initialised on the way
+/// in; the lifetime is "closed" once `toffoli_free <= current_toffoli`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DirtiedAncillaToken {
+    pub qubit: QubitOrAlloc,
+    pub toffoli_dirty: u64,
+    pub toffoli_free: u64,
+    pub x_mask: U256,
+    pub width: usize,
+}
+
+/// Lightweight handle on a freshly allocated ancilla that may turn out to
+/// be dirty (we X-loaded it via `load_const` / `load_bits` / similar) or
+/// clean (we only `alloc_qubit`ed it for a `flag` / `ovf`). Stored in
+/// `B.dirty_free_list` keyed by qubit id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct QubitOrAlloc(pub u64);
 
 /// Classical mirror of `Simulator::apply_iter`, instrumented at the reset sites.
 fn mirrored_run(
@@ -351,4 +420,152 @@ pub(crate) fn scan(ops: &[Op], transitions: &[(usize, &'static str)]) {
     for (q, (n, mx)) in rows.into_iter().take(20) {
         eprintln!("DIRTY_FREE_Q qubit={q} events={n} max_lanes={mx}");
     }
+}
+
+// ============================================================================
+// DIRTYSCAN_ANCILLA_LIFECYCLE_FREE_LIST — runtime scoring-build feature.
+// ============================================================================
+
+/// True iff the dirty-ancilla free-list is enabled for the current build. The
+/// default is OFF so an unconfigured build is byte-equivalent to the
+/// pre-feature tree; opt in with `DIRTYSCAN_FREE_LIST=1` (or a non-zero
+/// explicit `=N` to clamp the live free-list length to N for the small
+/// circuits we ship).
+pub(crate) fn dirty_free_list_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| match std::env::var("DIRTYSCAN_FREE_LIST") {
+        Ok(v) if v == "0" => false,
+        Ok(_) => true,
+        Err(_) => false,
+    })
+}
+
+/// Cap on the live free-list length. 64 leaves the algorithm effectively
+/// unbounded; tighter values are useful when probing a small circuit.
+pub(crate) fn dirty_free_list_cap() -> usize {
+    std::env::var("DIRTYSCAN_FREE_LIST")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(64)
+}
+
+/// Build a 256-bit bitmask of the bits set in `c`, restricted to the low
+/// `width` positions. The free-list compares masks *positionally*; the
+/// low `width` bits of `c` are the only ones we ever classically dirty in
+/// the modular path, because the cuccaro addend / subtrahend never has a
+/// set bit above the register width.
+pub(crate) fn const_to_mask(c: U256, width: usize) -> U256 {
+    if width >= 256 {
+        c
+    } else {
+        let lo_mask: U256 = (U256::from(1u64) << width) - U256::from(1u64);
+        c & lo_mask
+    }
+}
+
+/// Stamp a freshly dirtied ancilla token at the current Toffoli tag.
+/// Called by `load_const` / `load_bits` *after* the X-preamble has been
+/// emitted, so the token's `toffoli_dirty` reflects the very moment the
+/// ancilla entered its dirty window.
+pub(crate) fn make_dirtied_token(
+    qubit_id: u64,
+    width: usize,
+    x_mask: U256,
+    toffoli_now: u64,
+) -> DirtiedAncillaToken {
+    DirtiedAncillaToken {
+        qubit: QubitOrAlloc(qubit_id),
+        toffoli_dirty: toffoli_now,
+        toffoli_free: 0,
+        x_mask,
+        width,
+    }
+}
+
+/// Try to claim a previously-freed dirty ancilla from the free-list whose
+/// X-mask and width match the request. The search is O(n) over the
+/// free-list (≤ 64 entries by default), with one `U256` equality and one
+/// `u64` tag comparison per entry. On a hit, the entry is removed and
+/// `Some(qubit_id)` is returned; on a miss, `None`.
+///
+/// The caller is expected to set the new `toffoli_dirty` to `toffoli_now`
+/// before the X-preamble. The reuse here is purely an allocation skip:
+/// the *id* is reused, and the dirty/free tags are advanced.
+pub(crate) fn try_reuse_dirty_ancilla(
+    free_list: &mut Vec<DirtiedAncillaToken>,
+    width: usize,
+    x_mask: U256,
+    toffoli_now: u64,
+) -> Option<u64> {
+    // Linear scan; the free list is small (<= DIRTYSCAN_FREE_LIST cap).
+    let mut best: Option<usize> = None;
+    for (i, t) in free_list.iter().enumerate() {
+        if t.width != width {
+            continue;
+        }
+        if t.x_mask != x_mask {
+            continue;
+        }
+        if t.toffoli_free > toffoli_now {
+            // The lifetime window has not closed yet (shouldn't happen
+            // because we always write toffoli_free at unload_const with a
+            // value <= the current count, but be defensive).
+            continue;
+        }
+        // Take the oldest free'd entry that matches: it has the longest
+        // closed window and is therefore safest to reuse.
+        match best {
+            None => best = Some(i),
+            Some(j) if free_list[j].toffoli_free > t.toffoli_free => best = Some(i),
+            _ => {}
+        }
+    }
+    best.map(|i| {
+        let t = free_list.swap_remove(i);
+        debug_assert!(t.toffoli_free <= toffoli_now);
+        t.qubit.0
+    })
+}
+
+/// Push a freed dirty ancilla onto the free-list. Honours the cap. Stamps
+/// `toffoli_free = toffoli_now` so the next caller can compare tags.
+pub(crate) fn release_dirty_ancilla(
+    free_list: &mut Vec<DirtiedAncillaToken>,
+    cap: usize,
+    token: DirtiedAncillaToken,
+    toffoli_now: u64,
+) {
+    let mut token = token;
+    token.toffoli_free = toffoli_now;
+    if free_list.len() >= cap {
+        // Drop the newest free entry to keep the list biased toward
+        // oldest-free entries (longer-closed lifetimes).
+        free_list.remove(0);
+    }
+    free_list.push(token);
+}
+
+/// Diagnostic counter: how many dirty-ancilla reuses the free-list served
+/// during this build. Logged at the end of `build()` so the
+/// `dirty-scan` mirror can still see them. The counter is a plain
+/// `AtomicU64` (no per-thread sharding needed — `B` is per-thread).
+pub(crate) fn dirty_reuse_counter() -> std::sync::atomic::AtomicU64 {
+    std::sync::atomic::AtomicU64::new(0)
+}
+
+#[doc(hidden)]
+pub(crate) static DIRTY_REUSE_COUNT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Increment the global reuse counter (called on a free-list hit).
+#[inline]
+pub(crate) fn count_reuse() {
+    DIRTY_REUSE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Read the global reuse counter.
+#[inline]
+pub(crate) fn read_reuse_count() -> u64 {
+    DIRTY_REUSE_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
