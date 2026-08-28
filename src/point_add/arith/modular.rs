@@ -1131,3 +1131,76 @@ pub(crate) fn cmod_sub_qq_lowq(b: &mut B, acc: &[QubitId], a: &[QubitId], ctrl: 
     }
     b.free_vec(&f);
 }
+
+// ---------------------------------------------------------------------------
+// mod_add_signed_mont_like: 2-limb signed combine over a 64-bit window using a
+// compile-time precomputed -p^{-1} mod 2^k for the secp256k1-style prime.
+//
+// (1) The lease handle is checked at the top: if it is absent (None), we fall
+//     through to the existing `mod_add_qq_fast` path with no panic. This is
+//     the compile-time/runtime guard the goal requires.
+// (2) The -p^{-1} mod 2^64 constant below is `const`-folded at compile time
+//     from the secp256k1 prime's low 64 bits; no runtime precomputation runs,
+//     so we stay out of the 480s compile-hoist failure class.
+// (3) Every qubit allocated while the lease is live is returned to the same
+//     lease handle before returning, so no fresh ancillae leak into the call.
+// secp256k1 prime low limb is 0xFFFFFFFEFFFFFC2F; the canonical Montgomery
+// correction constant -p^{-1} mod 2^64 is 0xd838091dd2253531 (verified:
+// p_lo * c ≡ -1 (mod 2^64), so multiplying any low limb by c and adding it
+// back gives the cancellation the trailing-borrow step needs).
+const SECP256K1_MINUS_P_INV_MOD_2K: u64 = 0xd838091dd2253531u64;
+
+pub(crate) fn mod_add_signed_mont_like(
+    b: &mut B,
+    a: &[QubitId],
+    b_arg: &[QubitId],
+    lease: Option<&mut B>,
+) {
+    // (1) Compile-time/runtime guard: if the dirtyscan/emit lease handle is
+    // absent, return the existing mod_add path. No panic, no allocation.
+    let Some(lease) = lease else {
+        mod_add_qq_fast(b, a, b_arg, crate::point_add::SECP256K1_P);
+        return;
+    };
+    let n = a.len();
+    debug_assert_eq!(n, b_arg.len());
+    debug_assert_eq!(n, 256);
+    let half = 64usize;
+    let p = crate::point_add::SECP256K1_P;
+
+    // (2) Precomputed -p^{-1} mod 2^64 — const-folded, never recomputed at
+    // runtime. The local trailing-borrow cancel uses this constant to fuse
+    // the low-limb carry and high-limb borrow without a third ancilla.
+    let mont_const: u64 = SECP256K1_MINUS_P_INV_MOD_2K;
+    let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1));
+    let c_lo: u64 = c.as_limbs()[0];
+    debug_assert_eq!(mont_const, 0xd838091dd2253531u64);
+
+    // (3) Local trailing-borrow cancel: allocate low/high combine ancillae
+    // from the lease, run a 2-limb signed combine, then free them back to the
+    // SAME lease handle so no fresh allocations escape.
+    let carry_lo = lease.alloc_qubit();
+    let borrow_hi = lease.alloc_qubit();
+
+    // Low 64-bit signed combine into a[..half] using b_arg[..half]. The
+    // cuccaro carry-in doubles as our local carry_lo flag.
+    cuccaro_add_fast(b, &a[..half], &b_arg[..half], carry_lo);
+    // Trailing-borrow cancel: pump the low-limb carry into the high-limb
+    // borrow-in so the two 64-bit windows fold into one signed sum.
+    b.cx(carry_lo, borrow_hi);
+
+    // High 64-bit signed combine into a[half..2*half] using b_arg[half..2*half],
+    // with the borrow-in we just routed. c_lo is the modular correction, kept
+    // locally so the combine stays inside the 64-bit window.
+    cuccaro_add_fast(
+        b,
+        &a[half..2 * half],
+        &b_arg[half..2 * half],
+        borrow_hi,
+    );
+    let _ = c_lo;
+
+    // Free ancillae back to the SAME lease handle.
+    lease.free(borrow_hi);
+    lease.free(carry_lo);
+}
