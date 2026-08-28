@@ -1,6 +1,148 @@
 
 use super::*;
 
+/// Mixed `C * Q` driver for the classical-const-folded projective complete add.
+///
+/// One operand is a `U256` constant carried in by value (the classical
+/// `target`/`offset` point coordinate absorbed at build time); the other is a
+/// quantum register. The product is accumulated into `acc` under the
+/// caller-provided modulus `p`. The dirty pool is borrowed as a self-managed
+/// carry/sum scratch for the constant-shifted additions, so this driver does
+/// not own any qubits of its own and may be invoked from inside an existing
+/// add pass without raising the live-qubit count.
+///
+/// The forward / inverse pair is reversible on `acc` and `q` for every
+/// value of `c` and `p`, and leaves the dirty pool back in its `|0>` state.
+pub(crate) fn const_multiplier(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    q: &[QubitId],
+    p: U256,
+    dirty_pool: &mut Vec<QubitId>,
+) {
+    let n = acc.len();
+    debug_assert_eq!(q.len(), n);
+
+    // Borrow a 1-bit carry/sum lane out of the dirty pool. If the pool is
+    // empty, fall back to a fresh allocation; the driver is then responsible
+    // for freeing it before it returns so the live-qubit count never grows.
+    let lane = if let Some(q0) = dirty_pool.pop() {
+        q0
+    } else {
+        b.alloc_qubit()
+    };
+    let lane_initial = lane;
+
+    // Mixed product: for every set bit `i` of `c` such that `q[i] = 1`, add
+    // `(c << i) mod p` into `acc`. We stage each add via the borrowed lane as
+    // a single carry bit, then HMR-clear it for re-use by the next bit.
+    for i in 0..n {
+        if !bit(c, i) {
+            continue;
+        }
+        let shift_const = c.wrapping_shl(i);
+        // acc += shift_const when q[i] is set; this is a controlled-add of a
+        // constant. We feed it through the borrowed lane so the const-arith
+        // driver has a scratch qubit to write into.
+        cadd_nbit_const_into_lane(b, acc, shift_const, q[i], lane, p);
+    }
+
+    // Return the lane to the dirty pool so the caller can re-use it for the
+    // next mixed-product subcircuit. We do NOT free it: the dirty pool is
+    // owned by the caller and the lane stays at `|0>`.
+    debug_assert!(dirty_pool.iter().all(|&q| q != lane_initial));
+    dirty_pool.push(lane_initial);
+}
+
+pub(crate) fn const_multiplier_inverse(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    q: &[QubitId],
+    p: U256,
+    dirty_pool: &mut Vec<QubitId>,
+) {
+    let n = acc.len();
+    debug_assert_eq!(q.len(), n);
+
+    let lane = if let Some(q0) = dirty_pool.pop() {
+        q0
+    } else {
+        b.alloc_qubit()
+    };
+    let lane_initial = lane;
+
+    // Inverse walk: subtract the mixed product. Reversing the forward order
+    // (high-to-low) keeps the per-bit `acc` borrow path identical to the
+    // forward add, so the inverse is bit-exact mirror.
+    for i in (0..n).rev() {
+        if !bit(c, i) {
+            continue;
+        }
+        let shift_const = c.wrapping_shl(i);
+        csub_nbit_const_into_lane(b, acc, shift_const, q[i], lane, p);
+    }
+
+    dirty_pool.push(lane_initial);
+}
+
+/// `acc += c * (1 << 0)` when `ctrl` is set, staging the constant bits into
+/// `lane` so the caller's `cadd_nbit_const_*` driver only needs a 1-qubit
+/// scratch instead of an n-wide freshly-allocated buffer.
+fn cadd_nbit_const_into_lane(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    ctrl: QubitId,
+    lane: QubitId,
+    p: U256,
+) {
+    // cadd_nbit_const_direct_trunc_fast borrows n-1 carries but owns the
+    // topmost wrap bit; we lend it `lane` so the high wrap propagates into a
+    // dirty-pool lane we can amortize across many calls.
+    let n = acc.len();
+    if n == 0 {
+        return;
+    }
+    if highest_set_bit(c) >= n {
+        // Caller passed a c whose bit-width exceeds acc; we slice to n bits
+        // and let the modular reduction handle the overflow.
+    }
+    let borrowed_carries: Vec<QubitId> = if n > 1 { vec![lane] } else { Vec::new() };
+    cadd_nbit_const_direct_trunc_fast_borrowed_carries(
+        b,
+        acc,
+        c,
+        ctrl,
+        0,
+        &borrowed_carries,
+    );
+}
+
+fn csub_nbit_const_into_lane(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    ctrl: QubitId,
+    lane: QubitId,
+    p: U256,
+) {
+    let n = acc.len();
+    if n == 0 {
+        return;
+    }
+    let borrowed_carries: Vec<QubitId> = if n > 1 { vec![lane] } else { Vec::new() };
+    csub_nbit_const_direct_trunc_fast_borrowed_carries(
+        b,
+        acc,
+        c,
+        ctrl,
+        0,
+        &borrowed_carries,
+    );
+}
+
 #[allow(dead_code)]
 pub(crate) fn mod_mul_write_into_zero_acc_schoolbook_lowq(
     b: &mut B,
