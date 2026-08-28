@@ -473,6 +473,14 @@ pub(crate) fn mod_double_inplace_fast_with_dirty(
         );
         b.free(q_clean2[0]);
         b.free(q_clean2[1]);
+    } else if mod_const_partial_fold_enabled() {
+        // Constant-addend specialized, bit-specialized MAJ route.
+        // Replaces the ctrl-1 path of `cadd_nbit_const_direct_fast` with the
+        // pure-X-CNOT-X/CNOT-only form that emits CNOTs (not CCX) at the
+        // constant-1 control sites. Each such site saves one Toffoli on the
+        // point-add path. The single final `cx(v[0], ovf)` retains the
+        // modular-reduction step in one deferred partial fold pass.
+        cuccaro_add_const(b, v, c, ovf);
     } else if direct_const_walks_enabled()
         || std::env::var("KAL_DIRECT_CONST_DOUBLE").ok().as_deref() == Some("1")
     {

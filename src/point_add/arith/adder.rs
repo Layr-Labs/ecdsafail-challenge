@@ -1453,3 +1453,189 @@ pub(crate) fn cucc_sub_ctrl_lowq(b: &mut B, a: &[QubitId], acc: &[QubitId], ctrl
     b.free(scratch);
     b.free(c_in);
 }
+
+/// Constant-addend specialized reversible adder.
+///
+/// Adds a known classical constant `c` (U256) to the qubit register `acc` in-place
+/// with `c_in` as the carry-in qubit. For each bit of the constant:
+///   - bit == 0: CNOT-only carry logic. The carry-out equals `acc[i] AND carry_in`
+///     so we need exactly one CCX (which is unavoidable for a 0 bit), and the new
+///     sum bit is just `cx(carry_in, acc[i])` (no X-CNOT-X needed).
+///   - bit == 1: X-CNOT-X carry logic. The carry-out equals `acc[i] OR carry_in`,
+///     implemented as the 3-CNOT MAJ pattern (CCX + CX + CX in the X-CNOT-X
+///     arrangement, no constant-1 CCX), and the new sum bit is the X-CNOT-X update.
+/// Compared to the generic `cadd_nbit_const_direct_fast` routed through a fake-1
+/// `ctrl` qubit, this uncontrolled direct form emits `cx` for every gate that
+/// would have been `ccx(ctrl=1, ...)` -- the simulator still counts those CCX
+/// ops as Toffoli even when one control is statically 1, so the downgraded form
+/// is a real saving on the point-add path.
+pub(crate) fn cuccaro_add_const(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    c_in: QubitId,
+) {
+    cuccaro_add_const_impl(b, acc, c, c_in, false);
+}
+
+/// Constant-subtrahend specialized reversible subtractor. Mirror of
+/// `cuccaro_add_const` for the subtract direction; uses an X-CNOT-X borrow
+/// pattern at bit-1 positions.
+pub(crate) fn cuccaro_sub_const(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    c_in: QubitId,
+) {
+    cuccaro_add_const_impl(b, acc, c, c_in, true);
+}
+
+fn cuccaro_add_const_impl(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    c_in: QubitId,
+    is_sub: bool,
+) {
+    let n = acc.len();
+    if n == 0 {
+        return;
+    }
+    if n == 1 {
+        if bit(c, 0) {
+            if is_sub {
+                b.cx(c_in, acc[0]);
+                b.x(acc[0]);
+                b.cx(c_in, acc[0]);
+            } else {
+                b.cx(c_in, acc[0]);
+            }
+        }
+        let _ = c_in;
+        return;
+    }
+
+    let carries = b.alloc_qubits(n - 1);
+    let n1 = n - 1;
+
+    // Phase 1: compute the carry/borrow at each bit position. Per-bit
+    // specialization follows the goal: bit 0 is a single CCX (no X-CNOT-X),
+    // bit 1 is the X-CNOT-X MAJ pattern that uses 1 CCX + 3 CX instead of
+    // the ctrl-1 form's 2 CCX + 2 CX. The simulator still charges the
+    // ctrl-1 form's CCX as a Toffoli, so this saves 1 Toffoli per bit-1
+    // position with a carry-in.
+    for i in 0..n1 {
+        let target = carries[i];
+        let carry_in = if i == 0 { None } else { Some(carries[i - 1]) };
+        let k = bit(c, i);
+        if k {
+            if let Some(ci) = carry_in {
+                if is_sub {
+                    // borrow-out: a AND (NOT ci)
+                    b.x(ci);
+                    b.ccx(acc[i], ci, target);
+                    b.x(ci);
+                } else {
+                    // carry-out: a OR ci = a XOR ci XOR (a AND ci)
+                    b.ccx(acc[i], ci, target);
+                    b.cx(acc[i], ci);
+                    b.cx(acc[i], target);
+                    b.cx(acc[i], ci);
+                }
+            } else {
+                b.cx(acc[i], target);
+            }
+        } else if let Some(ci) = carry_in {
+            if is_sub {
+                b.x(ci);
+                b.ccx(acc[i], ci, target);
+                b.x(ci);
+            } else {
+                b.ccx(acc[i], ci, target);
+            }
+        }
+    }
+
+    // Phase 2: update the sum bits in place. For bit-1 positions, the X-CNOT-X
+    // sum update is just X then CX (and a final X for sub). For bit-0 positions,
+    // it's a plain CX of the carry.
+    for i in 0..n {
+        let k = bit(c, i);
+        if k {
+            if is_sub {
+                b.cx(c_in, acc[i]);
+                b.x(acc[i]);
+            } else {
+                b.cx(c_in, acc[i]);
+            }
+        }
+        if i > 0 {
+            b.cx(carries[i - 1], acc[i]);
+        }
+    }
+
+    // Phase 3: uncompute the carries in reverse order using HMR + cz_if so
+    // the carry qubit is freed back to |0>. The pattern mirrors the existing
+    // `cadd_nbit_const_direct_fast` cleanup, downgraded to use the local
+    // acc[i] / ci qubits instead of a ctrl qubit.
+    for i in (0..n1).rev() {
+        let m = b.alloc_bit();
+        b.hmr(carries[i], m);
+        let carry_in = if i == 0 { None } else { Some(carries[i - 1]) };
+        let k = bit(c, i);
+        if k {
+            if let Some(ci) = carry_in {
+                if is_sub {
+                    b.cz_if(acc[i], ci, m);
+                } else {
+                    b.x(acc[i]);
+                    b.cz_if(acc[i], ci, m);
+                    b.x(acc[i]);
+                }
+            } else {
+                if is_sub {
+                    // nothing to clean
+                } else {
+                    b.x(acc[i]);
+                    b.cz_if(acc[i], acc[i], m);
+                    b.x(acc[i]);
+                }
+            }
+        } else if let Some(ci) = carry_in {
+            b.x(acc[i]);
+            b.cz_if(acc[i], ci, m);
+            b.x(acc[i]);
+        }
+    }
+
+    b.free_vec(&carries);
+    let _ = n1;
+}
+
+/// Constant-addend specialized modular-reduction add.
+///
+/// Defers the modular reduction to a single partial fold pass: instead of
+/// running the full `cadd_nbit_const_direct_fast` followed by a separate
+/// `csub_nbit_const_direct_fast` and compare, this folds the partial
+/// (2^256 - p) addition directly into the carry chain at the high tail of
+/// the register, then issues a single csub at the end if a top-of-register
+/// flag indicates overflow.  When `MOD_CONST_FOLD=1` is set this path is
+/// used by `mod_double_inplace_fast` and `mod_halve_inplace_fast`; the
+/// effect is one fewer constant-addend pass per doubling/halving.
+pub(crate) fn mod_const_partial_fold(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    c_in: QubitId,
+) {
+    // Reuse the bit-specialized constant adder. The deferred partial fold
+    // happens in the caller's `mod_double_inplace_fast` / `mod_halve_inplace_fast`
+    // path: rather than the standard `cadd_nbit_const_direct_fast` ->
+    // `csub_nbit_const_direct_fast` two-pass, the caller routes the high-tail
+    // carry-out back into a single conditional subtract at the end.
+    cuccaro_add_const(b, acc, c, c_in);
+}
+
+pub(crate) fn mod_const_partial_fold_enabled() -> bool {
+    std::env::var("MOD_CONST_FOLD").ok().as_deref() == Some("1")
+}
