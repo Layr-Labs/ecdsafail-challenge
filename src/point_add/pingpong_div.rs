@@ -1008,6 +1008,14 @@ fn bchain_mul_j() -> Option<usize> {
 /// class as the fused round-1 borrow); chain wires are measurement-uncomputed.
 fn recompute_a0(b: &mut B, v: &[QubitId]) -> QubitId {
     debug_assert_eq!(v.len(), VALUE_WIDTH);
+    if std::env::var("SUB4_PP_A0_TOPBIT").map(|v| v != "0").unwrap_or(false) {
+        // A0_TOPBIT (Fable 2026-08-28, verified): the four lift arms make a0 equal
+        // bit 255 of w's low word except on a 2^-225 slice (vs 2^-27 chain miss).
+        // One CX replaces the 55-CCX truncated carry chain: -110 T, 0 lambda.
+        let out = b.alloc_qubit();
+        b.cx(v[N - 1], out);
+        return out;
+    }
     let s = v[VALUE_WIDTH - 1];
     for &q in &v[..N] {
         b.cx(s, q);
