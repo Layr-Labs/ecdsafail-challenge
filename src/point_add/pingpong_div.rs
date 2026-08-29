@@ -87,7 +87,7 @@ fn rounds() -> usize {
     // since the two tables are alternate fits to the same problem, not
     // additive. `SUB4_PP_ROUNDS` remains swept post-rebase against the new
     // 696 default -- see the rebase report for the result.
-    tuned_window("SUB4_PP_ROUNDS", &SLOT, 696)
+    tuned_window("SUB4_PP_ROUNDS", &SLOT, 695)
 }
 
 /// The width schedule is compressed so it still reaches its floor on the

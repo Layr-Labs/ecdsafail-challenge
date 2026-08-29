@@ -2471,7 +2471,7 @@ pub fn build() -> Vec<Op> {
     // retired installer.
     std::env::set_var("TLM_FFG_MAX_G", "55");
     set_default_env("SUB4_PINGPONG_LOW56_FOLD", "1");
-    set_default_env("SUB4_PP_ROUNDS", "696");
+    set_default_env("SUB4_PP_ROUNDS", "695");
     // Keep one additional multiply traversal round as a bounded reliability
     // purchase. The extra tape wire raises this composition from Q1267 to
     // Q1268 while retaining a projected score improvement above 0.1%.
