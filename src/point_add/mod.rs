@@ -2490,11 +2490,11 @@ pub fn build() -> Vec<Op> {
     // ladder: -952 CCX deterministic, peak unchanged at 1266. Previously retracted as a dead
     // end when the shipped config was ROUNDS=694, where PEAK=1268 realizes peak 1268 and costs
     // two qubits; restoring ROUNDS to 696 revived it.
-    set_default_env("SUB4_PP_PEAK", "1268");
+    set_default_env("SUB4_PP_PEAK", "1267");
     set_default_env("SUB4_PP_WALK_PEAK", "1267");
     set_default_env("SUB4_PP_REPLAY_CHUNK", "96");
     set_default_env("SUB4_PP_REPLAY_CHUNK_COMPARE", "21");
-    set_default_env("SUB4_PP_REPLAY_FOLD_WINDOW", "54");
+    set_default_env("SUB4_PP_REPLAY_FOLD_WINDOW", "53");
     set_default_env("SUB4_PP_REPLAY_FOLD_WINDOW_MUL", "53");
     set_default_env("SUB4_PP_ENDPOINT_FOLD_WINDOW", "18");
     // MERGE: the level-2 Karatsuba square (ours) needs 6 more live wires in
@@ -2608,7 +2608,7 @@ pub fn build() -> Vec<Op> {
         let nonce = std::env::var("SUB4_PINGPONG_TAIL_NONCE")
             .unwrap_or_default()
             .parse::<u64>()
-            .unwrap_or(97212983354114);
+            .unwrap_or(25000185239798);
         let mut x = Op::empty();
         x.kind = OperationType::X;
         x.q_target = QubitId(0);
