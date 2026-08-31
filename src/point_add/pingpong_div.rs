@@ -126,6 +126,16 @@ fn replay_chunk() -> usize {
     tuned_window("SUB4_PP_REPLAY_CHUNK", &SLOT, 96)
 }
 
+fn late_replay_walk_w() -> usize {
+    static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    tuned_window("SUB4_PP_LATE_REPLAY_WALK_W", &SLOT, 1)
+}
+
+fn solver_peak_safe() -> bool {
+    static SLOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SLOT.get_or_init(|| std::env::var_os("SUB4_PP_SOLVER_PEAK_SAFE").is_some())
+}
+
 fn replay_chunk_compare() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     // BAKE (2026-08-23): 21, not 20 -- measured +1,190.84 T, peak 1275
@@ -357,6 +367,9 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
             value_walk_back(b, &mut u, &mut v, std::mem::take(&mut tape), None, None);
         }
         (PingPongDirection::Divide, Some(plan)) => {
+            if std::env::var_os("SUB4_TRACE_PLAN").is_some() {
+                eprintln!("TRACE_PLAN div r1={} r2={} peak={} rounds={}", plan.r1, plan.r2, plan.peak, rounds);
+            }
             // Halving order matches the forward walk.
             phase(b, "pp_div_walk", "pp_mul_walk");
             tape = Vec::with_capacity(rounds);
@@ -375,6 +388,10 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
             // it before the batch replay costs the same ops and takes two
             // wires off the batch's footprint.
             if plan.r1 < rounds {
+                if std::env::var_os("SUB4_TRACE_WIDTH").is_some() {
+                    eprintln!("TRACE_WIDTH pre-batch shrink r1={} value_width={} u.len()={} ops={}",
+                        plan.r1, value_width(plan.r1), u.len(), b.ops.len());
+                }
                 shrink_to(b, &mut u, &mut v, value_width(plan.r1));
             }
             coefficient = b.alloc_qubits(N);
@@ -426,7 +443,14 @@ pub(crate) fn pingpong_mod_mul_div_in_place(
                 tape.push(walk_round(b, &mut u, &mut v, r, rounds));
             }
             let loans = loan(b, &u, &v);
-            set_chunks(pick_chunks(&plan, tape.len() - sign1_charge, 1));
+            let late_ladder = pick_chunks(&plan, tape.len() - sign1_charge, late_replay_walk_w());
+            if std::env::var_os("SUB4_TRACE_LATE").is_some() {
+                eprintln!(
+                    "TRACE_LATE tape_len={} sign1_charge={} u_len={} v_len={} ladder={}",
+                    tape.len(), sign1_charge, u.len(), v.len(), late_ladder
+                );
+            }
+            set_chunks(late_ladder);
             for r in (plan.r2 + 1).max(plan.r1)..rounds {
                 replay_halving_round(b, r, tape[r], &coefficient, numerator);
             }
@@ -1320,6 +1344,7 @@ fn signed_add_wrapping_sigma_split(
     target0_is_one: bool,
     low: usize,
     top_skip: bool,
+    low0: bool,
 ) {
     let n = source.len();
     debug_assert_eq!(n, target.len());
@@ -1327,6 +1352,9 @@ fn signed_add_wrapping_sigma_split(
     let top_skip = top_skip && n >= 6;
 
     for &q in target {
+        if low0 && q == target[0] {
+            continue;
+        }
         b.cx(sign, q);
     }
 
@@ -1367,7 +1395,9 @@ fn signed_add_wrapping_sigma_split(
         b.x(c_lo[0]);
     }
     b.cx(sign, c_lo[0]);
-    b.cx(source[0], target[0]);
+    if !low0 {
+        b.cx(source[0], target[0]);
+    }
     b.free_vec(&c_lo[..low - 1]);
 
     // High chunk: positions low..n, carry-in `boundary`. REPORT5 §3: on a
@@ -1483,6 +1513,9 @@ fn signed_add_wrapping_sigma_split(
     b.free(boundary);
 
     for &q in target {
+        if low0 && q == target[0] {
+            continue;
+        }
         b.cx(sign, q);
     }
 }
@@ -1500,6 +1533,7 @@ fn signed_add_wrapping_sigma(
     target: &[QubitId],
     target0_is_one: bool,
     top_skip: bool,
+    low0: bool,
 ) {
     let n = source.len();
     assert_eq!(n, target.len());
@@ -1523,6 +1557,9 @@ fn signed_add_wrapping_sigma(
     let top_skip = top_skip && n >= 6;
 
     for &q in target {
+        if low0 && q == target[0] {
+            continue;
+        }
         b.cx(sign, q);
     }
 
@@ -1635,10 +1672,15 @@ fn signed_add_wrapping_sigma(
         b.x(source[1]);
     }
     b.cx(source[1], target[1]);
-    b.cx(source[0], target[0]);
+    if !low0 {
+        b.cx(source[0], target[0]);
+    }
     b.free_vec(&carries);
 
     for &q in target {
+        if low0 && q == target[0] {
+            continue;
+        }
         b.cx(sign, q);
     }
 }
@@ -1650,9 +1692,10 @@ fn signed_add_wrapping(
     target: &[QubitId],
     target0_is_one: bool,
     top_skip: bool,
+    low0: bool,
 ) {
     if std::env::var_os("SUB4_PINGPONG_GENERIC_WALK").is_none() {
-        return signed_add_wrapping_sigma(b, sign, source, target, target0_is_one, top_skip);
+        return signed_add_wrapping_sigma(b, sign, source, target, target0_is_one, top_skip, low0);
     }
     for &q in target {
         b.cx(sign, q);
@@ -1860,10 +1903,31 @@ fn walk_round(
     let sign = b.alloc_qubit();
     b.cx(target[1], sign);
     b.cx(source[1], sign);
+    let low0 = std::env::var_os("SUB4_PP_LOW0_LOAN_OFF").is_none();
+    if low0 {
+        // Loan the odd passengers across the add.  `source[0]` is provably 1
+        // and `target[0]` is 1 before the add and 0 after, so the adder's only
+        // [0] gates (the two sandwich CXs and the bit-0 sum CX) are redundant
+        // and the wires can sit in the free pool through the carry ladder.
+        b.x(source[0]);
+        b.free(source[0]);
+        b.x(target[0]);
+        b.free(target[0]);
+    }
     let top_skip = walk_top_skip(round, rounds);
-    match walk_low_chunk(round, width) {
-        Some(low) => signed_add_wrapping_sigma_split(b, sign, source, target, true, low, top_skip),
-        None => signed_add_wrapping(b, sign, source, target, true, top_skip),
+    let low_chunk = walk_low_chunk(round, width);
+    if std::env::var_os("SUB4_TRACE_WALK").is_some() {
+        eprintln!("TRACE_WALK phase={} round={} width={} low={:?} active={}",
+            b.phase, round, width, low_chunk, b.active_qubits);
+    }
+    match low_chunk {
+        Some(low) => signed_add_wrapping_sigma_split(b, sign, source, target, true, low, top_skip, low0),
+        None => signed_add_wrapping(b, sign, source, target, true, top_skip, low0),
+    }
+    if low0 {
+        b.reacquire(target[0]);
+        b.reacquire(source[0]);
+        b.x(source[0]);
     }
     for i in 0..width - 1 {
         b.swap(target[i], target[i + 1]);
@@ -1910,10 +1974,25 @@ fn walk_back_round(
         b.swap(target[i], target[i + 1]);
     }
     b.x(sign);
+    let low0 = std::env::var_os("SUB4_PP_LOW0_LOAN_OFF").is_none();
+    if low0 {
+        // The rotation undo leaves `target[0]` at 0 and `source[0]` at 1, and
+        // the reverse add returns `target[0]` to 1: the same loan as the
+        // forward walk, zero Toffoli, zero phase.
+        b.free(target[0]);
+        b.x(source[0]);
+        b.free(source[0]);
+    }
     let top_skip = walk_top_skip(round, rounds);
     match walk_low_chunk(round, width) {
-        Some(low) => signed_add_wrapping_sigma_split(b, sign, source, target, false, low, top_skip),
-        None => signed_add_wrapping(b, sign, source, target, false, top_skip),
+        Some(low) => signed_add_wrapping_sigma_split(b, sign, source, target, false, low, top_skip, low0),
+        None => signed_add_wrapping(b, sign, source, target, false, top_skip, low0),
+    }
+    if low0 {
+        b.reacquire(target[0]);
+        b.x(target[0]);
+        b.reacquire(source[0]);
+        b.x(source[0]);
     }
     b.x(sign);
     b.cx(target[1], sign);
@@ -2099,7 +2178,7 @@ fn value_walk(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>, rounds: usi
         let sign = b.alloc_qubit();
         b.cx(target[1], sign);
         b.cx(source[1], sign);
-        signed_add_wrapping(b, sign, source, target, true, walk_top_skip(round, rounds));
+        signed_add_wrapping(b, sign, source, target, true, walk_top_skip(round, rounds), false);
         tape.push(sign);
 
         for i in 0..width - 1 {
@@ -2153,7 +2232,6 @@ fn value_walk_back(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>, tape: 
             continue;
         }
 
-        let sign = tape[round];
         let (source, target) = if round.is_multiple_of(2) {
             (&u[..width], &v[..width])
         } else {
@@ -2163,8 +2241,9 @@ fn value_walk_back(b: &mut B, u: &mut Vec<QubitId>, v: &mut Vec<QubitId>, tape: 
         for i in (0..width - 1).rev() {
             b.swap(target[i], target[i + 1]);
         }
+        let sign = tape[round];
         b.x(sign);
-        signed_add_wrapping(b, sign, source, target, false, walk_top_skip(round, rounds));
+        signed_add_wrapping(b, sign, source, target, false, walk_top_skip(round, rounds), false);
         b.x(sign);
         b.cx(target[1], sign);
         b.cx(source[1], sign);
@@ -2242,6 +2321,9 @@ fn chunk_add(
     }
 
     let owned = num_carries - usize::from(carry_out.is_some());
+    if std::env::var_os("SUB4_TRACE_PEAK").is_some() && b.active_qubits + owned as u32 + 10 >= b.peak_qubits {
+        eprintln!("TRACE_PEAK chunk_add width={} owned={} active={} peak={} ops={}", width, owned, b.active_qubits, b.peak_qubits, b.ops.len());
+    }
     let mut carries = b.alloc_qubits(owned);
     if let Some(carry) = carry_out {
         carries.push(carry);
@@ -2357,7 +2439,7 @@ fn add_chunked_measured_with(
 ) -> Option<QubitId> {
     let n = addend.len();
     let final_carry = carry_out.is_some() || late_carry_out;
-    let bounds = match ladder_target_now() {
+    let mut bounds = match ladder_target_now() {
         None => chunk_bounds(n, replay_chunk()),
         Some(v) => match legacy_width(v) {
             Some(width) => chunk_bounds(n, width),
@@ -2365,6 +2447,28 @@ fn add_chunked_measured_with(
                 .unwrap_or_else(|| chunk_bounds(n, n.div_ceil(12))),
         },
     };
+    // Binding-aware re-solve: the realized footprint of this add is the
+    // pre-active plus (ladder - 1).  When that would hit the realized peak
+    // (1264), re-run the solver with a target one below the standard ladder,
+    // so the realized footprint drops by one.  Non-binding rounds keep the
+    // cheapest layout, byte-identically to the base.
+    if solver_peak_safe() {
+        if let Some(v) = ladder_target_now() {
+            if legacy_width(v).is_none() {
+                let sizes: Vec<usize> = bounds.iter().map(|&(lo, hi)| hi - lo).collect();
+                let ladder = layout_ladder(&sizes, final_carry);
+                if b.active_qubits as usize + ladder >= 1264 {
+                    if std::env::var_os("SUB4_TRACE_PEAK").is_some() {
+                        eprintln!("TRACE_PEAK solver_peak_safe refit ladder={} -> {} ops={}",
+                            ladder, ladder.saturating_sub(1), b.ops.len());
+                    }
+                    if let Some(tight) = chunk_layout(n, ladder.saturating_sub(1), final_carry) {
+                        bounds = tight;
+                    }
+                }
+            }
+        }
+    }
     let legacy = std::env::var_os("SUB4_PP_LEGACY_CHUNK_ORDER").is_some();
     let erase = |b: &mut B, carry: QubitId, lo: usize, hi: usize| {
         let width = hi - lo;
@@ -2479,7 +2583,15 @@ fn fused_fold_maskfree(
     // The final carry is needed only as an XOR into the top output bit. Emit
     // it directly there, matching the exact terminal stage used by the split
     // walk adder, and retain carry wires only through position width - 3.
+    // SUB4_PP_FOLD_TERMINAL3: stop the chain one position earlier still and
+    // close the top three sum bits in a three-position terminal stage.  The
+    // last ladder CCX moves into the stage, so the Toffoli count is
+    // unchanged; the staged middle carry rides in `carries[1]` after that
+    // wire's own reverse step retires it early.
     let num_carries = width - 3;
+    if std::env::var_os("SUB4_TRACE_PEAK").is_some() && b.active_qubits + num_carries as u32 + 10 >= b.peak_qubits {
+        eprintln!("TRACE_PEAK fold width={} num_carries={} active={} peak={} ops={}", width, num_carries, b.active_qubits, b.peak_qubits, b.ops.len());
+    }
     let carries = b.alloc_qubits(num_carries);
 
     for offset in 0..num_carries {
@@ -2512,26 +2624,28 @@ fn fused_fold_maskfree(
         }
     }
 
-    let i = width - 2;
-    let previous = carries.last().copied().unwrap_or(first_carry);
-    let selectors = controls(i);
-    if selectors.is_empty() {
-        b.cx(previous, acc[i]);
-        b.ccx(previous, acc[i], acc[width - 1]);
-        b.cx(previous, acc[width - 1]);
-    } else {
-        let operand = selectors[0];
-        for &control in &selectors[1..] {
-            b.cx(control, operand);
-        }
-        b.cx(previous, operand);
-        b.cx(previous, acc[i]);
-        b.ccx(operand, acc[i], acc[width - 1]);
-        b.cx(previous, acc[width - 1]);
-        b.cx(previous, operand);
-        b.cx(operand, acc[i]);
-        for &control in selectors[1..].iter().rev() {
-            b.cx(control, operand);
+    {
+        let i = width - 2;
+        let previous = carries.last().copied().unwrap_or(first_carry);
+        let selectors = controls(i);
+        if selectors.is_empty() {
+            b.cx(previous, acc[i]);
+            b.ccx(previous, acc[i], acc[width - 1]);
+            b.cx(previous, acc[width - 1]);
+        } else {
+            let operand = selectors[0];
+            for &control in &selectors[1..] {
+                b.cx(control, operand);
+            }
+            b.cx(previous, operand);
+            b.cx(previous, acc[i]);
+            b.ccx(operand, acc[i], acc[width - 1]);
+            b.cx(previous, acc[width - 1]);
+            b.cx(previous, operand);
+            b.cx(operand, acc[i]);
+            for &control in selectors[1..].iter().rev() {
+                b.cx(control, operand);
+            }
         }
     }
     for control in controls(width - 1) {

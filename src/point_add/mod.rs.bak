@@ -154,6 +154,17 @@ pub struct B0Census {
     pub printed: bool,
 
     pub phase_filter: Option<String>,
+
+    // QUBIT-seat instrumentation (env-gated, default-off, byte-neutral):
+    // B0_PLATEAU_MIN: log every alloc/free event with active >= min (op, active, phase)
+    // B0_SNAP_AT: dump owner histogram at first event with op >= each listed index
+    // B0_SNAP_LEVEL/K: dump histogram every K-th event with active == level
+    pub plateau_min: u32,
+    pub plateau_log: Vec<(usize, u32, &'static str)>,
+    pub snap_at: Vec<usize>,
+    pub snap_level: Option<u32>,
+    pub snap_k: usize,
+    pub snap_count: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -220,6 +231,25 @@ impl B {
                         win_lo: lo,
                         win_hi: hi,
                         phase_filter: std::env::var("B0_PHASE").ok().filter(|s| !s.is_empty()),
+                        plateau_min: std::env::var("B0_PLATEAU_MIN")
+                            .ok()
+                            .and_then(|v| v.parse::<u32>().ok())
+                            .unwrap_or(0),
+                        snap_at: std::env::var("B0_SNAP_AT")
+                            .ok()
+                            .map(|v| {
+                                v.split(',')
+                                    .filter_map(|t| t.trim().parse::<usize>().ok())
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        snap_level: std::env::var("B0_SNAP_LEVEL")
+                            .ok()
+                            .and_then(|v| v.parse::<u32>().ok()),
+                        snap_k: std::env::var("B0_SNAP_K")
+                            .ok()
+                            .and_then(|v| v.parse::<usize>().ok())
+                            .unwrap_or(256),
                         ..Default::default()
                     },
                     _ => B0Census::default(),
@@ -330,6 +360,48 @@ impl B {
         }
     }
     fn record_phase_active(&mut self) {
+        if let Some(spec) = std::env::var_os("B0_SNAP_AT") {
+            let want: std::collections::HashSet<usize> = spec
+                .to_string_lossy()
+                .split(',')
+                .filter_map(|s| s.trim().parse().ok())
+                .collect();
+            if want.contains(&self.current_ops_len()) {
+                let mut hist: std::collections::HashMap<(&'static str, &'static str, u32), u32> =
+                    std::collections::HashMap::new();
+                for v in self.b0.owner.values() {
+                    *hist.entry(*v).or_insert(0) += 1;
+                }
+                let mut rows: Vec<((&'static str, &'static str, u32), u32)> = hist.into_iter().collect();
+                rows.sort_by(|a, b| b.1.cmp(&a.1));
+                eprintln!(
+                    "B0_SNAP_AT ops={} active={} phase={} n_live={}",
+                    self.current_ops_len(),
+                    self.active_qubits,
+                    self.phase,
+                    rows.iter().map(|(_, c)| c).sum::<u32>()
+                );
+                for ((phase, file, line), cnt) in rows.iter().take(12) {
+                    eprintln!("B0_SNAP_OWN count={cnt} phase={phase} caller={file}:{line}");
+                }
+                if std::env::var("B0_WIRE_DUMP").is_ok() {
+                    let filter = std::env::var("B0_WIRE_DUMP_FILTER").unwrap_or_default();
+                    let mut ids: Vec<(u64, &'static str, &'static str, u32)> = Vec::new();
+                    for (&qid, &(p, f, l)) in self.b0.owner.iter() {
+                        ids.push((qid, p, f, l));
+                    }
+                    ids.sort();
+                    for (qid, p, f, l) in &ids {
+                        let site = format!("{}:{}", f, l);
+                        if filter.is_empty() || site.contains(&filter) {
+                            eprintln!("B0_SNAP_WIRE id={qid} phase={p} caller={site}");
+                        }
+                    }
+                    eprintln!("B0_SNAP_IDS_MIN={} MAX={}", ids.first().unwrap().0, ids.last().unwrap().0);
+                }
+                eprintln!("B0_SNAP_END");
+            }
+        }
         self.record_active_timeline();
         if std::env::var("TRACE_PHASE_ACTIVE").is_ok() {
             let entry = self.phase_active_max.entry(self.phase).or_insert(0);
@@ -379,6 +451,31 @@ impl B {
             self.b0_print();
             return;
         }
+        if self.b0.plateau_min > 0 && self.active_qubits >= self.b0.plateau_min {
+            self.b0
+                .plateau_log
+                .push((cur, self.active_qubits, self.phase));
+        }
+        if let Some(level) = self.b0.snap_level {
+            if self.active_qubits == level {
+                self.b0.snap_count += 1;
+                if self.b0.snap_count % self.b0.snap_k == 0 {
+                    self.b0_dump_hist(cur, "level_kth");
+                }
+            }
+        }
+        if !self.b0.snap_at.is_empty() {
+            let mut fired: Vec<usize> = Vec::new();
+            for (i, at) in self.b0.snap_at.iter().enumerate() {
+                if cur >= *at {
+                    self.b0_dump_hist(*at, "at");
+                    fired.push(i);
+                }
+            }
+            for i in fired.into_iter().rev() {
+                self.b0.snap_at.remove(i);
+            }
+        }
         if cur >= self.b0.win_lo && self.active_qubits > self.b0.best_active {
             if let Some(f) = &self.b0.phase_filter {
                 if !self.phase.contains(f.as_str()) {
@@ -396,6 +493,124 @@ impl B {
         if self.b0.enabled && !self.b0.printed {
             self.b0_print();
         }
+        self.b0_plateau_report();
+    }
+    fn b0_dump_hist(&self, op_idx: usize, tag: &str) {
+        let snap = &self.b0.owner;
+        let mut hist: std::collections::HashMap<(&'static str, &'static str, u32), u32> =
+            std::collections::HashMap::new();
+        for v in snap.values() {
+            *hist.entry(*v).or_insert(0) += 1;
+        }
+        let mut rows: Vec<((&'static str, &'static str, u32), u32)> = hist.into_iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        eprintln!(
+            "B0_SNAP_BEGIN tag={tag} ops={op_idx} active={} phase={} n_live={} n_groups={}",
+            self.active_qubits,
+            self.phase,
+            snap.len(),
+            rows.len()
+        );
+        for ((phase, file, line), cnt) in &rows {
+            eprintln!("B0_SNAP_OWN count={cnt} phase={phase} caller={file}:{line}");
+        }
+        if std::env::var("B0_WIRE_DUMP").is_ok() {
+            let filter = std::env::var("B0_WIRE_DUMP_FILTER").unwrap_or_default();
+            let mut ids: Vec<(u64, &'static str, &'static str, u32)> = Vec::new();
+            for (&qid, &(p, f, l)) in snap.iter() {
+                ids.push((qid, p, f, l));
+            }
+            ids.sort();
+            let mut prev: Option<(u64, &'static str, u32)> = None;
+            for (qid, p, f, l) in &ids {
+                if let Some((pq, pf, pl)) = prev {
+                    if pq + 1 != *qid || pf != *p || pl != *l {
+                        eprintln!("B0_SNAP_GROUP_SEP after_id={pq}");
+                    }
+                }
+                prev = Some((*qid, *p, *l));
+                let site = format!("{}:{}", f, l);
+                if filter.is_empty() || site.contains(&filter) || site.contains("reacquire") {
+                    eprintln!("B0_SNAP_WIRE id={qid} phase={p} caller={site}");
+                }
+            }
+            eprintln!("B0_SNAP_IDS_MIN={} MAX={}", ids.first().unwrap().0, ids.last().unwrap().0);
+        }
+        eprintln!("B0_SNAP_END");
+    }
+    fn b0_plateau_report(&self) {
+        if self.b0.plateau_min == 0 {
+            return;
+        }
+        let log = &self.b0.plateau_log;
+        if log.is_empty() {
+            return;
+        }
+        let mut by_level: std::collections::BTreeMap<u32, usize> =
+            std::collections::BTreeMap::new();
+        for &(_, a, _) in log {
+            *by_level.entry(a).or_insert(0) += 1;
+        }
+        let max_level = *by_level.keys().last().unwrap();
+        eprintln!(
+            "B0_PLATEAU_BEGIN min={} n_events={} max_level={} ops=[{},{}]",
+            self.b0.plateau_min,
+            log.len(),
+            max_level,
+            log.first().unwrap().0,
+            log.last().unwrap().0
+        );
+        for (level, cnt) in by_level.iter().rev() {
+            eprintln!("B0_PLATEAU_LEVEL level={level} count={cnt}");
+        }
+        // per-phase stats at max level
+        let mut ph: std::collections::BTreeMap<&'static str, (usize, usize, usize)> =
+            std::collections::BTreeMap::new();
+        for &(op, a, p) in log {
+            if a == max_level {
+                let e = ph.entry(p).or_insert((usize::MAX, 0, 0));
+                e.0 = e.0.min(op);
+                e.1 = e.1.max(op);
+                e.2 += 1;
+            }
+        }
+        for (p, (f, l, c)) in &ph {
+            eprintln!(
+                "B0_PLATEAU_PHASE phase={p} count={c} ops=[{f},{l}]"
+            );
+        }
+        if std::env::var("B0_PLATEAU_EVENTS").is_ok() {
+            for &(op, a, p) in log {
+                if a == max_level {
+                    eprintln!("B0_PLATEAU_EVENT ops={op} phase={p}");
+                }
+            }
+        }
+        if std::env::var("B0_PLATEAU_EVENTS_ALL").is_ok() {
+            for &(op, a, p) in log {
+                eprintln!("B0_PLATEAU_EVENT_ALL ops={op} level={a} phase={p}");
+            }
+        }
+        // runs of max-level events (consecutive log entries at max_level)
+        let mut run_start = None;
+        let mut runs: Vec<(usize, usize, usize)> = Vec::new();
+        for (i, &(op, a, _)) in log.iter().enumerate() {
+            if a == max_level && run_start.is_none() {
+                run_start = Some((i, op));
+            } else if a != max_level {
+                if let Some((si, so)) = run_start.take() {
+                    runs.push((so, log[i - 1].0, i - si));
+                }
+            }
+        }
+        if let Some((si, so)) = run_start {
+            runs.push((so, log.last().unwrap().0, log.len() - si));
+        }
+        eprintln!("B0_PLATEAU_RUNS n_runs={}", runs.len());
+        for (f, l, c) in runs.iter().take(64) {
+            eprintln!("B0_PLATEAU_RUN events={c} ops=[{f},{l}]");
+        }
+        eprintln!("B0_PLATEAU_END");
     }
     fn b0_print(&mut self) {
         self.b0.printed = true;
