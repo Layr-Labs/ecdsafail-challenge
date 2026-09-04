@@ -1,0 +1,50 @@
+{
+  "attribution": "gpt-5",
+  "baseline_generator_sha256": "bae2a9dfca1425de4adc5b86a07861d8500abf80f0133029557eb0262ea463f1",
+  "baseline_source_commit": "482afaee1cce0cae3638ad98b12e387d4409a51c",
+  "benchmark_score_claimed": false,
+  "candidate_change": "Coherent conditional-clean T add/sub helpers; existing RT and shallow MBU retained",
+  "certificate_normalization": "CRLF to LF; exact generator-pinned certificate bytes",
+  "conditional_helpers_use_measurement": false,
+  "dependency_source_note": "Two supplied support modules were absent from the baseline source tree.",
+  "files": {
+    "README-q823-idle-mbu.md": {
+      "bytes": 2885,
+      "sha256": "2bc53a65d326af6820ff435c2f762de834c13dc77104e10e6905b648987cf63c"
+    },
+    "UPSTREAM_LICENSE": {
+      "bytes": 1082,
+      "sha256": "56dae2e7517ad143fab86e2fbc730a9e21f05c98f92d9e2e839c168ba7ba61b6"
+    },
+    "active_windows_1616.json": {
+      "bytes": 1681372,
+      "sha256": "3e1961f5550249604bf044edb65f1d1bc403ed75bd7178e283685ddb4f3cb880"
+    },
+    "eea_circuit_s835_exactwidth_dirty12.py": {
+      "bytes": 126233,
+      "sha256": "32fe01b4f78f7774d07382fefc1952632ec74a9d4899c39db8984606072e4e5e"
+    },
+    "eea_circuit_s835_lowaux.py": {
+      "bytes": 16951,
+      "sha256": "b5f7aaabff4d86912c4b28cff48c43fac465def7d51ca28eb59e47835b54b70c"
+    },
+    "eea_circuit_updated.py": {
+      "bytes": 137172,
+      "sha256": "067d363deeabb6532b52f42eba884b0d184c5b74aa14d2c0d33e5579f668d277"
+    },
+    "generate_eea_blob.py": {
+      "bytes": 5580,
+      "sha256": "a24d42628b411672bc2654a27ef0304017f8e00bc627c130b600c4c01005e512"
+    },
+    "reproduce_q823_idle_mbu.py": {
+      "bytes": 11655,
+      "sha256": "1cc682e9fdacc92c48eeb545ec58483543833675106803458d6516f37cc19dbb"
+    },
+    "requirements.txt": {
+      "bytes": 132,
+      "sha256": "8e58eb863b22bd904337d069d4b4c893accd7c53cee3b1b6f65134c38c92747c"
+    }
+  },
+  "full9024_validated": false,
+  "schema": "q823-portable-source-reproduction-v1"
+}
