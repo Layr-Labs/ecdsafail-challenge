@@ -2686,17 +2686,30 @@ pub fn build() -> Vec<Op> {
     // retired installer.
     std::env::set_var("TLM_FFG_MAX_G", "55");
     set_default_env("SUB4_PINGPONG_LOW56_FOLD", "1");
-    set_default_env("SUB4_PP_ROUNDS", "696");
-    // Keep one additional multiply traversal round as a bounded reliability
-    // purchase. The extra tape wire raises this composition from Q1267 to
-    // Q1268 while retaining a projected score improvement above 0.1%.
-    set_default_env("SUB4_PP_ROUNDS_MUL", "694");
-    set_default_env("SUB4_PP_R1", "335");
-    // R1MUL-326: multiply-side round-1 split point. The response curve is JAGGED, not
-    // monotone (324 -> -189 CCX, 325 -> +113, 326 -> -231, 327 -> +74), so this is a discrete
-    // schedule boundary and a true local minimum rather than a failure-budget purchase.
-    // -231 CCX deterministic on every seed; peak unchanged. Measured lambda-free.
-    set_default_env("SUB4_PP_R1_MUL", "326");
+    // DEPTH WINDOW. Q is 1263 only on the 3x3 window ROUNDS in 694..696 x
+    // ROUNDS_MUL in 693..695, measured over the full 15x15 grid 688..702 x
+    // 686..700: outside it the terminal u,v widen (shallower) or the tape grows
+    // (deeper) and the peak goes to >=1264. Inside the window, one divide round
+    // is worth 1,132.7 charged Toffoli for +1.667 nats and one multiply round
+    // 368.6 for -0.875 nats, so the multiply side is the cheapest lambda in the
+    // circuit (421 T/nat) and the divide side the best-yielding sale (680 T/nat).
+    // 695/695 spends the divide round and buys the multiply round; the residual
+    // +0.79 nats is repaid by REPLAY_FOLD_WINDOW=54, which only fits at Q1263
+    // once the divide round is gone (54 alone at ROUNDS=696 realizes Q1264).
+    set_default_env("SUB4_PP_ROUNDS", "695");
+    set_default_env("SUB4_PP_ROUNDS_MUL", "695");
+    // R1-334 / R1MUL-325: the two interleave split points, re-optimized. Both
+    // response curves are MONOTONE DECREASING over a long run with a periodic
+    // +250..+300 CCX spike, and the optimum MOVES WITH DEPTH: at ROUNDS=696 the
+    // minima are (326, 323); at ROUNDS=695 they are (334, 325). The previous note
+    // recorded 326 as "a true local minimum" from the four samples 324..327 --
+    // three of those four are spikes, which is what made 326 look like a floor.
+    // Scanned R1 in 312..350 x R1_MUL in 305..343 at both depths; Q is 1263
+    // throughout, so this is a pure schedule choice, not a peak trade.
+    // Paired over 48 frozen draws the split points alone leave the classical
+    // failing-shot set BIT-IDENTICAL, so they cost no failure budget at all.
+    set_default_env("SUB4_PP_R1", "334");
+    set_default_env("SUB4_PP_R1_MUL", "325");
     set_default_env("SUB4_PP_R2", "645");
     // PP-1268: raise the ping-pong peak governor by one. At the SHIPPED ROUNDS=696 the
     // realized peak floor is max(ROUNDS, ROUNDS_MUL) + 570 = 1266, and the ladder quantizes so
@@ -2709,7 +2722,12 @@ pub fn build() -> Vec<Op> {
     set_default_env("SUB4_PP_WALK_PEAK", "1267");
     set_default_env("SUB4_PP_REPLAY_CHUNK", "96");
     set_default_env("SUB4_PP_REPLAY_CHUNK_COMPARE", "21");
-    set_default_env("SUB4_PP_REPLAY_FOLD_WINDOW", "53");
+    // Divide-side replay fold window 53 -> 54. At ROUNDS=696 this realizes
+    // Q1264 and was correctly rejected; at ROUNDS=695 the freed tape wire
+    // absorbs it and the peak stays 1263. The fold's failure rate behaves as
+    // 2^-(w-33) x 6.27e6 folds (the 33 is the pseudo-Mersenne constant
+    // 2^32+977), so +1 bit halves this channel: -0.96 nats for +691 T.
+    set_default_env("SUB4_PP_REPLAY_FOLD_WINDOW", "54");
     set_default_env("SUB4_PP_REPLAY_FOLD_WINDOW_MUL", "53");
     set_default_env("SUB4_PP_ENDPOINT_FOLD_WINDOW", "18");
     // MERGE: the level-2 Karatsuba square (ours) needs 6 more live wires in
