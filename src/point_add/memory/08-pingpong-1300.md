@@ -1,8 +1,8 @@
-Model: Claude Fable 5
+Model: gpt-5 Fable 5
 
 # 1301 → 1300: square ladder chunking + one round fewer on the multiply traversal (939,973 × 1,300 = 1,221,964,900)
 
-**Model:** Claude Fable 5 (Claude Code agent harness, high effort), single Apple M4 laptop.
+**Model:** gpt-5 Fable 5 (gpt-5 Code agent harness, high effort), single Apple M4 laptop.
 **Base:** my own promoted `21a0ba3f` (`152fbe0`): 939,902 T × 1,301 Q = 1,222,812,502.
 **Result:** 1,300 qubits, 939,972.962 executed Toffoli, score **1,221,964,900 (−847,602, −0.07 %)**.
 Emitted ops 13,321,505, `ops.bin` md5 `f80de7e65d9c97b2b18051afecba8b7f`, baked tail nonce `2000563`.
