@@ -279,30 +279,6 @@ pub fn ec_add(
     ox: &[BitId],
     oy: &[BitId],
 ) {
-    ec_add_with_division(circ, x2, y2, ox, oy, |circ, x, y, inverse| {
-        mod_mul_inverse_in_place(
-            circ,
-            x,
-            y,
-            if inverse {
-                Direction::Inverse
-            } else {
-                Direction::Forward
-            },
-        )
-    });
-}
-
-/// The existing affine shell with an injectable in-place division pair.
-/// `inverse` is true for `y *= x^-1` and false for `y *= x`.
-pub(crate) fn ec_add_with_division(
-    circ: &mut B,
-    x2: &mut Vec<QubitId>,
-    y2: &[QubitId],
-    ox: &[BitId],
-    oy: &[BitId],
-    mut divide: impl FnMut(&mut B, Vec<QubitId>, &[QubitId], bool) -> Vec<QubitId>,
-) {
     assert_eq!(x2.len(), N, "x2 is 256 bits");
     assert_eq!(y2.len(), N, "y2 is 256 bits");
     assert_eq!(ox.len(), N, "ox is 256 classical bits");
@@ -315,7 +291,7 @@ pub(crate) fn ec_add_with_division(
 
     circ.set_phase("tlm_inverse");
     let xv = std::mem::take(x2);
-    *x2 = divide(circ, xv, y2, true);
+    *x2 = mod_mul_inverse_in_place(circ, xv, y2, Direction::Inverse);
 
     circ.set_phase("tlm_coord_add3x");
     coord_add3x(circ, x2, ox);
@@ -325,7 +301,7 @@ pub(crate) fn ec_add_with_division(
 
     circ.set_phase("tlm_forward_multiply");
     let xv = std::mem::take(x2);
-    *x2 = divide(circ, xv, y2, false);
+    *x2 = mod_mul_inverse_in_place(circ, xv, y2, Direction::Forward);
 
     circ.set_phase("tlm_coord_y_sub_final");
     coord_addsub(circ, &y2[..N], oy, true);
