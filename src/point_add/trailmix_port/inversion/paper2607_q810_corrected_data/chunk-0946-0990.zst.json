@@ -1,0 +1,474 @@
+{
+  "aux_size": 0,
+  "compressed_bytes": 84492,
+  "compressed_sha256": "5573a503792a8bc25576d48b21439a8e038da76d51d97023f0947289cf02cc73",
+  "compression_level": 19,
+  "compression_window_log": 25,
+  "counts": {
+    "ccx": 6347228,
+    "cx": 463963,
+    "x": 395070
+  },
+  "executed_toffoli": 6347228,
+  "n": 256,
+  "per_step": [
+    {
+      "counts": {
+        "ccx": 115351,
+        "cx": 9221,
+        "x": 7014
+      },
+      "executed_toffoli": 115351,
+      "records": 131586,
+      "step": 946
+    },
+    {
+      "counts": {
+        "ccx": 113947,
+        "cx": 9659,
+        "x": 7268
+      },
+      "executed_toffoli": 113947,
+      "records": 130874,
+      "step": 947
+    },
+    {
+      "counts": {
+        "ccx": 221496,
+        "cx": 13063,
+        "x": 13562
+      },
+      "executed_toffoli": 221496,
+      "records": 248121,
+      "step": 948
+    },
+    {
+      "counts": {
+        "ccx": 113947,
+        "cx": 9659,
+        "x": 7260
+      },
+      "executed_toffoli": 113947,
+      "records": 130866,
+      "step": 949
+    },
+    {
+      "counts": {
+        "ccx": 115471,
+        "cx": 9209,
+        "x": 7024
+      },
+      "executed_toffoli": 115471,
+      "records": 131704,
+      "step": 950
+    },
+    {
+      "counts": {
+        "ccx": 114055,
+        "cx": 9651,
+        "x": 7274
+      },
+      "executed_toffoli": 114055,
+      "records": 130980,
+      "step": 951
+    },
+    {
+      "counts": {
+        "ccx": 221768,
+        "cx": 13041,
+        "x": 13576
+      },
+      "executed_toffoli": 221768,
+      "records": 248385,
+      "step": 952
+    },
+    {
+      "counts": {
+        "ccx": 114029,
+        "cx": 9643,
+        "x": 7264
+      },
+      "executed_toffoli": 114029,
+      "records": 130936,
+      "step": 953
+    },
+    {
+      "counts": {
+        "ccx": 115339,
+        "cx": 9181,
+        "x": 7030
+      },
+      "executed_toffoli": 115339,
+      "records": 131550,
+      "step": 954
+    },
+    {
+      "counts": {
+        "ccx": 114231,
+        "cx": 9651,
+        "x": 7286
+      },
+      "executed_toffoli": 114231,
+      "records": 131168,
+      "step": 955
+    },
+    {
+      "counts": {
+        "ccx": 221966,
+        "cx": 13027,
+        "x": 13586
+      },
+      "executed_toffoli": 221966,
+      "records": 248579,
+      "step": 956
+    },
+    {
+      "counts": {
+        "ccx": 114205,
+        "cx": 9643,
+        "x": 7276
+      },
+      "executed_toffoli": 114205,
+      "records": 131124,
+      "step": 957
+    },
+    {
+      "counts": {
+        "ccx": 115369,
+        "cx": 9175,
+        "x": 7038
+      },
+      "executed_toffoli": 115369,
+      "records": 131582,
+      "step": 958
+    },
+    {
+      "counts": {
+        "ccx": 114259,
+        "cx": 9635,
+        "x": 7292
+      },
+      "executed_toffoli": 114259,
+      "records": 131186,
+      "step": 959
+    },
+    {
+      "counts": {
+        "ccx": 222226,
+        "cx": 13029,
+        "x": 13606
+      },
+      "executed_toffoli": 222226,
+      "records": 248861,
+      "step": 960
+    },
+    {
+      "counts": {
+        "ccx": 114259,
+        "cx": 9635,
+        "x": 7284
+      },
+      "executed_toffoli": 114259,
+      "records": 131178,
+      "step": 961
+    },
+    {
+      "counts": {
+        "ccx": 115453,
+        "cx": 9167,
+        "x": 7048
+      },
+      "executed_toffoli": 115453,
+      "records": 131668,
+      "step": 962
+    },
+    {
+      "counts": {
+        "ccx": 114065,
+        "cx": 9599,
+        "x": 7300
+      },
+      "executed_toffoli": 114065,
+      "records": 130964,
+      "step": 963
+    },
+    {
+      "counts": {
+        "ccx": 222226,
+        "cx": 13007,
+        "x": 13578
+      },
+      "executed_toffoli": 222226,
+      "records": 248811,
+      "step": 964
+    },
+    {
+      "counts": {
+        "ccx": 114103,
+        "cx": 9607,
+        "x": 7294
+      },
+      "executed_toffoli": 114103,
+      "records": 131004,
+      "step": 965
+    },
+    {
+      "counts": {
+        "ccx": 115615,
+        "cx": 9161,
+        "x": 7058
+      },
+      "executed_toffoli": 115615,
+      "records": 131834,
+      "step": 966
+    },
+    {
+      "counts": {
+        "ccx": 114553,
+        "cx": 9599,
+        "x": 7312
+      },
+      "executed_toffoli": 114553,
+      "records": 131464,
+      "step": 967
+    },
+    {
+      "counts": {
+        "ccx": 221906,
+        "cx": 13011,
+        "x": 13598
+      },
+      "executed_toffoli": 221906,
+      "records": 248515,
+      "step": 968
+    },
+    {
+      "counts": {
+        "ccx": 114399,
+        "cx": 9583,
+        "x": 7294
+      },
+      "executed_toffoli": 114399,
+      "records": 131276,
+      "step": 969
+    },
+    {
+      "counts": {
+        "ccx": 115747,
+        "cx": 9133,
+        "x": 7060
+      },
+      "executed_toffoli": 115747,
+      "records": 131940,
+      "step": 970
+    },
+    {
+      "counts": {
+        "ccx": 114589,
+        "cx": 9591,
+        "x": 7314
+      },
+      "executed_toffoli": 114589,
+      "records": 131494,
+      "step": 971
+    },
+    {
+      "counts": {
+        "ccx": 221672,
+        "cx": 12973,
+        "x": 13608
+      },
+      "executed_toffoli": 221672,
+      "records": 248253,
+      "step": 972
+    },
+    {
+      "counts": {
+        "ccx": 114551,
+        "cx": 9583,
+        "x": 7306
+      },
+      "executed_toffoli": 114551,
+      "records": 131440,
+      "step": 973
+    },
+    {
+      "counts": {
+        "ccx": 115899,
+        "cx": 9133,
+        "x": 7072
+      },
+      "executed_toffoli": 115899,
+      "records": 132104,
+      "step": 974
+    },
+    {
+      "counts": {
+        "ccx": 114727,
+        "cx": 9583,
+        "x": 7326
+      },
+      "executed_toffoli": 114727,
+      "records": 131636,
+      "step": 975
+    },
+    {
+      "counts": {
+        "ccx": 221876,
+        "cx": 12975,
+        "x": 13620
+      },
+      "executed_toffoli": 221876,
+      "records": 248471,
+      "step": 976
+    },
+    {
+      "counts": {
+        "ccx": 114693,
+        "cx": 9575,
+        "x": 7316
+      },
+      "executed_toffoli": 114693,
+      "records": 131584,
+      "step": 977
+    },
+    {
+      "counts": {
+        "ccx": 116003,
+        "cx": 9121,
+        "x": 7082
+      },
+      "executed_toffoli": 116003,
+      "records": 132206,
+      "step": 978
+    },
+    {
+      "counts": {
+        "ccx": 114903,
+        "cx": 9583,
+        "x": 7338
+      },
+      "executed_toffoli": 114903,
+      "records": 131824,
+      "step": 979
+    },
+    {
+      "counts": {
+        "ccx": 221970,
+        "cx": 12959,
+        "x": 13628
+      },
+      "executed_toffoli": 221970,
+      "records": 248557,
+      "step": 980
+    },
+    {
+      "counts": {
+        "ccx": 114513,
+        "cx": 9547,
+        "x": 7326
+      },
+      "executed_toffoli": 114513,
+      "records": 131386,
+      "step": 981
+    },
+    {
+      "counts": {
+        "ccx": 116063,
+        "cx": 9113,
+        "x": 7092
+      },
+      "executed_toffoli": 116063,
+      "records": 132268,
+      "step": 982
+    },
+    {
+      "counts": {
+        "ccx": 114695,
+        "cx": 9539,
+        "x": 7342
+      },
+      "executed_toffoli": 114695,
+      "records": 131576,
+      "step": 983
+    },
+    {
+      "counts": {
+        "ccx": 222334,
+        "cx": 12969,
+        "x": 13640
+      },
+      "executed_toffoli": 222334,
+      "records": 248943,
+      "step": 984
+    },
+    {
+      "counts": {
+        "ccx": 114737,
+        "cx": 9547,
+        "x": 7338
+      },
+      "executed_toffoli": 114737,
+      "records": 131622,
+      "step": 985
+    },
+    {
+      "counts": {
+        "ccx": 116245,
+        "cx": 9107,
+        "x": 7100
+      },
+      "executed_toffoli": 116245,
+      "records": 132452,
+      "step": 986
+    },
+    {
+      "counts": {
+        "ccx": 114755,
+        "cx": 9531,
+        "x": 7348
+      },
+      "executed_toffoli": 114755,
+      "records": 131634,
+      "step": 987
+    },
+    {
+      "counts": {
+        "ccx": 222198,
+        "cx": 12935,
+        "x": 13646
+      },
+      "executed_toffoli": 222198,
+      "records": 248779,
+      "step": 988
+    },
+    {
+      "counts": {
+        "ccx": 114755,
+        "cx": 9531,
+        "x": 7340
+      },
+      "executed_toffoli": 114755,
+      "records": 131626,
+      "step": 989
+    },
+    {
+      "counts": {
+        "ccx": 116065,
+        "cx": 9079,
+        "x": 7106
+      },
+      "executed_toffoli": 116065,
+      "records": 132250,
+      "step": 990
+    }
+  ],
+  "qubits": 564,
+  "raw_record_sha256": "f39ae1d83f16c2ffdcc591404d9024f39102e085693cc5180588e2da7d512c05",
+  "record_bytes": 8,
+  "records": 7206261,
+  "schedule_end": 1616,
+  "schema": "paper2607-eea-primitive-stream-v3",
+  "step_end": 990,
+  "step_start": 946
+}

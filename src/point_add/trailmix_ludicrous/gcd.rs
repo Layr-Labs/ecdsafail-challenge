@@ -1218,7 +1218,6 @@ pub fn forward_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, apply_inv: Option<(&
         crate::point_add::set_op_trace_context(
             0xa000_0000 | (u32::from(apply_inv.is_none()) << 24) | ((i as u32) & 0xffff),
         );
-        crate::point_add::set_cur_divstep(0xa000_0000 | (u32::from(apply_inv.is_none()) << 24) | ((i as u32) & 0xffff));
         circ.set_phase(if apply_inv.is_some() {
             "tlm_inverse_gcd_forward_shift"
         } else {
@@ -1468,7 +1467,6 @@ pub fn reverse_gcd_jump(circ: &mut B, v: &mut Vec<QubitId>, tape: &mut Vec<Qubit
         crate::point_add::set_op_trace_context(
             0xa200_0000 | (u32::from(apply_fwd.is_none()) << 24) | ((i as u32) & 0xffff),
         );
-        crate::point_add::set_cur_divstep(0xa200_0000 | (u32::from(apply_fwd.is_none()) << 24) | ((i as u32) & 0xffff));
         circ.set_phase(if apply_fwd.is_some() {
             "tlm_multiply_gcd_reverse_decode"
         } else {
