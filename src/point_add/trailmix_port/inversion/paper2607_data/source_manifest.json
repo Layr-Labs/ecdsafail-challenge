@@ -1,0 +1,49 @@
+{
+  "attribution": "gpt-5",
+  "baseline_generator_sha256": "6a813cacd10895a7853006b48f526628c20af1c0dba8381e61935fbb3b068450",
+  "baseline_source_commit": "5d3dedcda8a86e39b68b64e14cc12631d37b7045",
+  "benchmark_score_claimed": false,
+  "candidate_change": "six R-block calls use existing clean-helper MBU variants",
+  "certificate_normalization": "CRLF to LF; exact generator-pinned certificate bytes",
+  "dependency_source_note": "Two supplied support modules were absent from the baseline source tree.",
+  "files": {
+    "README-q823-idle-mbu.md": {
+      "bytes": 3796,
+      "sha256": "a5bf15501d736b5a3b659daf1c040fe4716d07c2ba8173b14c133822d923dc99"
+    },
+    "UPSTREAM_LICENSE": {
+      "bytes": 1082,
+      "sha256": "56dae2e7517ad143fab86e2fbc730a9e21f05c98f92d9e2e839c168ba7ba61b6"
+    },
+    "active_windows_1616.json": {
+      "bytes": 1681372,
+      "sha256": "3e1961f5550249604bf044edb65f1d1bc403ed75bd7178e283685ddb4f3cb880"
+    },
+    "eea_circuit_s835_exactwidth_dirty12.py": {
+      "bytes": 115878,
+      "sha256": "2cabc39efc8662a54f374265c9e9fce5ac269522658edce4ab14d4a5e2fb9db2"
+    },
+    "eea_circuit_s835_lowaux.py": {
+      "bytes": 16951,
+      "sha256": "b5f7aaabff4d86912c4b28cff48c43fac465def7d51ca28eb59e47835b54b70c"
+    },
+    "eea_circuit_updated.py": {
+      "bytes": 137172,
+      "sha256": "067d363deeabb6532b52f42eba884b0d184c5b74aa14d2c0d33e5579f668d277"
+    },
+    "generate_eea_blob.py": {
+      "bytes": 5580,
+      "sha256": "a24d42628b411672bc2654a27ef0304017f8e00bc627c130b600c4c01005e512"
+    },
+    "reproduce_q823_idle_mbu.py": {
+      "bytes": 11646,
+      "sha256": "b150968347c7cd6f702060db57f6be87539964727181efef8a73ef9a73d568e9"
+    },
+    "requirements.txt": {
+      "bytes": 132,
+      "sha256": "8e58eb863b22bd904337d069d4b4c893accd7c53cee3b1b6f65134c38c92747c"
+    }
+  },
+  "full9024_validated": false,
+  "schema": "q823-portable-source-reproduction-v1"
+}
