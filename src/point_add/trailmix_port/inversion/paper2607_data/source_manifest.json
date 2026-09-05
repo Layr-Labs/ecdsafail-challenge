@@ -1,0 +1,58 @@
+{
+  "attribution": "gpt-5",
+  "baseline_generator_sha256": "cf926e6782c8c4606627c299733646db8ee7359d62d8ffe4e6c1ea23a91cd216",
+  "baseline_source_commit": "1bb712e7f4db8a5e64df93c6e243d25389f1ff5d",
+  "benchmark_score_claimed": false,
+  "candidate_change": "Typed paired T-sub unary compute/measurement erase; complete retained T-add and R unchanged",
+  "certificate_normalization": "CRLF to LF; exact generator-pinned certificate bytes",
+  "codec_sha256": "d79109b671cddb232fbb48e4a23ff42c44eb830b5b8c45f19eb576d3b0da7f72",
+  "conditional_helpers_use_measurement": true,
+  "dependency_source_note": "Two supplied support modules were absent from the baseline source tree.",
+  "files": {
+    "README-q823-idle-mbu.md": {
+      "bytes": 2973,
+      "sha256": "a0469617548ba19fffcdc8deaf06eab8469de29bb555a4c9c580bc0b497e33fc"
+    },
+    "UPSTREAM_LICENSE": {
+      "bytes": 1082,
+      "sha256": "56dae2e7517ad143fab86e2fbc730a9e21f05c98f92d9e2e839c168ba7ba61b6"
+    },
+    "active_windows_1616.json": {
+      "bytes": 1681372,
+      "sha256": "3e1961f5550249604bf044edb65f1d1bc403ed75bd7178e283685ddb4f3cb880"
+    },
+    "eea_circuit_s835_exactwidth_dirty12.py": {
+      "bytes": 140716,
+      "sha256": "16e1bf06d353fe95ff8a6aad1d0e977c976b6651d8c90a0d54a3351dff179072"
+    },
+    "eea_circuit_s835_lowaux.py": {
+      "bytes": 16951,
+      "sha256": "b5f7aaabff4d86912c4b28cff48c43fac465def7d51ca28eb59e47835b54b70c"
+    },
+    "eea_circuit_updated.py": {
+      "bytes": 137172,
+      "sha256": "067d363deeabb6532b52f42eba884b0d184c5b74aa14d2c0d33e5579f668d277"
+    },
+    "generate_eea_blob.py": {
+      "bytes": 5580,
+      "sha256": "a24d42628b411672bc2654a27ef0304017f8e00bc627c130b600c4c01005e512"
+    },
+    "paired_codec.py": {
+      "bytes": 4317,
+      "sha256": "d79109b671cddb232fbb48e4a23ff42c44eb830b5b8c45f19eb576d3b0da7f72"
+    },
+    "reproduce_q823_idle_mbu.py": {
+      "bytes": 12593,
+      "sha256": "ca6bb49730f0a4eb7ef742c7cfeee0328b2ffb42d8e6327010ed26623f277b80"
+    },
+    "requirements.txt": {
+      "bytes": 132,
+      "sha256": "8e58eb863b22bd904337d069d4b4c893accd7c53cee3b1b6f65134c38c92747c"
+    }
+  },
+  "full9024_validated": false,
+  "paired_decoder_uses_measurement_cleanup": true,
+  "portable_reproducer_smoke_qualified": false,
+  "schema": "q823-portable-source-reproduction-v1",
+  "transport": "P26EEA3"
+}
