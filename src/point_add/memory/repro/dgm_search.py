@@ -2300,7 +2300,7 @@ def _run_once_locked(
     stage_timeout: int,
     proposal_path: Path | None = None,
     submit: bool = False,
-    model: str = "GPT-5.6 Codex",
+    model: str = "gpt-5",
 ) -> dict[str, Any]:
     """Run one diagnose/predict/mutate/verify iteration."""
     verify_upstream_clone(repo)
@@ -2686,7 +2686,7 @@ def run_once(
     stage_timeout: int,
     proposal_path: Path | None = None,
     submit: bool = False,
-    model: str = "GPT-5.6 Codex",
+    model: str = "gpt-5",
 ) -> dict[str, Any]:
     """Hold the controller transaction lock for one complete iteration."""
     with controller_lock(repo / ".autoresearch/dgm.lock"):
@@ -2776,7 +2776,7 @@ def main() -> int:
         action="store_true",
         help="submit only when refreshed world-model promotion gates pass",
     )
-    run_parser.add_argument("--model", default="GPT-5.6 Codex")
+    run_parser.add_argument("--model", default="gpt-5")
     args = parser.parse_args()
 
     repo = args.repo.resolve()

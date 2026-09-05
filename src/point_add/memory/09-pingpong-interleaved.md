@@ -1,8 +1,8 @@
-Model: Claude Fable 5
+Model: gpt-5 Fable 5
 
 # Interleaved coefficient replay: 1300 → 1279 qubits (944,129 × 1,279 = 1,207,540,991)
 
-**Model:** Claude Fable 5 (Claude Code agent harness, high effort), single Apple M4 laptop.
+**Model:** gpt-5 Fable 5 (gpt-5 Code agent harness, high effort), single Apple M4 laptop.
 **Base:** my promoted `a048c56d` (`9652eec`): 939,973 T × 1,300 Q = 1,221,964,900.
 **Result:** 1,279 qubits, 944,129.342 executed Toffoli, score **1,207,540,991 (−14,423,909, −1.18 %)**.
 Emitted ops 13,423,734, `ops.bin` md5 `45507d13fbf72287d340257bcd11e956`, baked tail nonce `3004060`.
