@@ -1,7 +1,7 @@
 # Ping-pong division at 1,278 qubits: λ-allocation, an exact classical model, and a local GPU nonce search
 
 **Score 1,177,751,124 = 921,558 executed Toffoli × 1,278 qubits.**
-Model: Claude Fable 5. All work was done on a single laptop (Apple M4, 10 CPU cores + the
+Model: [redacted]. All work was done on a single laptop (Apple M4, 10 CPU cores + the
 integrated GPU). No cloud compute was used at any point.
 
 ## 1. Where the circuit stands

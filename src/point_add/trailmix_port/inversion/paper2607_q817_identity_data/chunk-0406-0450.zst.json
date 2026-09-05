@@ -1,0 +1,2210 @@
+{
+  "added_cx": 95890,
+  "aux_size": 5,
+  "baseline_compressed_sha256": "3d259a2e2c541bbec2c1557edbb28e9d0d4ac60b87b9c3c932f6ceb97700891f",
+  "baseline_raw_record_sha256": "c11e3af3ac5ae129539b7048e5921638f0f61e312e492be7e05e40a2451a7c70",
+  "canonical_Q": null,
+  "canonical_T": null,
+  "compressed_bytes": 63502,
+  "compressed_sha256": "34149d32455cd3b545cf2333228c629748e0f6584b20b868cd0f4a28194fad28",
+  "counts": {
+    "ccx": 3578803,
+    "clean_c3x_mbu": 42902,
+    "cx": 544770,
+    "cz": 0,
+    "swap": 0,
+    "x": 1610738,
+    "z": 0
+  },
+  "executed_toffoli": 3664607,
+  "file": "chunk-0406-0450.zst",
+  "full9024": false,
+  "header_hex": "5032364545413200000100003b02000096010000c2010000",
+  "n": 256,
+  "per_step": [
+    {
+      "added_cx": 1406,
+      "baseline_counts": {
+        "ccx": 67991,
+        "clean_c3x_mbu": 966,
+        "cx": 8973,
+        "cz": 0,
+        "swap": 0,
+        "x": 34256,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "4c3a1fc2831416dacd94eb36b51b7a99321b9e88fa015a4fcfbb5cb113a01bc1",
+      "baseline_raw_record_sha256": "4c3a1fc2831416dacd94eb36b51b7a99321b9e88fa015a4fcfbb5cb113a01bc1",
+      "baseline_records": 112186,
+      "counts": {
+        "ccx": 66702,
+        "clean_c3x_mbu": 966,
+        "cx": 10379,
+        "cz": 0,
+        "swap": 0,
+        "x": 34256,
+        "z": 0
+      },
+      "duplicate_groups": 293,
+      "empty_parity_groups": 293,
+      "executed_toffoli": 68634,
+      "inserted_records": 2109,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "f21b33f3a0973e57924b8fda3bbc1932747cd359417ad3e81b9f38f3db84a8c0",
+      "raw_ccx_saved": 1289,
+      "raw_record_sha256": "f21b33f3a0973e57924b8fda3bbc1932747cd359417ad3e81b9f38f3db84a8c0",
+      "records": 112303,
+      "removed_records": 1992,
+      "rule_counts": {
+        "1": 775,
+        "2": 221
+      },
+      "run_lengths": {
+        "2": 996
+      },
+      "selected_runs": 996,
+      "step": 406,
+      "witness_prefix_sha256": "223f655ad3440619663b001e7c8d20858cf48e374ef0ce5464bf5ea297ef88fd",
+      "witness_record_end": 996,
+      "witness_record_start": 0,
+      "witness_sha256": "223f655ad3440619663b001e7c8d20858cf48e374ef0ce5464bf5ea297ef88fd"
+    },
+    {
+      "added_cx": 1406,
+      "baseline_counts": {
+        "ccx": 67990,
+        "clean_c3x_mbu": 962,
+        "cx": 8985,
+        "cz": 0,
+        "swap": 0,
+        "x": 34192,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "82f8a2afbf64d754f6e00b21e60017a6f8191ffeb01422b9a381c50f26cf281e",
+      "baseline_raw_record_sha256": "39512e29188b67358fd1cb189ce0e49cd12b14f5a0bcf2abcf5f110d3ae6ac26",
+      "baseline_records": 112129,
+      "counts": {
+        "ccx": 66703,
+        "clean_c3x_mbu": 962,
+        "cx": 10391,
+        "cz": 0,
+        "swap": 0,
+        "x": 34192,
+        "z": 0
+      },
+      "duplicate_groups": 292,
+      "empty_parity_groups": 292,
+      "executed_toffoli": 68627,
+      "inserted_records": 2109,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "bf6cbe4b808a2c9b89e4b1b6be453289eeeed7d3331d9d4c7278a44c3b100285",
+      "raw_ccx_saved": 1287,
+      "raw_record_sha256": "0fa90c51e7fd4dc9a4bfbc4c66ffffee8b51c809752b41a81cedf358a59b1205",
+      "records": 112248,
+      "removed_records": 1990,
+      "rule_counts": {
+        "1": 772,
+        "2": 223
+      },
+      "run_lengths": {
+        "2": 995
+      },
+      "selected_runs": 995,
+      "step": 407,
+      "witness_prefix_sha256": "8336e4e0b5b5ee416b580d177e50516aff3d14cfc4dd34b8c609d69e11912fc0",
+      "witness_record_end": 1991,
+      "witness_record_start": 996,
+      "witness_sha256": "6f854b3e985a390527e6d2cf3f82815191352441c850209e26b9addfe0e542a5"
+    },
+    {
+      "added_cx": 4286,
+      "baseline_counts": {
+        "ccx": 119844,
+        "clean_c3x_mbu": 966,
+        "cx": 12786,
+        "cz": 0,
+        "swap": 0,
+        "x": 41138,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "23f5da1a797fa3e3391a55db1df36064a43a570509a78d32617c950e406cc075",
+      "baseline_raw_record_sha256": "4b45d799badddfb33c21155d2f14e17efa17c32eafbbcd62f7090642051a35a3",
+      "baseline_records": 174734,
+      "counts": {
+        "ccx": 117115,
+        "clean_c3x_mbu": 966,
+        "cx": 17072,
+        "cz": 0,
+        "swap": 0,
+        "x": 41138,
+        "z": 0
+      },
+      "duplicate_groups": 293,
+      "empty_parity_groups": 293,
+      "executed_toffoli": 119047,
+      "inserted_records": 6073,
+      "max_run_length": 7,
+      "prefix_raw_record_sha256": "d0def69b82d09d2add3c055fa3c08999beaae4f4cf5caab520f16f9f5a6a464b",
+      "raw_ccx_saved": 2729,
+      "raw_record_sha256": "fc0e7011fb310dd9f613ef23e2ef614618350605c4c41c0e3395f60a982f03f1",
+      "records": 176291,
+      "removed_records": 4516,
+      "rule_counts": {
+        "1": 1495,
+        "2": 585
+      },
+      "run_lengths": {
+        "2": 1900,
+        "3": 88,
+        "4": 44,
+        "5": 24,
+        "6": 12,
+        "7": 12
+      },
+      "selected_runs": 2080,
+      "step": 408,
+      "witness_prefix_sha256": "abb930e709d956142c88ae415026e708ec2a612fc4ecc2bd8baae61eb776cb54",
+      "witness_record_end": 4071,
+      "witness_record_start": 1991,
+      "witness_sha256": "e5847d999718a050f27ad12045fcafc76cfd7b6b2793362b52c83ec9c7634e33"
+    },
+    {
+      "added_cx": 1402,
+      "baseline_counts": {
+        "ccx": 67854,
+        "clean_c3x_mbu": 958,
+        "cx": 8975,
+        "cz": 0,
+        "swap": 0,
+        "x": 34090,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "889d2a1d5a5bcd6d84d83141bff9d63b21f6a9ef86fb82735bafffed009e188f",
+      "baseline_raw_record_sha256": "20cd8d33da594b2fc11965e39979569f90383a7abe1fd2f76c222723f3d8adc8",
+      "baseline_records": 111877,
+      "counts": {
+        "ccx": 66571,
+        "clean_c3x_mbu": 958,
+        "cx": 10377,
+        "cz": 0,
+        "swap": 0,
+        "x": 34090,
+        "z": 0
+      },
+      "duplicate_groups": 291,
+      "empty_parity_groups": 291,
+      "executed_toffoli": 68487,
+      "inserted_records": 2103,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "078cc0f34850127e5ec9809c15896c6b9dc27b638d4701299f87a843fd24949c",
+      "raw_ccx_saved": 1283,
+      "raw_record_sha256": "36b4a6ba0106004a34f3a77c9170a613ede3df1fa6ab7e29af84686b35916ee9",
+      "records": 111996,
+      "removed_records": 1984,
+      "rule_counts": {
+        "1": 769,
+        "2": 223
+      },
+      "run_lengths": {
+        "2": 992
+      },
+      "selected_runs": 992,
+      "step": 409,
+      "witness_prefix_sha256": "0a8a29c08aa434e256144f5a0d58d23681dd60ccc12e618f70851c5af553c9f7",
+      "witness_record_end": 5063,
+      "witness_record_start": 4071,
+      "witness_sha256": "8fa4a6aa7380f367abef841d79fde8edc648ebfa4ffdc8193ca6abbf68de8c92"
+    },
+    {
+      "added_cx": 1406,
+      "baseline_counts": {
+        "ccx": 68001,
+        "clean_c3x_mbu": 962,
+        "cx": 8991,
+        "cz": 0,
+        "swap": 0,
+        "x": 34192,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "f682dff8de4f390d9c1ca5fbe3aa7cbe225517c7f1c052e01d612b02b6c53d96",
+      "baseline_raw_record_sha256": "21a1c69a0684e525f6321457141aee2de3c8d3021dfcce4e0c75e8481100288e",
+      "baseline_records": 112146,
+      "counts": {
+        "ccx": 66714,
+        "clean_c3x_mbu": 962,
+        "cx": 10397,
+        "cz": 0,
+        "swap": 0,
+        "x": 34192,
+        "z": 0
+      },
+      "duplicate_groups": 292,
+      "empty_parity_groups": 292,
+      "executed_toffoli": 68638,
+      "inserted_records": 2109,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "204b7a14c5e52a56b5f33e346adaebdf4f968d4cf8a42a078907f5a0297003f5",
+      "raw_ccx_saved": 1287,
+      "raw_record_sha256": "0319078e8e3191059c70ded4838ba0680b4df5040aef0a5c80b74acd6992b968",
+      "records": 112265,
+      "removed_records": 1990,
+      "rule_counts": {
+        "1": 772,
+        "2": 223
+      },
+      "run_lengths": {
+        "2": 995
+      },
+      "selected_runs": 995,
+      "step": 410,
+      "witness_prefix_sha256": "7cec919b6dcfd58c4801e4d60154ae75edfbdffaaccb54ca732ed03bb8b1298b",
+      "witness_record_end": 6058,
+      "witness_record_start": 5063,
+      "witness_sha256": "02d2809d6089ff51808d69bd1bf84993e77d63732694a25e6e32b1b7edea32c1"
+    },
+    {
+      "added_cx": 1406,
+      "baseline_counts": {
+        "ccx": 67990,
+        "clean_c3x_mbu": 958,
+        "cx": 8993,
+        "cz": 0,
+        "swap": 0,
+        "x": 34120,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "c92612736f1916d3eb32b297614a7ba7a0eff7f7529ffde20e65e3da1ef5bb74",
+      "baseline_raw_record_sha256": "735b98800249b8b5e6a55f8f834d7ca55b80d98d41863c778745683acc6a94a4",
+      "baseline_records": 112061,
+      "counts": {
+        "ccx": 66705,
+        "clean_c3x_mbu": 958,
+        "cx": 10399,
+        "cz": 0,
+        "swap": 0,
+        "x": 34120,
+        "z": 0
+      },
+      "duplicate_groups": 291,
+      "empty_parity_groups": 291,
+      "executed_toffoli": 68621,
+      "inserted_records": 2109,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "ff9b56c1de8370fc902c5c3697f1ff5fb0e8713c526435389daaeaf7a282431d",
+      "raw_ccx_saved": 1285,
+      "raw_record_sha256": "2a22f3f2739fb6d198cbcd738ef49ac5d8352e881e6a1c6dbb01db91f075e656",
+      "records": 112182,
+      "removed_records": 1988,
+      "rule_counts": {
+        "1": 769,
+        "2": 225
+      },
+      "run_lengths": {
+        "2": 994
+      },
+      "selected_runs": 994,
+      "step": 411,
+      "witness_prefix_sha256": "cde6a1a0af3a155104772ea70cde8f2ad9449ccceada75e3ec2f0971eb0f5df0",
+      "witness_record_end": 7052,
+      "witness_record_start": 6058,
+      "witness_sha256": "e628eed9fdd2dd609456905f42aa15d52fb383f8f73157ed6d8e0011651800d9"
+    },
+    {
+      "added_cx": 4310,
+      "baseline_counts": {
+        "ccx": 119890,
+        "clean_c3x_mbu": 962,
+        "cx": 12780,
+        "cz": 0,
+        "swap": 0,
+        "x": 41076,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "f1542be74cc1d399c8fddbb56a3bcb2b24394a8b44b149cc49998a2c24901d10",
+      "baseline_raw_record_sha256": "bd1ef06151485c9c00d78b4c418e8ad16212596c4cfce2c22dae58cd787c7da2",
+      "baseline_records": 174708,
+      "counts": {
+        "ccx": 117151,
+        "clean_c3x_mbu": 962,
+        "cx": 17090,
+        "cz": 0,
+        "swap": 0,
+        "x": 41076,
+        "z": 0
+      },
+      "duplicate_groups": 292,
+      "empty_parity_groups": 292,
+      "executed_toffoli": 119075,
+      "inserted_records": 6101,
+      "max_run_length": 7,
+      "prefix_raw_record_sha256": "42616eb5729c76a5f216c228b35aced17493cfa00340dcb7e5144f62a7748f30",
+      "raw_ccx_saved": 2739,
+      "raw_record_sha256": "d6598031065983eedfe2526b21b2446533552e10ff6eb36202e23af33da08ead",
+      "records": 176279,
+      "removed_records": 4530,
+      "rule_counts": {
+        "1": 1492,
+        "2": 591
+      },
+      "run_lengths": {
+        "2": 1899,
+        "3": 88,
+        "4": 48,
+        "5": 24,
+        "6": 12,
+        "7": 12
+      },
+      "selected_runs": 2083,
+      "step": 412,
+      "witness_prefix_sha256": "7a9010d52854a233255eb1f4b28d5a4fd7ec1abd96effafe3f3465be8f931c6f",
+      "witness_record_end": 9135,
+      "witness_record_start": 7052,
+      "witness_sha256": "aaf4af50a0250a06317cca2d1bf13659aa0784e39cca238841901b1af0afc1af"
+    },
+    {
+      "added_cx": 1406,
+      "baseline_counts": {
+        "ccx": 67973,
+        "clean_c3x_mbu": 958,
+        "cx": 8995,
+        "cz": 0,
+        "swap": 0,
+        "x": 34122,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "ef57cda1878cf9ade434945038cbbd92e3179f324fa8212bcf225efa89db088e",
+      "baseline_raw_record_sha256": "dbc96789c96d4b84aff9987e1af4fbe587cf24a2cd5abdd02a45f64e2473ccf4",
+      "baseline_records": 112048,
+      "counts": {
+        "ccx": 66688,
+        "clean_c3x_mbu": 958,
+        "cx": 10401,
+        "cz": 0,
+        "swap": 0,
+        "x": 34122,
+        "z": 0
+      },
+      "duplicate_groups": 291,
+      "empty_parity_groups": 291,
+      "executed_toffoli": 68604,
+      "inserted_records": 2109,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "afd264fd1aa337514d19bb8b8e285547de4446892679c8fc0216936cb6125823",
+      "raw_ccx_saved": 1285,
+      "raw_record_sha256": "93e5d296c0f7f703026ca492bc46f9debe7b8a3813ce94e078e97cefa2999348",
+      "records": 112169,
+      "removed_records": 1988,
+      "rule_counts": {
+        "1": 769,
+        "2": 225
+      },
+      "run_lengths": {
+        "2": 994
+      },
+      "selected_runs": 994,
+      "step": 413,
+      "witness_prefix_sha256": "472f552fbcb48257f943ce92d128282ca0ff50360768fd902f14e73c2e51b2f9",
+      "witness_record_end": 10129,
+      "witness_record_start": 9135,
+      "witness_sha256": "d61c33fddab982ee250a5de6d2c8e61b5d7322165d5400e83091826b1e60483e"
+    },
+    {
+      "added_cx": 1410,
+      "baseline_counts": {
+        "ccx": 68128,
+        "clean_c3x_mbu": 962,
+        "cx": 9011,
+        "cz": 0,
+        "swap": 0,
+        "x": 34224,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "c71db2ed28f77f11189df93e08a89407dd924d384c17498d0cbff88f419219ea",
+      "baseline_raw_record_sha256": "f3ef1ca09eff4108e2479a34d610dddaa1377c1680121f85080502ef4d99a54f",
+      "baseline_records": 112325,
+      "counts": {
+        "ccx": 66839,
+        "clean_c3x_mbu": 962,
+        "cx": 10421,
+        "cz": 0,
+        "swap": 0,
+        "x": 34224,
+        "z": 0
+      },
+      "duplicate_groups": 292,
+      "empty_parity_groups": 292,
+      "executed_toffoli": 68763,
+      "inserted_records": 2115,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "3ce996910fab9a02fd87b2e093fb585964415d4c103271ce36287e3e3d7992ee",
+      "raw_ccx_saved": 1289,
+      "raw_record_sha256": "3d7d3a2ebea344192eb495e9d05fe2876a78f9778d476d04f43b487674772de1",
+      "records": 112446,
+      "removed_records": 1994,
+      "rule_counts": {
+        "1": 772,
+        "2": 225
+      },
+      "run_lengths": {
+        "2": 997
+      },
+      "selected_runs": 997,
+      "step": 414,
+      "witness_prefix_sha256": "d99e7ae94be46f806cd17c6ec1b765493ecf6eb5e29c8c37b708ca972368a62c",
+      "witness_record_end": 11126,
+      "witness_record_start": 10129,
+      "witness_sha256": "492ff67909c5fddd0be53d3990dad494884ecf2b8fe8069af9445e1b9b3f2b9c"
+    },
+    {
+      "added_cx": 1410,
+      "baseline_counts": {
+        "ccx": 68100,
+        "clean_c3x_mbu": 958,
+        "cx": 8995,
+        "cz": 0,
+        "swap": 0,
+        "x": 34140,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "c53246766b5f7859b55d2e16ddcb6bc29aa7df3ec6a44904a641e8220cd7497b",
+      "baseline_raw_record_sha256": "ac2b5c545ba202f01580419aca0fc36b6013f45c24552a464ea6d843475cd29a",
+      "baseline_records": 112193,
+      "counts": {
+        "ccx": 66813,
+        "clean_c3x_mbu": 958,
+        "cx": 10405,
+        "cz": 0,
+        "swap": 0,
+        "x": 34140,
+        "z": 0
+      },
+      "duplicate_groups": 291,
+      "empty_parity_groups": 291,
+      "executed_toffoli": 68729,
+      "inserted_records": 2115,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "b3b78d3cae97abe924c1ea8db2d864855340260397db76b937493639ed0a7526",
+      "raw_ccx_saved": 1287,
+      "raw_record_sha256": "6e7922d52c3174a9acd0b94cbc2f0cd0190d07482178e6ffd24933ccc01db63f",
+      "records": 112316,
+      "removed_records": 1992,
+      "rule_counts": {
+        "1": 769,
+        "2": 227
+      },
+      "run_lengths": {
+        "2": 996
+      },
+      "selected_runs": 996,
+      "step": 415,
+      "witness_prefix_sha256": "ab9eb2332805edc3ca2af130f339432a2913c8186f23eb67322c8a72fbddca4c",
+      "witness_record_end": 12122,
+      "witness_record_start": 11126,
+      "witness_sha256": "443c8ed36a3b222b9bd4d45395f7d50227b05262a74aaf0068e1f897ff0d6f67"
+    },
+    {
+      "added_cx": 4314,
+      "baseline_counts": {
+        "ccx": 120182,
+        "clean_c3x_mbu": 962,
+        "cx": 12810,
+        "cz": 0,
+        "swap": 0,
+        "x": 41118,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "eb847e7d5868cd24ee187b7f6761acbda097bf452eaed555b10bdf17d15de3f3",
+      "baseline_raw_record_sha256": "9c35173050741637ce9babec97a696ac662025c906ce28c7c8a72d7e4267fb2f",
+      "baseline_records": 175072,
+      "counts": {
+        "ccx": 117441,
+        "clean_c3x_mbu": 962,
+        "cx": 17124,
+        "cz": 0,
+        "swap": 0,
+        "x": 41118,
+        "z": 0
+      },
+      "duplicate_groups": 292,
+      "empty_parity_groups": 292,
+      "executed_toffoli": 119365,
+      "inserted_records": 6111,
+      "max_run_length": 7,
+      "prefix_raw_record_sha256": "4e3c5be607bc4fcc26927fa41ac6234b40143b109a6c4c611f4c4fe9b7b2bff7",
+      "raw_ccx_saved": 2741,
+      "raw_record_sha256": "2d076632c2ae1c01e94290e1e1a50faf0f6fefeeb8c37d4aae178110eaa354bf",
+      "records": 176645,
+      "removed_records": 4538,
+      "rule_counts": {
+        "1": 1496,
+        "2": 593
+      },
+      "run_lengths": {
+        "2": 1905,
+        "3": 92,
+        "4": 44,
+        "5": 24,
+        "6": 12,
+        "7": 12
+      },
+      "selected_runs": 2089,
+      "step": 416,
+      "witness_prefix_sha256": "c9a111a5487a206507ae466a1e49125b1562c0453be2ed40e25ca4585719e4a8",
+      "witness_record_end": 14211,
+      "witness_record_start": 12122,
+      "witness_sha256": "41c0ab9574da35bb1a831d1648994ff4d8d41643a29fb4355db33ba8ad4e0d1e"
+    },
+    {
+      "added_cx": 1410,
+      "baseline_counts": {
+        "ccx": 68145,
+        "clean_c3x_mbu": 958,
+        "cx": 9013,
+        "cz": 0,
+        "swap": 0,
+        "x": 34150,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "db7a30906616379aaff50d415a23cff6a3631c3961d77cc508dcce5ca3cb158b",
+      "baseline_raw_record_sha256": "32902835ee91abb8fd45cf08af51e559ac67d77fe6f1de3e48cfa52cc5205d9b",
+      "baseline_records": 112266,
+      "counts": {
+        "ccx": 66858,
+        "clean_c3x_mbu": 958,
+        "cx": 10423,
+        "cz": 0,
+        "swap": 0,
+        "x": 34150,
+        "z": 0
+      },
+      "duplicate_groups": 291,
+      "empty_parity_groups": 291,
+      "executed_toffoli": 68774,
+      "inserted_records": 2115,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "494d8759ddba574a4232acf1b664ed3e94f12b85f2cbd368590c8687d99040d9",
+      "raw_ccx_saved": 1287,
+      "raw_record_sha256": "7ad3513dff27704c7fb6f02ddf5bd02552a91e3e952f8ced1bb79884c0c6bb9a",
+      "records": 112389,
+      "removed_records": 1992,
+      "rule_counts": {
+        "1": 769,
+        "2": 227
+      },
+      "run_lengths": {
+        "2": 996
+      },
+      "selected_runs": 996,
+      "step": 417,
+      "witness_prefix_sha256": "de4c5af9c3f8a3ddd1517c22ab1a47ea620dabd6b595e8d1161eaa413e0023fd",
+      "witness_record_end": 15207,
+      "witness_record_start": 14211,
+      "witness_sha256": "d297100b7e0b953c330ad4d61d9c2980a64f6f5a400daaa9cfc1b75f36c751e1"
+    },
+    {
+      "added_cx": 1414,
+      "baseline_counts": {
+        "ccx": 68242,
+        "clean_c3x_mbu": 962,
+        "cx": 9011,
+        "cz": 0,
+        "swap": 0,
+        "x": 34246,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "13c3d61a461a80e3e788eb985eddd852a5ca96d53fe6a709b054ebdd3b26a446",
+      "baseline_raw_record_sha256": "3ad194bb264a14b58fa6c053cad5d98a8f399447912004e2f23ab6a213eaaa57",
+      "baseline_records": 112461,
+      "counts": {
+        "ccx": 66951,
+        "clean_c3x_mbu": 962,
+        "cx": 10425,
+        "cz": 0,
+        "swap": 0,
+        "x": 34246,
+        "z": 0
+      },
+      "duplicate_groups": 292,
+      "empty_parity_groups": 292,
+      "executed_toffoli": 68875,
+      "inserted_records": 2121,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "f7c36bb37764f6d3d81ab2b8d7d2c14cbddf489aea0baf6c3d47c56965b1a787",
+      "raw_ccx_saved": 1291,
+      "raw_record_sha256": "c1426adbc8f2bd0be9f7dc0ff7fc0c576c0535ef9c78e80ffa4ae27358761065",
+      "records": 112584,
+      "removed_records": 1998,
+      "rule_counts": {
+        "1": 772,
+        "2": 227
+      },
+      "run_lengths": {
+        "2": 999
+      },
+      "selected_runs": 999,
+      "step": 418,
+      "witness_prefix_sha256": "6e2708dbce51a80c350603854cd2803323c7732c722b859dd1ef8bea0c8de1c4",
+      "witness_record_end": 16206,
+      "witness_record_start": 15207,
+      "witness_sha256": "b6a79f3a67e57b88f22e3b99495488a99a5c6417c3f7c927ee5bec6efbc08212"
+    },
+    {
+      "added_cx": 1414,
+      "baseline_counts": {
+        "ccx": 68266,
+        "clean_c3x_mbu": 958,
+        "cx": 9013,
+        "cz": 0,
+        "swap": 0,
+        "x": 34172,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "cbfd4ded662847b25211f4ebfb3ea105beb1ade6be3dfc0b70a5fbf371cacb72",
+      "baseline_raw_record_sha256": "e03f1121a3d2e4123764da726f77ffcd0f40405ea9c4d005673e76c9eba94ee8",
+      "baseline_records": 112409,
+      "counts": {
+        "ccx": 66977,
+        "clean_c3x_mbu": 958,
+        "cx": 10427,
+        "cz": 0,
+        "swap": 0,
+        "x": 34172,
+        "z": 0
+      },
+      "duplicate_groups": 291,
+      "empty_parity_groups": 291,
+      "executed_toffoli": 68893,
+      "inserted_records": 2121,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "5ba9ac60b8a076da58a59a315baf687cb887a74ffd772ad411cb37e33222836c",
+      "raw_ccx_saved": 1289,
+      "raw_record_sha256": "b20df5d92edef36923b13a40cdf5d7abd1a7ddd955cb2822e7ba29ef8dff6db7",
+      "records": 112534,
+      "removed_records": 1996,
+      "rule_counts": {
+        "1": 769,
+        "2": 229
+      },
+      "run_lengths": {
+        "2": 998
+      },
+      "selected_runs": 998,
+      "step": 419,
+      "witness_prefix_sha256": "4a326dcca49b9b21288a703fb152fcfe0a27da35900163f85868b5407132e3aa",
+      "witness_record_end": 17204,
+      "witness_record_start": 16206,
+      "witness_sha256": "a2357946fcc7c8bee54d039caae611f71d1009b168aa0ef00f5ac86bd867aa86"
+    },
+    {
+      "added_cx": 4322,
+      "baseline_counts": {
+        "ccx": 120359,
+        "clean_c3x_mbu": 958,
+        "cx": 12826,
+        "cz": 0,
+        "swap": 0,
+        "x": 41058,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "f969569d9a36079f7bb5d56aad2e7e947fb4abb076d7198a55f95408b3523c92",
+      "baseline_raw_record_sha256": "7944af8f0ebf5bd55e4dfc89c789e2d816cce2e45e9ad7c70f05ddbc5f07cd50",
+      "baseline_records": 175201,
+      "counts": {
+        "ccx": 117616,
+        "clean_c3x_mbu": 958,
+        "cx": 17148,
+        "cz": 0,
+        "swap": 0,
+        "x": 41058,
+        "z": 0
+      },
+      "duplicate_groups": 291,
+      "empty_parity_groups": 291,
+      "executed_toffoli": 119532,
+      "inserted_records": 6123,
+      "max_run_length": 7,
+      "prefix_raw_record_sha256": "fd118967a48d05576c6376908fd6b6e74ef5d11e3bac04e5c8e5c839df757d86",
+      "raw_ccx_saved": 2743,
+      "raw_record_sha256": "fe85718397310435d823de9106141ebbc5cb492170fc77777570648b0756263d",
+      "records": 176780,
+      "removed_records": 4544,
+      "rule_counts": {
+        "1": 1493,
+        "2": 599
+      },
+      "run_lengths": {
+        "2": 1908,
+        "3": 92,
+        "4": 44,
+        "5": 24,
+        "6": 12,
+        "7": 12
+      },
+      "selected_runs": 2092,
+      "step": 420,
+      "witness_prefix_sha256": "8aa8a7a00dbf20870ebe72b6bd4a7eb9d8e5b3383be06b88f694e151c8a370ce",
+      "witness_record_end": 19296,
+      "witness_record_start": 17204,
+      "witness_sha256": "bb6a8da81cb73be7a153fc8839ce3374e4c0eaa3dc641029b0d369471882f6e2"
+    },
+    {
+      "added_cx": 1410,
+      "baseline_counts": {
+        "ccx": 68132,
+        "clean_c3x_mbu": 954,
+        "cx": 9003,
+        "cz": 0,
+        "swap": 0,
+        "x": 34072,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "da7741084d125ee238bd5e6452ff06c1b321d0379a02ec695885000795925a2c",
+      "baseline_raw_record_sha256": "9f4d045cbd083417752f324674f3621fabd01c4a6dc3a9ff90a72b3b23c2093b",
+      "baseline_records": 112161,
+      "counts": {
+        "ccx": 66847,
+        "clean_c3x_mbu": 954,
+        "cx": 10413,
+        "cz": 0,
+        "swap": 0,
+        "x": 34072,
+        "z": 0
+      },
+      "duplicate_groups": 290,
+      "empty_parity_groups": 290,
+      "executed_toffoli": 68755,
+      "inserted_records": 2115,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "ac28494b3b1c2a76d9ba6810352b458192b64ca74182d1ac162fc4f019b83b71",
+      "raw_ccx_saved": 1285,
+      "raw_record_sha256": "2a23da9a141779bb23ef541fa266fae87673f47b6d4ab29dff992b320889dce2",
+      "records": 112286,
+      "removed_records": 1990,
+      "rule_counts": {
+        "1": 766,
+        "2": 229
+      },
+      "run_lengths": {
+        "2": 995
+      },
+      "selected_runs": 995,
+      "step": 421,
+      "witness_prefix_sha256": "c13290d3ce0c030b60983e2d425a1643c02dd7d887b70d44138ac45d0998f004",
+      "witness_record_end": 20291,
+      "witness_record_start": 19296,
+      "witness_sha256": "36eb9e6cbd4c0e265ea454b63ace1c496e5a080f8bb83d9c049a771276caf91d"
+    },
+    {
+      "added_cx": 1414,
+      "baseline_counts": {
+        "ccx": 68279,
+        "clean_c3x_mbu": 958,
+        "cx": 9019,
+        "cz": 0,
+        "swap": 0,
+        "x": 34174,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "5f545638585ad03a9673bc6f35121e0d8c2d41c0d7e6fdbf2c4454b747f37a90",
+      "baseline_raw_record_sha256": "cf5c5d56929d717ba6c9d06493b3c37b3ed35a562934a535ced32612d9edfc9e",
+      "baseline_records": 112430,
+      "counts": {
+        "ccx": 66990,
+        "clean_c3x_mbu": 958,
+        "cx": 10433,
+        "cz": 0,
+        "swap": 0,
+        "x": 34174,
+        "z": 0
+      },
+      "duplicate_groups": 291,
+      "empty_parity_groups": 291,
+      "executed_toffoli": 68906,
+      "inserted_records": 2121,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "3b74699e0c63ef6b4388b2a0cb42afcfa575bb87e408824b11c33e01f5cc6f09",
+      "raw_ccx_saved": 1289,
+      "raw_record_sha256": "9dd1f69b5ae2be629a5f1c3cccae4a627c27ff393abd4de41692acffdf4f7306",
+      "records": 112555,
+      "removed_records": 1996,
+      "rule_counts": {
+        "1": 769,
+        "2": 229
+      },
+      "run_lengths": {
+        "2": 998
+      },
+      "selected_runs": 998,
+      "step": 422,
+      "witness_prefix_sha256": "828d6d90cc945c839503f58f45b3b632fddcbde42f1133261a04bc173e48153b",
+      "witness_record_end": 21289,
+      "witness_record_start": 20291,
+      "witness_sha256": "5807033168ae2eaf6984978bb0ebd69f4e0ec07354720924d2333b010926247c"
+    },
+    {
+      "added_cx": 1414,
+      "baseline_counts": {
+        "ccx": 68288,
+        "clean_c3x_mbu": 954,
+        "cx": 9037,
+        "cz": 0,
+        "swap": 0,
+        "x": 34114,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "f997d384f25b942763586c542a26118546b5f396a127307286e04110a49c299d",
+      "baseline_raw_record_sha256": "ed334e91375c04959b5d88134dbb61d1d54c67aef327c1ef3d99d51d97baa33d",
+      "baseline_records": 112393,
+      "counts": {
+        "ccx": 67001,
+        "clean_c3x_mbu": 954,
+        "cx": 10451,
+        "cz": 0,
+        "swap": 0,
+        "x": 34114,
+        "z": 0
+      },
+      "duplicate_groups": 290,
+      "empty_parity_groups": 290,
+      "executed_toffoli": 68909,
+      "inserted_records": 2121,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "00888a25b1a56728d1addaecb7c24e067282b6815413cedc07d0151f681dff5e",
+      "raw_ccx_saved": 1287,
+      "raw_record_sha256": "8604a1c086e3dfc19ae30ed4c298d70104e080ce12484c34ab3b7f710fb0177f",
+      "records": 112520,
+      "removed_records": 1994,
+      "rule_counts": {
+        "1": 766,
+        "2": 231
+      },
+      "run_lengths": {
+        "2": 997
+      },
+      "selected_runs": 997,
+      "step": 423,
+      "witness_prefix_sha256": "6d025d0584bcd8f737412dc41953057fd649cb4568f2b12224958ad198831e17",
+      "witness_record_end": 22286,
+      "witness_record_start": 21289,
+      "witness_sha256": "d3e7b1ea77afaef64909d2bc5474668ed838f8ba06d7d614e205eb5059a675b7"
+    },
+    {
+      "added_cx": 4326,
+      "baseline_counts": {
+        "ccx": 120652,
+        "clean_c3x_mbu": 958,
+        "cx": 12852,
+        "cz": 0,
+        "swap": 0,
+        "x": 41118,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "0a2fee620e82e79ab93afbb09e37e89ab822fbae6f33248b8647de1156322c2b",
+      "baseline_raw_record_sha256": "7818eb7766eb8c2ef7b5fabb27e32b1c9f4e82fa9b30d30e4eb30af13ef1b20b",
+      "baseline_records": 175580,
+      "counts": {
+        "ccx": 117907,
+        "clean_c3x_mbu": 958,
+        "cx": 17178,
+        "cz": 0,
+        "swap": 0,
+        "x": 41118,
+        "z": 0
+      },
+      "duplicate_groups": 291,
+      "empty_parity_groups": 291,
+      "executed_toffoli": 119823,
+      "inserted_records": 6129,
+      "max_run_length": 7,
+      "prefix_raw_record_sha256": "abdeacfc01f413544f873c41568af3eb54bb8d248eee92d1dcb32a340559a4f0",
+      "raw_ccx_saved": 2745,
+      "raw_record_sha256": "1393e370aa263ce7519b2e36cee1f87ca5c909c47b0fea680810bf98140f869c",
+      "records": 177161,
+      "removed_records": 4548,
+      "rule_counts": {
+        "1": 1497,
+        "2": 597
+      },
+      "run_lengths": {
+        "2": 1910,
+        "3": 92,
+        "4": 44,
+        "5": 24,
+        "6": 12,
+        "7": 12
+      },
+      "selected_runs": 2094,
+      "step": 424,
+      "witness_prefix_sha256": "fa3d0234d12477fcc813c45142fc654124d78219635539021713bd84057a7f94",
+      "witness_record_end": 24380,
+      "witness_record_start": 22286,
+      "witness_sha256": "6cfa16426ef1fd8c1b8ee7a9d6ef99da14c06a201fdb0c95da1fddaea4e49270"
+    },
+    {
+      "added_cx": 1414,
+      "baseline_counts": {
+        "ccx": 68277,
+        "clean_c3x_mbu": 954,
+        "cx": 9037,
+        "cz": 0,
+        "swap": 0,
+        "x": 34120,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "46c413a88f3d1542b151fdf063c7203f66cb97ce2bbdb3469da901343069f5b9",
+      "baseline_raw_record_sha256": "b92ae3a38863e90add62166dff77eb7e6658378030ce28b1c2d36eb39d8beb92",
+      "baseline_records": 112388,
+      "counts": {
+        "ccx": 66990,
+        "clean_c3x_mbu": 954,
+        "cx": 10451,
+        "cz": 0,
+        "swap": 0,
+        "x": 34120,
+        "z": 0
+      },
+      "duplicate_groups": 290,
+      "empty_parity_groups": 290,
+      "executed_toffoli": 68898,
+      "inserted_records": 2121,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "7e5edce4847b8f88b30ec3617136367d336b93b1b0c8b4ac195b5f37ee92ce7e",
+      "raw_ccx_saved": 1287,
+      "raw_record_sha256": "33ca2eb0d3b291999448ebfb4d857c35c82655d698e25e0ea45aad81b173357f",
+      "records": 112515,
+      "removed_records": 1994,
+      "rule_counts": {
+        "1": 766,
+        "2": 231
+      },
+      "run_lengths": {
+        "2": 997
+      },
+      "selected_runs": 997,
+      "step": 425,
+      "witness_prefix_sha256": "e2357ec9bc45fde577e73e0f9fc52b405316360f2ff3a8a4f4109ce084a604af",
+      "witness_record_end": 25377,
+      "witness_record_start": 24380,
+      "witness_sha256": "3d2f513f70cb420bd6b57a071486d7b36d85f7eab7d0e95359650ef751a18823"
+    },
+    {
+      "added_cx": 1418,
+      "baseline_counts": {
+        "ccx": 68432,
+        "clean_c3x_mbu": 958,
+        "cx": 9053,
+        "cz": 0,
+        "swap": 0,
+        "x": 34222,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "8911adf415ae2e21a99472816812b5db602ece4c9708c4f4d2b0111544da8fc0",
+      "baseline_raw_record_sha256": "ea6640b21a996946ac700a319086e0bc87ea5703d0689271d858cb202296907f",
+      "baseline_records": 112665,
+      "counts": {
+        "ccx": 67141,
+        "clean_c3x_mbu": 958,
+        "cx": 10471,
+        "cz": 0,
+        "swap": 0,
+        "x": 34222,
+        "z": 0
+      },
+      "duplicate_groups": 291,
+      "empty_parity_groups": 291,
+      "executed_toffoli": 69057,
+      "inserted_records": 2127,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "5ea3260d689f72e68a22bd7aa59a28c86cf421f61b040526cd7c02db639ddd54",
+      "raw_ccx_saved": 1291,
+      "raw_record_sha256": "813360aa65b12f884ac75bd513dcb1dd8be6fe14b8812e14dd6dfaf21562e462",
+      "records": 112792,
+      "removed_records": 2000,
+      "rule_counts": {
+        "1": 769,
+        "2": 231
+      },
+      "run_lengths": {
+        "2": 1000
+      },
+      "selected_runs": 1000,
+      "step": 426,
+      "witness_prefix_sha256": "d01f2e8e3e41f154eca5211fc0782e5bb17094ad37ad908247ac8c61064f2a84",
+      "witness_record_end": 26377,
+      "witness_record_start": 25377,
+      "witness_sha256": "c50e6cd1854ee3c8520d825bfa5d79216899a1c73f609e7120d99cc2c55672bd"
+    },
+    {
+      "added_cx": 1414,
+      "baseline_counts": {
+        "ccx": 68220,
+        "clean_c3x_mbu": 950,
+        "cx": 9025,
+        "cz": 0,
+        "swap": 0,
+        "x": 34036,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "f44cc0cb7e4f6207f874a25e6c4ea5281079cfcfd8a2d9cae504186406270c48",
+      "baseline_raw_record_sha256": "d88e7311d9cdfc72004909d8d5ba699e903188412eba6e31bae126c1f4503bf2",
+      "baseline_records": 112231,
+      "counts": {
+        "ccx": 66935,
+        "clean_c3x_mbu": 950,
+        "cx": 10439,
+        "cz": 0,
+        "swap": 0,
+        "x": 34036,
+        "z": 0
+      },
+      "duplicate_groups": 289,
+      "empty_parity_groups": 289,
+      "executed_toffoli": 68835,
+      "inserted_records": 2121,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "7563f72bec7b326bb9602db5cc44e1d3b4ed209cb9bf56ea361c111487e2a293",
+      "raw_ccx_saved": 1285,
+      "raw_record_sha256": "6b6e606a410f1c776faa402c5ec18d22d12b0079f54cba6f96d70f4b70478e08",
+      "records": 112360,
+      "removed_records": 1992,
+      "rule_counts": {
+        "1": 763,
+        "2": 233
+      },
+      "run_lengths": {
+        "2": 996
+      },
+      "selected_runs": 996,
+      "step": 427,
+      "witness_prefix_sha256": "24d894a095050238b0440b28d81b5c8413f71797cecb84afae780604fc0ad0b3",
+      "witness_record_end": 27373,
+      "witness_record_start": 26377,
+      "witness_sha256": "adc8f7014504d10a192b359cee72b2d0825b38c2f7681e0003c65d47c4a3fc80"
+    },
+    {
+      "added_cx": 4342,
+      "baseline_counts": {
+        "ccx": 120774,
+        "clean_c3x_mbu": 954,
+        "cx": 12864,
+        "cz": 0,
+        "swap": 0,
+        "x": 41062,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "158f01606e0d0f825328ad6823c61eccb8edb8094ee43bc0dc176d16445f0ace",
+      "baseline_raw_record_sha256": "ff1d7c3476f9455c7880304b23e6036f1321755223163d7befc4400e3c02a5ff",
+      "baseline_records": 175654,
+      "counts": {
+        "ccx": 118023,
+        "clean_c3x_mbu": 954,
+        "cx": 17206,
+        "cz": 0,
+        "swap": 0,
+        "x": 41062,
+        "z": 0
+      },
+      "duplicate_groups": 290,
+      "empty_parity_groups": 290,
+      "executed_toffoli": 119931,
+      "inserted_records": 6149,
+      "max_run_length": 7,
+      "prefix_raw_record_sha256": "06a14e993d80a5c54c7f2cfa30e177b602a2316169a376a48d9eded2aaeff4fb",
+      "raw_ccx_saved": 2751,
+      "raw_record_sha256": "6a06f131073b560eeb6974ab89a36d8c164bbb307b0da254b377282457e5c50e",
+      "records": 177245,
+      "removed_records": 4558,
+      "rule_counts": {
+        "1": 1494,
+        "2": 603
+      },
+      "run_lengths": {
+        "2": 1909,
+        "3": 96,
+        "4": 44,
+        "5": 24,
+        "6": 12,
+        "7": 12
+      },
+      "selected_runs": 2097,
+      "step": 428,
+      "witness_prefix_sha256": "5d68af32848cafcee413da4368deb8ded7689cc19f0a7238eb91f25924669c0c",
+      "witness_record_end": 29470,
+      "witness_record_start": 27373,
+      "witness_sha256": "7cfd71620b9db9297c75609d8efa8186ad014d372d24fcb83a1d92829c39d09f"
+    },
+    {
+      "added_cx": 1414,
+      "baseline_counts": {
+        "ccx": 68261,
+        "clean_c3x_mbu": 950,
+        "cx": 9045,
+        "cz": 0,
+        "swap": 0,
+        "x": 34044,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "edc16ffcbc1990c0193874e3686027eea6cc26bf878afc368556b26a5c25343f",
+      "baseline_raw_record_sha256": "593544083602dca278de1e82a568945082846bd03346cf3e076427ccd84ae07c",
+      "baseline_records": 112300,
+      "counts": {
+        "ccx": 66976,
+        "clean_c3x_mbu": 950,
+        "cx": 10459,
+        "cz": 0,
+        "swap": 0,
+        "x": 34044,
+        "z": 0
+      },
+      "duplicate_groups": 289,
+      "empty_parity_groups": 289,
+      "executed_toffoli": 68876,
+      "inserted_records": 2121,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "fcbd429d26f7559aed7a0a86364465ed2fcb6a8f9bb111eddc724920e6122830",
+      "raw_ccx_saved": 1285,
+      "raw_record_sha256": "8682a70c686b7487a3e4b117a1b5e3b40269e4ed85b821330edcc29605813b65",
+      "records": 112429,
+      "removed_records": 1992,
+      "rule_counts": {
+        "1": 763,
+        "2": 233
+      },
+      "run_lengths": {
+        "2": 996
+      },
+      "selected_runs": 996,
+      "step": 429,
+      "witness_prefix_sha256": "60fd9507626605fc7f14154e41e4f77908162ff81e6466f486a3b82ba0a30e72",
+      "witness_record_end": 30466,
+      "witness_record_start": 29470,
+      "witness_sha256": "501f9298df275707bea288753114a8d47c183b41211b478784f55c5ef2edeee9"
+    },
+    {
+      "added_cx": 1418,
+      "baseline_counts": {
+        "ccx": 68358,
+        "clean_c3x_mbu": 954,
+        "cx": 9043,
+        "cz": 0,
+        "swap": 0,
+        "x": 34140,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "a422ad607a9bd3214cb9af5e24008fbcdadd5ff6ad7285b0d5bfc0ea8f6c76f8",
+      "baseline_raw_record_sha256": "5bc722e095103ac0d6cecb6791c7c625f18735401d567a19a46e919270585014",
+      "baseline_records": 112495,
+      "counts": {
+        "ccx": 67069,
+        "clean_c3x_mbu": 954,
+        "cx": 10461,
+        "cz": 0,
+        "swap": 0,
+        "x": 34140,
+        "z": 0
+      },
+      "duplicate_groups": 290,
+      "empty_parity_groups": 290,
+      "executed_toffoli": 68977,
+      "inserted_records": 2127,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "804074eb2a7e8e2e216325016ddca0b96982539f510864b7f1a10d31e085da35",
+      "raw_ccx_saved": 1289,
+      "raw_record_sha256": "9bec3edc5922820c0f652a7971872ec2ade754862f6433f12d4a18caa0b6c1d0",
+      "records": 112624,
+      "removed_records": 1998,
+      "rule_counts": {
+        "1": 766,
+        "2": 233
+      },
+      "run_lengths": {
+        "2": 999
+      },
+      "selected_runs": 999,
+      "step": 430,
+      "witness_prefix_sha256": "9e00556fe35c56840dfa6da0c2baa26a433f08f43f6a3e391a22d04735717925",
+      "witness_record_end": 31465,
+      "witness_record_start": 30466,
+      "witness_sha256": "5a3aa29ea30a6171e22be8465a7b4a0eac012b0d824d8ba0cdeeaa3c364f0630"
+    },
+    {
+      "added_cx": 1418,
+      "baseline_counts": {
+        "ccx": 68370,
+        "clean_c3x_mbu": 950,
+        "cx": 9045,
+        "cz": 0,
+        "swap": 0,
+        "x": 34062,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "cf1d72cd0d1679fa26e6f89dd38c2b98bd6206b9ed140b017a45d650c127fa1a",
+      "baseline_raw_record_sha256": "04bf122d27a29801754bd2189d5916925ccd032535e70381ddb031e94ab22de7",
+      "baseline_records": 112427,
+      "counts": {
+        "ccx": 67083,
+        "clean_c3x_mbu": 950,
+        "cx": 10463,
+        "cz": 0,
+        "swap": 0,
+        "x": 34062,
+        "z": 0
+      },
+      "duplicate_groups": 289,
+      "empty_parity_groups": 289,
+      "executed_toffoli": 68983,
+      "inserted_records": 2127,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "dc36cb696ee2f1f90c4ee73ee1b3600759487492496fcf60cc58daad8037d5ac",
+      "raw_ccx_saved": 1287,
+      "raw_record_sha256": "8e74951e191fb5fceb35a9d87a2c0d129006f516bf38f757d346ef805261f43c",
+      "records": 112558,
+      "removed_records": 1996,
+      "rule_counts": {
+        "1": 763,
+        "2": 235
+      },
+      "run_lengths": {
+        "2": 998
+      },
+      "selected_runs": 998,
+      "step": 431,
+      "witness_prefix_sha256": "7bd5c7166b168dd3abc82f9972e71ca7eb94f0b3fe68835a345843103f9b16c5",
+      "witness_record_end": 32463,
+      "witness_record_start": 31465,
+      "witness_sha256": "42fa3ca118af5ad1b38129ec795fd152cfc90bda26cc43285f24fd7a7c00abee"
+    },
+    {
+      "added_cx": 4346,
+      "baseline_counts": {
+        "ccx": 121096,
+        "clean_c3x_mbu": 954,
+        "cx": 12894,
+        "cz": 0,
+        "swap": 0,
+        "x": 41104,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "03e1d093910aef8b97b464d38e016b674844daf7006c83299b051e7d5d7cc7ea",
+      "baseline_raw_record_sha256": "e51c91dbfee12a36cb98e9cf391fe4a42cd63970f80c454d2add7cd56e94fc45",
+      "baseline_records": 176048,
+      "counts": {
+        "ccx": 118343,
+        "clean_c3x_mbu": 954,
+        "cx": 17240,
+        "cz": 0,
+        "swap": 0,
+        "x": 41104,
+        "z": 0
+      },
+      "duplicate_groups": 290,
+      "empty_parity_groups": 290,
+      "executed_toffoli": 120251,
+      "inserted_records": 6159,
+      "max_run_length": 7,
+      "prefix_raw_record_sha256": "60a43756c9e552ef2696b31590dc41e82fb8fae023ddd2c58bdffcae4ca90c50",
+      "raw_ccx_saved": 2753,
+      "raw_record_sha256": "18f37c8f7f180dc0d62892a4cc94241ccd852df9261350e464d78479dc8b15aa",
+      "records": 177641,
+      "removed_records": 4566,
+      "rule_counts": {
+        "1": 1498,
+        "2": 605
+      },
+      "run_lengths": {
+        "2": 1919,
+        "3": 92,
+        "4": 44,
+        "5": 24,
+        "6": 12,
+        "7": 12
+      },
+      "selected_runs": 2103,
+      "step": 432,
+      "witness_prefix_sha256": "6acef647e705866072f6a6c8ba96e88712aaa19d88fa9d875c77aec541662cf8",
+      "witness_record_end": 34566,
+      "witness_record_start": 32463,
+      "witness_sha256": "f8f86902ee0701f80382889e12c600d4cc5c6f5bad0fe15dc582aac5b376675b"
+    },
+    {
+      "added_cx": 1418,
+      "baseline_counts": {
+        "ccx": 68365,
+        "clean_c3x_mbu": 950,
+        "cx": 9045,
+        "cz": 0,
+        "swap": 0,
+        "x": 34066,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "1b3187fe8b318f74509085ae0df82e65317ab385b5ee5914c8f4febce589e68d",
+      "baseline_raw_record_sha256": "b7f7cb5bafc1868ffad793d36310d3f1b2460c7f88e0d3b127fceebafbe9061d",
+      "baseline_records": 112426,
+      "counts": {
+        "ccx": 67078,
+        "clean_c3x_mbu": 950,
+        "cx": 10463,
+        "cz": 0,
+        "swap": 0,
+        "x": 34066,
+        "z": 0
+      },
+      "duplicate_groups": 289,
+      "empty_parity_groups": 289,
+      "executed_toffoli": 68978,
+      "inserted_records": 2127,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "d50a10d4511efc21bcc352c3c5f157239100eb19a2dd235aa5dda9590d6502b2",
+      "raw_ccx_saved": 1287,
+      "raw_record_sha256": "d847efce239d966237d440edfe612e5adf557e07907dbe7c38e864b53afa1204",
+      "records": 112557,
+      "removed_records": 1996,
+      "rule_counts": {
+        "1": 763,
+        "2": 235
+      },
+      "run_lengths": {
+        "2": 998
+      },
+      "selected_runs": 998,
+      "step": 433,
+      "witness_prefix_sha256": "1859d69bfefcc360546bc7b5168b8c77953eca512ccac095caf59b906851f705",
+      "witness_record_end": 35564,
+      "witness_record_start": 34566,
+      "witness_sha256": "d2898c8043aaebfe26bdcc6b3edef8faa42ca1121441e8023f3c1928f882a14d"
+    },
+    {
+      "added_cx": 1418,
+      "baseline_counts": {
+        "ccx": 68379,
+        "clean_c3x_mbu": 950,
+        "cx": 9051,
+        "cz": 0,
+        "swap": 0,
+        "x": 34060,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "0c8e9c3e492f030fd2710aca2e93dd8a95099765aacea3a275d65a0ce6789ca2",
+      "baseline_raw_record_sha256": "7df376afeef260122e3413d35cced7ce063c039a92ed36db0722f1fd2be4aedf",
+      "baseline_records": 112440,
+      "counts": {
+        "ccx": 67092,
+        "clean_c3x_mbu": 950,
+        "cx": 10469,
+        "cz": 0,
+        "swap": 0,
+        "x": 34060,
+        "z": 0
+      },
+      "duplicate_groups": 289,
+      "empty_parity_groups": 289,
+      "executed_toffoli": 68992,
+      "inserted_records": 2127,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "ad6bc018b1f282fa82dba06e76267b466f0cac653bef98790e791488da1cc0d3",
+      "raw_ccx_saved": 1287,
+      "raw_record_sha256": "ff13ddc4d0c27288664e9898a0f5df4d279e9abb5b0b638c7d14f0d7ceb282f1",
+      "records": 112571,
+      "removed_records": 1996,
+      "rule_counts": {
+        "1": 763,
+        "2": 235
+      },
+      "run_lengths": {
+        "2": 998
+      },
+      "selected_runs": 998,
+      "step": 434,
+      "witness_prefix_sha256": "605c5371706bbe394f147ce7c33eccc222976e76b66b589781ba4e0b24850168",
+      "witness_record_end": 36562,
+      "witness_record_start": 35564,
+      "witness_sha256": "7a2ba9c491e75400b572477ef2e9d3c3952eb3b0c28bed6e74818bd7d827498f"
+    },
+    {
+      "added_cx": 1418,
+      "baseline_counts": {
+        "ccx": 68401,
+        "clean_c3x_mbu": 946,
+        "cx": 9053,
+        "cz": 0,
+        "swap": 0,
+        "x": 33986,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "7cdddb6a95045343c44a3ac2422d686033165025a36927a5a6fa4f8f8fd71acb",
+      "baseline_raw_record_sha256": "bc8684586f6c9d32e40d44f207bc19570563cca28f8579b81eb0f0153fc81cd7",
+      "baseline_records": 112386,
+      "counts": {
+        "ccx": 67116,
+        "clean_c3x_mbu": 946,
+        "cx": 10471,
+        "cz": 0,
+        "swap": 0,
+        "x": 33986,
+        "z": 0
+      },
+      "duplicate_groups": 288,
+      "empty_parity_groups": 288,
+      "executed_toffoli": 69008,
+      "inserted_records": 2127,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "7cbaa6edcaa67aa989cf5c08dfa8c42c3e84cbf7109ad4e89b5c4718ad6f57b5",
+      "raw_ccx_saved": 1285,
+      "raw_record_sha256": "e02a29a88180fe294d3dab04a9b13c426de9643a96f71ede5e83b788593a0fb8",
+      "records": 112519,
+      "removed_records": 1994,
+      "rule_counts": {
+        "1": 760,
+        "2": 237
+      },
+      "run_lengths": {
+        "2": 997
+      },
+      "selected_runs": 997,
+      "step": 435,
+      "witness_prefix_sha256": "e2d66ced180ebf6f9c492542021ab168e931a41b031d399dfa2f24c17fc77456",
+      "witness_record_end": 37559,
+      "witness_record_start": 36562,
+      "witness_sha256": "d2f28cb8458b8567ee26c6e5ace6c46228ec2d2990057f483ebf79bb5a922d27"
+    },
+    {
+      "added_cx": 4354,
+      "baseline_counts": {
+        "ccx": 121237,
+        "clean_c3x_mbu": 950,
+        "cx": 12892,
+        "cz": 0,
+        "swap": 0,
+        "x": 41038,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "5e4ae52a4a0c7cee454d0c311553552a1b7dbe46e19bec07b1428b4222b965f9",
+      "baseline_raw_record_sha256": "9e0496ee39b624221fb6e774298398159bb7afc2ab0d81e854da9f2ed79444e9",
+      "baseline_records": 176117,
+      "counts": {
+        "ccx": 118482,
+        "clean_c3x_mbu": 950,
+        "cx": 17246,
+        "cz": 0,
+        "swap": 0,
+        "x": 41038,
+        "z": 0
+      },
+      "duplicate_groups": 289,
+      "empty_parity_groups": 289,
+      "executed_toffoli": 120382,
+      "inserted_records": 6171,
+      "max_run_length": 7,
+      "prefix_raw_record_sha256": "978c1f97cef7164ea88e977c2eef416577a20f9a68ba79e1695d3c819d89a8ed",
+      "raw_ccx_saved": 2755,
+      "raw_record_sha256": "c902e5097293e8069666eaaeb519e6d9b3e4dc4d0090aa3e0f17ec83f573dbe9",
+      "records": 177716,
+      "removed_records": 4572,
+      "rule_counts": {
+        "1": 1495,
+        "2": 611
+      },
+      "run_lengths": {
+        "2": 1922,
+        "3": 92,
+        "4": 44,
+        "5": 24,
+        "6": 12,
+        "7": 12
+      },
+      "selected_runs": 2106,
+      "step": 436,
+      "witness_prefix_sha256": "1f07070149a8028d4f1bb29e1f6e97a651f2d5045c1109361fef0a876652da57",
+      "witness_record_end": 39665,
+      "witness_record_start": 37559,
+      "witness_sha256": "e1f8eb6d9524ee27f08de3426af79f0f64962df53dc109dff1a788abe8c433f3"
+    },
+    {
+      "added_cx": 1418,
+      "baseline_counts": {
+        "ccx": 68392,
+        "clean_c3x_mbu": 946,
+        "cx": 9053,
+        "cz": 0,
+        "swap": 0,
+        "x": 33994,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "f709d2fd77775ec8f33e464f7e4311871ac4081bc984e85991f8963d28a50718",
+      "baseline_raw_record_sha256": "6fef9d86c2f4d4fccdd6111c08c8d4d834035506f57d12e857bca91dc747c796",
+      "baseline_records": 112385,
+      "counts": {
+        "ccx": 67107,
+        "clean_c3x_mbu": 946,
+        "cx": 10471,
+        "cz": 0,
+        "swap": 0,
+        "x": 33994,
+        "z": 0
+      },
+      "duplicate_groups": 288,
+      "empty_parity_groups": 288,
+      "executed_toffoli": 68999,
+      "inserted_records": 2127,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "dcbec4721b3c499d345dd4a1b325dafed8e39123b1a61e9b844802d5229d59b4",
+      "raw_ccx_saved": 1285,
+      "raw_record_sha256": "48e6b5899d71cec109d84a1bdbdedd9e9074a3f3d60e1c0bece04c99838901a8",
+      "records": 112518,
+      "removed_records": 1994,
+      "rule_counts": {
+        "1": 760,
+        "2": 237
+      },
+      "run_lengths": {
+        "2": 997
+      },
+      "selected_runs": 997,
+      "step": 437,
+      "witness_prefix_sha256": "5649a3a92ea6a6084f53bc74c7d01850febd2978d0e28429a3dfebd79ad24973",
+      "witness_record_end": 40662,
+      "witness_record_start": 39665,
+      "witness_sha256": "080a510f736a901c2e341baf2acca2067c028b4cee87119f1935a1fe28b8ca10"
+    },
+    {
+      "added_cx": 1422,
+      "baseline_counts": {
+        "ccx": 68547,
+        "clean_c3x_mbu": 950,
+        "cx": 9069,
+        "cz": 0,
+        "swap": 0,
+        "x": 34096,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "80a7f0e02a4651a660527b65bc20669d53ad4fbc59b3d35321fd7cc7938ddf76",
+      "baseline_raw_record_sha256": "c75a70e6a7a1cfe10e7f391305e67b169d16ca4b1843676a59d11f1cde0b9058",
+      "baseline_records": 112662,
+      "counts": {
+        "ccx": 67258,
+        "clean_c3x_mbu": 950,
+        "cx": 10491,
+        "cz": 0,
+        "swap": 0,
+        "x": 34096,
+        "z": 0
+      },
+      "duplicate_groups": 289,
+      "empty_parity_groups": 289,
+      "executed_toffoli": 69158,
+      "inserted_records": 2133,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "710aab619788bae87e2074fda58e9bef5bed21d12907aef5fd2d082d4fb3357f",
+      "raw_ccx_saved": 1289,
+      "raw_record_sha256": "acfee237dd760c7d4955ea91491a530ac085d4004ba37ac3ed626a15ce9a54f8",
+      "records": 112795,
+      "removed_records": 2000,
+      "rule_counts": {
+        "1": 763,
+        "2": 237
+      },
+      "run_lengths": {
+        "2": 1000
+      },
+      "selected_runs": 1000,
+      "step": 438,
+      "witness_prefix_sha256": "7dd683c11ff6a23ead25cefa55fec2fddb7093e4adad0d998bc28a3539200ca9",
+      "witness_record_end": 41662,
+      "witness_record_start": 40662,
+      "witness_sha256": "d29e5128f4b11012b6aa8be0104f3a2bac7d638cb3ed78eda967ac971bb6a394"
+    },
+    {
+      "added_cx": 1422,
+      "baseline_counts": {
+        "ccx": 68502,
+        "clean_c3x_mbu": 946,
+        "cx": 9063,
+        "cz": 0,
+        "swap": 0,
+        "x": 34026,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "70a0e1cf889dd66b9292902049d2c3d2d7d6ccbdd3e6bb6508ee3fc0921cc557",
+      "baseline_raw_record_sha256": "65e1653f6035c209510e4d369daaab1dc013b3987f9556cd7d2dbdc100df7d29",
+      "baseline_records": 112537,
+      "counts": {
+        "ccx": 67215,
+        "clean_c3x_mbu": 946,
+        "cx": 10485,
+        "cz": 0,
+        "swap": 0,
+        "x": 34026,
+        "z": 0
+      },
+      "duplicate_groups": 288,
+      "empty_parity_groups": 288,
+      "executed_toffoli": 69107,
+      "inserted_records": 2133,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "8e1f4cfb43aaf8933756b4d425eec6f79f9c10d0c0f97ddcfdc0e00b4bf47c73",
+      "raw_ccx_saved": 1287,
+      "raw_record_sha256": "7e4a1d05eb63cd9ff7786161a59ba2d1fa30bd53b41fbb5b56fb7fe0c23dbdd7",
+      "records": 112672,
+      "removed_records": 1998,
+      "rule_counts": {
+        "1": 760,
+        "2": 239
+      },
+      "run_lengths": {
+        "2": 999
+      },
+      "selected_runs": 999,
+      "step": 439,
+      "witness_prefix_sha256": "5ab968bcc816cc438bd0bc6323976ceb1e408e827f428ed8840639d74fadb12e",
+      "witness_record_end": 42661,
+      "witness_record_start": 41662,
+      "witness_sha256": "0af9d8b0340d5a49855083f64a0927e3aa1c27f297421c0b49745d9963450408"
+    },
+    {
+      "added_cx": 4358,
+      "baseline_counts": {
+        "ccx": 121440,
+        "clean_c3x_mbu": 950,
+        "cx": 12954,
+        "cz": 0,
+        "swap": 0,
+        "x": 41116,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "77a416c44db4c39ace03185456552a378763098371c7e2a366b6494766359f05",
+      "baseline_raw_record_sha256": "9a53a27cd7517deaa41bceb50e698cab5579eb111557834e5a59b1414f690e6e",
+      "baseline_records": 176460,
+      "counts": {
+        "ccx": 118683,
+        "clean_c3x_mbu": 950,
+        "cx": 17312,
+        "cz": 0,
+        "swap": 0,
+        "x": 41116,
+        "z": 0
+      },
+      "duplicate_groups": 289,
+      "empty_parity_groups": 289,
+      "executed_toffoli": 120583,
+      "inserted_records": 6177,
+      "max_run_length": 7,
+      "prefix_raw_record_sha256": "0062a33300e37865437774c6bb5c9d2c74d91a0db86984f4d5d49432cf4ae6ae",
+      "raw_ccx_saved": 2757,
+      "raw_record_sha256": "01c90177806465f3369220d447e4349221656dfdfd7b96be7a031e06f878ee0b",
+      "records": 178061,
+      "removed_records": 4576,
+      "rule_counts": {
+        "1": 1499,
+        "2": 609
+      },
+      "run_lengths": {
+        "2": 1924,
+        "3": 92,
+        "4": 44,
+        "5": 24,
+        "6": 12,
+        "7": 12
+      },
+      "selected_runs": 2108,
+      "step": 440,
+      "witness_prefix_sha256": "2b824ad34c70196ed609afbb159569fe5ebbced17e71ac337ebcded74241b14b",
+      "witness_record_end": 44769,
+      "witness_record_start": 42661,
+      "witness_sha256": "d51062b3306a3cda95503e85129039e0a2d7911d18d9c7117786db5c5f473333"
+    },
+    {
+      "added_cx": 1422,
+      "baseline_counts": {
+        "ccx": 68549,
+        "clean_c3x_mbu": 946,
+        "cx": 9081,
+        "cz": 0,
+        "swap": 0,
+        "x": 34038,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "069e5cd310d732b3a272ee1a5371baf499d1af09d4182fc998c09e1b65299413",
+      "baseline_raw_record_sha256": "3715d347e5c4f573911c13726666182921caed065a6ce7df348c68da2ab820b5",
+      "baseline_records": 112614,
+      "counts": {
+        "ccx": 67262,
+        "clean_c3x_mbu": 946,
+        "cx": 10503,
+        "cz": 0,
+        "swap": 0,
+        "x": 34038,
+        "z": 0
+      },
+      "duplicate_groups": 288,
+      "empty_parity_groups": 288,
+      "executed_toffoli": 69154,
+      "inserted_records": 2133,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "153eeb37117f8ad1c0b12078ff26aeece80d558e708ebe204088ea20998f7bfb",
+      "raw_ccx_saved": 1287,
+      "raw_record_sha256": "e7df95bc95d5b9967a18e0574eab8d9baedb17141d99dd1b84bc09e2c88ceffe",
+      "records": 112749,
+      "removed_records": 1998,
+      "rule_counts": {
+        "1": 760,
+        "2": 239
+      },
+      "run_lengths": {
+        "2": 999
+      },
+      "selected_runs": 999,
+      "step": 441,
+      "witness_prefix_sha256": "9a642ada10c0b7c25b1365896c0d8283cf59ab7a63b6c1d02ff4bea4b7ed6e68",
+      "witness_record_end": 45768,
+      "witness_record_start": 44769,
+      "witness_sha256": "fb35c80a23214b2eb392ed32ed3d2a4528f4a6e2089bffd143190d6f3f560673"
+    },
+    {
+      "added_cx": 1426,
+      "baseline_counts": {
+        "ccx": 68646,
+        "clean_c3x_mbu": 950,
+        "cx": 9079,
+        "cz": 0,
+        "swap": 0,
+        "x": 34134,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "fc4e8af036f6403425fdec7f4058868727e693204705b31b5b33d18613ce111b",
+      "baseline_raw_record_sha256": "dcf8a0acb0d68767889ea4ae557df16d9dc337465ec5e83fbe4514f48dc331d4",
+      "baseline_records": 112809,
+      "counts": {
+        "ccx": 67355,
+        "clean_c3x_mbu": 950,
+        "cx": 10505,
+        "cz": 0,
+        "swap": 0,
+        "x": 34134,
+        "z": 0
+      },
+      "duplicate_groups": 289,
+      "empty_parity_groups": 289,
+      "executed_toffoli": 69255,
+      "inserted_records": 2139,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "70fe3c8e0b4ae4dfc9373d19e53ed3bbe23ae5b0ccf6038a1b1e2da4908671d7",
+      "raw_ccx_saved": 1291,
+      "raw_record_sha256": "1f9fd2976c3061ebefd261238ac3b3f14ed5ae0998ba9e7adfe5cc62a36f9682",
+      "records": 112944,
+      "removed_records": 2004,
+      "rule_counts": {
+        "1": 763,
+        "2": 239
+      },
+      "run_lengths": {
+        "2": 1002
+      },
+      "selected_runs": 1002,
+      "step": 442,
+      "witness_prefix_sha256": "757cf223356ece8035305acc9b0a2e201817b1ad86ee532ea963fefbab694916",
+      "witness_record_end": 46770,
+      "witness_record_start": 45768,
+      "witness_sha256": "c90e2011c8bde23f9b94108bf62dea652ddbb51c30d70ff240e2aa999ad1b0b7"
+    },
+    {
+      "added_cx": 1426,
+      "baseline_counts": {
+        "ccx": 68637,
+        "clean_c3x_mbu": 946,
+        "cx": 9081,
+        "cz": 0,
+        "swap": 0,
+        "x": 34062,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "ad2cffdda5e53123abbed4b0efe7d336c8cce422fd03ebf58fa1f1e236af314a",
+      "baseline_raw_record_sha256": "4aa0f91dec5467f7d33de8dbdaa5a9cdeb5b017ed8634fb923fd8b9aab33489b",
+      "baseline_records": 112726,
+      "counts": {
+        "ccx": 67348,
+        "clean_c3x_mbu": 946,
+        "cx": 10507,
+        "cz": 0,
+        "swap": 0,
+        "x": 34062,
+        "z": 0
+      },
+      "duplicate_groups": 288,
+      "empty_parity_groups": 288,
+      "executed_toffoli": 69240,
+      "inserted_records": 2139,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "a6e1ce74a8c280f9e25c229be4c8d5cfe00bcd8c047c4895e5bc4549df341f07",
+      "raw_ccx_saved": 1289,
+      "raw_record_sha256": "a601d0f6c0187250c97ed79397727e9ba5cdb9beeebb0a899d94116c68e7fca7",
+      "records": 112863,
+      "removed_records": 2002,
+      "rule_counts": {
+        "1": 760,
+        "2": 241
+      },
+      "run_lengths": {
+        "2": 1001
+      },
+      "selected_runs": 1001,
+      "step": 443,
+      "witness_prefix_sha256": "fdd01003e67115c10896a62d4a01570a01307d42c86460eb2e8d68890b4632da",
+      "witness_record_end": 47771,
+      "witness_record_start": 46770,
+      "witness_sha256": "205dbe6451507376ec917697c2bedb4799b20c9927e6e1c44d2da01d6a450fe7"
+    },
+    {
+      "added_cx": 4394,
+      "baseline_counts": {
+        "ccx": 121651,
+        "clean_c3x_mbu": 950,
+        "cx": 12966,
+        "cz": 0,
+        "swap": 0,
+        "x": 41168,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "d939e0fab13484afabcc3664b10bbeb04bc1de1121f544300915e0f112a0ce2d",
+      "baseline_raw_record_sha256": "5f42853badbd2187d07a88debced3171bfdcc121cee6759cdd93fcc022c7d4ec",
+      "baseline_records": 176735,
+      "counts": {
+        "ccx": 118876,
+        "clean_c3x_mbu": 950,
+        "cx": 17360,
+        "cz": 0,
+        "swap": 0,
+        "x": 41168,
+        "z": 0
+      },
+      "duplicate_groups": 289,
+      "empty_parity_groups": 289,
+      "executed_toffoli": 120776,
+      "inserted_records": 6219,
+      "max_run_length": 7,
+      "prefix_raw_record_sha256": "c7c2f468a46d2fa6174d24ae142127d44271b235b46500908faed92aa76e0f3a",
+      "raw_ccx_saved": 2775,
+      "raw_record_sha256": "599d2f39cf6fae0a73b534ca109f847455a9f94f0db2b4820b025cd2676093c7",
+      "records": 178354,
+      "removed_records": 4600,
+      "rule_counts": {
+        "1": 1499,
+        "2": 615
+      },
+      "run_lengths": {
+        "2": 1926,
+        "3": 92,
+        "4": 44,
+        "5": 28,
+        "6": 12,
+        "7": 12
+      },
+      "selected_runs": 2114,
+      "step": 444,
+      "witness_prefix_sha256": "14cb1a7d063beb32b903b03fe86b967a5b9d0ccb698340c99783aebc56700e5b",
+      "witness_record_end": 49885,
+      "witness_record_start": 47771,
+      "witness_sha256": "f683b99d68e9c22f9c693f9d2cc3e42588550c6f32d6fb39f399ce41b49a4936"
+    },
+    {
+      "added_cx": 1422,
+      "baseline_counts": {
+        "ccx": 68655,
+        "clean_c3x_mbu": 942,
+        "cx": 9073,
+        "cz": 0,
+        "swap": 0,
+        "x": 33828,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "7cdc17fca1018661b2fa3176abfd3badde8a0dc500e3709e2bcf1b95d09dfbdc",
+      "baseline_raw_record_sha256": "257c1b994c9c1d5edefe0dc7910974411cb7a02d9a24ac226f0d9139cd171bdf",
+      "baseline_records": 112498,
+      "counts": {
+        "ccx": 67370,
+        "clean_c3x_mbu": 942,
+        "cx": 10495,
+        "cz": 0,
+        "swap": 0,
+        "x": 33828,
+        "z": 0
+      },
+      "duplicate_groups": 287,
+      "empty_parity_groups": 287,
+      "executed_toffoli": 69254,
+      "inserted_records": 2133,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "40b08d9f1018bdec14122a051d7172e57594c9ce4d565392fb087bb6a259906e",
+      "raw_ccx_saved": 1285,
+      "raw_record_sha256": "a00cb5da6882ebdb7893589ebd84e6791aad054e203c2423eb3f73ed50b9a19b",
+      "records": 112635,
+      "removed_records": 1996,
+      "rule_counts": {
+        "1": 757,
+        "2": 241
+      },
+      "run_lengths": {
+        "2": 998
+      },
+      "selected_runs": 998,
+      "step": 445,
+      "witness_prefix_sha256": "bbbacbe4289792a0a0cc40849c4563ca13de34acd5af49789556fe4c7c224e4d",
+      "witness_record_end": 50883,
+      "witness_record_start": 49885,
+      "witness_sha256": "035593013eaa0e4d5d87859c0d5df5a4149443d3c8406d9abd3bef56713e920d"
+    },
+    {
+      "added_cx": 1426,
+      "baseline_counts": {
+        "ccx": 68802,
+        "clean_c3x_mbu": 946,
+        "cx": 9089,
+        "cz": 0,
+        "swap": 0,
+        "x": 33930,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "705ecd3465f438a0eefc4a00f84d6b6ce0832634008b86039bc38cc0ad0356a8",
+      "baseline_raw_record_sha256": "fd88bc775fd5952cb978e28d28f14933894529b8f3d6a1726790c00af418d8f6",
+      "baseline_records": 112767,
+      "counts": {
+        "ccx": 67513,
+        "clean_c3x_mbu": 946,
+        "cx": 10515,
+        "cz": 0,
+        "swap": 0,
+        "x": 33930,
+        "z": 0
+      },
+      "duplicate_groups": 288,
+      "empty_parity_groups": 288,
+      "executed_toffoli": 69405,
+      "inserted_records": 2139,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "6f321a15ec4131d14ba33ee81d3643568a5c4bf8d1d3ad92eb2753d7a1c70557",
+      "raw_ccx_saved": 1289,
+      "raw_record_sha256": "6057299b26ad749976bdd1f53050458fcaa49756124eeba20188c7fcabd47b1d",
+      "records": 112904,
+      "removed_records": 2002,
+      "rule_counts": {
+        "1": 760,
+        "2": 241
+      },
+      "run_lengths": {
+        "2": 1001
+      },
+      "selected_runs": 1001,
+      "step": 446,
+      "witness_prefix_sha256": "ff0aa192d8e38f04086617e98682478da542691746cea5ff8961881e2b940545",
+      "witness_record_end": 51884,
+      "witness_record_start": 50883,
+      "witness_sha256": "619c89d0def4f81efd81feddb86d6d3fa0d44999aea6ea0df8accde10d748d2f"
+    },
+    {
+      "added_cx": 1426,
+      "baseline_counts": {
+        "ccx": 68840,
+        "clean_c3x_mbu": 942,
+        "cx": 9091,
+        "cz": 0,
+        "swap": 0,
+        "x": 33852,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "befa4a28c2725950390bac480674425721348b869d2944740187be330bd080b5",
+      "baseline_raw_record_sha256": "b3dbf11368c7817311201685d10882c8ed2d62f77119525b08fd4c8ffadbe198",
+      "baseline_records": 112725,
+      "counts": {
+        "ccx": 67553,
+        "clean_c3x_mbu": 942,
+        "cx": 10517,
+        "cz": 0,
+        "swap": 0,
+        "x": 33852,
+        "z": 0
+      },
+      "duplicate_groups": 287,
+      "empty_parity_groups": 287,
+      "executed_toffoli": 69437,
+      "inserted_records": 2139,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "90f9cd761ab79bd9a2d8d87b4dc51e8fb429311b2bf4bed73d299c4c2dbb5653",
+      "raw_ccx_saved": 1287,
+      "raw_record_sha256": "28abd853444fd58200a9f6a5f516c24b1519700a249515ad451e709864e1abcb",
+      "records": 112864,
+      "removed_records": 2000,
+      "rule_counts": {
+        "1": 757,
+        "2": 243
+      },
+      "run_lengths": {
+        "2": 1000
+      },
+      "selected_runs": 1000,
+      "step": 447,
+      "witness_prefix_sha256": "1e56692e2567754635dd86eba59774a0218b59f35ac33b319b90fdc369b52afe",
+      "witness_record_end": 52884,
+      "witness_record_start": 51884,
+      "witness_sha256": "eb5242c0c5eb4d5c51c4b382e45ff67e74b67a0fe3a22fcb89aa6515d202ae35"
+    },
+    {
+      "added_cx": 4394,
+      "baseline_counts": {
+        "ccx": 121888,
+        "clean_c3x_mbu": 946,
+        "cx": 12968,
+        "cz": 0,
+        "swap": 0,
+        "x": 40968,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "a6793c769827ee28fbe9be385938b0478e7b5db0ec052ba4840694499486371f",
+      "baseline_raw_record_sha256": "ba6ac0ce11a26d019c98121d1e2828bb28735b0b155442822181c1c62fc54c16",
+      "baseline_records": 176770,
+      "counts": {
+        "ccx": 119115,
+        "clean_c3x_mbu": 946,
+        "cx": 17362,
+        "cz": 0,
+        "swap": 0,
+        "x": 40968,
+        "z": 0
+      },
+      "duplicate_groups": 288,
+      "empty_parity_groups": 288,
+      "executed_toffoli": 121007,
+      "inserted_records": 6223,
+      "max_run_length": 7,
+      "prefix_raw_record_sha256": "a8c65ca6a3d842a3213bd41c17ff0daac888642f1a88fe0f14195376c9d37c26",
+      "raw_ccx_saved": 2773,
+      "raw_record_sha256": "b6db43eeca17e1e970659d97b9466ce53f3bb92d645f4427196bb16518983363",
+      "records": 178391,
+      "removed_records": 4602,
+      "rule_counts": {
+        "1": 1500,
+        "2": 617
+      },
+      "run_lengths": {
+        "2": 1929,
+        "3": 92,
+        "4": 48,
+        "5": 24,
+        "6": 12,
+        "7": 12
+      },
+      "selected_runs": 2117,
+      "step": 448,
+      "witness_prefix_sha256": "13e7823cc33062bd8a33fbf8ea840b2e7143935ef702d2af29e78b18d2b4d4ed",
+      "witness_record_end": 55001,
+      "witness_record_start": 52884,
+      "witness_sha256": "4575df6714c61a820b51377dae6b15c97af82353a2fb4049946354384e017826"
+    },
+    {
+      "added_cx": 1426,
+      "baseline_counts": {
+        "ccx": 68827,
+        "clean_c3x_mbu": 942,
+        "cx": 9091,
+        "cz": 0,
+        "swap": 0,
+        "x": 33856,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "4fa205d23ca3990b279697ae391b40dd023454b8481ad9575bce684954b9ec6f",
+      "baseline_raw_record_sha256": "f5955386c35520d33240b7296c5ed719c72bb85610ee260b2ecde4ce5255333e",
+      "baseline_records": 112716,
+      "counts": {
+        "ccx": 67540,
+        "clean_c3x_mbu": 942,
+        "cx": 10517,
+        "cz": 0,
+        "swap": 0,
+        "x": 33856,
+        "z": 0
+      },
+      "duplicate_groups": 287,
+      "empty_parity_groups": 287,
+      "executed_toffoli": 69424,
+      "inserted_records": 2139,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "23f9a679bf5c05c6572c34433a0584241899c056942563c50a735f47f565927c",
+      "raw_ccx_saved": 1287,
+      "raw_record_sha256": "2753f0d285d13ca1416872fcc666d550a57486d944a6fe329cfc460c87612039",
+      "records": 112855,
+      "removed_records": 2000,
+      "rule_counts": {
+        "1": 757,
+        "2": 243
+      },
+      "run_lengths": {
+        "2": 1000
+      },
+      "selected_runs": 1000,
+      "step": 449,
+      "witness_prefix_sha256": "41ae5e620b6a5dc058af2ad0bd3df84ccc527f5be92185aab13252696043d484",
+      "witness_record_end": 56001,
+      "witness_record_start": 55001,
+      "witness_sha256": "00c5377244584397578775540d449d977ffde952bf9bb129fcd75daf3c3f453f"
+    },
+    {
+      "added_cx": 1430,
+      "baseline_counts": {
+        "ccx": 68982,
+        "clean_c3x_mbu": 946,
+        "cx": 9107,
+        "cz": 0,
+        "swap": 0,
+        "x": 33958,
+        "z": 0
+      },
+      "baseline_prefix_raw_sha256": "c11e3af3ac5ae129539b7048e5921638f0f61e312e492be7e05e40a2451a7c70",
+      "baseline_raw_record_sha256": "9ff4979309ee77af383b8439d6fa6935d233334826aa6b7062dcab94c61ff324",
+      "baseline_records": 112993,
+      "counts": {
+        "ccx": 67691,
+        "clean_c3x_mbu": 946,
+        "cx": 10537,
+        "cz": 0,
+        "swap": 0,
+        "x": 33958,
+        "z": 0
+      },
+      "duplicate_groups": 288,
+      "empty_parity_groups": 288,
+      "executed_toffoli": 69583,
+      "inserted_records": 2145,
+      "max_run_length": 2,
+      "prefix_raw_record_sha256": "7981a78fc228e02b66c02e3ab7ac803d8d7a4dbc6e84b31e012fc80f1b46d115",
+      "raw_ccx_saved": 1291,
+      "raw_record_sha256": "ce65880b2c742c973b59aa18516105891d269cfdbb07421f5ef427998ca29a18",
+      "records": 113132,
+      "removed_records": 2006,
+      "rule_counts": {
+        "1": 760,
+        "2": 243
+      },
+      "run_lengths": {
+        "2": 1003
+      },
+      "selected_runs": 1003,
+      "step": 450,
+      "witness_prefix_sha256": "ebf1db5731bf0e2dbe5ece214dfd0fdb39abe49b241dfbe1f0ced573b5008b52",
+      "witness_record_end": 57004,
+      "witness_record_start": 56001,
+      "witness_sha256": "d2b0778bab554b8ad6bf050964580c8b3b904bff736287137cacfc24de6f4855"
+    }
+  ],
+  "public_attribution": "gpt-5",
+  "qubits": 571,
+  "raw_ccx_saved": 74031,
+  "raw_record_sha256": "7981a78fc228e02b66c02e3ab7ac803d8d7a4dbc6e84b31e012fc80f1b46d115",
+  "record_bytes": 8,
+  "records": 5777213,
+  "schedule_end": 1616,
+  "schema": "q817-maximal-runs-public-chunk-v1",
+  "selected_runs": 57004,
+  "source_generator_sha256": "b7ff97de22b36450d6fee3f267be62a00d8be24f6988849655e1fea04c9374d2",
+  "source_postprocessor_sha256": "f7541ce988af4bba116427efd9599ffc3800bcdb7a140db81b6e32f85882efe6",
+  "step_end": 450,
+  "step_start": 406,
+  "witness_sha256": "ebf1db5731bf0e2dbe5ece214dfd0fdb39abe49b241dfbe1f0ced573b5008b52"
+}
