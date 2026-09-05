@@ -741,130 +741,6 @@ fn compare_geq_chunked_middle_direct<F: FnOnce(&mut B, &QubitId)>(
     }
 }
 
-/// Apply the phase of the complemented comparison result without allocating
-/// its final carry. With incoming carry `ci` and the top bits in the ripple
-/// frame, the omitted result is `ci ^ (a & b)`. Its complement has phase
-/// polynomial `1 ^ ci ^ (a & b)`. An optional quantum control raises each
-/// term by one degree and requires one CCZ for the product term.
-pub fn compare_geq_chunked_middle_complement_phase(
-    circ: &mut B,
-    a: &[QubitId],
-    b: &[QubitId],
-    ctrl: Option<&QubitId>,
-    k: usize,
-) {
-    let call_index = next_compare_direct_call_index();
-    let n = a.len();
-    assert_eq!(
-        b.len(),
-        n,
-        "compare_geq_chunked_middle_complement_phase: a,b equal width"
-    );
-    assert!(
-        n > 0,
-        "compare_geq_chunked_middle_complement_phase: nonempty operands"
-    );
-    let k = super::target_qubit_headroom(circ)
-        .map_or(k, |headroom| k.min(headroom.saturating_sub(1)))
-        .min(n);
-    let split = n - k;
-    let c = circ.alloc_qubit();
-    circ.x(c);
-
-    for i in 0..split {
-        circ.x(b[i]);
-        circ.cx(c, b[i]);
-        circ.cx(c, a[i]);
-        circ.ccx(a[i], b[i], c);
-    }
-
-    if split == n {
-        match ctrl {
-            Some(ctrl) => {
-                circ.z(*ctrl);
-                circ.cz(*ctrl, c);
-            }
-            None => {
-                circ.neg();
-                circ.z(c);
-            }
-        }
-    } else {
-        let last = n - 1;
-        let mut cy = Vec::with_capacity(k);
-        cy.push(c);
-        for i in split..last {
-            let next = circ.alloc_qubit();
-            let ci = *cy.last().expect("comparison carry present");
-            circ.x(b[i]);
-            circ.cx(ci, b[i]);
-            circ.cx(ci, a[i]);
-            if !compare_call_has_structurally_dead_top(call_index, i) {
-                let old_context = crate::point_add::set_op_trace_context(
-                    0x0400_0000 | (((call_index as u32) & 0xffff) << 8) | (i as u32 & 0xff),
-                );
-                circ.ccx(a[i], b[i], next);
-                crate::point_add::restore_op_trace_context(old_context);
-            }
-            circ.cx(ci, next);
-            cy.push(next);
-        }
-
-        let ci = *cy.last().expect("comparison carry present");
-        circ.x(b[last]);
-        circ.cx(ci, b[last]);
-        circ.cx(ci, a[last]);
-        let product_is_live = !compare_call_has_structurally_dead_top(call_index, last);
-        match ctrl {
-            Some(ctrl) => {
-                circ.z(*ctrl);
-                circ.cz(*ctrl, ci);
-                if product_is_live {
-                    let old_context = crate::point_add::set_op_trace_context(
-                        0x0400_0000
-                            | (((call_index as u32) & 0xffff) << 8)
-                            | (last as u32 & 0xff),
-                    );
-                    circ.ccz(*ctrl, a[last], b[last]);
-                    crate::point_add::restore_op_trace_context(old_context);
-                }
-            }
-            None => {
-                circ.neg();
-                circ.z(ci);
-                if product_is_live {
-                    circ.cz(a[last], b[last]);
-                }
-            }
-        }
-        circ.cx(ci, a[last]);
-        circ.cx(ci, b[last]);
-        circ.x(b[last]);
-
-        for i in (split..last).rev() {
-            let next = cy.pop().expect("comparison carry present");
-            let ci = *cy.last().expect("comparison carry present");
-            circ.cx(ci, next);
-            let bit = circ.alloc_bit();
-            circ.hmr(next, bit);
-            circ.zero_and_free(next);
-            circ.cz_if_bit(a[i], b[i], bit);
-            circ.cx(ci, a[i]);
-            circ.cx(ci, b[i]);
-            circ.x(b[i]);
-        }
-    }
-
-    for i in (0..split).rev() {
-        circ.ccx(a[i], b[i], c);
-        circ.cx(c, a[i]);
-        circ.cx(c, b[i]);
-        circ.x(b[i]);
-    }
-    circ.x(c);
-    circ.zero_and_free(c);
-}
-
 pub fn compare_geq_chunked_middle<F: FnOnce(&mut B, &QubitId)>(
     circ: &mut B,
     a: &[QubitId],
@@ -945,9 +821,9 @@ pub fn compare_geq_cin_middle<F: FnOnce(&mut B, &QubitId, &QubitId, &QubitId)>(
 /// behaviour.
 ///
 /// `drops = None` disables the drops entirely. A caller that changes the *value* of the carry chain
-/// For example, truncating the window forces carry-in 0 where the fitted circuit had a real
-/// carry-in. Such callers MUST use `None`: the census established those gates
-/// never fire in the untruncated chain, and that evidence does not transfer.
+/// — e.g. by truncating the window, which forces carry-in 0 where the fitted circuit had a real
+/// carry-in — MUST use `None`: the census established those gates never fire in the untruncated
+/// chain, and that evidence does not transfer.
 pub fn compare_geq_cin_middle_keyed<F: FnOnce(&mut B, &QubitId, &QubitId, &QubitId)>(
     circ: &mut B,
     a: &[QubitId],
