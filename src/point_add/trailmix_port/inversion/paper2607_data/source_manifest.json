@@ -1,0 +1,50 @@
+{
+  "attribution": "gpt-5",
+  "baseline_generator_sha256": "d38bc62563bb27f6bca38c7beb6609f086b4d8e1bfc8ac506e8387bce2d87531",
+  "baseline_source_commit": "994672dfa7946f8fbbe4982715fe6ef4198b59b6",
+  "benchmark_score_claimed": false,
+  "candidate_change": "Retained T-add carry, delayed unchanged sign map and exact carry erasure; generic API, K1, R and T-sub retained",
+  "certificate_normalization": "CRLF to LF; exact generator-pinned certificate bytes",
+  "conditional_helpers_use_measurement": false,
+  "dependency_source_note": "Two supplied support modules were absent from the baseline source tree.",
+  "files": {
+    "README-q823-idle-mbu.md": {
+      "bytes": 4400,
+      "sha256": "15e0769dd1f31ca3fe1f72752f560394555796f55328f7de6e19641063312ea9"
+    },
+    "UPSTREAM_LICENSE": {
+      "bytes": 1082,
+      "sha256": "56dae2e7517ad143fab86e2fbc730a9e21f05c98f92d9e2e839c168ba7ba61b6"
+    },
+    "active_windows_1616.json": {
+      "bytes": 1681372,
+      "sha256": "3e1961f5550249604bf044edb65f1d1bc403ed75bd7178e283685ddb4f3cb880"
+    },
+    "eea_circuit_s835_exactwidth_dirty12.py": {
+      "bytes": 135702,
+      "sha256": "cf926e6782c8c4606627c299733646db8ee7359d62d8ffe4e6c1ea23a91cd216"
+    },
+    "eea_circuit_s835_lowaux.py": {
+      "bytes": 16951,
+      "sha256": "b5f7aaabff4d86912c4b28cff48c43fac465def7d51ca28eb59e47835b54b70c"
+    },
+    "eea_circuit_updated.py": {
+      "bytes": 137172,
+      "sha256": "067d363deeabb6532b52f42eba884b0d184c5b74aa14d2c0d33e5579f668d277"
+    },
+    "generate_eea_blob.py": {
+      "bytes": 5580,
+      "sha256": "a24d42628b411672bc2654a27ef0304017f8e00bc627c130b600c4c01005e512"
+    },
+    "reproduce_q823_idle_mbu.py": {
+      "bytes": 11656,
+      "sha256": "8f7ee4f2adf2fe586378fef216d91d6722c17e2e04e48056f812439ae293a27d"
+    },
+    "requirements.txt": {
+      "bytes": 132,
+      "sha256": "8e58eb863b22bd904337d069d4b4c893accd7c53cee3b1b6f65134c38c92747c"
+    }
+  },
+  "full9024_validated": false,
+  "schema": "q823-portable-source-reproduction-v1"
+}
