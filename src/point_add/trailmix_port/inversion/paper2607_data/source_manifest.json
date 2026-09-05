@@ -1,0 +1,50 @@
+{
+  "attribution": "gpt-5",
+  "baseline_generator_sha256": "32fe01b4f78f7774d07382fefc1952632ec74a9d4899c39db8984606072e4e5e",
+  "baseline_source_commit": "8266b1052865c2c08282548f9d6d62eb231f2242",
+  "benchmark_score_claimed": false,
+  "candidate_change": "Unconditional carry plus prefix-controlled T-sub sum; original generic API, R and T-add retained",
+  "certificate_normalization": "CRLF to LF; exact generator-pinned certificate bytes",
+  "conditional_helpers_use_measurement": false,
+  "dependency_source_note": "Two supplied support modules were absent from the baseline source tree.",
+  "files": {
+    "README-q823-idle-mbu.md": {
+      "bytes": 2993,
+      "sha256": "e807d783df1e7972e84504a940f2364e47bfa7ed86dca78ba7d945977e7bc3ee"
+    },
+    "UPSTREAM_LICENSE": {
+      "bytes": 1082,
+      "sha256": "56dae2e7517ad143fab86e2fbc730a9e21f05c98f92d9e2e839c168ba7ba61b6"
+    },
+    "active_windows_1616.json": {
+      "bytes": 1681372,
+      "sha256": "3e1961f5550249604bf044edb65f1d1bc403ed75bd7178e283685ddb4f3cb880"
+    },
+    "eea_circuit_s835_exactwidth_dirty12.py": {
+      "bytes": 130304,
+      "sha256": "d38bc62563bb27f6bca38c7beb6609f086b4d8e1bfc8ac506e8387bce2d87531"
+    },
+    "eea_circuit_s835_lowaux.py": {
+      "bytes": 16951,
+      "sha256": "b5f7aaabff4d86912c4b28cff48c43fac465def7d51ca28eb59e47835b54b70c"
+    },
+    "eea_circuit_updated.py": {
+      "bytes": 137172,
+      "sha256": "067d363deeabb6532b52f42eba884b0d184c5b74aa14d2c0d33e5579f668d277"
+    },
+    "generate_eea_blob.py": {
+      "bytes": 5580,
+      "sha256": "a24d42628b411672bc2654a27ef0304017f8e00bc627c130b600c4c01005e512"
+    },
+    "reproduce_q823_idle_mbu.py": {
+      "bytes": 11654,
+      "sha256": "3cac5d50bc9824aa7ca249b5de2d1f95d671a46b87c807953a21ec127fddb122"
+    },
+    "requirements.txt": {
+      "bytes": 132,
+      "sha256": "8e58eb863b22bd904337d069d4b4c893accd7c53cee3b1b6f65134c38c92747c"
+    }
+  },
+  "full9024_validated": false,
+  "schema": "q823-portable-source-reproduction-v1"
+}
