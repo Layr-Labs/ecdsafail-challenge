@@ -8,6 +8,9 @@ use classical::{coord_add3x, coord_rsub, coord_sub};
 use pingpong::{divide, multiply};
 use square::sub_square;
 
+mod affine_simplify;
+mod quadratic_simplify;
+mod truth_simplify;
 mod builder;
 mod classical;
 mod compare;
@@ -285,6 +288,10 @@ pub fn build() -> Vec<Op> {
     // lambda in the tree to buy, and funding it by narrowing the fold profile
     // was measured and does not pay.
     set_default_env("PP_ROUNDS_MUL", "694");
+    set_default_env("PP_SPLIT_FOLD", "0");
+    set_default_env("PP_CUT_SQIDENT", "1");
+    set_default_env("PP_CUT_WALKLOAN", "1");
+    set_default_env("PP_SIMPLIFY", "product,affine,quadratic,truth");
     // The peak, and therefore half the score. Nothing else sets it: the walk's
     // split adds and the replay's chunked adds both size themselves against this
     // and land on it exactly. The replay folds used to floor it as well -- the
@@ -295,7 +302,7 @@ pub fn build() -> Vec<Op> {
     // ~0.06 lambda, for -0.033% of score. That is 0.56% per lambda, five times
     // the rate anything else in the tree trades at, which is why it is taken --
     // but it is still lambda, and lambda is paid in the cost of grinding a nonce.
-    set_default_env("PP_WALK_MAX_QUBITS", "1260");
+    set_default_env("PP_WALK_MAX_QUBITS", "1259");
 
     // ── The replay fold window ─────────────────────────────────────────────
 
@@ -317,7 +324,7 @@ pub fn build() -> Vec<Op> {
     // walk and then collapses ~11x over the last hundred rounds. Keyed on the
     // width rather than the round so that regenerating the schedule above
     // carries the profile with it; `pingpong::fold_offset` applies it.
-    set_default_env("PP_FOLD_PROFILE", "38:0,32:-1,19:-3,0:-4");
+    set_default_env("PP_FOLD_PROFILE", "38:0,32:-1,19:-4,0:-4");
     // How many leading rounds carry one extra bit of window. The level, kept
     // deliberately out of the shape above: the measured rate is flat across
     // exactly the region this covers, so one threshold reads it more honestly
@@ -373,6 +380,7 @@ pub fn build() -> Vec<Op> {
     set_default_env("PP_CHUNK_SHAPE", "38:0,25:-2,0:-4");
     // The replay cell's overflow flag, same construction.
     set_default_env("PP_REPLAY_FLAG_COMPARE", "20");
+    set_default_env("PP_FLAG_WIDEN_DIV", "38");
     set_default_env("PP_FLAG_SHAPE", "38:0,25:-2,0:-4");
 
     // ── The two widths every approximation outside the replay reads ────────
@@ -395,12 +403,40 @@ pub fn build() -> Vec<Op> {
 
     // ── The ground nonce ───────────────────────────────────────────────────
     //
-    // Ground against this exact op stream, which is what selects the 9,024
-    // graded shots: ANY change to the emitted ops re-rolls them and voids this
-    // value. `md5sum ops.bin` is the acceptance test for a refactor here.
-    set_default_env("TAIL_NONCE", "4399134209103");
+    // Diagnostic placeholder; not a passing nonce. The exact op stream
+    // selects all 9,024 graded shots; any stream change rerolls them.
+    // Check the compressed ops.bin SHA256 before grinding this candidate.
+    set_default_env("TAIL_NONCE", "2886213855485");
 
     let mut ops = build_point_add();
+    // Exact op-stream post-passes, ported from the 2026-09-04 warpspeed
+    // campaign (R10 affine, R33 quadratic, R41 truth, R46 product). Each pass
+    // re-derives value supports from the stream's own ABI and drops or weakens
+    // CCX ops it proves redundant, so composition is semantics-preserving.
+    // PP_SIMPLIFY is a comma-separated list applied left to right; defaults to
+    // the full four-pass chain when unset, "off" disables. Runs BEFORE the tail
+    // append so the 96-X identity tail and the nonce it encodes are never
+    // reinterpreted by a proof.
+    let simplify_config =
+        env_raw("PP_SIMPLIFY").unwrap_or_else(|| "product,affine,quadratic,truth".to_string());
+    if simplify_config != "off" {
+        for name in simplify_config.split(',') {
+            let name = name.trim();
+            let before = ops.len();
+            ops = match name {
+                "affine" => affine_simplify::simplify(ops),
+                "quadratic" => quadratic_simplify::simplify(ops),
+                "truth" => truth_simplify::simplify(ops),
+                "product" => truth_simplify::simplify_products(ops),
+                other => panic!("PP_SIMPLIFY: unknown pass {other:?}"),
+            };
+            eprintln!(
+                "pp_simplify {name}: {before} -> {} ops ({} removed)",
+                ops.len(),
+                before - ops.len()
+            );
+        }
+    }
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;

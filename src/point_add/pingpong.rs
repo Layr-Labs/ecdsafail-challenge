@@ -52,8 +52,8 @@ use super::const_arith::{
     add_const, cadd_const_per_position_trunc, cadd_const_trunc, csub_const_trunc,
     csub_const_trunc_ctrl_low0, sub_const,
 };
-use super::modular::{add_f_window, f, f_slice, ripple_add};
-use super::{fold_guard, pinned_env, required_env, Builder, N, SECP256K1_P};
+use super::modular::{add_f_window, f, f_slice, ripple_add, ripple_add_lent};
+use super::{env_flag, env_raw, fold_guard, pinned_env, required_env, Builder, N, SECP256K1_P};
 use crate::circuit::{BitId, QubitId};
 use alloy_primitives::U256;
 
@@ -84,6 +84,7 @@ pinned_env!(replay_chunk_compare, "PP_REPLAY_CHUNK_COMPARE");
 pinned_env!(replay_fold_window, "PP_REPLAY_FOLD_WINDOW");
 pinned_env!(replay_fold_window_mul, "PP_REPLAY_FOLD_WINDOW_MUL");
 pinned_env!(replay_flag_compare, "PP_REPLAY_FLAG_COMPARE");
+pinned_env!(flag_widen_div, "PP_FLAG_WIDEN_DIV");
 
 // The circuit's peak, and the only width knob there is. Both carry-ladder
 // sites -- `walk_low_chunk` for the walk's split adds, `chunked_add` for the
@@ -113,6 +114,17 @@ const MODEL_OVERCOUNT: usize = 4;
 // with neither dominating across budgets. Deriving it would dress a tuning
 // choice up as a derivation, so it stays a swept knob.
 pinned_env!(plan_r2, "PP_R2");
+
+// Split the replay fold's carry ladder at bit 32 (`PP_SPLIT_FOLD=1`): k*f is
+// k*977 + k*2^32, so one ripple adds k*977 into bits 0..32 (mod 2^32) and a
+// second adds k into bits 32..W. The low block's wrap/borrow into bit 32 is
+// deliberately DROPPED -- a new, bounded approximation (~977*E|k|/2^32 per
+// cell), not a bug to repair. Default off; with the gate off the emitted
+// stream is byte-identical to the single-ladder form.
+fn split_fold() -> bool {
+    static SLOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SLOT.get_or_init(|| super::env_flag("PP_SPLIT_FOLD"))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PingPongDirection {
@@ -910,6 +922,11 @@ fn walk_operands<'a>(
 /// carries are ever live at once. [`walk_low_chunk`] decides that from the live
 /// count, which is why the caller passes nothing: both call sites reach here
 /// with the round's whole footprint already allocated.
+///
+/// With `PP_CUT_WALKLOAN` set, the add also lends its duplicated bit-1 wire
+/// into its own carry ladder: after the bit-1 preamble, `target[0]` is a known
+/// function of other live wires (see [`walk_add_single`]), so it parks at |0>
+/// for the length of the high ladder and the ladder runs one wire narrower.
 fn walk_add(
     circ: &mut Builder,
     sign: QubitId,
@@ -917,9 +934,49 @@ fn walk_add(
     target: &[QubitId],
     target0_is_one: bool,
 ) {
-    match walk_low_chunk(circ, source.len()) {
-        Some(low) => walk_add_split(circ, sign, source, target, target0_is_one, low),
-        None => walk_add_single(circ, sign, source, target, target0_is_one),
+    let loan = cut_walkloan();
+    match walk_low_chunk(circ, source.len(), loan) {
+        Some(low) => walk_add_split(circ, sign, source, target, target0_is_one, low, loan),
+        None => walk_add_single(circ, sign, source, target, target0_is_one, loan),
+    }
+}
+
+/// `PP_CUT_WALKLOAN` (default ON): lend the walk adder's duplicated bit-1
+/// wire into its carry ladder, narrowing every split's boundary repair by one
+/// bit. Setting it to 0/false/no/off restores the pre-cut stream bit-for-bit.
+fn cut_walkloan() -> bool {
+    static SLOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SLOT.get_or_init(|| {
+        env_raw("PP_CUT_WALKLOAN").is_none_or(|value| {
+            !matches!(
+                value.to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
+    })
+}
+
+/// Park the duplicated bit-1 wire at |0> for lending into a carry ladder, or
+/// undo that parking. Self-inverse.
+///
+/// After the bit-1 preamble (`cx_all` plus the two [`carry1_into`]s) the wire
+/// is a known function of wires that stay live, so it can be cleared now and
+/// rebuilt exactly once the ladder is done with it:
+///
+///   * forward (`target0_is_one`), where the tape gives `sign = t1 ^ s1`:
+///     `target[0] = t1 ^ 1 = source[0]` -- the two wires hold the SAME value,
+///     so one CX clears it (and re-creates it).
+///   * walk-back (`target0_is_one = false`): `target[0] = D1`, bit 1 of the
+///     doubled value, which is the constant one -- the walk-back comment's
+///     "bit 1 of twice an odd value is a one", the same fact
+///     `erase_boundary_carry`'s classical borrow relies on -- so one X clears
+///     it. (The `sign` and `carry1_into` applications cancel out of this wire
+///     regardless of the tape value.)
+fn walkloan_park(circ: &mut Builder, source0: QubitId, target0: QubitId, forward: bool) {
+    if forward {
+        circ.cx(source0, target0);
+    } else {
+        circ.x(target0);
     }
 }
 
@@ -947,6 +1004,7 @@ fn walk_add_single(
     source: &[QubitId],
     target: &[QubitId],
     target0_is_one: bool,
+    loan: bool,
 ) {
     let m = source.len();
     assert_eq!(m, target.len());
@@ -960,6 +1018,12 @@ fn walk_add_single(
     // Bits 1 and 2, whose carries-in are classical.
     carry1_into(circ, sign, target0_is_one, source[0]);
     carry1_into(circ, sign, target0_is_one, target[0]);
+    // With the loan on, `target[0]` is now redundant (see `walkloan_park`) and
+    // nothing reads it until the bit-1 unwind below: park it at |0> and lend it
+    // to the ripple, whose ladder is then one wire narrower.
+    if loan {
+        walkloan_park(circ, source[0], target[0], target0_is_one);
+    }
     circ.cx(source[0], source[1]);
     carry1_into(circ, sign, target0_is_one, source[1]);
     circ.cx(source[0], target[1]);
@@ -968,7 +1032,14 @@ fn walk_add_single(
     circ.cx(source[0], carry2);
     carry1_into(circ, sign, target0_is_one, carry2);
 
-    ripple_add(circ, &source[2..], &target[2..], Some(carry2), None);
+    if loan {
+        ripple_add_lent(circ, &source[2..], &target[2..], Some(carry2), target[0]);
+        // The lent wire came back clean and `source[0]` is untouched since the
+        // park (it only ever reads as a control), so the same gate restores.
+        walkloan_park(circ, source[0], target[0], target0_is_one);
+    } else {
+        ripple_add(circ, &source[2..], &target[2..], Some(carry2), None);
+    }
 
     // Bit 2, in reverse: mirrors the special case above.
     circ.cx(source[0], carry2);
@@ -1022,13 +1093,23 @@ fn walk_add_single(
 /// build and neither ever binds -- a round narrow enough for the `n < 12` test
 /// never reaches `low >= 4` anyway -- so at this budget `low < 4` is the only
 /// live rejection.
-fn walk_low_chunk(circ: &Builder, m: usize) -> Option<usize> {
+///
+/// With the `PP_CUT_WALKLOAN` borrow the picture shifts by one wire: the
+/// single ladder's high ripple lends `target[0]`, peaking at `live + m - 4`,
+/// so it still fits at `low == 4`; and a split's high chunk lends it too,
+/// peaking at `live + (m - low) - 1`, so the split point comes out one bit
+/// narrower. The borrow needs a real ladder to lend into: below
+/// `MIN_WALK_WIDTH` the high ripple has no carry position to spare and the
+/// arithmetic is the pre-loan one.
+fn walk_low_chunk(circ: &Builder, m: usize, loan: bool) -> Option<usize> {
     // `low` is a bit position, so it counts against the full value width.
     let n = m + 1;
     let low = (circ.active_qubits() as usize + m).saturating_sub(walk_max_qubits());
-    if n < 12 || low < 4 {
+    let single_fits_below = if loan && m >= MIN_WALK_WIDTH { 5 } else { 4 };
+    if n < 12 || low < single_fits_below {
         return None;
     }
+    let low = if loan { low - 1 } else { low };
     (low + 2 <= n && low * 2 <= n).then_some(low)
 }
 
@@ -1046,6 +1127,7 @@ fn walk_add_split(
     target: &[QubitId],
     target0_is_one: bool,
     low: usize,
+    loan: bool,
 ) {
     let m = source.len();
     assert_eq!(m, target.len());
@@ -1064,6 +1146,13 @@ fn walk_add_split(
     circ.cx(source[0], carry1);
     carry1_into(circ, sign, target0_is_one, source[0]);
     carry1_into(circ, sign, target0_is_one, target[0]);
+    // With the loan on, `target[0]` is now redundant (see `walkloan_park`):
+    // park it at |0> for the high chunk's ladder. Neither chunk's ripple nor
+    // the boundary erasure reads it; the bit-1 sum it would have accumulated is
+    // rebuilt from `sign` and `source[0]` at the restore below.
+    if loan {
+        walkloan_park(circ, source[0], target[0], target0_is_one);
+    }
 
     // The low chunk vents its top carry onto `boundary` and retires its own
     // ladder in the same call, so the two chunks' ladders are never live
@@ -1077,18 +1166,40 @@ fn walk_add_split(
     );
     carry1_undo(circ, sign, target0_is_one, source[0]);
     circ.cx(source[0], carry1);
-    circ.cx(source[0], target[0]);
+    if !loan {
+        circ.cx(source[0], target[0]);
+    }
     circ.free(carry1);
 
     // High chunk, carried in on `boundary` and wrapping at the top.
     assert!(m - low >= 1, "low + 1 <= m leaves a final high carry");
-    ripple_add(
-        circ,
-        &source[low - 1..],
-        &target[low - 1..],
-        Some(boundary),
-        None,
-    );
+    if loan {
+        ripple_add_lent(
+            circ,
+            &source[low - 1..],
+            &target[low - 1..],
+            Some(boundary),
+            target[0],
+        );
+        // The lent wire came back clean; rebuild the bit-1 value the un-loaned
+        // code holds here: `t1 ^ target0` forward (where that is
+        // `sign ^ source[0] ^ 1`), the constant one on walk-back -- then the
+        // shared CX adds the source's bit 1 to finish the bit-1 sum.
+        if target0_is_one {
+            circ.cx(sign, target[0]);
+            circ.cx(source[0], target[0]);
+        }
+        circ.x(target[0]);
+        circ.cx(source[0], target[0]);
+    } else {
+        ripple_add(
+            circ,
+            &source[low - 1..],
+            &target[low - 1..],
+            Some(boundary),
+            None,
+        );
+    }
 
     erase_boundary_carry(circ, source, target, boundary, low);
 
@@ -1482,7 +1593,7 @@ fn replay_add_halve(
 ) {
     let f = f();
     circ.cx_all(sign, target);
-    let overflow = chunked_add(circ, source, target, round);
+    let overflow = chunked_add(circ, source, target, round, false);
 
     let parity = circ.alloc_qubit();
     circ.cx(target[0], parity);
@@ -1535,7 +1646,7 @@ fn replay_add_halve(
 
     circ.cx(overflow, parity);
     circ.cx(sign, parity);
-    let k = flag_compare(round);
+    let k = flag_compare(round) + usize::from(value_width(round) >= flag_widen_div());
     circ.record_replay_site('F', round, N, k);
     erase_with_compare(circ, overflow, &target[N - k..], &source[N - k..], None);
     circ.free(overflow);
@@ -1559,7 +1670,7 @@ fn replay_double_add(
     let doubled_out = start_doubling(circ, target);
 
     circ.cx_all(sign, target);
-    let add_out = chunked_add(circ, source, target, round);
+    let add_out = chunked_add(circ, source, target, round, true);
 
     // In the complemented subtraction frame the correction multiple is d+o when
     // sign=0 and o-d when sign=1, hence {-1,0,+1,+2}.
@@ -1632,11 +1743,25 @@ fn replay_double_add(
     circ.cx(add_out, doubled_out);
     circ.free(doubled_out);
 
-    let k = flag_compare(round);
+    let wide = value_width(round) >= 38;
+    let k = flag_compare(round) + usize::from(a5_policy() == "mul-f-plus1-early200" && (2..202).contains(&round));
+    let borrow = if wide && matches!(a5_policy(), "mul-f-seed" | "mul-fb-seed") {
+        Some(source[N - k - 1])
+    } else { None };
     circ.record_replay_site('F', round, N, k);
-    erase_with_compare(circ, add_out, &target[N - k..], &source[N - k..], None);
+    erase_with_compare(circ, add_out, &target[N - k..], &source[N - k..], borrow);
     circ.free(add_out);
     circ.cx_all(sign, target);
+}
+
+// C59X defaults to the adopted A5 mul-fb-seed predictor. No new carry is claimed exact.
+fn a5_policy() -> &'static str {
+    static POLICY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    POLICY.get_or_init(|| {
+        let s = std::env::var("A5_REPAIR").unwrap_or_else(|_| "mul-fb-seed".into());
+        assert!(matches!(s.as_str(), "off" | "mul-f-seed" | "mul-b-seed" | "mul-fb-seed" | "mul-f-plus1-early200"));
+        s
+    }).as_str()
 }
 
 // ─── The replay's chunked adder ────────────────────────────────────────────
@@ -1747,7 +1872,7 @@ fn chunk_layout(n: usize, target: usize) -> Option<Vec<(usize, usize)>> {
 /// builder exactly as [`walk_low_chunk`] asks it. Nothing about *what* is live —
 /// the tape, the coefficient pair, the walk registers, this cell's own retained
 /// wires — appears in it, so none of them can drift out of a model.
-fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: usize) -> QubitId {
+fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: usize, multiply: bool) -> QubitId {
     let ladder = walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
     let bounds = chunk_layout(addend.len(), ladder).expect("a chunk layout fits the ladder target");
 
@@ -1762,7 +1887,11 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
             let compare = chunk_compare(round).min(phi - plo);
             circ.record_replay_site('B', round, phi, compare);
             let window = phi - compare..phi;
-            erase_with_compare(circ, carry, &acc[window.clone()], &addend[window], None);
+            let borrow = if multiply && value_width(round) >= 38 && compare < phi - plo
+                && matches!(a5_policy(), "mul-b-seed" | "mul-fb-seed") {
+                Some(addend[phi - compare - 1])
+            } else { None };
+            erase_with_compare(circ, carry, &acc[window.clone()], &addend[window], borrow);
             circ.free(carry);
         }
         carry_in = Some(next);
@@ -1819,6 +1948,24 @@ fn twos_complement_bits(value: U256, width: usize) -> Vec<bool> {
 /// or the incoming carry when there is none — carries that XOR for the length of
 /// one ripple stage, so no operand register is ever built.
 fn fold_selected(
+    circ: &mut Builder,
+    acc: &[QubitId],
+    f: U256,
+    plus_f: QubitId,
+    plus_2f: Option<QubitId>,
+    minus_f: QubitId,
+    first_carry: QubitId,
+) {
+    if split_fold() {
+        return fold_selected_split(circ, acc, f, plus_f, plus_2f, minus_f, first_carry);
+    }
+    fold_selected_single(circ, acc, f, plus_f, plus_2f, minus_f, first_carry)
+}
+
+/// The single-ladder fold: one ripple over the whole window. This is the
+/// pre-split construction, and also the building block the split calls twice
+/// -- the inner calls must NOT re-enter the gate.
+fn fold_selected_single(
     circ: &mut Builder,
     acc: &[QubitId],
     f: U256,
@@ -1895,6 +2042,92 @@ fn fold_selected(
         );
     }
     circ.free_vec(&carries);
+}
+
+/// The bit position the split fold divides the window at: the `2^32` term of
+/// `f = 2^32 + 977` goes to the high ripple, the `977` stays in the low one.
+const FOLD_SPLIT_BIT: usize = 32;
+
+/// [`fold_selected`] as two sequential ripples, gated by [`split_fold`]:
+/// `k*977` into bits `0..FOLD_SPLIT_BIT` (mod `2^32`), then `k` into bits
+/// `FOLD_SPLIT_BIT..`.
+///
+/// The low block's wrap/borrow into bit 32 is DELIBERATELY omitted -- the one
+/// place this differs from the single-ladder fold. When the low word `z`
+/// satisfies `z + 977*k >= 2^32` (k > 0) or `z < 977*|k|` (k < 0) the true
+/// fold carries or borrows across the split and this result is off by `2^32`;
+/// the per-cell rate is `~977*E|k| / 2^32`.
+///
+/// Both halves are the ordinary fold with a smaller constant, so the selector
+/// identities fall out of the existing machinery. The high half runs with the
+/// constant 1, whose two's complement is all ones: bit 0's addend is
+/// `plus_f ^ minus_f`, bit 1's is `plus_2f ^ minus_f`, and every later bit's
+/// is `minus_f`. The low half runs with 977, whose bits 0..32 are `f`'s own,
+/// so the caller's `first_carry` (bit 0's carry-out) is unchanged.
+///
+/// Cost against the single ladder: `(32 - 2) + (width - 32 - 2)` ripple
+/// Toffoli plus one for the high block's first carry -- which the unsplit
+/// form receives from its caller -- against `width - 2`, i.e. one Toffoli
+/// cheaper per cell, and the deepest live ladder is `32 - 3` carries rather
+/// than `width - 3`, which is what the binding trailing-batch cells feel.
+fn fold_selected_split(
+    circ: &mut Builder,
+    acc: &[QubitId],
+    f: U256,
+    plus_f: QubitId,
+    plus_2f: Option<QubitId>,
+    minus_f: QubitId,
+    first_carry: QubitId,
+) {
+    let width = acc.len();
+    // The high block must be wide enough to hold a ladder at all, with margin.
+    assert!(width >= 36, "split fold needs a window of at least 36 bits");
+    let f_low = f & ((U256::from(1) << FOLD_SPLIT_BIT).wrapping_sub(U256::from(1)));
+    assert_eq!(
+        f >> FOLD_SPLIT_BIT,
+        U256::from(1),
+        "split fold assumes f = 2^32 + 977"
+    );
+
+    // Low block: k*977 mod 2^32. Bit 0's addend is the same as the unsplit
+    // fold's, so the caller-prepared carry into bit 1 serves unchanged. The
+    // carry off bit 31 -- the wrap into bit 32 -- is dropped: that drop is
+    // the approximation.
+    fold_selected_single(
+        circ,
+        &acc[..FOLD_SPLIT_BIT],
+        f_low,
+        plus_f,
+        plus_2f,
+        minus_f,
+        first_carry,
+    );
+
+    // High block: k mod 2^(width - 32). The carry out of its bit 0,
+    // `acc[32] AND (plus_f ^ minus_f)`, has no caller-prepared wire, so it is
+    // computed here -- the one Toffoli the split pays back -- and erased with
+    // the restore/uncompute/re-apply discipline `replay_double_add` uses on
+    // its own `first_carry`.
+    let boundary = circ.alloc_qubit();
+    with_selector_xor(circ, &[plus_f, minus_f], plus_f, |circ, operand| {
+        circ.ccx(acc[FOLD_SPLIT_BIT], operand, boundary);
+    });
+    fold_selected_single(
+        circ,
+        &acc[FOLD_SPLIT_BIT..],
+        U256::from(1),
+        plus_f,
+        plus_2f,
+        minus_f,
+        boundary,
+    );
+    with_selector_xor(circ, &[plus_f, minus_f], plus_f, |circ, operand| {
+        // The fold left `acc[32] ^ operand` in `acc[32]`; uncomputing the AND
+        // needs its compute-time operands back.
+        circ.cx(operand, acc[FOLD_SPLIT_BIT]);
+        and_uncompute(circ, boundary, acc[FOLD_SPLIT_BIT], operand);
+        circ.cx(operand, acc[FOLD_SPLIT_BIT]);
+    });
 }
 
 /// One [`fold_selected`] ripple stage: `carry = MAJ(acc, addend, previous)` with

@@ -15,9 +15,10 @@
 //! as a `bool` and never as a wire: `negate` turns an add into the
 //! complement-add-complement subtraction.
 
-use super::modular::{add_wide, addsub_full, addsub_wide, mod_addsub, sub_wide};
+use super::modular::{addsub_full_low, addsub_wide_low, Carry0, Carry1, add_wide, addsub_full, addsub_wide, mod_addsub, sub_wide};
 use super::{fold_guard, pinned_env, Builder, N};
 use crate::circuit::QubitId;
+fn cut_sqident() -> bool { super::env_flag("PP_CUT_SQIDENT") }
 
 /// `f = 2^256 - p` in non-adjacent form: the value is `sum (-1)^neg * 2^shift`,
 /// i.e. `1 + 2^4 - 2^6 + 2^10 + 2^32`. Five terms against the constant's six set
@@ -116,7 +117,9 @@ fn diag_correction(circ: &mut Builder, x: &[QubitId], product: &[QubitId], inver
     }
     let mut value = x.to_vec();
     value.extend_from_slice(&pads);
-    addsub_full(circ, &value, product, inverse);
+    if cut_sqident() && 2*m >= 4 {
+        addsub_full_low(circ, &value, product, inverse, Carry0::IsAddend0, Carry1::Full);
+    } else { addsub_full(circ, &value, product, inverse); }
     for i in 0..m - 1 {
         circ.x(pads[i]);
         circ.cx(x[i], pads[i]);
@@ -260,11 +263,18 @@ fn tri_square_k2r(circ: &mut Builder, x: &[QubitId], product: &[QubitId]) -> K2R
     // two's-complement frame never wraps at this width.
     let cross = circ.alloc_qubits(2 * t.len());
     let sum = square_half(circ, &t, &cross, sq_split_sum_min());
-    sub_wide(circ, a2, &cross);
-    sub_wide(circ, b2, &cross);
+    if cut_sqident() {
+        addsub_wide_low(circ, a2, &cross, true, Carry0::Full, Carry1::CopiesCarry0);
+        addsub_wide_low(circ, b2, &cross, true, Carry0::Zero, Carry1::CopiesCarry0);
+    } else {
+        sub_wide(circ, a2, &cross);
+        sub_wide(circ, b2, &cross);
+    }
     // product += 2ab << lo, exact full ripple to the top (x^2 < 2^(2m), so the
     // top never overflows).
-    add_wide(circ, &cross, &product[lo..]);
+    if cut_sqident() {
+        addsub_wide_low(circ, &cross, &product[lo..], false, Carry0::Zero, Carry1::Full);
+    } else { add_wide(circ, &cross, &product[lo..]); }
     K2Retained { carry, cross, low, sum }
 }
 
@@ -285,11 +295,18 @@ fn tri_square_k2r_inv(
     let mut t = bs.to_vec();
     t.push(carry);
     // product -= 2ab << lo: the halves are pure a^2 / b^2 again.
-    sub_wide(circ, &cross, &product[lo..]);
+    if cut_sqident() {
+        addsub_wide_low(circ, &cross, &product[lo..], true, Carry0::Zero, Carry1::Full);
+    } else { sub_wide(circ, &cross, &product[lo..]); }
     // cross: 2ab -> t^2, then clear it with the inverse square (which also
     // restores t if its own split modified it).
-    add_wide(circ, b2, &cross);
-    add_wide(circ, a2, &cross);
+    if cut_sqident() {
+        addsub_wide_low(circ, b2, &cross, false, Carry0::Zero, Carry1::CopiesCarry0);
+        addsub_wide_low(circ, a2, &cross, false, Carry0::Full, Carry1::CopiesCarry0);
+    } else {
+        add_wide(circ, b2, &cross);
+        add_wide(circ, a2, &cross);
+    }
     square_half_inv(circ, &t, &cross, sum);
     circ.free_vec(&cross);
     // Clear a^2, restoring a first if it was split, then uncompute t = a + b:
@@ -352,3 +369,7 @@ pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
     sub_wide(circ, y_lo, &sum);
     circ.free(sum_carry);
 }
+
+#[cfg(test)]
+#[path="a2_square_tests.rs"]
+mod a2_tests;

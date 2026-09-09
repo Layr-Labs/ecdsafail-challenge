@@ -59,6 +59,13 @@ pub fn ripple_add(
     carry_in: Option<QubitId>,
     carry_out: Option<QubitId>,
 ) {
+    ripple_add_proved(circ, addend, acc, carry_in, carry_out, Carry0::Full, Carry1::Full);
+}
+
+fn ripple_add_proved(
+    circ: &mut Builder, addend: &[QubitId], acc: &[QubitId],
+    carry_in: Option<QubitId>, carry_out: Option<QubitId>, c0: Carry0, c1: Carry1,
+) {
     let width = acc.len();
     let k = addend.len();
     assert!(k >= 1 && k <= width, "ripple_add: addend must be 1..=acc bits wide");
@@ -89,7 +96,16 @@ pub fn ripple_add(
     let zero_prev = |i: usize| previous(i).expect("a zero-addend position always has a carry in");
 
     for i in 0..carries.len() {
-        if i < k {
+        if i == 0 && c0 != Carry0::Full {
+            assert!(carry_in.is_none() && k >= 2 && width >= 4);
+            if c0 == Carry0::IsAddend0 { circ.cx(addend[0], carries[0]); }
+        } else if i == 1 && c1 == Carry1::CopiesCarry0 {
+            assert!(carry_in.is_none() && k >= 2 && width >= 4);
+            let prev = previous(i).unwrap();
+            circ.cx(prev, addend[i]);
+            circ.cx(prev, acc[i]);
+            circ.cx(prev, carries[i]);
+        } else if i < k {
             carry_step(circ, addend[i], acc[i], previous(i), carries[i]);
         } else {
             circ.ccx(zero_prev(i), acc[i], carries[i]);
@@ -242,6 +258,78 @@ pub fn add_f_window(
 
 /// `acc += addend`, or `acc -= addend` when `inverse` -- subtraction is the
 /// complement-add-complement identity `~(~acc + v) == acc - v`.
+/// [`ripple_add`] with the carry out of position `width - 3` on a LENT wire
+/// instead of an owned one: one fewer allocation, one narrower ladder.
+///
+/// `lent` must arrive clean (|0>) and is returned clean: its unwind is the
+/// same measurement erasure the owned carries get, minus the `free` -- the
+/// wire stays the caller's. Gate sequence, wire values and phase repairs are
+/// otherwise identical to [`ripple_add`] with one more owned carry, so the sum
+/// computed is bit-for-bit the same.
+///
+/// Wrapped mode only (no carry-out): both walk-adder callers wrap. With
+/// `width < 3` there is no carry position below the terminal fusion to lend,
+/// so this falls back to [`ripple_add`] and `lent` is never touched.
+pub fn ripple_add_lent(
+    circ: &mut Builder,
+    addend: &[QubitId],
+    acc: &[QubitId],
+    carry_in: Option<QubitId>,
+    lent: QubitId,
+) {
+    let width = addend.len();
+    assert_eq!(width, acc.len(), "ripple_add_lent: width mismatch");
+    if width < 3 {
+        ripple_add(circ, addend, acc, carry_in, None);
+        return;
+    }
+    // Owned carries for positions 0..width-3; the lent wire takes the carry out
+    // of position width - 3, which the terminal fusion reads.
+    let owned = width - 3;
+    let carries = circ.alloc_qubits(owned);
+    let previous = |i: usize| {
+        if i == 0 {
+            carry_in
+        } else {
+            Some(carries[i - 1])
+        }
+    };
+
+    for i in 0..owned {
+        carry_step(circ, addend[i], acc[i], previous(i), carries[i]);
+    }
+    carry_step(circ, addend[owned], acc[owned], previous(owned), lent);
+    terminal_step(circ, addend, acc, Some(lent));
+
+    unwind_carry_step_lent(circ, addend[owned], acc[owned], previous(owned), lent);
+    for i in (0..owned).rev() {
+        unwind_carry_step(circ, addend[i], acc[i], previous(i), carries[i]);
+    }
+}
+
+/// [`unwind_carry_step`] for a lent carry wire: same erasure and phase repair,
+/// but the wire is the caller's, so there is no `free` -- the `hmr` has
+/// already left it clean, which is exactly the state it was lent in.
+fn unwind_carry_step_lent(
+    circ: &mut Builder,
+    addend: QubitId,
+    acc: QubitId,
+    previous: Option<QubitId>,
+    carry: QubitId,
+) {
+    if let Some(previous) = previous {
+        circ.cx(previous, carry);
+    }
+    let measured = circ.alloc_bit();
+    circ.hmr(carry, measured);
+    circ.cz_if(addend, acc, measured);
+    circ.free_bit(measured);
+    if let Some(previous) = previous {
+        circ.cx(previous, addend);
+    }
+    circ.cx(addend, acc);
+}
+
 pub fn addsub_full(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], inverse: bool) {
     if inverse {
         circ.x_all(acc);
@@ -385,4 +473,18 @@ pub fn mod_sub_vented(circ: &mut Builder, x: &[QubitId], y: &[QubitId]) {
     );
     assert_eq!(x.len(), 256, "secp256k1 mod_sub_vented expects n=256");
     mod_addsub(circ, true, x, y);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Carry0 { Full, IsAddend0, Zero }
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Carry1 { Full, CopiesCarry0 }
+pub fn addsub_full_low(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], inverse: bool, c0: Carry0, c1: Carry1) {
+    if inverse { circ.x_all(acc); }
+    ripple_add_proved(circ, value, acc, None, None, c0, c1);
+    if inverse { circ.x_all(acc); }
+}
+pub fn addsub_wide_low(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], inverse: bool, c0: Carry0, c1: Carry1) {
+    assert!(value.len() <= acc.len());
+    addsub_full_low(circ, value, acc, inverse, c0, c1);
 }
