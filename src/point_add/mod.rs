@@ -280,7 +280,7 @@ pub fn build() -> Vec<Op> {
             "60x2,59x2,58x2,57x2,56x2,55x3,54x3,53x2,52x3,51x2,50x4,49x2,48x2,47x3,",
             "46x3,45x2,44x2,43x3,42x2,41x2,40x3,39x2,38x2,37x3,36x4,35x2,34x3,33x2,",
             "32x2,31x2,30x2,29x2,28x4,27x2,26x2,25x3,24x2,23x2,22x2,21x3,20x3,19x2,",
-            "18x3,17x2,16x2,15x3,14x2,13x2,12x2,11x2,10x2,9x4,8x9",
+            "18x3,17x2,16x2,15x3,14x2,13x2,12x2,11x2,10x2,9x4,8x8",
         ),
     );
     // The multiply walk's round count. The divide's is the schedule's length
@@ -302,7 +302,7 @@ pub fn build() -> Vec<Op> {
     // ~0.06 lambda, for -0.033% of score. That is 0.56% per lambda, five times
     // the rate anything else in the tree trades at, which is why it is taken --
     // but it is still lambda, and lambda is paid in the cost of grinding a nonce.
-    set_default_env("PP_WALK_MAX_QUBITS", "1259");
+    set_default_env("PP_WALK_MAX_QUBITS", "1258");
 
     // ── The replay fold window ─────────────────────────────────────────────
 
@@ -324,7 +324,7 @@ pub fn build() -> Vec<Op> {
     // walk and then collapses ~11x over the last hundred rounds. Keyed on the
     // width rather than the round so that regenerating the schedule above
     // carries the profile with it; `pingpong::fold_offset` applies it.
-    set_default_env("PP_FOLD_PROFILE", "38:0,32:-1,19:-4,0:-4");
+    set_default_env("PP_FOLD_PROFILE", "38:0,32:-2,19:-6,0:-6");
     // How many leading rounds carry one extra bit of window. The level, kept
     // deliberately out of the shape above: the measured rate is flat across
     // exactly the region this covers, so one threshold reads it more honestly
