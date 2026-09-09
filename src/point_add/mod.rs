@@ -280,7 +280,7 @@ pub fn build() -> Vec<Op> {
             "60x2,59x2,58x2,57x2,56x2,55x3,54x3,53x2,52x3,51x2,50x4,49x2,48x2,47x3,",
             "46x3,45x2,44x2,43x3,42x2,41x2,40x3,39x2,38x2,37x3,36x4,35x2,34x3,33x2,",
             "32x2,31x2,30x2,29x2,28x4,27x2,26x2,25x3,24x2,23x2,22x2,21x3,20x3,19x2,",
-            "18x3,17x2,16x2,15x3,14x2,13x2,12x2,11x2,10x2,9x4,8x9",
+            "18x3,17x2,16x2,15x3,14x2,13x2,12x2,11x2,10x2,9x4,8x8",
         ),
     );
     // The multiply walk's round count. The divide's is the schedule's length
@@ -329,7 +329,7 @@ pub fn build() -> Vec<Op> {
     // deliberately out of the shape above: the measured rate is flat across
     // exactly the region this covers, so one threshold reads it more honestly
     // than another band would.
-    set_default_env("PP_FOLD_WIDEN", "242");
+    set_default_env("PP_FOLD_WIDEN", "400");
     // Where the trailing replay batch takes over. Everything above it is
     // replayed at the terminal state, where `loan_terminal` has collapsed both
     // walk registers to a sign wire and the tape is at its longest -- so the
