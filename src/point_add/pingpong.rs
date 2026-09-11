@@ -732,6 +732,28 @@ fn flag_compare(round: usize) -> usize {
         .expect("the flag shape keeps the comparison positive")
 }
 
+/// One-shot profile dump for the classical nonce filter (env-gated,
+/// default off so the shipped stream is byte-identical).  One line per round:
+/// `W <r> <width> <fold_div> <fold_mul> <chunk_cmp> <flag_cmp>`
+/// (fields are -1 past a direction's round count).
+pub(crate) fn dump_profile_tables() {
+    if std::env::var_os("SUB4_PP_DUMP_WIDTHS").is_none() {
+        return;
+    }
+    let pd = Plan::new(PingPongDirection::Divide);
+    let pm = Plan::new(PingPongDirection::Multiply);
+    let (d, m) = (rounds_div(), rounds_mul());
+    eprintln!("ROUNDS divide={} multiply={}", d, m);
+    for r in 0..700 {
+        let w = if r < d { value_width(r) as i32 } else { -1 };
+        let fd = if r < d { pd.fold_window(r) as i32 } else { -1 };
+        let fm = if r < m { pm.fold_window(r) as i32 } else { -1 };
+        let cc = if r < d { chunk_compare(r) as i32 } else { -1 };
+        let fc = if r < d { flag_compare(r) as i32 } else { -1 };
+        eprintln!("W {} {} {} {} {} {}", r, w, fd, fm, cc, fc);
+    }
+}
+
 /// The first round the shape narrows at, i.e. the first whose walk width has
 /// dropped below the top band. The trailing replay batch is the one region whose
 /// fold sets the peak, so it must lie entirely above this -- which is what
@@ -1743,7 +1765,7 @@ fn replay_double_add(
     circ.cx(add_out, doubled_out);
     circ.free(doubled_out);
 
-    let wide = value_width(round) >= 0;
+    let wide = value_width(round) >= 38;
     let k = flag_compare(round) + usize::from(a5_policy() == "mul-f-plus1-early200" && (2..202).contains(&round));
     let borrow = if wide && matches!(a5_policy(), "mul-f-seed" | "mul-fb-seed") {
         Some(source[N - k - 1])
@@ -1887,7 +1909,7 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
             let compare = chunk_compare(round).min(phi - plo);
             circ.record_replay_site('B', round, phi, compare);
             let window = phi - compare..phi;
-            let borrow = if multiply && value_width(round) >= 0 && compare < phi - plo
+            let borrow = if multiply && value_width(round) >= 38 && compare < phi - plo
                 && matches!(a5_policy(), "mul-b-seed" | "mul-fb-seed") {
                 Some(addend[phi - compare - 1])
             } else { None };
