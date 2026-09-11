@@ -302,7 +302,7 @@ pub fn build() -> Vec<Op> {
     // ~0.06 lambda, for -0.033% of score. That is 0.56% per lambda, five times
     // the rate anything else in the tree trades at, which is why it is taken --
     // but it is still lambda, and lambda is paid in the cost of grinding a nonce.
-    set_default_env("PP_WALK_MAX_QUBITS", "1259");
+    set_default_env("PP_WALK_MAX_QUBITS", "1258");
 
     // ── The replay fold window ─────────────────────────────────────────────
 
@@ -324,7 +324,7 @@ pub fn build() -> Vec<Op> {
     // walk and then collapses ~11x over the last hundred rounds. Keyed on the
     // width rather than the round so that regenerating the schedule above
     // carries the profile with it; `pingpong::fold_offset` applies it.
-    set_default_env("PP_FOLD_PROFILE", "38:0,32:-1,19:-4,0:-4");
+    set_default_env("PP_FOLD_PROFILE", "38:0,32:-2,19:-5,0:-5");
     // How many leading rounds carry one extra bit of window. The level, kept
     // deliberately out of the shape above: the measured rate is flat across
     // exactly the region this covers, so one threshold reads it more honestly
@@ -406,7 +406,7 @@ pub fn build() -> Vec<Op> {
     // Diagnostic placeholder; not a passing nonce. The exact op stream
     // selects all 9,024 graded shots; any stream change rerolls them.
     // Check the compressed ops.bin SHA256 before grinding this candidate.
-    set_default_env("TAIL_NONCE", "2886213855485");
+    set_default_env("TAIL_NONCE", "230915643996243");
 
     let mut ops = build_point_add();
     // Exact op-stream post-passes, ported from the 2026-09-04 warpspeed

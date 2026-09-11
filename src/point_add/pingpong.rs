@@ -1743,7 +1743,7 @@ fn replay_double_add(
     circ.cx(add_out, doubled_out);
     circ.free(doubled_out);
 
-    let wide = value_width(round) >= 38;
+    let wide = value_width(round) >= 0;
     let k = flag_compare(round) + usize::from(a5_policy() == "mul-f-plus1-early200" && (2..202).contains(&round));
     let borrow = if wide && matches!(a5_policy(), "mul-f-seed" | "mul-fb-seed") {
         Some(source[N - k - 1])
@@ -1887,7 +1887,7 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
             let compare = chunk_compare(round).min(phi - plo);
             circ.record_replay_site('B', round, phi, compare);
             let window = phi - compare..phi;
-            let borrow = if multiply && value_width(round) >= 38 && compare < phi - plo
+            let borrow = if multiply && value_width(round) >= 0 && compare < phi - plo
                 && matches!(a5_policy(), "mul-b-seed" | "mul-fb-seed") {
                 Some(addend[phi - compare - 1])
             } else { None };
