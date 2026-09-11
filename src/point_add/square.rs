@@ -55,6 +55,30 @@ fn row_addsub(
     circ.x(ctrl);
 }
 
+/// Erase the first row's reachable image, after all later rows are undone.
+/// For c = !ctrl, its value is (a + c*(2^k-1)) XOR c*(2^(k+1)-1).
+/// XORing a into the low bits and c into the top recovers the carry history.
+/// carry[i+1] = a[i]*c XOR a[i]*carry[i] XOR c*carry[i], so HMR needs
+/// only Clifford phase corrections. Descending order keeps each predecessor live.
+fn erase_first_row(circ: &mut Builder, ctrl: QubitId, operand: &[QubitId], acc: &[QubitId]) {
+    let k = operand.len();
+    assert_eq!(acc.len(), k + 1);
+    circ.x(ctrl);
+    circ.cx_pairs(operand, &acc[..k]);
+    circ.cx(ctrl, acc[k]);
+    for i in (0..k).rev() {
+        let measured = circ.alloc_bit();
+        circ.hmr(acc[i + 1], measured);
+        circ.cz_if(operand[i], ctrl, measured);
+        if i > 0 {
+            circ.cz_if(operand[i], acc[i], measured);
+            circ.cz_if(ctrl, acc[i], measured);
+        }
+        circ.free_bit(measured);
+    }
+    circ.x(ctrl);
+}
+
 fn tri_square(circ: &mut Builder, x: &[QubitId], product: &[QubitId], inverse: bool) {
     let m = x.len();
     assert_eq!(product.len(), 2 * m);
@@ -67,7 +91,11 @@ fn tri_square(circ: &mut Builder, x: &[QubitId], product: &[QubitId], inverse: b
     for r in 0..m - 1 {
         let i = if inverse { m - 2 - r } else { r };
         let row = &product[2 * i + 1..i + m + 1];
-        row_addsub(circ, x[i], &x[i + 1..], row, inverse);
+        if inverse && i == 0 {
+            erase_first_row(circ, x[i], &x[i + 1..], row);
+        } else {
+            row_addsub(circ, x[i], &x[i + 1..], row, inverse);
+        }
     }
     if !inverse {
         tri_corr(circ, x, product, false);
@@ -373,3 +401,7 @@ pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
 #[cfg(test)]
 #[path="a2_square_tests.rs"]
 mod a2_tests;
+
+#[cfg(test)]
+#[path = "first_row_tests.rs"]
+mod first_row_tests;
