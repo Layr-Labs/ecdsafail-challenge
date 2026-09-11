@@ -1,0 +1,421 @@
+--- a/src/point_add/trailmix_port/inversion/cell_folds.rs
++++ b/src/point_add/trailmix_port/inversion/cell_folds.rs
+@@ -208,15 +208,44 @@
+     }
+ }
+ 
++// Configuration eligibility only; exact input membership in the coefficient-
++// margin support remains required. No forward-fused flag is needed for the
++// inverse doubled-coefficient theorem.
++fn inverse_top_compare_eligible() -> bool {
++    std::env::var("MIDQ_TAIL_INVERSE_TOP_COMPARE").ok().as_deref() == Some("1")
++        && std::env::var("MIDQ_MEASURE_COMPARE").ok().as_deref() == Some("1")
++        && super::midq_rotated_halves()
++        && super::midq_tail_enabled()
++        && super::MIDQ_PZ_CUT == 360
++        && super::MIDQ_TAIL_ROUNDS == 224
++        && super::MIDQ_TAIL_VALUE_WIDTH.iter().all(|&w| w <= 85)
++        && super::trailmix_srot_width() <= 5
++}
++
++fn clear_signed_add_overflow(c: &mut Circuit, target: &[QReg], source: &[QReg],
++    overflow: &QReg, inverse_context: bool) {
++    let low = if inverse_context && inverse_top_compare_eligible() { 136 } else { 0 };
++    let section = (low != 0).then(|| c.push_section("midq.cell.inverse.top120_compare"));
++    // This frame is UNROTATED: target[136..256], not the forward fused
++    // oracle's physical target[135..255] slice.
++    super::clear_borrow_compare_refs(c, &target[low..256].iter().collect::<Vec<_>>(),
++        &source[low..256].iter().collect::<Vec<_>>(), overflow);
++    if let Some(section) = section { c.pop_section(&section); }
++}
++
+ fn signed_add(c: &mut Circuit, target: &[QReg], source: &[QReg], sign: &QReg) {
++    signed_add_context(c, target, source, sign, false);
++}
++
++fn signed_add_context(c: &mut Circuit, target: &[QReg], source: &[QReg], sign: &QReg,
++    inverse_context: bool) {
+     assert!(matches!(target.len(), 256 | 257));
+     let temporary = (target.len() == 256).then(|| c.alloc_qreg("midq.cell.overflow"));
+     let overflow = temporary.as_ref().unwrap_or_else(|| &target[256]);
+     for q in &target[..256] { c.cx(sign, q); }
+     add_raw_with_overflow(c, target, source, overflow);
+     fold(c, target, source, overflow, false);
+-    super::clear_borrow_compare_refs(c, &target[..256].iter().collect::<Vec<_>>(),
+-        &source[..256].iter().collect::<Vec<_>>(), overflow);
++    clear_signed_add_overflow(c, target, source, overflow, inverse_context);
+     for q in &target[..256] { c.cx(sign, q); }
+     if let Some(overflow) = temporary { c.zero_and_free(overflow); }
+ }
+@@ -227,7 +256,7 @@
+         if super::midq_rotated_halves() {
+             super::midq_rotated_double(c, target, source);
+             c.x(sign);
+-            signed_add(c, target, source, sign);
++            signed_add_context(c, target, source, sign, true);
+             c.x(sign);
+             return;
+         }
+@@ -240,7 +269,7 @@
+         c.cx(&target[0], &overflow);
+         c.zero_and_free(overflow);
+         c.x(sign);
+-        signed_add(c, target, source, sign);
++        signed_add_context(c, target, source, sign, true);
+         c.x(sign);
+     } else {
+         signed_add(c, target, source, sign);
+@@ -256,3 +285,6 @@
+         c.zero_and_free(parity);
+     }
+ }
++
++#[path = "inverse_top_compare_selftest.rs"]
++mod inverse_top_checks;
+--- a/src/point_add/trailmix_port/inversion/cell_folds_selftest.rs
++++ b/src/point_add/trailmix_port/inversion/cell_folds_selftest.rs
+@@ -623,6 +623,10 @@
+ }
+ 
+ pub(crate) fn run() {
++    if std::env::var_os("MIDQ_TAIL_INVERSE_TOP_COMPARE_SELFTEST").is_some() {
++        super::inverse_top_checks::run();
++        return;
++    }
+     if std::env::var_os("MIDQ_TAIL_TOP_COMPARE_SELFTEST").is_some() {
+         super::fused_rotation::top_compare_selftest();
+         return;
+--- /dev/null
++++ b/src/point_add/trailmix_port/inversion/inverse_top_compare_selftest.rs
+@@ -0,0 +1,331 @@
++//! Native inverse-cell tests on certified states, plus qualified counterexamples.
++use super::*;
++use crate::circuit::{BitId, Op, OperationType as K};
++use crate::point_add::B;
++use alloy_primitives::U256;
++
++struct Guard(Vec<(&'static str, Option<String>)>);
++impl Guard {
++    fn new() -> Self {
++        Self(
++            [
++                "MIDQ_TAIL_INVERSE_TOP_COMPARE",
++                "MIDQ_TAIL_TOP_COMPARE",
++                "MIDQ_FUSED_ROTATION_CELL",
++                "MIDQ_PZ_PINGPONG_TAIL",
++                "TRAILMIX_SROT_W",
++                "MIDQ_CELL_SUM",
++                "MIDQ_CELL_RECURSIVE_CARRY",
++                "MIDQ_CELL_COST_SELECT",
++                "MIDQ_ALL_CONST_FOLDS",
++                "MIDQ_DIRTY_CONST",
++                "MIDQ_OUTER_DIRTY_CONST",
++                "MIDQ_COMPACT_CONST_CARRY",
++                "MIDQ_VARIABLE_CHUNKS",
++                "MIDQ_MEASURE_COMPARE",
++                "MIDQ_CHUNK_COMPARE",
++                "MIDQ_ROTATED_HALVES",
++                "MIDQ_CELL_QCAP",
++                "MIDQ_CHUNK_COMPARE_QCAP",
++                "MIDQ_CELL_FOLDS",
++            ]
++            .into_iter()
++            .map(|key| (key, std::env::var(key).ok()))
++            .collect(),
++        )
++    }
++}
++impl Drop for Guard {
++    fn drop(&mut self) {
++        for (key, value) in &self.0 {
++            if let Some(value) = value {
++                std::env::set_var(key, value)
++            } else {
++                std::env::remove_var(key)
++            }
++        }
++    }
++}
++fn condition(c: &mut Circuit, active: Option<bool>, body: impl FnOnce(&mut Circuit)) {
++    if let Some(active) = active {
++        let first = c.alloc_bit();
++        let second = c.alloc_bit();
++        for (bit, value) in [(first, active), (second, true)] {
++            let mut op = Op::empty();
++            op.kind = if value { K::BitStore1 } else { K::BitStore0 };
++            op.c_target = BitId(bit.raw() as u64);
++            c.b.push_op(op);
++        }
++        c.with_conditions(&[first, second], body);
++    } else {
++        body(c)
++    }
++}
++fn raw_t(ops: &[Op]) -> usize {
++    ops.iter()
++        .filter(|op| matches!(op.kind, K::CCX | K::CCZ))
++        .count()
++}
++fn weighted_t(ops: &[Op]) -> f64 {
++    let mut depth = 0;
++    let mut count = 0.;
++    for op in ops {
++        match op.kind {
++            K::PushCondition => depth += 1,
++            K::PopCondition => depth -= 1,
++            K::CCX | K::CCZ => count += 2.0f64.powi(-depth),
++            _ => {}
++        }
++    }
++    assert_eq!(depth, 0);
++    count
++}
++struct Cell {
++    built: B,
++    live: usize,
++}
++fn build(
++    width: usize,
++    cap: usize,
++    room: usize,
++    narrow: bool,
++    roundtrip: bool,
++    active: Option<bool>,
++) -> Cell {
++    std::env::set_var(
++        "MIDQ_TAIL_INVERSE_TOP_COMPARE",
++        if narrow { "1" } else { "0" },
++    );
++    std::env::set_var("MIDQ_CELL_QCAP", cap.to_string());
++    std::env::set_var("MIDQ_CHUNK_COMPARE_QCAP", cap.to_string());
++    let live = cap - room;
++    let mut c = Circuit::new();
++    let target = c.alloc_qreg_bits("inverse.target", width);
++    let source = c.alloc_qreg_bits("inverse.source", width);
++    let sign = c.alloc_qreg("inverse.sign");
++    let _spectator = c.alloc_qreg_bits("inverse.spectator", live - 2 * width - 1);
++    condition(&mut c, active, |c| {
++        apply(c, &target, &source, &sign, true);
++        if roundtrip {
++            apply(c, &target, &source, &sign, false)
++        }
++    });
++    c.flush_pending_frees();
++    let built = c.into_builder();
++    assert!(
++        built.peak_qubits as usize <= cap,
++        "inverse cap width={width} room={room}"
++    );
++    Cell { built, live }
++}
++fn fixtures() -> Vec<(U256, U256, bool, U256)> {
++    include_str!("fused_rotation_cases.txt")
++        .lines()
++        .map(|line| {
++            let v: Vec<_> = line.split_whitespace().collect();
++            assert_eq!(v.len(), 4);
++            (
++                U256::from_str_radix(v[0], 16).unwrap(),
++                U256::from_str_radix(v[1], 16).unwrap(),
++                v[2] == "1",
++                U256::from_str_radix(v[3], 16).unwrap(),
++            )
++        })
++        .collect()
++}
++fn pack(
++    cell: &Cell,
++    width: usize,
++    rows: &[(U256, U256, bool, U256)],
++    roundtrip: bool,
++    active: bool,
++) -> (Vec<u64>, Vec<u64>) {
++    let mut input: Vec<_> = (0..cell.live)
++        .map(|i| (i as u64).wrapping_mul(0x9e3779b97f4a7c15) ^ 0xa55a_c33c_9669_5aa5)
++        .collect();
++    input[..2 * width + 1].fill(0);
++    let mut expected = input.clone();
++    for (lane, &(old, source, sign, current)) in rows.iter().enumerate() {
++        let result = if !active || roundtrip { current } else { old };
++        for bit in 0..256 {
++            input[bit] |= u64::from(current.bit(bit)) << lane;
++            input[width + bit] |= u64::from(source.bit(bit)) << lane;
++            expected[bit] |= u64::from(result.bit(bit)) << lane;
++            expected[width + bit] |= u64::from(source.bit(bit)) << lane;
++        }
++        input[2 * width] |= u64::from(sign) << lane;
++        expected[2 * width] |= u64::from(sign) << lane;
++    }
++    (input, expected)
++}
++fn certified() -> usize {
++    let cases = fixtures();
++    assert_eq!(cases.len(), 512);
++    let f = U256::from(0x1000003d1u64);
++    let p = U256::MAX - f + U256::from(1);
++    for &(old, b, sign, y) in &cases {
++        let (low, overflow) = y.overflowing_add(y);
++        let doubled = if overflow {
++            low.wrapping_add(f)
++        } else if low >= p {
++            low - p
++        } else {
++            low
++        };
++        assert!(doubled < p && doubled.min(p - doubled) > (U256::from(1) << 137));
++        let local_subtract = !sign;
++        let framed = if local_subtract { !doubled } else { doubled };
++        let (sum, carry) = framed.overflowing_add(b);
++        let folded = sum.wrapping_add(if carry { f } else { U256::ZERO });
++        let gap = if folded >= b { folded - b } else { b - folded };
++        assert!(gap > (U256::from(1) << 136));
++        assert_eq!(folded < b, carry);
++        assert_eq!((folded >> 136usize) < (b >> 136usize), carry);
++        assert_eq!(if local_subtract { !folded } else { folded }, old);
++    }
++    let mut checked = 0;
++    for width in [256usize, 257] {
++        for cap in [1000usize, 1011] {
++            for room in [8usize, 16] {
++                for roundtrip in [false, true] {
++                    let full = build(width, cap, room, false, roundtrip, None);
++                    let top = build(width, cap, room, true, roundtrip, None);
++                    assert!(inverse_top_compare_eligible());
++                    let mut executed = [0u64; 2];
++                    for batch in cases.chunks(64) {
++                        let (input, expected) = pack(&full, width, batch, roundtrip, true);
++                        for mode in 0..3 {
++                            let a = super::selftest::run_ops(&full.built, &input, mode, None, None);
++                            let b = super::selftest::run_ops(&top.built, &input, mode, None, None);
++                            assert_eq!((&a.0, a.1), (&expected, 0), "full inverse certificate");
++                            assert_eq!((&b.0, b.1), (&expected, 0), "top inverse certificate");
++                            if mode == 2 {
++                                executed[0] += a.2;
++                                executed[1] += b.2;
++                            }
++                            checked += batch.len();
++                        }
++                    }
++                    eprintln!("TAIL_INVERSE_TOP_COMPARE_RESOURCE width={width} cap={cap} room={room} roundtrip={roundtrip} fullQ={} topQ={} full_rawT={} top_rawT={} full_weightedT={} top_weightedT={} full_fixture_avgT={} top_fixture_avgT={}; component census only",
++            full.built.peak_qubits,top.built.peak_qubits,raw_t(&full.built.ops),raw_t(&top.built.ops),
++            weighted_t(&full.built.ops),weighted_t(&top.built.ops),executed[0] as f64/512.,executed[1] as f64/512.);
++                }
++            }
++        }
++    }
++    for active in [false, true] {
++        let cell = build(256, 1000, 16, true, false, Some(active));
++        let (input, expected) = pack(&cell, 256, &cases[..64], false, active);
++        for mode in 0..3 {
++            let (v, p, _) = super::selftest::run_ops(&cell.built, &input, mode, None, None);
++            assert_eq!((v, p), (expected.clone(), 0));
++            checked += 64;
++        }
++    }
++    // Composition with the already-certified forward fused/top option.
++    std::env::set_var("MIDQ_FUSED_ROTATION_CELL", "1");
++    std::env::set_var("MIDQ_TAIL_TOP_COMPARE", "1");
++    let cell = build(256, 1011, 16, true, true, None);
++    let (input, expected) = pack(&cell, 256, &cases[..64], true, true);
++    for mode in 0..3 {
++        let (v, p, _) = super::selftest::run_ops(&cell.built, &input, mode, None, None);
++        assert_eq!((v, p), (expected.clone(), 0));
++        checked += 64;
++    }
++    std::env::set_var("MIDQ_FUSED_ROTATION_CELL", "0");
++    std::env::set_var("MIDQ_TAIL_TOP_COMPARE", "0");
++    checked
++}
++fn outside_support() -> usize {
++    let full = build(257, 1011, 16, false, false, None);
++    let top = build(257, 1011, 16, true, false, None);
++    let p = U256::MAX - U256::from(0x1000003d1u64) + U256::from(1);
++    let y = (p - U256::from(1)) >> 1usize;
++    let cases: Vec<_> = (0..64)
++        .map(|i| {
++            let b = (U256::from(1) << 200usize) + U256::from(8 + 2 * i);
++            (b - U256::from(1), b, true, y)
++        })
++        .collect();
++    let (input, expected) = pack(&full, 257, &cases, false, true);
++    // Doubling y gives p-1: an explicit violation of the inverse target margin.
++    // The full folded comparator sees b-1<b, but high120 bits tie.
++    for mode in 0..3 {
++        let m = [0, u64::MAX, 0xa55a_c33c_9669_5aa5][mode as usize];
++        let a = super::selftest::run_ops(&full.built, &input, mode, None, Some((256, m)));
++        let b = super::selftest::run_ops(&top.built, &input, mode, None, Some((256, m)));
++        assert_eq!((a.0, a.1), (expected.clone(), 0));
++        assert_eq!((b.0, b.1), (expected.clone(), m));
++    }
++    eprintln!("TAIL_INVERSE_TOP_COMPARE_OUTSIDE_SUPPORT PASS:192 coupled native inverse cases; doubled target p-1 violates margin, numerical map unchanged, intentional narrowed phase defect; no all-input equivalence claim");
++    192
++}
++fn scope_and_fallback() {
++    for direct in [false, true] {
++        let generate = |enabled: bool| {
++            std::env::set_var(
++                "MIDQ_TAIL_INVERSE_TOP_COMPARE",
++                if enabled { "1" } else { "0" },
++            );
++            let mut c = Circuit::new();
++            let a = c.alloc_qreg_bits("scope.a", 256);
++            let b = c.alloc_qreg_bits("scope.b", 256);
++            let s = c.alloc_qreg("scope.s");
++            if direct {
++                signed_add(&mut c, &a, &b, &s)
++            } else {
++                apply(&mut c, &a, &b, &s, false)
++            }
++            c.into_builder().ops
++        };
++        assert_eq!(
++            generate(false),
++            generate(true),
++            "generic/forward signed_add changed"
++        );
++    }
++    for (flag, bad, good) in [
++        ("MIDQ_PZ_PINGPONG_TAIL", "0", "1"),
++        ("TRAILMIX_SROT_W", "6", "5"),
++        ("MIDQ_ROTATED_HALVES", "0", "1"),
++        ("MIDQ_MEASURE_COMPARE", "0", "1"),
++    ] {
++        std::env::set_var(flag, bad);
++        let full = build(257, 1011, 16, false, false, None);
++        let fallback = build(257, 1011, 16, true, false, None);
++        assert!(!inverse_top_compare_eligible());
++        assert_eq!(full.built.ops, fallback.built.ops, "guard fallback {flag}");
++        std::env::set_var(flag, good);
++    }
++    // Forward fused mode is deliberately not an inverse-admission prerequisite.
++    std::env::set_var("MIDQ_TAIL_INVERSE_TOP_COMPARE", "1");
++    assert!(inverse_top_compare_eligible());
++    assert_eq!(std::env::var("MIDQ_FUSED_ROTATION_CELL").unwrap(), "0");
++}
++pub(super) fn run() {
++    let _guard = Guard::new();
++    for flag in [
++        "MIDQ_CELL_SUM",
++        "MIDQ_CELL_RECURSIVE_CARRY",
++        "MIDQ_CELL_COST_SELECT",
++        "MIDQ_ALL_CONST_FOLDS",
++        "MIDQ_DIRTY_CONST",
++        "MIDQ_OUTER_DIRTY_CONST",
++        "MIDQ_COMPACT_CONST_CARRY",
++        "MIDQ_VARIABLE_CHUNKS",
++        "MIDQ_MEASURE_COMPARE",
++        "MIDQ_CHUNK_COMPARE",
++        "MIDQ_ROTATED_HALVES",
++        "MIDQ_CELL_FOLDS",
++        "MIDQ_PZ_PINGPONG_TAIL",
++    ] {
++        std::env::set_var(flag, "1")
++    }
++    std::env::set_var("TRAILMIX_SROT_W", "5");
++    std::env::set_var("MIDQ_FUSED_ROTATION_CELL", "0");
++    std::env::set_var("MIDQ_TAIL_TOP_COMPARE", "0");
++    let certified = certified();
++    let outside = outside_support();
++    scope_and_fallback();
++    eprintln!("TAIL_INVERSE_TOP_COMPARE_SELFTEST PASS certified_native_cases={certified} outside_native_cases={outside}; doubled-coefficient scalar margins, inverse full/top120, inverse-forward roundtrips, forward fused composition, nested guards, exact scope/fallback byte comparisons, phase and pre-reset scratch; not whole-circuit support or resource certification");
++}
