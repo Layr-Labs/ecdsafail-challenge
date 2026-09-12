@@ -1,0 +1,72 @@
+{
+  "candidate": "fused-top-compare",
+  "status": "frozen for remote validation",
+  "predecessor": "fused-rotation-cell",
+  "enable": {
+    "MIDQ_FUSED_ROTATION_CELL": "1",
+    "MIDQ_TAIL_TOP_COMPARE": "1"
+  },
+  "new_flag_default": "off",
+  "scope": "Forward fused overflow phase oracle only; inverse and generic comparators unchanged.",
+  "support": "Qualified exact-transition coefficient-margin support; static guard does not certify input membership.",
+  "predicate": {
+    "drop_logical_low_bits": 136,
+    "retain_bits": 120,
+    "physical_lhs": "target[135..255]",
+    "physical_rhs": "source[136..256]"
+  },
+  "local_evidence": [
+    "Rust parsing/format checks passed",
+    "all512 unchanged certified fixtures satisfy full/top predicate equality",
+    "allfour sign/carry cases covered;minimum observedgap183bits",
+    "theorem/guard reviewed with prefix_arithmetic",
+    "generic comparison/inverse owner files byte-identical to predecessor",
+    "trusted files byte-identical to baseline"
+  ],
+  "pending": [
+    "remote build and native selftest",
+    "flag-off predecessor byte identity",
+    "actual support membership checks",
+    "frozen and independent complete quantum regression",
+    "trusted benchmark and measured Q/T"
+  ],
+  "measured_Q": null,
+  "measured_T": null,
+  "changes_vs_predecessor_excluding_manifest": [
+    {
+      "path": "src/point_add/memory/TAIL_CANONICAL_SUPPORT_PROOF.md",
+      "predecessor_sha256": null,
+      "candidate_sha256": "a5918e726665b10f69ff70c5e572bf7747b199e14bb596760ede561a28a2c422"
+    },
+    {
+      "path": "src/point_add/memory/TAIL_TOP_COMPARE.patch",
+      "predecessor_sha256": null,
+      "candidate_sha256": "c82b697c8a5f988c2d9cbafa9bd3ca3bfb9f36febcef5a599e55bfb21e88c860"
+    },
+    {
+      "path": "src/point_add/memory/TAIL_TOP_COMPARE_ALGEBRA.json",
+      "predecessor_sha256": null,
+      "candidate_sha256": "68927271e75d8c3b5c37f4cad277cdf235015fd80f27b2bc123ac77a9e0e04b1"
+    },
+    {
+      "path": "src/point_add/memory/TAIL_TOP_COMPARE_PROOF.md",
+      "predecessor_sha256": null,
+      "candidate_sha256": "b30852a39782edc3d25170535cfda28b025b0fbf9001b69d2908eef924fce1a5"
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/cell_folds_selftest.rs",
+      "predecessor_sha256": "d34689329b9c71c5cefbe148a4944a37effaa94ec2c068708a02907a62d5ed3e",
+      "candidate_sha256": "60efc34bdc157abd476dd2d4b69399a3216b9bb720cd6574254b79468943593d"
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/fused_rotation_cell.rs",
+      "predecessor_sha256": "2c7827eff0ba57c670c2fd12fe186b24801cea5a2a1b7b3edfeaf2a18c480f45",
+      "candidate_sha256": "130cd927eb3c8829265e733b23b529b83ade3a6866f045307b4141332d95df72"
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/fused_rotation_cell_selftest.rs",
+      "predecessor_sha256": "b42d2a4d2460dc6168380e820961dad4d38ca6be20d6347e5ac708eb414f4e3b",
+      "candidate_sha256": "4a72ddc776ab542d843c37ed78cc02e9dca827e3e993e17ff4d0aac4d392862a"
+    }
+  ]
+}
