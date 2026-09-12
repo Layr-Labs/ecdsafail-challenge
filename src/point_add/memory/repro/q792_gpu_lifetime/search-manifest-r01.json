@@ -1,0 +1,16 @@
+{
+  "at": "2026-09-12T19:22:24.447618+00:00",
+  "status": "PRE_EXECUTION_DECLARATION",
+  "rule": "Known metadata bit becomes prefix cache during T10 scan, restored before all A-addressed gathers. Exact C>=2,S>=3,A+C+S<=256 and schedule supports.",
+  "search": "202blocks x11wirechoices x7splits, select minimum whole forward/reverse analyticToffoli; no randomized inputs/nonce",
+  "candidate_scores": 15554,
+  "GPU_devices_required": 2,
+  "CPU_role": "domain census and independent checks only; GPU assesses all scores",
+  "identity": {
+    "lifetime_search_r01.cpp": "686a5fd754c68ac22d4a96a4caaf237c13a3ccf7ac84fe60e53cc9e0e70f9864",
+    "lifetime_search_r01": "58db7c6dc9fe68dfa0b79319792cdd9fae420f45dc95350703c5431e213daea5",
+    "lifetime-input-r01.txt": "0e0349e92d5f74fe48490576fbfc8d43ac2fa89e5e0e83aa8b25e012f7d7c066",
+    "lifetime-domain-proof-r01.json": "bb8a1af25cc614987c30ec67f4196c1edb901405af6857b6817872a5cbeaf634"
+  },
+  "preparation_failure": "Initial C++ compile omitted existing local OpenCL include path and failed before GPU execution; corrected include/link path. Kernel source reviewed before first execution."
+}
