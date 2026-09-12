@@ -1,0 +1,18 @@
+{
+  "at": "2026-09-12T18:44:15.208192+00:00",
+  "status": "DECLARED_BEFORE_EXECUTION",
+  "beam_width": 8,
+  "maximum_rounds": 6,
+  "maximum_depth": 16,
+  "configuration_count": 278,
+  "moves": "all CX/CCX insert/delete/replace, one polarity flip, retain old; lexicographic GPU T/N scores; no structural random seeds",
+  "both_B50_required": true,
+  "layout": "SoA",
+  "workgroup": 256,
+  "cpu": "neighborhood generation/dedup and selected/stride4093 independent exact checks",
+  "source_sha256": "cc207009bddd0d1825db35a97caf442987675bb0486b129e367787cd8dce3165",
+  "binary_sha256": "8f7a069df6000cfb594ef1d0a351979af078904a1691d668e891e94e6ccae68e",
+  "initial_beam_sha256": "2f8c577e3d72d937bf7274fd4ad5a6c65e3b8b8e67c0c09eada9bd9fa8119ff7",
+  "estimated_host_resident_cap_bytes": 4000000000,
+  "wait_for_initial28GB_suite": true
+}
