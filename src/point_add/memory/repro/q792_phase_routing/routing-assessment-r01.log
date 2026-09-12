@@ -1,0 +1,30 @@
+DEVICE 0 Intel(R) Arc(TM) Pro B50 Graphics driver=26.05.037020
+CLOCK 0 cases=10752 errors=130 first_error=384 T=88884 ops=172778 ms=54.9673
+CLOCK 1 cases=10752 errors=126 first_error=324 T=75348 ops=149524 ms=30.4424
+DEVICE 1 Intel(R) Arc(TM) Pro B50 Graphics driver=26.05.037020
+CLOCK 2 cases=10752 errors=109 first_error=385 T=90912 ops=175676 ms=53.1301
+CLOCK 3 cases=10752 errors=107 first_error=390 T=71268 ops=143290 ms=28.1187
+PHASE_ROUTING_GPU_ASSESSMENT_FINISHED both_B50=true inspect_error_counts=true
+	Command being timed: "prlimit --as=4000000000 timeout 900s .autoresearch/q792-phase-integrate-20260913.lk5x3khy/gpu/phase_routing_assess_r01 .autoresearch/q792-phase-integrate-20260913.lk5x3khy/gpu/fixtures-r01"
+	User time (seconds): 0.24
+	System time (seconds): 0.14
+	Percent of CPU this job got: 129%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.30
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 242944
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 30
+	Minor (reclaiming a frame) page faults: 30131
+	Voluntary context switches: 289
+	Involuntary context switches: 14
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 432
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
