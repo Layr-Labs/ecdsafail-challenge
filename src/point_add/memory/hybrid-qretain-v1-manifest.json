@@ -1,0 +1,96 @@
+{
+  "candidate": "hybrid-qretain-v1",
+  "status": "frozen for root external native/build/scouts",
+  "parent_tree_sha256": "e5834412075d6ecf163ce34ae17c566e78fa46afdcb177f254a3fd30331cab53",
+  "flag": "HYBRID_QRETAIN=32",
+  "default": "off; unset/off/0 preserves old path",
+  "required_configuration": {
+    "TRAILMIX_Q_TARGET": 684,
+    "TRAILMIX_SROT_W": 5,
+    "MIDQ_PZ_PINGPONG_TAIL": 1,
+    "TRAILMIX_Q_CAP": "at least32"
+  },
+  "policy": "fixed32 overrides natural and target q taper, including initialization; same accessor used by scalar model and runtime dump",
+  "backend_enable_functions_unchanged": true,
+  "no_boolean_force": true,
+  "generic_quotient_code_unchanged": true,
+  "raw_width_at_handoff": 32,
+  "tag_bits": 6,
+  "legacy_rank18_not_eligible": true,
+  "small_scalar_witness_passed": true,
+  "no_local_rust_build_or_simulation": true,
+  "prepared_native_positive_cases": 8256,
+  "prepared_native_outside_delta32_cases": 8,
+  "native_hook": "MIDQ_QRETAIN_SELFTEST=1",
+  "unit_filter": "qretain_",
+  "objective_context": "bounded density/space repair; not a solution or projection for1100q/5.6M executedT",
+  "Q_T_measured": false,
+  "remaining": [
+    "external native tests",
+    "known input1465 replay",
+    "actual full Q/T and own-FS validation",
+    "other inherited width/window/support misses"
+  ],
+  "changes_excluding_manifest": [
+    {
+      "path": "src/point_add/memory/HYBRID_QRETAIN_V1.md",
+      "parent_sha256": null,
+      "candidate_sha256": "da062a6530f3fab10e18955385cb780614debb7ab39479fb6c59e61e43de6a49"
+    },
+    {
+      "path": "src/point_add/memory/hybrid-qretain-v1.patch",
+      "parent_sha256": null,
+      "candidate_sha256": "e844357cd1c610447ecdeb07c53b9b948cc280622005a31ff13b99c73664f005"
+    },
+    {
+      "path": "src/point_add/memory/qretain-source-guard.json",
+      "parent_sha256": null,
+      "candidate_sha256": "a6c03b23ee6947daf95d1b79c56e3a2e568ea89732f1dbb81bf8aa05c65ddecb"
+    },
+    {
+      "path": "src/point_add/memory/qretain_witness.json",
+      "parent_sha256": null,
+      "candidate_sha256": "a0549cc9f2b5ba166b7bdf0914466d974d2cb969a0ff6c73c3656230ef23b6dd"
+    },
+    {
+      "path": "src/point_add/memory/qretain_witness.py",
+      "parent_sha256": null,
+      "candidate_sha256": "05d866817d7e2b4fa62513b01036de5982b3368a607d092f920c8b99e13a0d17"
+    },
+    {
+      "path": "src/point_add/mod.rs",
+      "parent_sha256": "db591d7d27db21c157f5960537285a5dc9e241db4614c13d6a766cb7e4fbdce3",
+      "candidate_sha256": "1dfe490e9a1357305ebe78029a5c9e35109a9ac5c7e8ca53b264f67a33a0b3a0"
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/hybrid_profile.rs",
+      "parent_sha256": "2528d1509c0e71341dcbcd73eb0897e2bfb2a0080cd4387a96074e80aa294058",
+      "candidate_sha256": "2f724043848de120541704c9880edc44b8a94ed0eab88e8413df84a2b6f0d2ef"
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/qretain.rs",
+      "parent_sha256": null,
+      "candidate_sha256": "fe689d18bc22ab9fb619968f7b1527da561b4610a99fe5687430c62f1b8f52b6"
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/qretain_selftest.rs",
+      "parent_sha256": null,
+      "candidate_sha256": "844fdd661657ebbb682443589b8edfe5c6f6724b5f808d11d47d6d5ce59d24b0"
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/shrunken_pz_schedule.rs",
+      "parent_sha256": "3e654acf5e9cce64c576b6f8ba4ac81f016efe150e7b327cf382dbb52f02d16a",
+      "candidate_sha256": "c769160ace077459e9bde69ea9f3cb61a8be2ae523bf7fc8ea87a1447b89ba79"
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs",
+      "parent_sha256": "7517d5d614147f72f3def1eddd3fa03329efdd2fbd12a37e8a1649ad5d37cc28",
+      "candidate_sha256": "a72bf36662d4c91f19e9a971df07f98c8f491bf0da7bf1a7230e17daaf2589b1"
+    },
+    {
+      "path": "src/point_add/trailmix_port/mod.rs",
+      "parent_sha256": "5c550f8e067f4b72cf301e52757db774ef1336303b54a7277009f6f06b6fc9c9",
+      "candidate_sha256": "85332f4ba24e0c0727c4a5ca369ceca3c7ca02f449efb37bee4ccbf0679af2b1"
+    }
+  ]
+}

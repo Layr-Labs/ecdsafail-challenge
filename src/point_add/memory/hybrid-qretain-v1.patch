@@ -1,0 +1,885 @@
+diff --git a/src/point_add/memory/HYBRID_QRETAIN_V1.md b/src/point_add/memory/HYBRID_QRETAIN_V1.md
+new file mode 100644
+index 0000000..09e288a
+--- /dev/null
++++ b/src/point_add/memory/HYBRID_QRETAIN_V1.md
+@@ -0,0 +1,45 @@
++# Fixed pending quotient experiment
++
++Parent: frozen `hybrid-margin-v3`, tree `e5834412075d6ecf163ce34ae17c566e78fa46afdcb177f254a3fd30331cab53`. This candidate makes one explicit allocation-policy experiment, with native tests prepared but not run locally. It is a bounded repair of failure density/storage support, not a solution to the user's ~1100q /5.6M executed-Toffoli goal. No Q/T or full-validation result is claimed.
++
++## Policy and domain
++
++`HYBRID_QRETAIN=32` allocates 32 pending-quotient bits from the initial setup through every PZ prefix step. It overrides BOTH the thin schedule's q width and the target-induced q taper. It is not merely a 32 ceiling. Unset, `off`, or `0` retains the parent's allocation path. Unsupported setting strings reject.
++
++Enabled mode requires SROT5, the hybrid tail enabled, Q_TARGET684, and no explicit quotient cap below 32. A conflicting lower cap rejects rather than silently overriding the user. Q_TARGET684 is deliberately retained for the existing backend selection; its old q-budget formula is explicitly superseded by this policy. The PZ pack is therefore no longer promised to fit 684: at the known step 327, its data/coefficient/q subtotal changes666+18→666+32=698. Actual whole Q and arithmetic scratch must be measured.
++
++The existing semantic support remains explicit: true GREEDY PZ integer transitions, faithful value/coefficient widths and windows, and true pre-offset/reverse-offset shifts fitting the actually used SROT5 rotators. Under that support, every fresh quotient bit has index≤31 and the retained word fits32 bits. This prevents premature loss of pending high bits. It does not prove membership from allocation, remove other width/window failures, or broaden the margin certificate silently.
++
++`HYBRID_MARGIN_SUPPORT=exact-positive-l31` and its positive/faithful-support conditions are unchanged. New profiles still require that explicit declaration before their fused/top shortcuts activate. Generic quotient encoding becomes32→6 with constructor-captured raw width. The existing raw-width==18 guard excludes the old mixed-radix metadata pack. No new codec or phase simplification is introduced.
++
++## One implementation feeds allocation and diagnostics
++
++`qretain::fixed_width` is the shared accessor. It is called by both initial quotient allocations, `trailmix_q_width_step` for forward and reverse PZ loops, and the scalar support model's q rows. Runtime schedule dumps already use the actual width function and now explicitly report `fixed_quotient_bits=32` (zero means off). The support model no longer reapplies target/thin/model-only shrinking to the fixed physical word.
++
++The two inversion constructors start with 32 wires directly. The generic quotient codec retains the original raw width for restoration, so the reverse prefix receives 32 wires. No handoff field or source/profile array is regenerated. The first eight counter/tape slots and six-bit popcount cache are unchanged; q width32 remains below the cache's64-position bound.
++
++## Why backend predicates remain valid
++
++No one-A, passenger-borrow or CLZ enable function was modified or forced true.
++
++- One-A elimination replaces a controlled-|1> addition by the corresponding unconditional adder, and removes a materialized flag in the Gray-deposit consumer. For two controls, the latter is the exact dirty-pivot identity: copy pivot p into other targets, toggle p by f=a*b, then copy it again, so every target changes by f and initial pivot data cancels. The argument is independent of q length; the source/target registers remain distinct. The PZ CTZ helper’s literal zero sentinel at q32 is31, coinciding with ctz(1<<31); valid active multiply has q!=0, and inactive zero queries remain masked. This differs from the generic quotient-code tag, whose zero sentinel is32 and requires six bits.
++- CLZ constant folding computes `(pos_a−pos_b+lo_a−lo_b) mod2^5`, instead of adding/canceling the two separate +1/window constants. The A/B and coefficient widths/windows are unchanged. A wider q word does not alter that identity or manufacture true shift-fit membership.
++- The passenger carry is canonical field lane 256, removed from dy/new_dy while its owner remains live and returned before the next 257-bit field operation. It is not a quotient bit. The same complete Cuccaro add restores it. Extra q allocations cannot alias this live QReg. Its zero premise and return timing are unchanged.
++
++The old Q_TARGET-specific gates are thus retained for their existing exact primitives, with a separately declared larger q allocation. Their resource footprint can change; the policy does not claim the old peak proof. A prepared native test compares optimized and plain backends with q32, retained high bits 21/31 and actual creation/consumption of bit31 on 40-bit operands, nonzero CLZ window offsets, active/skipped cases, fixed/random outcomes, forward/inverse values, phase and every reset. An explicit delta32/j31 negative witness must differ from the ideal greedy update even if the finite-word circuit round-trips; this guards the distinction between final index fit and pre-alignment fit. Actual native execution remains root-owned.
++
++## Witness and tests
++
++`memory/qretain_witness.py` independently replays the single recorded factor's ideal PZ integer recurrence through 338 steps. It verifies the dot product and both modular coefficient invariants. The generated JSON shows bit 21 created at 322, retained through the start of 337, and finally consumed. The old width policy first discards it entering 327; fixed32 discards nothing. This tiny scalar regression ran locally and passed. It does not sample new inputs or run a quantum simulator.
++
++The Rust scalar fixture additionally checks the exact 322..337 quotient sequence and popcount-cache consistency. Policy tests verify shared allocator/model behavior, initial width, incompatible-knob rejection, and unchanged off behavior. Four caught constructor panics are expected in the negative policy tests.
++
++Run externally from this candidate, retaining the same HYBRID_PROFILE value on every compile:
++
++```sh
++HYBRID_PROFILE=cut360 cargo test --release --locked --offline --bin build_circuit qretain_ -- --test-threads=1 --nocapture
++HYBRID_PROFILE=cut360 cargo build --release --locked --offline --bin build_circuit
++HYBRID_QRETAIN=32 HYBRID_QCAP=1080 MIDQ_QRETAIN_SELFTEST=1 /absolute/path/to/build_circuit
++```
++
++The native hook is diagnostic and returns an empty builder; run it in a separate output directory. It is not a benchmark artifact. For actual emission unset the selftest flag, keep `HYBRID_QRETAIN=32`, and choose the intended profile/cap. Then verify runtime rows all use 32 q bits, replay the known failed input and the original control corpus, and run the unchanged official evaluator on the new artifact's own FS inputs. Retain off-mode artifact comparison if byte identity is required; source equivalence alone is not a measured receipt.
+diff --git a/src/point_add/memory/qretain-source-guard.json b/src/point_add/memory/qretain-source-guard.json
+new file mode 100644
+index 0000000..ff0e8be
+--- /dev/null
++++ b/src/point_add/memory/qretain-source-guard.json
+@@ -0,0 +1 @@
++{"mode": "candidate", "candidate": "/Users/jieyilong/Personal/research/ShorOptimization/shor_optimization_workspace/research/hybrid-pareto-campaign/candidates/hybrid-qretain-v1", "changed": ["src/point_add/mod.rs", "src/point_add/trailmix_port/mod.rs", "src/point_add/newarith/chunked_compare.rs", "src/point_add/trailmix_port/inversion/cell_recursive_carries.rs", "src/point_add/trailmix_port/inversion/fused_rotation_cell_selftest.rs", "src/point_add/trailmix_port/inversion/tail_metadata_codec.rs", "src/point_add/trailmix_port/inversion/midq_tail_checkpoint_tests.rs", "src/point_add/trailmix_port/inversion/cell_folds.rs", "src/point_add/trailmix_port/inversion/quotient_code_selftest.rs", "src/point_add/trailmix_port/inversion/quotient_code.rs", "src/point_add/trailmix_port/inversion/shrunken_pz_schedule.rs", "src/point_add/trailmix_port/inversion/fused_rotation_cell.rs", "src/point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs", "src/point_add/trailmix_port/inversion/midq_tail_checkpoint.rs", "src/point_add/trailmix_port/inversion/counter_tape_selftest.rs", "src/point_add/memory/qretain-source-guard.json", "src/point_add/memory/qretain_witness.json", "src/point_add/memory/HYBRID_QRETAIN_V1.md", "src/point_add/memory/qretain_witness.py", "src/point_add/trailmix_port/inversion/hybrid_margin_near_selftest.rs", "src/point_add/trailmix_port/inversion/hybrid_profile_selftest.rs", "src/point_add/trailmix_port/inversion/hybrid_margin_selftest.rs", "src/point_add/trailmix_port/inversion/qretain.rs", "src/point_add/trailmix_port/inversion/hybrid_margin.rs", "src/point_add/trailmix_port/inversion/hybrid_profile_baseline_widths.rs", "src/point_add/trailmix_port/inversion/hybrid_margin_near_cases.py", "src/point_add/trailmix_port/inversion/hybrid_profiles_generated.rs", "src/point_add/trailmix_port/inversion/hybrid_margin_near_cases.txt", "src/point_add/trailmix_port/inversion/hybrid_profile.rs", "src/point_add/trailmix_port/inversion/qretain_selftest.rs"], "errors": []}
+diff --git a/src/point_add/memory/qretain_witness.json b/src/point_add/memory/qretain_witness.json
+new file mode 100644
+index 0000000..c1f1660
+--- /dev/null
++++ b/src/point_add/memory/qretain_witness.json
+@@ -0,0 +1,162 @@
++{
++  "status": "PASS scalar witness only",
++  "shot": 1465,
++  "factor": "0xa886fa97a6d9e5c7eb7f824b9302db27992d9862334845a199a1f8f4152dbc63",
++  "first_old_loss": {
++    "step": 327,
++    "q_before": "0x232400",
++    "old_width": 18,
++    "old_discarded": "0x200000",
++    "fixed_width": 32,
++    "fixed_discarded": "0x0",
++    "q_after": "0x232420"
++  },
++  "rows": [
++    {
++      "step": 322,
++      "q_before": "0x0",
++      "old_width": 22,
++      "old_discarded": "0x0",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x200000"
++    },
++    {
++      "step": 323,
++      "q_before": "0x200000",
++      "old_width": 22,
++      "old_discarded": "0x0",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x220000"
++    },
++    {
++      "step": 324,
++      "q_before": "0x220000",
++      "old_width": 22,
++      "old_discarded": "0x0",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x230000"
++    },
++    {
++      "step": 325,
++      "q_before": "0x230000",
++      "old_width": 22,
++      "old_discarded": "0x0",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x232000"
++    },
++    {
++      "step": 326,
++      "q_before": "0x232000",
++      "old_width": 22,
++      "old_discarded": "0x0",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x232400"
++    },
++    {
++      "step": 327,
++      "q_before": "0x232400",
++      "old_width": 18,
++      "old_discarded": "0x200000",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x232420"
++    },
++    {
++      "step": 328,
++      "q_before": "0x232420",
++      "old_width": 18,
++      "old_discarded": "0x200000",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x232428"
++    },
++    {
++      "step": 329,
++      "q_before": "0x232428",
++      "old_width": 22,
++      "old_discarded": "0x0",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x232429"
++    },
++    {
++      "step": 330,
++      "q_before": "0x232429",
++      "old_width": 22,
++      "old_discarded": "0x0",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x232428"
++    },
++    {
++      "step": 331,
++      "q_before": "0x232428",
++      "old_width": 22,
++      "old_discarded": "0x0",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x232420"
++    },
++    {
++      "step": 332,
++      "q_before": "0x232420",
++      "old_width": 20,
++      "old_discarded": "0x200000",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x232400"
++    },
++    {
++      "step": 333,
++      "q_before": "0x232400",
++      "old_width": 22,
++      "old_discarded": "0x0",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x232000"
++    },
++    {
++      "step": 334,
++      "q_before": "0x232000",
++      "old_width": 21,
++      "old_discarded": "0x200000",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x230000"
++    },
++    {
++      "step": 335,
++      "q_before": "0x230000",
++      "old_width": 21,
++      "old_discarded": "0x200000",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x220000"
++    },
++    {
++      "step": 336,
++      "q_before": "0x220000",
++      "old_width": 21,
++      "old_discarded": "0x200000",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x200000"
++    },
++    {
++      "step": 337,
++      "q_before": "0x200000",
++      "old_width": 20,
++      "old_discarded": "0x200000",
++      "fixed_width": 32,
++      "fixed_discarded": "0x0",
++      "q_after": "0x0"
++    }
++  ],
++  "no_quantum_simulation": true,
++  "no_general_profile_success_claim": true
++}
+diff --git a/src/point_add/memory/qretain_witness.py b/src/point_add/memory/qretain_witness.py
+new file mode 100644
+index 0000000..a6efce0
+--- /dev/null
++++ b/src/point_add/memory/qretain_witness.py
+@@ -0,0 +1,42 @@
++"""One recorded scalar regression, no circuit or sample generation."""
++import json
++P=(1<<256)-(1<<32)-977
++factor=int('a886fa97a6d9e5c7eb7f824b9302db27992d9862334845a199a1f8f4152dbc63',16)
++x=min(factor,P-factor)
++a,b,ca,cb,q,parity=P,x,0,1,0,1
++old_widths=[22,22,22,22,22,18,18,22,22,22,20,22,21,21,21,20]
++rows=[]
++for step in range(338):
++    before=q
++    if 322<=step<=337:
++        width=old_widths[step-322]
++        rows.append(dict(step=step,q_before=hex(q),old_width=width,
++            old_discarded=hex(q&~((1<<width)-1)),fixed_width=32,
++            fixed_discarded=hex(q&~((1<<32)-1))))
++    assert q>>32==0
++    if a<b and q:
++        j=(q&-q).bit_length()-1
++        assert j<=31
++        q^=1<<j;ca+=cb<<j
++    if ca<cb:
++        delta=a.bit_length()-b.bit_length()
++        offset=int(delta>=0 and a<(b<<delta))
++        j=delta-offset
++        if j>=0:
++            assert delta<=31 and j<=31
++            a-=b<<j;q^=1<<j
++    if q==0 and a!=0:a,b,ca,cb=b,a,cb,ca;parity^=1
++    assert a*cb+b*(ca+q*cb)==P
++    sign=-1 if parity else 1
++    assert (a-sign*(ca+q*cb)*x)%P==0 and (b+sign*cb*x)%P==0
++    assert q>>32==0
++    if 322<=step<=337:rows[-1]['q_after']=hex(q)
++assert rows[0]['q_after']=='0x200000'
++assert all(int(r['q_before'],16)&(1<<21) for r in rows[1:])
++assert rows[-1]['q_after']=='0x0'
++first=next(r for r in rows if int(r['old_discarded'],16))
++assert (first['step'],first['q_before'],first['old_discarded'])==(327,'0x232400','0x200000')
++assert all(r['fixed_discarded']=='0x0' for r in rows)
++print(json.dumps(dict(status='PASS scalar witness only',shot=1465,factor=hex(factor),
++    first_old_loss=first,rows=rows,no_quantum_simulation=True,
++    no_general_profile_success_claim=True),indent=2))
+diff --git a/src/point_add/mod.rs b/src/point_add/mod.rs
+index a31ee5c..580a038 100644
+--- a/src/point_add/mod.rs
++++ b/src/point_add/mod.rs
+@@ -2247,6 +2247,10 @@ fn exact_cancellation_selftest() {
+ }
+ 
+ pub fn build() -> Vec<Op> {
++    if std::env::var_os("MIDQ_QRETAIN_SELFTEST").is_some() {
++        trailmix_port::build_builder();
++        return Vec::new();
++    }
+     if std::env::var_os("MIDQ_HYBRID_MARGIN_SELFTEST").is_some() {
+         trailmix_port::build_builder();
+         return Vec::new();
+diff --git a/src/point_add/trailmix_port/inversion/hybrid_profile.rs b/src/point_add/trailmix_port/inversion/hybrid_profile.rs
+index 18065f5..540e7cd 100644
+--- a/src/point_add/trailmix_port/inversion/hybrid_profile.rs
++++ b/src/point_add/trailmix_port/inversion/hybrid_profile.rs
+@@ -198,6 +198,8 @@ pub(crate) fn hard_ceiling() -> usize {
+     runtime_cap().unwrap_or(1019)
+ }
+ pub(crate) fn configure_runtime_caps() {
++    // Reject conflicts before any circuit construction.
++    let _ = super::qretain::fixed_width();
+     if let Ok(raw) = std::env::var("MIDQ_PZ_CUT") {
+         assert_eq!(
+             raw.parse::<usize>()
+@@ -231,6 +233,7 @@ pub(crate) fn configure_runtime_caps() {
+ }
+ 
+ pub(crate) fn report() {
++    super::qretain::report();
+     eprintln!("HYBRID_PROFILE id={} compile_time=true cut={} rounds={} handoff_width={} ctz_bits={} checkpoint_start={} replay_default={} baseline_compatible={} legacy_margin_shortcuts={} legacy_metadata={} provenance={}",
+         SELECTED.id,SELECTED.pz_cut,SELECTED.rounds,SELECTED.value_widths[0],SELECTED.ctz_bits,
+         SELECTED.checkpoint_start,SELECTED.payload_replay_start,baseline_layout(SELECTED),
+@@ -261,10 +264,11 @@ pub(crate) fn dump_runtime_schedule() {
+         print!("{{\"step\":{},\"raw\":[{},{},{},{},{}],\"effective\":[{},{},{},{},{}],\"lo\":[{},{},{},{},{}],\"shift_ceiling\":[{},{}]}}",i,a,b,ca,cb,q,ab,ab,cc,cc,qq,la,lb,lca,lcb,lq,sd,sm);
+     }
+     println!(
+-        "],\"srot_bits\":{},\"counter_bits\":{},\"no_terminal_admitted\":{}}}",
++        "],\"srot_bits\":{},\"counter_bits\":{},\"no_terminal_admitted\":{},\"fixed_quotient_bits\":{}}}",
+         super::trailmix_srot_width(),
+         super::trailmix_counter_width(),
+-        super::prefix_no_terminal_eligible(0)
++        super::prefix_no_terminal_eligible(0),
++        super::qretain::fixed_width().unwrap_or(0)
+     );
+ }
+ 
+diff --git a/src/point_add/trailmix_port/inversion/qretain.rs b/src/point_add/trailmix_port/inversion/qretain.rs
+new file mode 100644
+index 0000000..48286bc
+--- /dev/null
++++ b/src/point_add/trailmix_port/inversion/qretain.rs
+@@ -0,0 +1,67 @@
++//! Explicit fixed pending-quotient storage for the existing SROT5 route.
++//! HYBRID_QRETAIN=32 overrides both thin q taper and target-induced q clipping.
++//! It does not force any one-A, CLZ, carry, margin or metadata optimization.
++//! The semantic support still requires exact greedy PZ transitions, true
++//! per-rotator shift/window fit and faithful value/coefficient widths. Only
++//! quotient-storage losses are removed; allocation alone proves no membership.
++
++pub(crate) const WIDTH: usize = 32;
++
++fn requested(value: Option<&str>) -> bool {
++    match value {
++        None | Some("0" | "off") => false,
++        Some("32") => true,
++        _ => panic!("HYBRID_QRETAIN must be32 or off (0)"),
++    }
++}
++
++pub(crate) fn fixed_width() -> Option<usize> {
++    if !requested(std::env::var("HYBRID_QRETAIN").ok().as_deref()) {
++        return None;
++    }
++    assert_eq!(
++        super::trailmix_srot_width(),
++        5,
++        "fixed q32 is scoped to SROT5"
++    );
++    assert_eq!(
++        super::env_usize("TRAILMIX_Q_TARGET", 0),
++        684,
++        "fixed q32 preserves Q_TARGET684 and its existing backend guards"
++    );
++    assert!(
++        super::midq_tail_enabled(),
++        "fixed q32 is scoped to the hybrid prefix"
++    );
++    assert!(
++        super::env_usize("TRAILMIX_Q_CAP", 99).max(1) >= WIDTH,
++        "explicit quotient cap below32 conflicts with fixed q32"
++    );
++    Some(WIDTH)
++}
++
++pub(crate) fn initial_width(raw: usize) -> usize {
++    fixed_width().unwrap_or_else(|| raw.max(1))
++}
++
++/// Use the same policy as the actual allocator, before scalar repair checks.
++/// Model-only shrinking guards have no role in the fixed physical q word.
++pub(crate) fn apply_to_model_rows(rows: &mut [[u16; 5]]) -> bool {
++    let Some(width) = fixed_width() else {
++        return false;
++    };
++    for row in rows {
++        row[4] = width as u16;
++    }
++    true
++}
++
++pub(crate) fn report() {
++    if let Some(width) = fixed_width() {
++        eprintln!("HYBRID_QRETAIN fixed_bits={width} initial_and_prefix=true overrides_thin_and_target_q_taper=true Q_TARGET=684 one_A_borrow_CLZ_flags_unchanged=true support=exact_greedy_true_SROT5_fit quotient_membership_not_inferred_from_allocation=true generic_tag_bits=6 legacy_rank_q18_ineligible=true actual_Q_T_unmeasured_by_policy=true");
++    }
++}
++
++#[path = "qretain_selftest.rs"]
++mod tests;
++pub(crate) use tests::run as selftest;
+diff --git a/src/point_add/trailmix_port/inversion/qretain_selftest.rs b/src/point_add/trailmix_port/inversion/qretain_selftest.rs
+new file mode 100644
+index 0000000..ec4f0b8
+--- /dev/null
++++ b/src/point_add/trailmix_port/inversion/qretain_selftest.rs
+@@ -0,0 +1,411 @@
++use super::super::{division_substep_retained_lengths, Circuit, GateControl, QReg};
++use super::*;
++use crate::circuit::{analyze_ops, Op, QubitId};
++use crate::sim::Simulator;
++use sha3::digest::XofReader;
++
++struct Guard(Vec<(&'static str, Option<String>)>);
++impl Guard {
++    fn new() -> Self {
++        Self(
++            [
++                "HYBRID_QRETAIN",
++                "TRAILMIX_Q_TARGET",
++                "TRAILMIX_Q_CAP",
++                "TRAILMIX_SROT_W",
++                "MIDQ_PZ_PINGPONG_TAIL",
++                "LOWQ_ONE_A_ELIM",
++                "LOWQ_CLZ_DIFF_CONST_FOLD",
++                "LOWQ_BORROW_PASSENGER_CARRY",
++            ]
++            .into_iter()
++            .map(|n| (n, std::env::var(n).ok()))
++            .collect(),
++        )
++    }
++}
++impl Drop for Guard {
++    fn drop(&mut self) {
++        for (n, v) in &self.0 {
++            if let Some(v) = v {
++                std::env::set_var(n, v);
++            } else {
++                std::env::remove_var(n);
++            }
++        }
++    }
++}
++fn enable() {
++    for (name, value) in [
++        ("HYBRID_QRETAIN", "32"),
++        ("TRAILMIX_Q_TARGET", "684"),
++        ("TRAILMIX_Q_CAP", "99"),
++        ("TRAILMIX_SROT_W", "5"),
++        ("MIDQ_PZ_PINGPONG_TAIL", "1"),
++    ] {
++        std::env::set_var(name, value);
++    }
++}
++
++fn witness() {
++    // Recorded exact steps322..337 from failed control input1465. Actions are
++    // the ideal quotient writes/drains; after an old resize fails, that old
++    // trajectory is no longer claimed to describe the actual circuit.
++    let actions = [21, 17, 16, 13, 10, 5, 3, 0, 0, 3, 5, 10, 13, 16, 17, 21];
++    let old_widths = [
++        22, 22, 22, 22, 22, 18, 18, 22, 22, 22, 20, 22, 21, 21, 21, 20,
++    ];
++    let expected = [
++        0x200000, 0x220000, 0x230000, 0x232000, 0x232400, 0x232420, 0x232428, 0x232429, 0x232428,
++        0x232420, 0x232400, 0x232000, 0x230000, 0x220000, 0x200000, 0,
++    ];
++    let mut q = 0u64;
++    let mut count = 0u32;
++    let mut first_old_loss = None;
++    for (offset, &bit) in actions.iter().enumerate() {
++        let step = 322 + offset;
++        let old_discard = q & !((1u64 << old_widths[offset]) - 1);
++        if old_discard != 0 && first_old_loss.is_none() {
++            first_old_loss = Some((step, q, old_discard));
++        }
++        assert_eq!(q >> WIDTH, 0);
++        if offset > 0 {
++            assert_eq!((q >> 21) & 1, 1, "retained high bit at step{step}");
++        }
++        q ^= 1u64 << bit;
++        if offset < 8 {
++            count += 1;
++        } else {
++            count -= 1;
++        }
++        assert_eq!(q, expected[offset]);
++        assert_eq!(q.count_ones(), count);
++    }
++    assert_eq!(first_old_loss, Some((327, 0x232400, 0x200000)));
++    assert_eq!((q, count), (0, 0));
++    assert_eq!(super::super::quotient_code::code_bits(WIDTH), 6);
++}
++
++fn policy() {
++    let _guard = Guard::new();
++    enable();
++    assert_eq!(fixed_width(), Some(32));
++    assert_eq!(initial_width(18), 32);
++    let mut rows = [[103, 103, 230, 230, 18], [98, 98, 232, 232, 21]];
++    assert!(apply_to_model_rows(&mut rows));
++    for row in rows {
++        assert_eq!(row[4], 32);
++        assert_eq!(
++            super::super::trailmix_q_width_step(
++                18,
++                row[0] as usize,
++                row[1] as usize,
++                row[2] as usize,
++                row[3] as usize
++            ),
++            32
++        );
++    }
++    for (name, value) in [
++        ("TRAILMIX_Q_TARGET", "999"),
++        ("TRAILMIX_SROT_W", "6"),
++        ("TRAILMIX_Q_CAP", "31"),
++        ("MIDQ_PZ_PINGPONG_TAIL", "0"),
++    ] {
++        enable();
++        std::env::set_var(name, value);
++        assert!(std::panic::catch_unwind(fixed_width).is_err());
++    }
++    enable();
++    std::env::set_var("HYBRID_QRETAIN", "off");
++    assert_eq!(fixed_width(), None);
++    assert_eq!(initial_width(22), 22);
++    let mut old = [[103, 103, 230, 230, 22]];
++    assert!(!apply_to_model_rows(&mut old));
++    assert_eq!(old[0][4], 22);
++    assert_eq!(
++        super::super::trailmix_q_width_step(22, 103, 103, 230, 230),
++        18
++    );
++}
++
++struct Outcomes {
++    fixed: Option<u8>,
++    state: u64,
++}
++impl XofReader for Outcomes {
++    fn read(&mut self, out: &mut [u8]) {
++        if let Some(v) = self.fixed {
++            out.fill(v);
++        } else {
++            for b in out {
++                self.state ^= self.state << 13;
++                self.state ^= self.state >> 7;
++                self.state ^= self.state << 17;
++                *b = self.state as u8;
++            }
++        }
++    }
++}
++struct Built {
++    ops: Vec<Op>,
++    split: usize,
++    ids: Vec<Vec<QubitId>>,
++    nq: usize,
++    nb: usize,
++}
++fn ids(v: &[QReg]) -> Vec<QubitId> {
++    v.iter().map(|q| QubitId(q.id().into())).collect()
++}
++fn build(optimized: bool, n: usize) -> Built {
++    for key in [
++        "LOWQ_ONE_A_ELIM",
++        "LOWQ_CLZ_DIFF_CONST_FOLD",
++        "LOWQ_BORROW_PASSENGER_CARRY",
++    ] {
++        std::env::set_var(key, if optimized { "1" } else { "0" });
++    }
++    assert_eq!(super::super::lowq_one_a_elim_enabled(), optimized);
++    assert_eq!(
++        super::super::lowq_borrow_passenger_carry_enabled(),
++        optimized
++    );
++    assert_eq!(super::super::lowq_clz_diff_const_fold_enabled(), optimized);
++    let mut c = Circuit::new();
++    let a = c.alloc_qreg_bits("qr.test.a", n);
++    let b = c.alloc_qreg_bits("qr.test.b", n);
++    let q = c.alloc_qreg_bits("qr.test.q", initial_width(22));
++    let shift = c.alloc_qreg_bits("qr.test.shift", 5);
++    let offset = c.alloc_qreg("qr.test.offset");
++    let active = c.alloc_qreg("qr.test.active");
++    let carry = c.alloc_qreg("qr.test.borrowed_zero");
++    let ids = vec![
++        ids(&a),
++        ids(&b),
++        ids(&q),
++        ids(std::slice::from_ref(&active)),
++        ids(std::slice::from_ref(&carry)),
++    ];
++    division_substep_retained_lengths(
++        &mut c,
++        &a,
++        &b,
++        &q,
++        &shift,
++        &offset,
++        GateControl::Direct(&active),
++        Some(&carry),
++        2,
++        1,
++        5,
++        false,
++    );
++    c.flush_pending_frees();
++    let split = c.b.ops.len();
++    division_substep_retained_lengths(
++        &mut c,
++        &a,
++        &b,
++        &q,
++        &shift,
++        &offset,
++        GateControl::Direct(&active),
++        Some(&carry),
++        2,
++        1,
++        5,
++        true,
++    );
++    c.flush_pending_frees();
++    let b = c.into_builder();
++    let (nq, nb, _, _) = analyze_ops(b.ops.iter());
++    let nq = (nq as usize).max(
++        ids.iter()
++            .flatten()
++            .map(|q| q.0 as usize + 1)
++            .max()
++            .unwrap(),
++    );
++    Built {
++        ops: b.ops,
++        split,
++        ids,
++        nq,
++        nb: nb as usize,
++    }
++}
++fn unsupported_alignment(built: &Built) {
++    // True pre-offset delta32 / effective j31 is NOT SROT5 support. This
++    // coherent finite-word route can round-trip while computing the wrong
++    // greedy quotient; retain an explicit native negative witness.
++    let a = (3u64 << 32) - 8;
++    let b = 3u64;
++    let delta = (64 - a.leading_zeros()) - (64 - b.leading_zeros());
++    assert_eq!(delta, 32);
++    assert!(a < b << delta);
++    let input = [a, b, 0, 1, 0];
++    for fixed in [Some(0), Some(255), Some(0x55), None] {
++        let mut rng = Outcomes {
++            fixed,
++            state: 0x7385_124e_6783_2321,
++        };
++        let mut sim = Simulator::new(built.nq, built.nb + 1, &mut rng);
++        for (reg, value) in built.ids.iter().zip(input) {
++            for (i, q) in reg.iter().enumerate() {
++                sim.qubits[q.0 as usize] = (value >> i) & 1;
++            }
++        }
++        let initial = sim.qubits.clone();
++        sim.phase = 1;
++        super::super::predicate_clear_selftest::checked_apply(
++            &mut sim,
++            &built.ops[..built.split],
++            1,
++        );
++        let read = |reg: &[QubitId], qubits: &[u64]| {
++            reg.iter()
++                .enumerate()
++                .fold(0u64, |v, (i, q)| v | ((qubits[q.0 as usize] & 1) << i))
++        };
++        assert_ne!(
++            (
++                read(&built.ids[0], &sim.qubits),
++                read(&built.ids[2], &sim.qubits)
++            ),
++            (a - (b << 31), 1u64 << 31)
++        );
++        assert_eq!(sim.phase & 1, 1);
++        super::super::predicate_clear_selftest::checked_apply(
++            &mut sim,
++            &built.ops[built.split..],
++            1,
++        );
++        for (a, b) in sim.qubits.iter().zip(&initial) {
++            assert_eq!(a & 1, b & 1);
++        }
++        assert_eq!(sim.phase & 1, 1);
++    }
++}
++fn native() {
++    let _guard = Guard::new();
++    enable();
++    let mut cases = Vec::new();
++    for seed in 0..128usize {
++        let b = 2 + (13 * seed) % 126;
++        let base = b.max(4);
++        let a = base + (seed * 7) % (256 - base);
++        let delta = (usize::BITS - a.leading_zeros()) - (usize::BITS - b.leading_zeros());
++        let aligned = b << delta;
++        let off = usize::from(a < aligned);
++        if (a >> 2 < aligned >> 2) != (off != 0) {
++            continue;
++        }
++        let j = delta as usize - off;
++        for enabled in [0u64, 1] {
++            for prior in [0, 1u64 << 21, 1u64 << 31, (1u64 << 21) | (1u64 << 31)] {
++                cases.push((
++                    [a as u64, b as u64, prior, enabled, 0],
++                    [
++                        (a - enabled as usize * (b << j)) as u64,
++                        b as u64,
++                        prior ^ (enabled << j),
++                        enabled,
++                        0,
++                    ],
++                ));
++            }
++        }
++    }
++    // Actually create/consume the top q bit on a wide enough operand, not
++    // merely retain it while operating on lower positions.
++    let mut wide = Vec::new();
++    for (a, b, prior) in [
++        ((2u64 << 31) + 16, 2, 0),
++        ((3u64 << 31) - 8, 3, 0),
++        ((3u64 << 31) - 8, 3, 1u64 << 31),
++        ((2u64 << 30) + 8, 2, 1u64 << 31),
++    ] {
++        let delta = (64 - a.leading_zeros()) as usize - (64 - b.leading_zeros()) as usize;
++        let off = u64::from(a < (b << delta));
++        let j = delta - off as usize;
++        assert!(delta < 32 && j < 32);
++        assert!(prior == 0 || prior.trailing_zeros() as usize > j);
++        for enabled in [0u64, 1] {
++            wide.push((
++                [a, b, prior, enabled, 0],
++                [
++                    a - enabled * (b << j),
++                    b,
++                    prior ^ (enabled << j),
++                    enabled,
++                    0,
++                ],
++            ));
++        }
++    }
++    let mut checked = 0;
++    for optimized in [false, true] {
++        for (n, cases) in [(8, &cases), (40, &wide)] {
++            let built = build(optimized, n);
++            for batch in cases.chunks(64) {
++                for fixed in [Some(0), Some(255), Some(0x55), None] {
++                    let mut rng = Outcomes {
++                        fixed,
++                        state: 0x7a08_3485_fa34_abc9,
++                    };
++                    let mut sim = Simulator::new(built.nq, built.nb + 1, &mut rng);
++                    let mut expected = vec![0u64; built.nq];
++                    for (lane, (input, output)) in batch.iter().enumerate() {
++                        for ((reg, &a), &b) in built.ids.iter().zip(input).zip(output) {
++                            for (bit, &q) in reg.iter().enumerate() {
++                                sim.qubits[q.0 as usize] |= ((a >> bit) & 1) << lane;
++                                expected[q.0 as usize] |= ((b >> bit) & 1) << lane;
++                            }
++                        }
++                    }
++                    let initial = sim.qubits.clone();
++                    let phase = 0x8127_af35_3301_75bcu64;
++                    sim.phase = phase;
++                    let mask = u64::MAX >> (64 - batch.len());
++                    super::super::predicate_clear_selftest::checked_apply(
++                        &mut sim,
++                        &built.ops[..built.split],
++                        mask,
++                    );
++                    for (a, b) in sim.qubits.iter().zip(&expected) {
++                        assert_eq!(a & mask, b & mask);
++                    }
++                    assert_eq!(sim.phase & mask, phase & mask);
++                    super::super::predicate_clear_selftest::checked_apply(
++                        &mut sim,
++                        &built.ops[built.split..],
++                        mask,
++                    );
++                    for (a, b) in sim.qubits.iter().zip(&initial) {
++                        assert_eq!(a & mask, b & mask);
++                    }
++                    assert_eq!(sim.phase & mask, phase & mask);
++                    checked += batch.len();
++                }
++            }
++        }
++        unsupported_alignment(&build(optimized, 40));
++    }
++    eprintln!("QRETAIN_NATIVE PASS cases={checked} q_bits=32 retained_high_bits=21/31 optimized_and_plain_backends=true value_phase_every_reset_forward_inverse=true; no_whole_profile_membership_claim=true");
++}
++pub(crate) fn run() {
++    witness();
++    policy();
++    native();
++    report();
++}
++#[cfg(test)]
++#[test]
++fn qretain_scalar_lifetime_witness() {
++    witness();
++}
++#[cfg(test)]
++#[test]
++fn qretain_policy_alignment_and_rejections() {
++    policy();
++}
+diff --git a/src/point_add/trailmix_port/inversion/shrunken_pz_schedule.rs b/src/point_add/trailmix_port/inversion/shrunken_pz_schedule.rs
+index bb7a703..d26c399 100644
+--- a/src/point_add/trailmix_port/inversion/shrunken_pz_schedule.rs
++++ b/src/point_add/trailmix_port/inversion/shrunken_pz_schedule.rs
+@@ -750,7 +750,9 @@ pub fn thin_factor_repairs_u256(value: U256) -> usize {
+             }
+         }
+     }
+-    if let Some(target) = trailmix_q_target() {
++    if super::shrunken_pz_state_machine::qretain::apply_to_model_rows(&mut tmp) {
++        // The fixed-word policy supersedes both thin taper and target clamp.
++    } else if let Some(target) = trailmix_q_target() {
+         // Mirror `trailmix_q_width_step`: per-step q budget so the working width
+         // 2*max(A,B) + 2*max(ca,cb) + q never exceeds `target`. Only the wide
+         // peak step(s) get q trimmed -> the support model now matches the circuit.
+diff --git a/src/point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs b/src/point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs
+index 2162196..bb62d9a 100644
+--- a/src/point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs
++++ b/src/point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs
+@@ -165,7 +165,8 @@ fn trailmix_cacb_width(wcacb: usize) -> usize {
+         .map_or(w, |c| w.min(c.max(1)))
+ }
+ 
+-fn trailmix_q_width_step(wq: usize, wa: usize, wb: usize, wca: usize, wcb: usize) -> usize {
++fn trailmix_q_width_step(wq: usize, wa: usize, wb: usize, wca: usize, wcb: usize) -> usize {
++    if let Some(width) = qretain::fixed_width() { return width; }
+     let natural = wq.max(1);
+     let target = std::env::var("TRAILMIX_Q_TARGET")
+         .ok()
+@@ -2694,6 +2695,8 @@ pub(crate) fn shrunken_pz_invert_backward(
+ pub(crate) mod hybrid_profile;
+ #[path = "hybrid_margin.rs"]
+ pub(crate) mod hybrid_margin;
++#[path = "qretain.rs"]
++pub(crate) mod qretain;
+ const MIDQ_PZ_CUT: usize = hybrid_profile::SELECTED.pz_cut;
+ const MIDQ_TAIL_ROUNDS: usize = hybrid_profile::SELECTED.rounds;
+ #[path = "midq_tail_checkpoint.rs"]
+@@ -3829,7 +3832,7 @@ pub fn shrunken_pz_divide_forward(
+     let mut aa = c.alloc_qreg_bits("shpzdiv.A", wg0);
+     let mut cca = c.alloc_qreg_bits("shpzdiv.ca", wc0);
+     let mut ccb = c.alloc_qreg_bits("shpzdiv.cb", wc0);
+-    let mut qq = c.alloc_qreg_bits("shpzdiv.q", q0.max(1));
++    let mut qq = c.alloc_qreg_bits("shpzdiv.q", qretain::initial_width(q0));
+     let mut s_rot = c.alloc_qreg_bits("shpzdiv.srot", trailmix_srot_width());
+     let mut off = Some(c.alloc_qreg("shpzdiv.off"));
+     let mut parity = Some(BorrowedQReg::Owned(c.alloc_qreg("shpzdiv.par")));
+@@ -4104,7 +4107,7 @@ pub fn shrunken_pz_divide_cancel(
+     let mut aa = c.alloc_qreg_bits("shpzcan.A", wg0);
+     let mut cca = c.alloc_qreg_bits("shpzcan.ca", wc0);
+     let mut ccb = c.alloc_qreg_bits("shpzcan.cb", wc0);
+-    let mut qq = c.alloc_qreg_bits("shpzcan.q", q0.max(1));
++    let mut qq = c.alloc_qreg_bits("shpzcan.q", qretain::initial_width(q0));
+     let mut s_rot = c.alloc_qreg_bits("shpzcan.srot", trailmix_srot_width());
+     let mut off = Some(c.alloc_qreg("shpzcan.off"));
+     let mut parity = Some(BorrowedQReg::Owned(c.alloc_qreg("shpzcan.par")));
+diff --git a/src/point_add/trailmix_port/mod.rs b/src/point_add/trailmix_port/mod.rs
+index 3541057..c4f73a2 100644
+--- a/src/point_add/trailmix_port/mod.rs
++++ b/src/point_add/trailmix_port/mod.rs
+@@ -678,6 +678,10 @@ pub(crate) fn search_optimized_tail_nonce(ops: &[Op]) {
+ 
+ pub fn build_builder() -> crate::point_add::B {
+     configure_sub1000_trailmix_route();
++    if std::env::var_os("MIDQ_QRETAIN_SELFTEST").is_some() {
++        inversion::shrunken_pz_state_machine::qretain::selftest();
++        return crate::point_add::B::new();
++    }
+     if std::env::var_os("MIDQ_HYBRID_MARGIN_SELFTEST").is_some() {
+         inversion::shrunken_pz_state_machine::hybrid_margin::selftest();
+         return crate::point_add::B::new();
