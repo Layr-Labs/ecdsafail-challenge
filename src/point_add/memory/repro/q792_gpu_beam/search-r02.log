@@ -1,0 +1,25 @@
+ROUND_START round=1 candidates=492896 host_data_bytes=35488512
+DEVICE 0 Intel(R) Arc(TM) Pro B50 Graphics driver=26.05.037020
+DEVICE 1 Intel(R) Arc(TM) Pro B50 Graphics driver=26.05.037020
+GPU_BEAM_ROUND_PASS round=1 candidates=492896 total=492896 wall_ms=3.26824 gpu0_ms=0.294583 gpu1_ms=0.44375 changed_beams=267 better_T_jobs=24 unweighted_T_gain=111 CPU_checks_total=2345 all_selected_truths_exact=true
+ROUND_START round=2 candidates=491261 host_data_bytes=35370792
+DEVICE 0 Intel(R) Arc(TM) Pro B50 Graphics driver=26.05.037020
+DEVICE 1 Intel(R) Arc(TM) Pro B50 Graphics driver=26.05.037020
+GPU_BEAM_ROUND_PASS round=2 candidates=491261 total=984157 wall_ms=1.61705 gpu0_ms=0.2275 gpu1_ms=0.827395 changed_beams=127 better_T_jobs=25 unweighted_T_gain=159 CPU_checks_total=4690 all_selected_truths_exact=true
+ROUND_START round=3 candidates=481418 host_data_bytes=34662096
+DEVICE 0 Intel(R) Arc(TM) Pro B50 Graphics driver=26.05.037020
+DEVICE 1 Intel(R) Arc(TM) Pro B50 Graphics driver=26.05.037020
+GPU_BEAM_ROUND_PASS round=3 candidates=481418 total=1465575 wall_ms=1.5906 gpu0_ms=0.21625 gpu1_ms=0.819166 changed_beams=82 better_T_jobs=25 unweighted_T_gain=186 CPU_checks_total=7032 all_selected_truths_exact=true
+ROUND_START round=4 candidates=473902 host_data_bytes=34120944
+DEVICE 0 Intel(R) Arc(TM) Pro B50 Graphics driver=26.05.037020
+DEVICE 1 Intel(R) Arc(TM) Pro B50 Graphics driver=26.05.037020
+GPU_BEAM_ROUND_PASS round=4 candidates=473902 total=1939477 wall_ms=1.52102 gpu0_ms=0.220104 gpu1_ms=0.72875 changed_beams=59 better_T_jobs=25 unweighted_T_gain=193 CPU_checks_total=9372 all_selected_truths_exact=true
+ROUND_START round=5 candidates=474446 host_data_bytes=34160112
+DEVICE 0 Intel(R) Arc(TM) Pro B50 Graphics driver=26.05.037020
+DEVICE 1 Intel(R) Arc(TM) Pro B50 Graphics driver=26.05.037020
+GPU_BEAM_ROUND_PASS round=5 candidates=474446 total=2413923 wall_ms=1.33346 gpu0_ms=0.19875 gpu1_ms=0.474479 changed_beams=38 better_T_jobs=25 unweighted_T_gain=198 CPU_checks_total=11712 all_selected_truths_exact=true
+ROUND_START round=6 candidates=474343 host_data_bytes=34152696
+DEVICE 0 Intel(R) Arc(TM) Pro B50 Graphics driver=26.05.037020
+DEVICE 1 Intel(R) Arc(TM) Pro B50 Graphics driver=26.05.037020
+GPU_BEAM_ROUND_PASS round=6 candidates=474343 total=2888266 wall_ms=1.59203 gpu0_ms=0.206979 gpu1_ms=0.743854 changed_beams=28 better_T_jobs=25 unweighted_T_gain=200 CPU_checks_total=14052 all_selected_truths_exact=true
+GPU_BEAM_SEARCH_PASS total_candidates=2888266 CPU_checks=14052 both_B50=true

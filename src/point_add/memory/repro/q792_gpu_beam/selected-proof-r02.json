@@ -1,0 +1,17 @@
+{
+  "at": "2026-09-12T18:49:38.541187+00:00",
+  "status": "INDEPENDENT_ALL_TRUTHS_PASS",
+  "plans": 278,
+  "inputs": 5936,
+  "GPU_total_scores": 2888266,
+  "independent_CPU_score_checks": 14052,
+  "both_B50_used": true,
+  "rounds": 6,
+  "source_sha256": "3d3164e6d14252bfd0fb0ef18118f656884e50b16e746e9fe62088dbd0444d6c",
+  "binary_sha256": "831d69e96142b333eb4991054785e7815654eb1c9a6cd2a009187b4d4ef6d1b7",
+  "results_sha256": "bc0fd3274b50f814e14c8c41fee5f5cbb6a593d2cbb1783e3acfd78c086bf7b4",
+  "log_sha256": "956d3d75349ecd239171e26d1226d650e1e542501e538f5ea59b8add3bdb35af",
+  "declared_algorithm_manifest_sha256": "3ba8050c87d072f0d823ec9ab531e14f317ed5318a76f08300ced6a46d4a3cb1",
+  "post_execution_identity_record": true,
+  "timing_note": "Revision2 parser-fix code was written before execution. Attempted revision2 pre-execution binary-hash manifest raced unfinished compile and failed; this identity record is post-execution. Algorithm/beam/depth/rounds were predeclared in r01. Failed r01 parser evaluated no GPU candidates."
+}
