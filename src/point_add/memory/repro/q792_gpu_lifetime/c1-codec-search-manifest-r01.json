@@ -1,0 +1,15 @@
+{
+  "at": "2026-09-12T19:58:21.295513+00:00",
+  "status": "PRE_EXECUTION_IDENTITIES",
+  "jobs": 38,
+  "candidates_per_group": 3,
+  "rule": "C1 C4/C5 clean across codec; factor or direct MCX with one clean rail; arbitrary outside-C1 codec U cancels literal inverse around identity arithmetic",
+  "hashes": {
+    "gpu/c1_codec_search_r01.cpp": "19ade381dac3debfaae0c2cbd357c3db647161b05b298e0e1c7bedfc1eaaa4d6",
+    "gpu/c1_codec_search_r01": "9e0ebeb6e2564b00fb7661aeabffc1f1ac41b28bd51dc5ef807fccc049aa5c4b",
+    "gpu/c1-codec-input-r01.txt": "54c3f9e4bb4c49e3cdc4350970d74a90135ad85a48b858e110e6024ddc8be358",
+    "s04-census.log": "5582b2210e7aa95501ff5a67d8c7d39dc0329760081dedac5b4f15b039bf7fcc",
+    "s04-census.manifest.json": "cd1a02d42c793fed9eb5aa6d2decfadb795261dc45ab15ed9a431eeaf2e38b50",
+    "s04-census.result.json": "ab938366374d01c6f37c9ed9ba499e39a7caf01e23a7ce059301a903686e874e"
+  }
+}
