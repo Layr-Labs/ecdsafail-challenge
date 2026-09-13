@@ -1,0 +1,68 @@
+{
+  "at": "2026-09-12T23:46:04.654450+00:00",
+  "status": "GPU_ZERO_ERRORS",
+  "stage": "stage-r04",
+  "both_B50": true,
+  "cases": 43008,
+  "errors": 0,
+  "clocks": [
+    {
+      "clock": 0,
+      "cases": 10752,
+      "errors": 0,
+      "first_error": 10752,
+      "T": 85770,
+      "ops": 164418
+    },
+    {
+      "clock": 1,
+      "cases": 10752,
+      "errors": 0,
+      "first_error": 10752,
+      "T": 72234,
+      "ops": 141164
+    },
+    {
+      "clock": 2,
+      "cases": 10752,
+      "errors": 0,
+      "first_error": 10752,
+      "T": 87798,
+      "ops": 167316
+    },
+    {
+      "clock": 3,
+      "cases": 10752,
+      "errors": 0,
+      "first_error": 10752,
+      "T": 68154,
+      "ops": 134930
+    }
+  ],
+  "manifest_sha256": "46ac90db802e0898d5aa4adf108d8bbc80760ec33dc333cb740b1d8ef0a39d07",
+  "log_sha256": "f7ac665820205caf14ff1a08a8478c99450ab0af0aad3ff264696017514f4baf",
+  "GPU_environment": {
+    "LD_LIBRARY_PATH": "/home/agentyczny-zdzich/Desktop/projekty/ecdsa/.autoresearch/intel-runtime/root/usr/lib/x86_64-linux-gnu:/home/agentyczny-zdzich/Desktop/projekty/ecdsa/.autoresearch/intel-runtime/root/usr/lib/x86_64-linux-gnu/intel-opencl",
+    "OCL_ICD_VENDORS": "/home/agentyczny-zdzich/Desktop/projekty/ecdsa/.autoresearch/q792-gpu-20260912.sd8khklc/gpu/vendors"
+  },
+  "runtime_initialization_recovery": false,
+  "baseline_fullwidth_T": [
+    86274,
+    72738,
+    88302,
+    68658
+  ],
+  "baseline_fullwidth_ops": [
+    165940,
+    142686,
+    168838,
+    136452
+  ],
+  "component_T_reduction_by_clock": [
+    504,
+    504,
+    504,
+    504
+  ],
+  "whole_circuit_gain_measured": false
+}
