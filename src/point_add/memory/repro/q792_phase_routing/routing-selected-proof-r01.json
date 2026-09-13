@@ -1,0 +1,66 @@
+{
+  "at": "2026-09-12T22:21:23.057380+00:00",
+  "status": "GPU_ASSESSED_NATIVE_AND_WHOLE_COUNT_PASS",
+  "selected_stage": "stage-r03",
+  "selected_source_manifest": "stage-r03-source-manifest.json",
+  "both_B50": true,
+  "GPU_cases": 43008,
+  "GPU_errors": 0,
+  "rows": [
+    {
+      "clock": 0,
+      "cases": 10752,
+      "T": 86274,
+      "N": 165940
+    },
+    {
+      "clock": 1,
+      "cases": 10752,
+      "T": 72738,
+      "N": 142686
+    },
+    {
+      "clock": 2,
+      "cases": 10752,
+      "T": 88302,
+      "N": 168838
+    },
+    {
+      "clock": 3,
+      "cases": 10752,
+      "T": 68658,
+      "N": 136452
+    }
+  ],
+  "production_changed_files": [
+    "src/point_add/trailmix_port/inversion/q792_t10_nop2_r01.rs",
+    "src/point_add/trailmix_port/inversion/q792_t10_nocache_r01.rs",
+    "src/point_add/trailmix_port/inversion/q792_t10_c1_fused_r01.rs",
+    "src/point_add/trailmix_port/inversion/q792_t10_c1_unified_r01.rs"
+  ],
+  "selected_production_hashes": {
+    "src/point_add/trailmix_port/inversion/q792_t10_nop2_r01.rs": "39289ef097e6d400d5ac97ad5a29615c440ce6c66fcd8b2fa6fd317d4f3d4c1e",
+    "src/point_add/trailmix_port/inversion/q792_t10_nocache_r01.rs": "f1f63c30df6cb805d502dbc791e3e05948245db50daa93c7e10af6750065e2be",
+    "src/point_add/trailmix_port/inversion/q792_t10_c1_fused_r01.rs": "3569ce497e312a695a4abfbafaaf48edc15535b05e5b1a730cf68dd442b3ad0b",
+    "src/point_add/trailmix_port/inversion/q792_t10_c1_unified_r01.rs": "e198baf6e0fa031debd39da7bd6d81b218e8dcdfbb37bed2873f4670b6addaf4"
+  },
+  "Q": 792,
+  "whole_T": 1011619426,
+  "whole_N": 1675192218,
+  "whole_gain": 9798272,
+  "full_H_phase_fusion": false,
+  "hashes": {
+    "routing-assessment-manifest-r03.json": "914cc35e3e89bcb32f240a807eca0023b9e599dba1dbe6129c11d8cfaad61386",
+    "routing-assessment-r03.log": "f593309439a13d88393095973f76f94f0d64f9f4ddc1a4ef7f0dd561678f8cb5",
+    "fixtures-r03/j0-gpu-result.tsv": "249de544d7ac5ab7303bb94a7ceac9679182b3cda65561afbc265d60c0a33947",
+    "fixtures-r03/j1-gpu-result.tsv": "28a4e68193246bc7f4e87e54a2321d242bf499a580f595386e35079e1865502e",
+    "fixtures-r03/j2-gpu-result.tsv": "52fe87eb0a632bb8be0ef52526c7a498f01e5e5f61b37ef2752549f3cb1ed1aa",
+    "fixtures-r03/j3-gpu-result.tsv": "44a58e6f0bf6603ac447baefce469298a7b0be29b5e2615fcd6891f3b56b7fe4"
+  },
+  "native_and_count_evidence": {
+    "s03-t10.result.json": "d1f7dba9edc6d101da2c8e93583894f438f0d7f7bd36ca2c940e74559dc0edb9",
+    "s03-t10.log": "be1d9d335fbd19c0d82128165bf1830bac6a79cb4fee3850e0138d5cc70df19a",
+    "s03-count.result.json": "a12c1f6736bdab7e3eb45faf7af823fe990683c00a88d9a059de80cd2116674b",
+    "s03-step-j0.result.json": "dfca8fd47544b5408f38639c733adaf0128dfec13bd0ace3c60ea486802ab9b4"
+  }
+}
