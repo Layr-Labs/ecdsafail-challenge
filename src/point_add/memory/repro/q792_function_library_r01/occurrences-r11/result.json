@@ -1,0 +1,51 @@
+{
+  "at": "2026-09-13T09:59:59.982580+00:00",
+  "status": "ALL_WINDOW_GPU_MATCH_CPU_TRUTH_NONOVERLAP_SELECTED",
+  "unique_functions": 4,
+  "equivalent_normalized_sequences": 9,
+  "positive_matches": 597,
+  "nonoverlapping_matches": 160,
+  "template_T_saved": 272,
+  "template_N_added": -17,
+  "clocks": [
+    {
+      "clock": 0,
+      "matched_positive": 136,
+      "nonoverlapping": 37,
+      "saved_T": 65,
+      "added_N": -1,
+      "old_N": 367343,
+      "new_N": 367342
+    },
+    {
+      "clock": 1,
+      "matched_positive": 160,
+      "nonoverlapping": 42,
+      "saved_T": 68,
+      "added_N": -9,
+      "old_N": 299876,
+      "new_N": 299867
+    },
+    {
+      "clock": 2,
+      "matched_positive": 142,
+      "nonoverlapping": 37,
+      "saved_T": 68,
+      "added_N": 11,
+      "old_N": 300318,
+      "new_N": 300329
+    },
+    {
+      "clock": 3,
+      "matched_positive": 159,
+      "nonoverlapping": 44,
+      "saved_T": 71,
+      "added_N": -18,
+      "old_N": 298958,
+      "new_N": 298940
+    }
+  ],
+  "manifest_sha256": "65258359c8991abdd44f8d54ea6295d4f4878cb4712ab67b6993d502d0f27133",
+  "GPU_log_sha256": "e33e848c87840a8756bc3ea9d9c77e5412cbf866678dd25217819b1dee674f25",
+  "whole_circuit_T_saved": "UNMEASURED until all808 templates integrated and counted"
+}
