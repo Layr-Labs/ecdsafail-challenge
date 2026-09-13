@@ -1,0 +1,20 @@
+{
+  "selected_stage": "stage-r10",
+  "production_only_changes_in_final": "measured pins; appended independent bank test; native alias; reproducibility artifacts",
+  "source_manifest_sha256": "b552b93f7127a43146478ff210470e58375dec099c99c87fc705e3cf04bb1adb",
+  "artifacts": {
+    "candidate-r10.json": "ae120de7050c2588e6f7740999507b79a95f598119b4e6b1fe13a2c02da86635",
+    "stage-r10-source-manifest.json": "b552b93f7127a43146478ff210470e58375dec099c99c87fc705e3cf04bb1adb",
+    "s10-build.result.json": "fb0254ad8caeeecc4ee4352160fe92143adf9e22b9fefe803113d1383642eb8c",
+    "s10-star-factor.result.json": "72262c79a447468664b2ccef2f28a70518ae881e479bf0ba3e97a56784d4dd59",
+    "s10-step-j0.result.json": "ff193d085fd7ca21e6e5049d5eb9adae0bae2759570f5fae3702ed45fb38af51",
+    "s10-count.result.json": "41d52e875c60ffb6514b6e38d63c755cb8526b0da3897f57001beb02bdaf68bd",
+    "gpu/assessment-r10-whole-step-manifest.json": "79ce91a43fc4a2e316de999782a9ee5edbbb9a2ee99cea7eb573320170db8ed2",
+    "gpu/assessment-r10-whole-step-result.json": "5987379b79838e8ba407bc8e0f1b1439bab20754b06bea41f9d590442335eaa6",
+    "gpu/assessment-r10-whole-step-runner.log": "30aeb882dbabf9ad5f308dc55f094469fed3ce7bff74cae871f796dcbfd3926c",
+    "gpu/phase_routing_assess_r01.cpp": "b93060589939a000536c656e7ef1686f6bd0d5b603733ba2f0817c77f7e37e0e"
+  },
+  "author": "GPT-6 Astra",
+  "public_credit": "nasqret f3580f292c6e78b1b5235f4a7b5bde14af91a672 and upstream authors",
+  "goal_minus20_met": false
+}

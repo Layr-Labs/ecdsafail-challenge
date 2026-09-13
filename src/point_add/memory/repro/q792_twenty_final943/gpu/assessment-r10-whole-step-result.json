@@ -1,0 +1,44 @@
+{
+  "at": "2026-09-13T07:29:17.252596+00:00",
+  "status": "GPU_ZERO_ERRORS",
+  "stage": "stage-r10",
+  "both_B50": true,
+  "cases": 43008,
+  "errors": 0,
+  "clocks": [
+    {
+      "clock": 0,
+      "cases": 10752,
+      "errors": 0,
+      "first_error": 10752,
+      "T": 221237,
+      "ops": 368262
+    },
+    {
+      "clock": 1,
+      "cases": 10752,
+      "errors": 0,
+      "first_error": 10752,
+      "T": 177743,
+      "ops": 303436
+    },
+    {
+      "clock": 2,
+      "cases": 10752,
+      "errors": 0,
+      "first_error": 10752,
+      "T": 174582,
+      "ops": 304588
+    },
+    {
+      "clock": 3,
+      "cases": 10752,
+      "errors": 0,
+      "first_error": 10752,
+      "T": 173594,
+      "ops": 302584
+    }
+  ],
+  "manifest_sha256": "79ce91a43fc4a2e316de999782a9ee5edbbb9a2ee99cea7eb573320170db8ed2",
+  "log_sha256": "30aeb882dbabf9ad5f308dc55f094469fed3ce7bff74cae871f796dcbfd3926c"
+}

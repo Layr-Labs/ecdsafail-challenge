@@ -1,0 +1,25 @@
+{
+  "at": "2026-09-13T07:29:16.938006+00:00",
+  "stage": "stage-r10",
+  "source_archive_sha256": "96a27f4dc3f1fc4ef5973ac2f92fc5022cc3c9983a145f28ea9758e300cd7856",
+  "binary_sha256": "e09d4d4e6971ad62a5e20239a4c2805bb0ab009ae3b73c0de6c23d0bd54ac27c",
+  "GPU_source_sha256": "b93060589939a000536c656e7ef1686f6bd0d5b603733ba2f0817c77f7e37e0e",
+  "GPU_binary_sha256": "69ec5fe3f1a6ce59420c0c4f24956d0d0bdfff884687fa24f971c7509f71d0e1",
+  "fixtures": {
+    "j0-cases.bin": "bf4f8c88314a31dc2a66f8c0eda1292ce43c8168b67c55a03ec26a3d83e1a86d",
+    "j0-ops.bin": "5572849ba47b0333917bf87814129bdb1f0e3c3b676bebd9d30e7dbf52f35c36",
+    "j1-cases.bin": "be9b04c69d0fabe4a760f211475e6e8ad37ce4ef542dba0662157d2020619630",
+    "j1-ops.bin": "bc4e6298f4e1ccc5f9ff4f6d3d507ca0d02885e559396ec54aef401b3f8e8261",
+    "j2-cases.bin": "d25f711ff221a0d93359f8641042367093c001a51971b4d1edf4d04da08a5849",
+    "j2-ops.bin": "eedff3164ab807a2a01de212634033844ae4c1ebf01ec1bc01626b9443f6a619",
+    "j3-cases.bin": "e1e02ac5e29ac0570540e556cc014bb6f05d2e356f0aec1a0727871d02f71f64",
+    "j3-ops.bin": "60420211198faf7ea56873b20260744d5c6c54dc0b1b25bcfb0ab31d1f056632"
+  },
+  "cases": 43008,
+  "source_manifest_sha256": "b552b93f7127a43146478ff210470e58375dec099c99c87fc705e3cf04bb1adb",
+  "export_result_sha256": "8b81f1c12d7183547134ebbd3b85004533fa2c07e23ba07c1ad520ba73dbacd9",
+  "environment": {
+    "LD_LIBRARY_PATH": "/home/agentyczny-zdzich/Desktop/projekty/ecdsa/.autoresearch/intel-runtime/root/usr/lib/x86_64-linux-gnu:/home/agentyczny-zdzich/Desktop/projekty/ecdsa/.autoresearch/intel-runtime/root/usr/lib/x86_64-linux-gnu/intel-opencl",
+    "OCL_ICD_VENDORS": "/home/agentyczny-zdzich/Desktop/projekty/ecdsa/.autoresearch/q792-gpu-20260912.sd8khklc/gpu/vendors"
+  }
+}
