@@ -1,0 +1,22 @@
+{
+  "at": "2026-09-12T22:06:52.411996+00:00",
+  "status": "PRE_EXECUTION_DECLARATION",
+  "candidate_stage": "stage-r01",
+  "source_archive_sha256": "da8ce1ab0715e7b6145b719cc34f3fc736af0e2d8b864c631ffed6cabef8ae83",
+  "candidate_binary_sha256": "db0fbcca1edd042c349f30f96be3cff547e8d67de02fc706e7d2ee763b974e0a",
+  "both_B50": true,
+  "AS_limit": 4000000000,
+  "case_selection": "every31st64-lane batch plus last; all four clocks and six passenger patterns; scalar expected states; no native simulation yet",
+  "files": {
+    "phase_routing_assess_r01.cpp": "b93060589939a000536c656e7ef1686f6bd0d5b603733ba2f0817c77f7e37e0e",
+    "phase_routing_assess_r01": "69ec5fe3f1a6ce59420c0c4f24956d0d0bdfff884687fa24f971c7509f71d0e1",
+    "fixtures-r01/j0-cases.bin": "bf907a60195020c6112298db94fdb48f26629651cfadaa65c98592c2ad5cad04",
+    "fixtures-r01/j0-ops.bin": "66fef57c7a7cc8dc1fb08db6ec158e0982a8e0f283ceb34fde37f07ad1020801",
+    "fixtures-r01/j1-cases.bin": "315c6dbce8c41d3baa04485bef46188940e58a8b03b6def38f8e9e6af8ab20da",
+    "fixtures-r01/j1-ops.bin": "010a97aee41f493ac2d5afba2449bdbf0cfb85f6e45c51a2771f82f9f2c638d3",
+    "fixtures-r01/j2-cases.bin": "2ebe8a15c21ec651ba6cbfca9aefca713c7999e1bb1f93930a0f9810d4ca458f",
+    "fixtures-r01/j2-ops.bin": "aaa2290539182319cfe7c83e28b917626de60d347a9002738e100a0f495c86df",
+    "fixtures-r01/j3-cases.bin": "d4968593814c4c0b50446777366a76489716ed5cd19a2204999d2d50785d6de2",
+    "fixtures-r01/j3-ops.bin": "07dfc70699caa60ebb6e05019862c8166c7fdff4e85ae4449d9c9bb10f0a40f9"
+  }
+}

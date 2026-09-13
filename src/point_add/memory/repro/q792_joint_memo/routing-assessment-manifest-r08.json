@@ -1,0 +1,24 @@
+{
+  "at": "2026-09-13T00:03:01.150851+00:00",
+  "status": "PRE_EXECUTION_IDENTITY",
+  "stage": "stage-r08",
+  "source_archive_sha256": "3d304a926d5f3f7311f8f64e397ef1676e47740223ed5040f4118df830dca580",
+  "binary_sha256": "a5578eea7979396960b49da0e99e75a00511b08e2535edc5eacd289e5395c6e4",
+  "source_manifest_sha256": "b9a50de22954641b408903f2a8efd984895bccac171c2fb427c4471b90330736",
+  "export_result_sha256": "37c4cd07d660b0825290f182cdcfc790ad2e787a4a4df55c0460e8f4512784e8",
+  "GPU_source_sha256": "b93060589939a000536c656e7ef1686f6bd0d5b603733ba2f0817c77f7e37e0e",
+  "GPU_executable_sha256": "69ec5fe3f1a6ce59420c0c4f24956d0d0bdfff884687fa24f971c7509f71d0e1",
+  "fixtures": {
+    "j0-cases.bin": "c2802d58eb15dd4297722069e4ec6b8a5c2755345e7af61554bcfac248499454",
+    "j0-ops.bin": "1d96e4cfa1b26d134076918c03ceb19bca5a42661a8429ed16311c5f17ea5ae0",
+    "j1-cases.bin": "61302dd9afccdcdfb8d92fa93df02e8a7bc523d3bd418658f601bbaa0c00fec6",
+    "j1-ops.bin": "931cad7dc2197584f0d828a15af786c1321d9d332fe3d76f719bbd27d2a3cab2",
+    "j2-cases.bin": "fb81e5bc875e51fd8cf30ec39a3160f3453c262874b988082a65a2dac4f526b8",
+    "j2-ops.bin": "b943972bc13e5cef1d81a826325e575c897ec2f124cc20cee874495e2cceefa6",
+    "j3-cases.bin": "f70af0ee1f3097729ff6c76e0fd9b54ea577cc033b779206899102c0e867b061",
+    "j3-ops.bin": "6451fe77895ada8c3b07b4e26e7c72ac8b79d6203872231cce2eb81893452296"
+  },
+  "policy": "Sign every17th64lane batch+last, all11patterns (8cargo/3offphase), allfourclocks, unchanged independent integer-capsule oracle",
+  "devices": "Two distinct Intel Arc Pro B50; GPU0 clocks0/1, GPU1 clocks2/3",
+  "candidate_assessment_executed": false
+}

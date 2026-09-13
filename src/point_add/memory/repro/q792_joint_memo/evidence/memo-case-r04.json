@@ -1,0 +1,22 @@
+{
+  "at": "2026-09-12T23:48:49.968972+00:00",
+  "status": "GPU_NATIVE_STEP_WHOLE_COUNT_PASS",
+  "stage": "stage-r04",
+  "Q": 792,
+  "T": 1008538786,
+  "N": 1669838474,
+  "base_Q": 792,
+  "base_T": 1011619426,
+  "base_N": 1675192218,
+  "gain_T": 3080640,
+  "gain_N": 5353744,
+  "source_archive_sha256": "9dcb358c28a62175c876cc6da4d16ae94089daaf320e6eb976f319993dcd002d",
+  "binary_sha256": "b83d63bc0f9927dc8131ebc9c99caecf17f9a5712d62f0944775307e9fe11ff5",
+  "assessment_sha256": "485969312e8e5b6748f18528e3839c1125c140783a5dccf2848e939da73c5dd0",
+  "native_result_sha256": "2472bb34489a4e5f7a2486826965417a4a71601fba3d170786e863edf2ab9291",
+  "step_result_sha256": "2e90ea6b0b1457a020620c107d283a4ee138b795e26083988261ddea6cfdb0fa",
+  "count_result_sha256": "df8b68d63c26b5e5ab6a2cc6bd6ce561ad200702fed612d6b8e0ac9d0e71577e",
+  "description": "Arbitrary existing dirty helper memoizes mask*source as XOR overlay; carry echoes remove passenger locally, one fanout correction removes shared passenger contribution from all sum outputs; old metadata cache retained; no extra Q or clean loan",
+  "full_9024_qualified": false,
+  "submitted": false
+}

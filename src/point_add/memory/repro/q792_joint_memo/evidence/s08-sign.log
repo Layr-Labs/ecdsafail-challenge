@@ -1,0 +1,31 @@
+=== quantum_ecc: build_circuit (untrusted stage) ===
+
+-- building circuit --
+FOLD20_SIGN_PHASELEASE_BUILT j=0 rows=28022 ops=55607 T=27347
+FOLD20_SIGN_PHASELEASE_BUILT j=1 rows=22150 ops=50515 T=24939
+FOLD20_SIGN_PHASELEASE_BUILT j=2 rows=25452 ops=49801 T=23759
+FOLD20_SIGN_PHASELEASE_BUILT j=3 rows=26864 ops=57009 T=27827
+FOLD20_SIGN_PHASELEASE_PASS lanes=1128512 active=820736 short=3768 S0=64512 A254=1184 scalar_rows=102488; complete Sign wrapper, one funded mask, no clean carry, all three absent rails, all eight cargo patterns and three off phases, exact phase/inverse/allwire restoration; no whole-step claim
+	Command being timed: "prlimit --as=8000000000 timeout 1200s /home/agentyczny-zdzich/Desktop/projekty/ecdsa/.autoresearch/q792-memo-joint-20260913.s9u6rt86/stage-r08-workspace/target/release/build_circuit"
+	User time (seconds): 3.17
+	System time (seconds): 0.00
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:03.20
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 28352
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 6950
+	Voluntary context switches: 36
+	Involuntary context switches: 44
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

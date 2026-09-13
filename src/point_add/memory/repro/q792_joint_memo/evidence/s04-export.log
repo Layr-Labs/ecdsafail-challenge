@@ -1,0 +1,47 @@
+=== quantum_ecc: build_circuit (untrusted stage) ===
+
+-- building circuit --
+RANK4_LOWER class=4 original_ops=19961 new_ops=15573 symbolic_rank_gates=108 paired_macros=208 conditional_clean=true
+FOLD20_T10_RANK4 j=0 last=true low=true old_ops=19961 ops=15573
+RANK4_LOWER class=3 original_ops=104565 new_ops=89369 symbolic_rank_gates=896 paired_macros=1100 conditional_clean=true
+FOLD20_T10_RANK4 j=0 last=false low=true old_ops=104565 ops=89369
+PHASE_ROUTING_EXPORTED_CLOCK j=0 ops=164418 T=85770
+RANK4_LOWER class=4 original_ops=22983 new_ops=18497 symbolic_rank_gates=108 paired_macros=246 conditional_clean=true
+FOLD20_T10_RANK4 j=1 last=true low=true old_ops=22983 ops=18497
+RANK4_LOWER class=3 original_ops=73489 new_ops=63323 symbolic_rank_gates=704 paired_macros=828 conditional_clean=true
+FOLD20_T10_RANK4 j=1 last=false low=true old_ops=73489 ops=63323
+PHASE_ROUTING_EXPORTED_CLOCK j=1 ops=141164 T=72234
+RANK4_LOWER class=4 original_ops=24531 new_ops=19725 symbolic_rank_gates=108 paired_macros=252 conditional_clean=true
+FOLD20_T10_RANK4 j=2 last=true low=true old_ops=24531 ops=19725
+RANK4_LOWER class=3 original_ops=102927 new_ops=88319 symbolic_rank_gates=896 paired_macros=1082 conditional_clean=true
+FOLD20_T10_RANK4 j=2 last=false low=true old_ops=102927 ops=88319
+PHASE_ROUTING_EXPORTED_CLOCK j=2 ops=167316 T=87798
+RANK4_LOWER class=4 original_ops=17081 new_ops=13259 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=17081 ops=13259
+RANK4_LOWER class=3 original_ops=73877 new_ops=63319 symbolic_rank_gates=704 paired_macros=828 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=73877 ops=63319
+PHASE_ROUTING_EXPORTED_CLOCK j=3 ops=134930 T=68154
+PHASE_ROUTING_EXPORT_PASS scalar_references_only=true native_simulation_executed=false
+	Command being timed: "prlimit --as=8000000000 timeout 1200s /home/agentyczny-zdzich/Desktop/projekty/ecdsa/.autoresearch/q792-memo-joint-20260913.s9u6rt86/stage-r04-workspace/target/release/build_circuit"
+	User time (seconds): 1.13
+	System time (seconds): 0.45
+	Percent of CPU this job got: 98%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.60
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 76652
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 37311
+	Voluntary context switches: 20
+	Involuntary context switches: 19
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 31120
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

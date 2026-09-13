@@ -1,0 +1,688 @@
+   Compiling quantum_ecc v0.1.0 (/home/agentyczny-zdzich/Desktop/projekty/ecdsa/.autoresearch/q792-memo-joint-20260913.s9u6rt86/stage-r04-workspace)
+warning: unused import: `Op`
+ --> src/bin/../point_add/q792_compact_check_r01.rs:4:35
+  |
+4 | use crate::circuit::{analyze_ops, Op, QubitId, QubitOrBit};
+  |                                   ^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `length_recompute::mixed_mcx`
+ --> src/bin/../point_add/trailmix_port/inversion/q792_r01_r01.rs:4:96
+  |
+4 | use super::{q792_rank4_lower_r01 as lower,q792_class_chart_r01 as chart,q792_fold20_r01::table,length_recompute::mixed_mcx};
+  |                                                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `QReg`
+ --> src/bin/../point_add/trailmix_port/inversion/q793_r01_numeric_seed_check.rs:2:56
+  |
+2 | use crate::point_add::trailmix_port::circuit::{Circuit,QReg};
+  |                                                        ^^^^
+
+warning: unused import: `crate::circuit::NO_QUBIT`
+ --> src/bin/../point_add/trailmix_port/inversion/q792_r01_phaselease_r01.rs:3:5
+  |
+3 | use crate::circuit::NO_QUBIT;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `q792_class_chart_r01 as chart` and `q792_r01_r01 as local`
+ --> src/bin/../point_add/trailmix_port/inversion/q792_r01_phaselease_r01.rs:4:13
+  |
+4 | use super::{q792_class_chart_r01 as chart,q792_r01_r01 as local};
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unnecessary trailing semicolon
+   --> src/bin/../point_add/trailmix_port/inversion/q792_sign_nop2_r01.rs:333:94
+    |
+333 |     cargo(circ,rank,a,c,sm,p1,p2,w1,w2,helpers,j);let moves=circ.b.ops[movestart..].to_vec();;
+    |                                                                                              ^ help: remove this semicolon
+    |
+    = note: `#[warn(redundant_semicolons)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary trailing semicolon
+   --> src/bin/../point_add/trailmix_port/inversion/q792_sign_nop2_r01.rs:334:152
+    |
+334 | ...2,mask,w1,dirty);let loan=circ.b.ops[ls..].to_vec();;
+    |                                                        ^ help: remove this semicolon
+
+warning: unnecessary trailing semicolon
+   --> src/bin/../point_add/trailmix_port/inversion/q792_sign_nop2_r01.rs:335:110
+    |
+335 |     let ts=circ.b.ops.len();top_flag(circ,rank,c,sm,p1,p2,mask,w1,dirty,j);let top=circ.b.ops[ts..].to_vec();;
+    |                                                                                                              ^ help: remove this semicolon
+
+warning: unnecessary trailing semicolon
+   --> src/bin/../point_add/trailmix_port/inversion/q792_sign_nop2_r01.rs:339:56
+    |
+339 |     core(circ,rank,c,sm,p1,p2,mask,sign,w1,w2,dirty,j);;
+    |                                                        ^ help: remove this semicolon
+
+warning: unused import: `crate::circuit::OperationType`
+ --> src/bin/../point_add/trailmix_port/inversion/q792_rotation_r01.rs:5:5
+  |
+5 | use crate::circuit::OperationType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Circuit` and `QReg`
+ --> src/bin/../point_add/trailmix_port/inversion/q793_r01_dynamic_v2.rs:3:48
+  |
+3 | use crate::point_add::trailmix_port::circuit::{Circuit,QReg};
+  |                                                ^^^^^^^ ^^^^
+
+warning: unused imports: `Circuit` and `QReg`
+ --> src/bin/../point_add/trailmix_port/inversion/q793_r01_supported_v3.rs:2:48
+  |
+2 | use crate::point_add::trailmix_port::circuit::{Circuit,QReg};
+  |                                                ^^^^^^^ ^^^^
+
+warning: unused imports: `Circuit` and `QReg`
+ --> src/bin/../point_add/trailmix_port/inversion/q793_r01_supported_v5.rs:2:48
+  |
+2 | use crate::point_add::trailmix_port::circuit::{Circuit,QReg};
+  |                                                ^^^^^^^ ^^^^
+
+warning: unused imports: `Circuit` and `QReg`
+ --> src/bin/../point_add/trailmix_port/inversion/q793_r01_supported_v7.rs:2:48
+  |
+2 | use crate::point_add::trailmix_port::circuit::{Circuit,QReg};
+  |                                                ^^^^^^^ ^^^^
+
+warning: unused imports: `Circuit` and `QReg`
+ --> src/bin/../point_add/trailmix_port/inversion/q793_r01_supported_v11.rs:2:48
+  |
+2 | use crate::point_add::trailmix_port::circuit::{Circuit,QReg};
+  |                                                ^^^^^^^ ^^^^
+
+warning: unused imports: `Circuit` and `QReg`
+ --> src/bin/../point_add/trailmix_port/inversion/q793_r01_supported_v9.rs:2:48
+  |
+2 | use crate::point_add::trailmix_port::circuit::{Circuit,QReg};
+  |                                                ^^^^^^^ ^^^^
+
+warning: unused imports: `Circuit` and `QReg`
+ --> src/bin/../point_add/trailmix_port/inversion/q793_r01_supported_timefix_r01.rs:2:48
+  |
+2 | use crate::point_add::trailmix_port::circuit::{Circuit,QReg};
+  |                                                ^^^^^^^ ^^^^
+
+warning: unused import: `QReg`
+ --> src/bin/../point_add/trailmix_port/inversion/q793_mbu.rs:3:111
+  |
+3 | use crate::{circuit::{Op,OperationType as K,QubitId,BitId,NO_BIT},point_add::trailmix_port::circuit::{Circuit,QReg}};
+  |                                                                                                               ^^^^
+
+warning: unused import: `crate::circuit::OperationType`
+ --> src/bin/../point_add/trailmix_port/inversion/q793_Aupdate.rs:7:5
+  |
+7 | use crate::circuit::OperationType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::sim::Simulator`
+ --> src/bin/../point_add/trailmix_port/inversion/q793_Aupdate.rs:8:5
+  |
+8 | use crate::sim::Simulator;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `sha3::digest::XofReader`
+ --> src/bin/../point_add/trailmix_port/inversion/q793_Aupdate.rs:9:5
+  |
+9 | use sha3::digest::XofReader;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::circuit::OperationType`
+ --> src/bin/../point_add/trailmix_port/inversion/q793_transfer.rs:5:5
+  |
+5 | use crate::circuit::OperationType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::sim::Simulator`
+ --> src/bin/../point_add/trailmix_port/inversion/q793_transfer.rs:6:5
+  |
+6 | use crate::sim::Simulator;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `sha3::digest::XofReader`
+ --> src/bin/../point_add/trailmix_port/inversion/q793_transfer.rs:7:5
+  |
+7 | use sha3::digest::XofReader;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::circuit::OperationType`
+ --> src/bin/../point_add/trailmix_port/inversion/q794_metadata_exit.rs:6:5
+  |
+6 | use crate::circuit::OperationType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::sim::Simulator`
+ --> src/bin/../point_add/trailmix_port/inversion/q794_metadata_exit.rs:7:5
+  |
+7 | use crate::sim::Simulator;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `sha3::digest::XofReader`
+ --> src/bin/../point_add/trailmix_port/inversion/q794_metadata_exit.rs:8:5
+  |
+8 | use sha3::digest::XofReader;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::circuit::OperationType`
+ --> src/bin/../point_add/trailmix_port/inversion/q794_Aupdate.rs:7:5
+  |
+7 | use crate::circuit::OperationType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::sim::Simulator`
+ --> src/bin/../point_add/trailmix_port/inversion/q794_Aupdate.rs:8:5
+  |
+8 | use crate::sim::Simulator;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `sha3::digest::XofReader`
+ --> src/bin/../point_add/trailmix_port/inversion/q794_Aupdate.rs:9:5
+  |
+9 | use sha3::digest::XofReader;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::circuit::OperationType`
+ --> src/bin/../point_add/trailmix_port/inversion/q794_transfer.rs:5:5
+  |
+5 | use crate::circuit::OperationType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::sim::Simulator`
+ --> src/bin/../point_add/trailmix_port/inversion/q794_transfer.rs:6:5
+  |
+6 | use crate::sim::Simulator;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `sha3::digest::XofReader`
+ --> src/bin/../point_add/trailmix_port/inversion/q794_transfer.rs:7:5
+  |
+7 | use sha3::digest::XofReader;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::circuit::OperationType`
+ --> src/bin/../point_add/trailmix_port/inversion/q794_r00.rs:7:5
+  |
+7 | use crate::circuit::OperationType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::sim::Simulator`
+ --> src/bin/../point_add/trailmix_port/inversion/q794_r00.rs:8:5
+  |
+8 | use crate::sim::Simulator;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `sha3::digest::XofReader`
+ --> src/bin/../point_add/trailmix_port/inversion/q794_r00.rs:9:5
+  |
+9 | use sha3::digest::XofReader;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `metadata_rank5`
+ --> src/bin/../point_add/trailmix_port/inversion/metadata_phase_counter5.rs:5:13
+  |
+5 | use super::{metadata_rank5,length_recompute::mixed_mcx};
+  |             ^^^^^^^^^^^^^^
+
+warning: unused import: `crate::point_add::trailmix_port::num_bigint::BigUint`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:6965:9
+     |
+6965 |     use crate::point_add::trailmix_port::num_bigint::BigUint;
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::point_add::trailmix_port::num_bigint::BigUint`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:7203:9
+     |
+7203 |     use crate::point_add::trailmix_port::num_bigint::BigUint;
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Q945HclzForm`
+    --> src/bin/../point_add/trailmix_port/mod.rs:3286:39
+     |
+3286 |     use inversion::q945_local_hosts::{Q945HclzForm, Q945StateRegister, Q945Substep};
+     |                                       ^^^^^^^^^^^^
+
+warning: unused import: `inversion::shrunken_pz_schedule::Q949NarrowCompareSubstep`
+    --> src/bin/../point_add/trailmix_port/mod.rs:3287:9
+     |
+3287 |     use inversion::shrunken_pz_schedule::Q949NarrowCompareSubstep;
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unreachable statement
+  --> src/bin/../point_add/trailmix_port/inversion/q792_t10_c1_codec_r01.rs:97:5
+   |
+96 |     return;
+   |     ------ any code following this expression is unreachable
+97 |     super::q794_t10_quotient::endpoint(circ,rank,a,c,&[(g,true)],m256,dirty);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+   |
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `i`
+  --> src/bin/../point_add/trailmix_port/inversion/q792_fold20_address_r01.rs:38:13
+   |
+38 |         for i in (0..6).filter(|&i|i==wanted){table(c,&tag,(0..16).map(|t|(10..15).contains(&t)).collect(),&[(d,true)],out,rest);}
+   |             ^
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+help: you might have meant to pattern match on the similarly named constant `N`
+   |
+38 -         for i in (0..6).filter(|&i|i==wanted){table(c,&tag,(0..16).map(|t|(10..15).contains(&t)).collect(),&[(d,true)],out,rest);}
+38 +         for point_add::N in (0..6).filter(|&i|i==wanted){table(c,&tag,(0..16).map(|t|(10..15).contains(&t)).collect(),&[(d,true)],out,rest);}
+   |
+help: if this is intentional, prefix it with an underscore
+   |
+38 |         for _i in (0..6).filter(|&i|i==wanted){table(c,&tag,(0..16).map(|t|(10..15).contains(&t)).collect(),&[(d,true)],out,rest);}
+   |             +
+
+warning: unused variable: `guard`
+  --> src/bin/../point_add/trailmix_port/inversion/q792_r00_r01.rs:25:40
+   |
+25 | fn high(circ:&mut Circuit,rank:&[QReg],guard:&QReg,target:&QReg,helpers:&[QReg],scratch:&QReg,axis:usize,h:isize){
+   |                                        ^^^^^ help: if this is intentional, prefix it with an underscore: `_guard`
+
+warning: unused variable: `scratch`
+  --> src/bin/../point_add/trailmix_port/inversion/q792_r00_r01.rs:25:81
+   |
+25 | fn high(circ:&mut Circuit,rank:&[QReg],guard:&QReg,target:&QReg,helpers:&[QReg],scratch:&QReg,axis:usize,h:isize){
+   |                                                                                 ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_scratch`
+
+warning: unused variable: `dirty`
+  --> src/bin/../point_add/trailmix_port/inversion/q792_r01_check_r01.rs:18:147
+   |
+18 | ...alloc_qreg_bits("w2",259);let dirty=circ.alloc_qreg_bits("borrowed",23);let owned=circ.b.next_qubit;
+   |                                  ^^^^^ help: if this is intentional, prefix it with an underscore: `_dirty`
+
+warning: unused variable: `hs`
+   --> src/bin/../point_add/trailmix_port/inversion/q792_r01_nohs_normal_r01.rs:308:101
+    |
+308 | pub(super) fn emit(circ:&mut Circuit,rank:&[QReg],a:&[QReg],c:&[QReg],sm:&[QReg],g:&QReg,mask:&QReg,hs:&QReg,ha:&QReg,
+    |                                                                                                     ^^ help: if this is intentional, prefix it with an underscore: `_hs`
+
+warning: unused variable: `dirty`
+  --> src/bin/../point_add/trailmix_port/inversion/q792_r01_phaselease_check_r01.rs:18:147
+   |
+18 | ...alloc_qreg_bits("w2",259);let dirty=circ.alloc_qreg_bits("borrowed",23);let owned=circ.b.next_qubit;
+   |                                  ^^^^^ help: if this is intentional, prefix it with an underscore: `_dirty`
+
+warning: unused variable: `p2`
+  --> src/bin/../point_add/trailmix_port/inversion/q792_t10_dirtyq1_r01.rs:89:91
+   |
+89 | ...g],c:&[QReg],sm:&[QReg],p1:&QReg,p2:&QReg,g:&QReg,w1:&[QReg],w2:&[QReg],helpers:&[QReg],j:usize,inverse:bool,last:bool){
+   |                                     ^^ help: if this is intentional, prefix it with an underscore: `_p2`
+
+warning: unused variable: `rank`
+  --> src/bin/../point_add/trailmix_port/inversion/q792_t10_phaselease_check_r01.rs:19:41
+   |
+19 | ...   let mut circ=Circuit::new();let rank=circ.alloc_qreg_bits("rank",5);let a=circ.alloc_qreg_bits("a",6);let c=circ.alloc_qreg_bits("c...
+   |                                       ^^^^ help: if this is intentional, prefix it with an underscore: `_rank`
+
+warning: unused variable: `a`
+  --> src/bin/../point_add/trailmix_port/inversion/q792_t10_phaselease_check_r01.rs:19:81
+   |
+19 | ...irc.alloc_qreg_bits("rank",5);let a=circ.alloc_qreg_bits("a",6);let c=circ.alloc_qreg_bits("c",6);let sm=circ.alloc_qreg_bits("sm",4);
+   |                                      ^ help: if this is intentional, prefix it with an underscore: `_a`
+
+warning: unused variable: `c`
+  --> src/bin/../point_add/trailmix_port/inversion/q792_t10_phaselease_check_r01.rs:19:115
+   |
+19 | ...a=circ.alloc_qreg_bits("a",6);let c=circ.alloc_qreg_bits("c",6);let sm=circ.alloc_qreg_bits("sm",4);
+   |                                      ^ help: if this is intentional, prefix it with an underscore: `_c`
+
+warning: unused variable: `sm`
+  --> src/bin/../point_add/trailmix_port/inversion/q792_t10_phaselease_check_r01.rs:19:149
+   |
+19 | ...=circ.alloc_qreg_bits("c",6);let sm=circ.alloc_qreg_bits("sm",4);
+   |                                     ^^ help: if this is intentional, prefix it with an underscore: `_sm`
+
+warning: unused variable: `p1`
+  --> src/bin/../point_add/trailmix_port/inversion/q792_t10_phaselease_check_r01.rs:20:13
+   |
+20 | ...   let p1=circ.alloc_qreg("p1");let p2=circ.alloc_qreg("p2");let _it=circ.alloc_qreg("it");let w1=circ.alloc_qreg_bits("w1",259);let w...
+   |           ^^ help: if this is intentional, prefix it with an underscore: `_p1`
+
+warning: unused variable: `p2`
+  --> src/bin/../point_add/trailmix_port/inversion/q792_t10_phaselease_check_r01.rs:20:42
+   |
+20 | ...   let p1=circ.alloc_qreg("p1");let p2=circ.alloc_qreg("p2");let _it=circ.alloc_qreg("it");let w1=circ.alloc_qreg_bits("w1",259);let w...
+   |                                        ^^ help: if this is intentional, prefix it with an underscore: `_p2`
+
+warning: unused variable: `helpers`
+  --> src/bin/../point_add/trailmix_port/inversion/q792_t10_phaselease_check_r01.rs:20:177
+   |
+20 | ...loc_qreg_bits("w2",259);let helpers=circ.alloc_qreg_bits("borrowed",23);assert_eq!(circ.b.next_qubit,565);
+   |                                ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_helpers`
+
+warning: variable does not need to be mutable
+  --> src/bin/../point_add/trailmix_port/inversion/q792_sign_nop2_r01.rs:96:53
+   |
+96 |     assert!(free.len()<=12);let n=1<<free.len();let mut anf:Vec<_>=(0..n).map(|z|{let code=codes.iter().enumerate().fold(0,|v,(i,(k,b))|v...
+   |                                                     ----^^^
+   |                                                     |
+   |                                                     help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `dirty`
+   --> src/bin/../point_add/trailmix_port/inversion/q792_sign_nop2_r01.rs:201:94
+    |
+201 | ...[QReg],offset:usize,max:usize,dirty:&[QReg],g:&QReg)->(&'a QReg,Vec<crate::circuit::Op>){
+    |                                  ^^^^^ help: if this is intentional, prefix it with an underscore: `_dirty`
+
+warning: unused variable: `cache`
+   --> src/bin/../point_add/trailmix_port/inversion/q792_sign_nop2_r01.rs:242:80
+    |
+242 | fn cargo(circ:&mut Circuit,rank:&[QReg],a:&[QReg],c:&[QReg],sm:&[QReg],g:&QReg,cache:&QReg,w1:&[QReg],w2:&[QReg],dirty:&[QReg],j:usize){
+    |                                                                                ^^^^^ help: if this is intentional, prefix it with an underscore: `_cache`
+
+warning: unused variable: `cache`
+   --> src/bin/../point_add/trailmix_port/inversion/q792_sign_nop2_r01.rs:299:69
+    |
+299 | ...,c:&[QReg],sm:&[QReg],g:&QReg,cache:&QReg,top:&QReg,sign:&QReg,w1:&[QReg],w2:&[QReg],dirty:&[QReg],j:usize){
+    |                                  ^^^^^ help: if this is intentional, prefix it with an underscore: `_cache`
+
+warning: unused variable: `dirty`
+   --> src/bin/../point_add/trailmix_port/inversion/q792_numeric_moves_r01.rs:111:84
+    |
+111 | pub(super) fn gather_a<'a>(circ:&mut Circuit,a:&[QReg],word:&'a[QReg],offset:usize,dirty:&[QReg])->(&'a QReg,Vec<crate::circuit::Op>){
+    |                                                                                    ^^^^^ help: if this is intentional, prefix it with an underscore: `_dirty`
+
+warning: unused variable: `j`
+   --> src/bin/../point_add/trailmix_port/inversion/q792_lifecycle_r01.rs:229:14
+    |
+229 | ...   for (j,logical)in logical.into_iter().enumerate(){let ops=remap(logical.unwrap(),&mapping,passenger,inverse);let mut kinds=[0usize;...
+    |            ^
+    |
+help: you might have meant to pattern match on the similarly named constant `N`
+    |
+229 -         for (j,logical)in logical.into_iter().enumerate(){let ops=remap(logical.unwrap(),&mapping,passenger,inverse);let mut kinds=[0usize;18];for op in &ops{kinds[op.kind as usize]+=1;}cached.push((std::sync::Arc::new(ops),kinds));}
+229 +         for (point_add::N,logical)in logical.into_iter().enumerate(){let ops=remap(logical.unwrap(),&mapping,passenger,inverse);let mut kinds=[0usize;18];for op in &ops{kinds[op.kind as usize]+=1;}cached.push((std::sync::Arc::new(ops),kinds));}
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+229 |         for (_j,logical)in logical.into_iter().enumerate(){let ops=remap(logical.unwrap(),&mapping,passenger,inverse);let mut kinds=[0usize;18];for op in &ops{kinds[op.kind as usize]+=1;}cached.push((std::sync::Arc::new(ops),kinds));}
+    |              +
+
+warning: unused variable: `known`
+   --> src/bin/../point_add/trailmix_port/inversion/q792_t10_c1_codec_r01.rs:147:92
+    |
+147 |             let base=mul(&sb,&rb);let spec=match rwidth{3=>&spec3,2=>&spec2,_=>&spec1};let known=rwidth==1||(rwidth==2&&!inverse);
+    |                                                                                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_known`
+
+warning: unused variable: `move_g`
+  --> src/bin/../point_add/trailmix_port/inversion/q792_t10_c1_unified_r01.rs:12:6
+   |
+12 |  let move_g=|c:&mut Circuit|{let(l,ls)=super::q794_handoffs::gather_a(c,rank,a,&source,1,d);let(r,rs)=super::q794_handoffs::gather_a(c,ra...
+   |      ^^^^^^ help: if this is intentional, prefix it with an underscore: `_move_g`
+
+warning: variable does not need to be mutable
+  --> src/bin/../point_add/trailmix_port/inversion/q792_sign_small_r01.rs:92:53
+   |
+92 |     assert!(free.len()<=12);let n=1<<free.len();let mut anf:Vec<_>=(0..n).map(|z|{let code=codes.iter().enumerate().fold(0,|v,(i,(k,b))|v...
+   |                                                     ----^^^
+   |                                                     |
+   |                                                     help: remove this `mut`
+
+warning: unused variable: `dirty`
+   --> src/bin/../point_add/trailmix_port/inversion/q793_sign_dynamic_r05.rs:159:94
+    |
+159 | ...[QReg],offset:usize,max:usize,dirty:&[QReg],g:&QReg)->(&'a QReg,Vec<crate::circuit::Op>){
+    |                                  ^^^^^ help: if this is intentional, prefix it with an underscore: `_dirty`
+
+warning: unused variable: `dirty`
+   --> src/bin/../point_add/trailmix_port/inversion/q793_sign_dynamic_r05.rs:164:119
+    |
+164 | ...ase:usize,min:usize,max:usize,dirty:&[QReg],g:&QReg)->(&'a QReg,Vec<crate::circuit::Op>){
+    |                                  ^^^^^ help: if this is intentional, prefix it with an underscore: `_dirty`
+
+warning: unused variable: `dirty`
+   --> src/bin/../point_add/trailmix_port/inversion/q793_sign_dynamic_r04.rs:150:94
+    |
+150 | ...[QReg],offset:usize,max:usize,dirty:&[QReg],g:&QReg)->(&'a QReg,Vec<crate::circuit::Op>){
+    |                                  ^^^^^ help: if this is intentional, prefix it with an underscore: `_dirty`
+
+warning: unused variable: `dirty`
+   --> src/bin/../point_add/trailmix_port/inversion/q793_sign_dynamic_r04.rs:155:119
+    |
+155 | ...ase:usize,min:usize,max:usize,dirty:&[QReg],g:&QReg)->(&'a QReg,Vec<crate::circuit::Op>){
+    |                                  ^^^^^ help: if this is intentional, prefix it with an underscore: `_dirty`
+
+warning: unused variable: `dirty`
+   --> src/bin/../point_add/trailmix_port/inversion/q793_sign_dynamic_r06.rs:197:94
+    |
+197 | ...[QReg],offset:usize,max:usize,dirty:&[QReg],g:&QReg)->(&'a QReg,Vec<crate::circuit::Op>){
+    |                                  ^^^^^ help: if this is intentional, prefix it with an underscore: `_dirty`
+
+warning: unused variable: `dirty`
+   --> src/bin/../point_add/trailmix_port/inversion/q793_sign_dynamic_r06.rs:202:119
+    |
+202 | ...ase:usize,min:usize,max:usize,dirty:&[QReg],g:&QReg)->(&'a QReg,Vec<crate::circuit::Op>){
+    |                                  ^^^^^ help: if this is intentional, prefix it with an underscore: `_dirty`
+
+warning: unused variable: `sm`
+   --> src/bin/../point_add/trailmix_port/inversion/q793_r01_dynamic_timefix_r01.rs:102:68
+    |
+102 | fn normal_guard(circ:&mut Circuit,rank:&[QReg],a:&[QReg],c:&[QReg],sm:&[QReg],p1:&QReg,p2:&QReg,g:&QReg,dirty:&[QReg],j:usize){
+    |                                                                    ^^ help: if this is intentional, prefix it with an underscore: `_sm`
+
+warning: unused variable: `j`
+   --> src/bin/../point_add/trailmix_port/inversion/q793_r01_dynamic_timefix_r01.rs:102:119
+    |
+102 | fn normal_guard(circ:&mut Circuit,rank:&[QReg],a:&[QReg],c:&[QReg],sm:&[QReg],p1:&QReg,p2:&QReg,g:&QReg,dirty:&[QReg],j:usize){
+    |                                                                                                                       ^ help: if this is intentional, prefix it with an underscore: `_j`
+
+warning: variable does not need to be mutable
+   --> src/bin/../point_add/trailmix_port/inversion/q793_r01_dynamic_timefix_r01.rs:197:32
+    |
+197 | ...   circ.cx(root,pass);let mut base=vec![(p1,false),(p2,true),(pass,true)];gate(circ,&base,root,helpers);for term in [cflags(rank,c,0),...
+    |                              ----^^^^
+    |                              |
+    |                              help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/bin/../point_add/trailmix_port/inversion/paper2607_eea.rs:745:9
+    |
+745 |     let mut terminal = release_terminal(circ, core);
+    |         ----^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/bin/../point_add/trailmix_port/inversion/paper2607_eea.rs:795:9
+    |
+795 |     let mut terminal = release_terminal(circ, core);
+    |         ----^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: unused variable: `b`
+   --> src/bin/../point_add/arith/multiply.rs:774:24
+    |
+774 |     let borrow_lane = |b: &mut B, _need: usize| -> Vec<QubitId> {
+    |                        ^ help: if this is intentional, prefix it with an underscore: `_b`
+
+warning: unused variable: `seg_w`
+   --> src/bin/../point_add/arith/multiply.rs:787:13
+    |
+787 |         let seg_w = hi - lo;
+    |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_seg_w`
+
+warning: type `BorrowedTranscriptLoans<'_>` is more private than the item `division_substep_windowed`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:3893:1
+     |
+3893 | / pub(crate) fn division_substep_windowed(
+3894 | |     circ: &mut Circuit,
+3895 | |     a: &[QReg],
+3896 | |     b: &[QReg],
+...    |
+3907 | |     q945_carry: Option<Q945NarrowCarry<'_>>,
+3908 | | ) {
+     | |_^ function `division_substep_windowed` is reachable at visibility `pub(crate)`
+     |
+note: but type `BorrowedTranscriptLoans<'_>` is only usable at visibility `pub(self)`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:2875:1
+     |
+2875 | struct BorrowedTranscriptLoans<'a> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: `#[warn(private_interfaces)]` on by default
+
+warning: type `Q945NarrowCarry<'_>` is more private than the item `division_substep_windowed`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:3893:1
+     |
+3893 | / pub(crate) fn division_substep_windowed(
+3894 | |     circ: &mut Circuit,
+3895 | |     a: &[QReg],
+3896 | |     b: &[QReg],
+...    |
+3907 | |     q945_carry: Option<Q945NarrowCarry<'_>>,
+3908 | | ) {
+     | |_^ function `division_substep_windowed` is reachable at visibility `pub(crate)`
+     |
+note: but type `Q945NarrowCarry<'_>` is only usable at visibility `pub(self)`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:2882:1
+     |
+2882 | enum Q945NarrowCarry<'a> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `BorrowedTranscriptLoans<'_>` is more private than the item `division_substep_windowed_inv`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:4122:1
+     |
+4122 | / pub(crate) fn division_substep_windowed_inv(
+4123 | |     circ: &mut Circuit,
+4124 | |     a: &[QReg],
+4125 | |     b: &[QReg],
+...    |
+4136 | |     q945_carry: Option<Q945NarrowCarry<'_>>,
+4137 | | ) {
+     | |_^ function `division_substep_windowed_inv` is reachable at visibility `pub(crate)`
+     |
+note: but type `BorrowedTranscriptLoans<'_>` is only usable at visibility `pub(self)`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:2875:1
+     |
+2875 | struct BorrowedTranscriptLoans<'a> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `Q945NarrowCarry<'_>` is more private than the item `division_substep_windowed_inv`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:4122:1
+     |
+4122 | / pub(crate) fn division_substep_windowed_inv(
+4123 | |     circ: &mut Circuit,
+4124 | |     a: &[QReg],
+4125 | |     b: &[QReg],
+...    |
+4136 | |     q945_carry: Option<Q945NarrowCarry<'_>>,
+4137 | | ) {
+     | |_^ function `division_substep_windowed_inv` is reachable at visibility `pub(crate)`
+     |
+note: but type `Q945NarrowCarry<'_>` is only usable at visibility `pub(self)`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:2882:1
+     |
+2882 | enum Q945NarrowCarry<'a> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `BorrowedTranscriptLoans<'_>` is more private than the item `multiply_substep_windowed`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:4472:1
+     |
+4472 | / pub(crate) fn multiply_substep_windowed(
+4473 | |     circ: &mut Circuit,
+4474 | |     a: &[QReg],
+4475 | |     b: &[QReg],
+...    |
+4486 | |     q945_carry: Option<Q945NarrowCarry<'_>>,
+4487 | | ) {
+     | |_^ function `multiply_substep_windowed` is reachable at visibility `pub(crate)`
+     |
+note: but type `BorrowedTranscriptLoans<'_>` is only usable at visibility `pub(self)`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:2875:1
+     |
+2875 | struct BorrowedTranscriptLoans<'a> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `Q945NarrowCarry<'_>` is more private than the item `multiply_substep_windowed`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:4472:1
+     |
+4472 | / pub(crate) fn multiply_substep_windowed(
+4473 | |     circ: &mut Circuit,
+4474 | |     a: &[QReg],
+4475 | |     b: &[QReg],
+...    |
+4486 | |     q945_carry: Option<Q945NarrowCarry<'_>>,
+4487 | | ) {
+     | |_^ function `multiply_substep_windowed` is reachable at visibility `pub(crate)`
+     |
+note: but type `Q945NarrowCarry<'_>` is only usable at visibility `pub(self)`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:2882:1
+     |
+2882 | enum Q945NarrowCarry<'a> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `BorrowedTranscriptLoans<'_>` is more private than the item `multiply_substep_windowed_inv`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:4645:1
+     |
+4645 | / pub(crate) fn multiply_substep_windowed_inv(
+4646 | |     circ: &mut Circuit,
+4647 | |     a: &[QReg],
+4648 | |     b: &[QReg],
+...    |
+4659 | |     q945_carry: Option<Q945NarrowCarry<'_>>,
+4660 | | ) {
+     | |_^ function `multiply_substep_windowed_inv` is reachable at visibility `pub(crate)`
+     |
+note: but type `BorrowedTranscriptLoans<'_>` is only usable at visibility `pub(self)`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:2875:1
+     |
+2875 | struct BorrowedTranscriptLoans<'a> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `Q945NarrowCarry<'_>` is more private than the item `multiply_substep_windowed_inv`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:4645:1
+     |
+4645 | / pub(crate) fn multiply_substep_windowed_inv(
+4646 | |     circ: &mut Circuit,
+4647 | |     a: &[QReg],
+4648 | |     b: &[QReg],
+...    |
+4659 | |     q945_carry: Option<Q945NarrowCarry<'_>>,
+4660 | | ) {
+     | |_^ function `multiply_substep_windowed_inv` is reachable at visibility `pub(crate)`
+     |
+note: but type `Q945NarrowCarry<'_>` is only usable at visibility `pub(self)`
+    --> src/bin/../point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs:2882:1
+     |
+2882 | enum Q945NarrowCarry<'a> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: module `q793_Aupdate` should have a snake case name
+   --> src/bin/../point_add/trailmix_port/mod.rs:190:13
+    |
+190 |     pub mod q793_Aupdate;
+    |             ^^^^^^^^^^^^ help: convert the identifier to snake case: `q793_aupdate`
+    |
+    = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: `quantum_ecc` (bin "build_circuit") generated 87 warnings (run `cargo fix --bin "build_circuit" -p quantum_ecc` to apply 73 suggestions)
+    Finished `release` profile [optimized] target(s) in 1m 50s
+	Command being timed: "prlimit --as=8000000000 timeout 300s cargo build --release --offline --bin build_circuit"
+	User time (seconds): 111.79
+	System time (seconds): 1.24
+	Percent of CPU this job got: 102%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:50.26
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2456116
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 1617950
+	Voluntary context switches: 1769
+	Involuntary context switches: 870
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 101744
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

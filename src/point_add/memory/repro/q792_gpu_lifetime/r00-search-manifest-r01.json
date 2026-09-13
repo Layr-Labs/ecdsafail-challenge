@@ -1,0 +1,13 @@
+{
+  "at": "2026-09-12T19:42:20.003973+00:00",
+  "status": "PRE_EXECUTION_DECLARATION",
+  "jobs": 1421,
+  "both_B50_required": true,
+  "CPU_selection": false,
+  "rule": "R00: strengthen the existing high-A cache C2 with high low-A bits, retain across nearby upper-boundary comparisons. C0chart C2=C3=0 on phase00; no other C2consumer inside W; flush before reverse W. No new rail.",
+  "identity": {
+    "r00_lifetime_search_r01.cpp": "8c28c4137093b25a281502d21d8eb102fbfa685e2a7bc8b392c801f96edf277e",
+    "r00_lifetime_search_r01": "c8cb29f788aa13c72bf8c569516485fb5c8d39fbbb7f8a071fd57ac654293a37",
+    "r00-lifetime-input-r01.txt": "b51dcace05b8934baf1cea7271989713ca25ba71ab7db76634e1df639e301e74"
+  }
+}

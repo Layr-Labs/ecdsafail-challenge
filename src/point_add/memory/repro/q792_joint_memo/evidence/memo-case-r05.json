@@ -1,0 +1,22 @@
+{
+  "at": "2026-09-12T23:52:57.018050+00:00",
+  "status": "GPU_NATIVE_STEP_WHOLE_COUNT_PASS",
+  "stage": "stage-r05",
+  "Q": 792,
+  "T": 1006443746,
+  "N": 1667199242,
+  "base_Q": 792,
+  "base_T": 1011619426,
+  "base_N": 1675192218,
+  "gain_T": 5175680,
+  "gain_N": 7992976,
+  "source_archive_sha256": "778c6938bad9085b0e4a5da86b2d55d6a5e6a6d495a461087ae35418ca1f7c16",
+  "binary_sha256": "8077e2e44708cfcfabef27cbc2922df23a7a71ccca7be4ec80e3fcfaaba84417",
+  "assessment_sha256": "fdb7f74eb4de5b2c44bd6ccb116cf7a157213d1b97724b305f464195e57e4f17",
+  "native_result_sha256": "8f8c31a38b34166a636f7bd2ba5695c236c85c34f5cff1eeaf568e5054206226",
+  "step_result_sha256": "c40cd92c941dc85106b45dd731b8f5e039891f3e513542810d9b4f772a0c3814",
+  "count_result_sha256": "6ccbd96ca016931b5489c12d669b528dfcaaeded9d88f169f677e98deddb1ae2",
+  "description": "Dirty product overlay from04 plus direct XOR-of-equality updates of live General/C1 metadata caches through an affine frame; existing scratch only, all input/memo restoration included",
+  "full_9024_qualified": false,
+  "submitted": false
+}
