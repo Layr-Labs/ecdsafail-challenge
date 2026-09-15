@@ -1,0 +1,777 @@
+{
+  "schema": 1,
+  "source_snapshot": "submit-q1010",
+  "staging_snapshot": "submit-q1010-n599",
+  "statement": "Public source preserves circuit code and compiled data from the source snapshot, except for the explicitly recorded identity-tail nonce change. Listed unreferenced private research artifacts were removed.",
+  "rust_file_count": 87,
+  "rust_tree_sha256": "b81a631994f9cab5a0c2f28ced51ab00781a8a5ddf55cd8d7a4a6ac8cf5aad12",
+  "required_data": [
+    {
+      "path": "src/point_add/trailmix_port/inversion/fused_rotation_cases.txt",
+      "sha256": "3b1184c6e253cf591c3763cf71a4c66060734733ec5dba528295e2f06456daaa",
+      "bytes": 100864,
+      "unchanged": true
+    }
+  ],
+  "protected_original_files": [
+    {
+      "path": ".github/workflows/benchmark.yml",
+      "sha256": "3b90200b03c72242cbaab4a8dd22eedcab97fb4ba5983980cf4d738130141162",
+      "bytes": 3699,
+      "unchanged": true
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "42ff16919e551891ad1b21821329b116d133194245a0e0734a33573dfe598e07",
+      "bytes": 46208,
+      "unchanged": true
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "3c80178b08d29a158abb29a7dcb8eefc67c66f60f2c3bd14483b65eeca0740dc",
+      "bytes": 385,
+      "unchanged": true
+    },
+    {
+      "path": "NOTICE",
+      "sha256": "fdfff837a1a85c14fc8854cfb2fa8a43b2ac58a6b8fcc50e56fe6c9d1293c58f",
+      "bytes": 1624,
+      "unchanged": true
+    },
+    {
+      "path": "benchmark.json",
+      "sha256": "213c8e602881130991b9374d8f991acb2d2a7cc3618ec5f24d5e3cc27add06fb",
+      "bytes": 517,
+      "unchanged": true
+    },
+    {
+      "path": "benchmark.sh",
+      "sha256": "122a65431ad42a1bad5114af9e8f8301fe5cb08c01adaeee00799c9f0d0ed92a",
+      "bytes": 9207,
+      "unchanged": true
+    },
+    {
+      "path": "rust-toolchain",
+      "sha256": "92b454c1ccf330de9b94242f73bc3214370fb420d5152baeec12dc82ceef9dcc",
+      "bytes": 31,
+      "unchanged": true
+    },
+    {
+      "path": "setup.sh",
+      "sha256": "6efa1c41517f0cd94f1e7301aa5ccb2c488eef66466843668e44e09c5523d029",
+      "bytes": 7224,
+      "unchanged": true
+    },
+    {
+      "path": "src/bin/build_circuit.rs",
+      "sha256": "ac013f1d851156a117c7d41ddb16cb5bb014ed4e6ed4679df143207b46852f33",
+      "bytes": 4455,
+      "unchanged": true
+    },
+    {
+      "path": "src/bin/eval_circuit.rs",
+      "sha256": "b35314bc47a5f8eecbf60459e6c76c9b43aa034eeb9b7ec3421655d74f9e890b",
+      "bytes": 20059,
+      "unchanged": true
+    },
+    {
+      "path": "src/circuit.rs",
+      "sha256": "ac2255f6bcb6895c9da2dfe21c3a051a0ef8fc4e0af9598634fec0035dbf35c6",
+      "bytes": 13421,
+      "unchanged": true
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "ebad13b0018b36bdcbcac0d0ca2b7b76a00a886eb4f93ff18e7ba321e76b0039",
+      "bytes": 1279,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/arith/adder.rs",
+      "sha256": "211cfc295ec256a6d4fc400e75b1e736a161c42d65ae5fb992672f2a7985a8da",
+      "bytes": 44937,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/arith/compare.rs",
+      "sha256": "944934329a96f8b309d3e9a6b9d301d7c061a1ff57b085757d5ad5b6ce39601d",
+      "bytes": 19194,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/arith/const_arith.rs",
+      "sha256": "e6683a2bce402c4de35f0c9299810d549e68dc97074746fc0dbfac19b4e0b254",
+      "bytes": 112648,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/arith/mod.rs",
+      "sha256": "b3fd12f39e606e9f8cb3233fdb756ed3a19ccd15c32c8c193c0cc74c305b2888",
+      "bytes": 418,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/arith/modular.rs",
+      "sha256": "c442a60c760a775f083cf80253958cd40d6a09e0f1d6278a05ca5e9da39141c0",
+      "bytes": 47727,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/arith/multiply.rs",
+      "sha256": "0b98661619f43fa01084bbf922c633a6b1a6d433ac1c6890d41076c0bf97ad4d",
+      "bytes": 82660,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/arith/nbit.rs",
+      "sha256": "80a4de5215693ef955861f5c5b9293a8b01190d7e61668901ae1c1285fc82e22",
+      "bytes": 5412,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/chunked_controlled_add.rs",
+      "sha256": "628a46ee0462e52a3319e129845312abad0253d728e746f2a51b02c7c94968a7",
+      "bytes": 10148,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/chunked_controlled_add_recursive_selftest.rs",
+      "sha256": "9a2dcb572349ee7e2fa441b1b5da8e5711d047dce1e830098bcc10595ef44894",
+      "bytes": 17470,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/chunked_controlled_add_selftest.rs",
+      "sha256": "973354fcaa51b46b8042e43e53ea62cb27c1a62aa99d7159f4666e16b4cc75dd",
+      "bytes": 5300,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/clean_chunk_plan.rs",
+      "sha256": "881da664527ac799437a2d3ccf6d0f833f3f9fb840ca23034bc83dc76185313c",
+      "bytes": 1729,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/dialog_gcd_classical_filter.rs",
+      "sha256": "8348f59a26ab863d066bfe63a3c5fbdfd515b03bfeb15ef4be83016ebd4eafa0",
+      "bytes": 72930,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/emit.rs",
+      "sha256": "ad1e8713fde3f87cc3849b560a7933d703b7b75723ba85765c789f1fd232d609",
+      "bytes": 3495,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/exact_boolean.rs",
+      "sha256": "fc8c19c303b761222e07d27212d824156f513d2c185455813cb5f980b3e5e899",
+      "bytes": 12602,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/exact_boolean_tests.rs",
+      "sha256": "df635a253ace402d2b8721589b08140ed68c83d12f25f36f78863c5731ad13d9",
+      "bytes": 27178,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/memory/q834-original-NOTICE.txt",
+      "sha256": "fdfff837a1a85c14fc8854cfb2fa8a43b2ac58a6b8fcc50e56fe6c9d1293c58f",
+      "bytes": 1624,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/mod.rs",
+      "sha256": "3cea4d8b622952d301d3f39b83b1547e00f6fbc620726e9021a5e986af0974aa",
+      "bytes": 239267,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/newarith/chunked_compare.rs",
+      "sha256": "a40f6c2ba18f39131baa4a545b11e71ee3af67641cd667f5ae833d6b53359189",
+      "bytes": 10693,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/newarith/chunked_compare_selftest.rs",
+      "sha256": "4eabe7ddb2f76660fb05306d96271337c46c6bd4929e247bbf178eb0f9e99596",
+      "bytes": 26928,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/q834_clean_and.rs",
+      "sha256": "a3e120a1098ef636aac20da98e0a29499ab5dec81a80ce484ffa675321093ce4",
+      "bytes": 28923,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/rounds/dialog/compressed.rs",
+      "sha256": "00aff8399b5c1f87af618e12e6f15dab3491ce010457deded3b3691c5a09fb01",
+      "bytes": 237551,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/rounds/dialog/config.rs",
+      "sha256": "50b1851707397dbbbb5ff8bd42723b2e40ab1616b8293e0e09b08f1da5d1bd87",
+      "bytes": 24740,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/rounds/dialog/mod.rs",
+      "sha256": "db9dc2bd3ba418afb693bd154d30722302ca4dd97dd146672cb47b462a509a33",
+      "bytes": 103327,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/rounds/mod.rs",
+      "sha256": "ec7b60d277d9a6a100e464b16f909926e5a81fb70bc2c5ddea2944ce991fd0a2",
+      "bytes": 284,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/symbolic_clean_and.rs",
+      "sha256": "cedc1a765677fa664b433221e0503a842db689350fde95f20c874f52952e404c",
+      "bytes": 6556,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/symbolic_clean_and_tests.rs",
+      "sha256": "71da744cd26fe6fae8d0e3212a3b2577b049ac629dbbfafd86a46bfee9cd4229",
+      "bytes": 15632,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/arith/compact_const_carry.rs",
+      "sha256": "143261ab5fcb24bfe2a9166711f01c961b11077e0367edad4f973b01ff75f42b",
+      "bytes": 1611,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/arith/compare.rs",
+      "sha256": "5447c1b6ba9fbb0f3a583c5f98e5b43b440a84110884c912ea5e35122d02bf2b",
+      "bytes": 28581,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/arith/const_add.rs",
+      "sha256": "2d9554be03500645d04b8d68e6bbd26a966124353f946724317c3cd225c8436b",
+      "bytes": 21123,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/arith/cuccaro.rs",
+      "sha256": "ab1989c18fca51ed6fbd5306672edc7302872439ad16cb72c74d511bd5b6ae3c",
+      "bytes": 31163,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/arith/gidney_const_adder.rs",
+      "sha256": "dd9b2bde791601286c23e63f48534fc16bff6d28522b9d5386161e6b0439e091",
+      "bytes": 29387,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/arith/khattar_gidney.rs",
+      "sha256": "fc1a09975df68a720e587af47f80890d9acf9a97dee9517187cb88deffc1c1da",
+      "bytes": 159262,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/arith/mcx.rs",
+      "sha256": "e6a85c0114a79f3ba6b5982757dd7ce5f5805008666ec1ef8fcf308276c9cff3",
+      "bytes": 19153,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/arith/qshift_sub.rs",
+      "sha256": "03b70bf4160af08849310b048e696cb5a38155ca06fc50b9719f2bc7b3262ea4",
+      "bytes": 1904,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/arith/ripple_add.rs",
+      "sha256": "90ecb2a9c8420ebfad0e25856935555dff9e5839029423bc6ad3734f9855c0fe",
+      "bytes": 25382,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/arith/shift.rs",
+      "sha256": "c4d16a8a4e496596e1817a2349b0749d4ed6399c15f29e54092aab1842e401b0",
+      "bytes": 718,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/circuit.rs",
+      "sha256": "a99d7b9dcd2f837c452102ede99466dcecd9fa0a288aecad7e612175d1b2fed2",
+      "bytes": 17440,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/ec/point_add.rs",
+      "sha256": "0ca1c2d6213d917fdb87dc7fcbd925667d9dce72aca9bfafbafb61d7f6fc5205",
+      "bytes": 36612,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/all_const_folds_selftest.rs",
+      "sha256": "2491b5b57a57edfd2fad3ec195832e6c8f8ab9f33180279740859fe0d4eef7c9",
+      "bytes": 6042,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/cell_folds.rs",
+      "sha256": "884213c542ccc41c073e30506d9ba261d43eefeb37a2f1baa8a3784ef26b10dc",
+      "bytes": 12072,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/cell_folds_selftest.rs",
+      "sha256": "3ba87811217da4641308a13426890eb4885390889edbcbbd5db16790a553e550",
+      "bytes": 33043,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/cell_recursive_carries.rs",
+      "sha256": "176b97b24400b4ae9dcf100ea6985d2439256899c0b37e9384fc33f7a34898b5",
+      "bytes": 12309,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/checkpoint_cap_aware.rs",
+      "sha256": "fc81c1eff7eb87d667b8f491aa17fb1031fbbeff708a966c58c6317cc2685c5b",
+      "bytes": 5095,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/checkpoint_cap_aware_selftest.rs",
+      "sha256": "dde714ac953402be1980e0c27ff3507a3c8ce868f518c03be6649c19778a2068",
+      "bytes": 10949,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/chunked_bitlength.rs",
+      "sha256": "06e9a65ced686d1a2cf6e5321901dfa604f8d1241526964a51ebc50a16d85110",
+      "bytes": 10282,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/chunked_predicate.rs",
+      "sha256": "d3cc6fde91669e918dc3ac746036fe41c6bab74e5ff3f1f18ced6c560fda62d8",
+      "bytes": 3542,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/counter_tape.rs",
+      "sha256": "b847b2ecde2dca0d059e474a6d039caa49c2fe7792ee320e39c03eaf84e24984",
+      "bytes": 1803,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/counter_tape_selftest.rs",
+      "sha256": "4a8496a0d05c21ce2d786783abe80ef1165f2673263e5bfbdb02bdcf9281591c",
+      "bytes": 21524,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/direct_ctz.rs",
+      "sha256": "21ed532ac6afb90019bdf124dd316c2172e58f8fd91f97e2a6bd7c0de32066bc",
+      "bytes": 4554,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/direct_ctz_selftest.rs",
+      "sha256": "975bf1d859aac78ffcfd636a2f81e6dfec3762d4f78cf51eca7bb82cb15d1a52",
+      "bytes": 12418,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/fused_rotation_cases.txt",
+      "sha256": "3b1184c6e253cf591c3763cf71a4c66060734733ec5dba528295e2f06456daaa",
+      "bytes": 100864,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/fused_rotation_cell.rs",
+      "sha256": "130cd927eb3c8829265e733b23b529b83ade3a6866f045307b4141332d95df72",
+      "bytes": 10291,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/fused_rotation_cell_selftest.rs",
+      "sha256": "4a72ddc776ab542d843c37ed78cc02e9dca827e3e993e17ff4d0aac4d392862a",
+      "bytes": 27188,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/inverse_top_compare_selftest.rs",
+      "sha256": "9d8f417f1c681e999a9070b79c0bb3c7055b3d7256b204c8a6f1f2065418d129",
+      "bytes": 13021,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/measured_demux.rs",
+      "sha256": "7b6b5958106ca52cfff386d230df024bcb5b0748fb2992285c635174e8b143e6",
+      "bytes": 6573,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/midq_odd_values.rs",
+      "sha256": "ac4a69d2953a4edce3c058ec73cd7b0b98333221b8c5e97c67cb641658b298a3",
+      "bytes": 10580,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/midq_odd_values_tests.rs",
+      "sha256": "d60cc311ad84011d5e2101bfc737d6fb38b657a69dc70919d6802655f63b25df",
+      "bytes": 28704,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/midq_tail_checkpoint.rs",
+      "sha256": "cd91e638f9dcbfebf893b07804ff316d2ebc665c10e1828a90d2d0e429759acc",
+      "bytes": 11860,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/midq_tail_checkpoint_tests.rs",
+      "sha256": "84ee9a0d3960d51485ce30ed70ef46bb656b5384fcbaf0d159bda52a46f4b79e",
+      "bytes": 18275,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/narrow_coefficient_selftest.rs",
+      "sha256": "afb075849e1aa4226a9c6568f173307570f93d301a3a5d79d69078b4a2b1812c",
+      "bytes": 11042,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/payload_sign_loan.rs",
+      "sha256": "2f7bb9a7d31604618029ac5539d2586c648f2c061aa5d86d759a8b140ec16925",
+      "bytes": 2806,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/payload_sign_loan_selftest.rs",
+      "sha256": "747bce8430ba9d06b80157921465e81bbe0689b6a25af5e224ed071e60870d24",
+      "bytes": 12747,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/payload_value_replay.rs",
+      "sha256": "2de748b72f6002e649117834e826f99b6121799e2bc241306722e2b6451d7465",
+      "bytes": 3517,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/predicate_clear_selftest.rs",
+      "sha256": "955ab8daa3bbd9312626211b04e60e4d92557a069fd028b3f5c493de50ddeac1",
+      "bytes": 18096,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/prefix_no_terminal_selftest.rs",
+      "sha256": "a8733a8687d3fd99eff5003debd4c117763b517efca7ab05e6b3330e8e8afd23",
+      "bytes": 7223,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/prefix_popcount.rs",
+      "sha256": "4ff5e2d8a789d2f5313892e8ed973ed40347aa403f8689fb56aa7e92f007d236",
+      "bytes": 2083,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/prefix_popcount_selftest.rs",
+      "sha256": "04400c04909e4a94f6a7694971d0570518f0ec8dc16a725cd34f7176389394ed",
+      "bytes": 10904,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/quotient_code.rs",
+      "sha256": "4e131ad491e5f5f02b10085b9f897e12d2252b81874a9d2ba7e7ecedab1c1b80",
+      "bytes": 5713,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/quotient_code_selftest.rs",
+      "sha256": "8c481e85ac7533dc6b2cb15dc1b4880dce6cd57619f28be02a764cce0b26321d",
+      "bytes": 12035,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/retained_division.rs",
+      "sha256": "ab78c689aa3bbc7c4d291dbd8954175290345b924c43fdf13676e3cfd98feb5d",
+      "bytes": 10107,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/shrunken_pz_primitives.rs",
+      "sha256": "5fbadd37c891aa720146104c51085040cfa1a5514836957a51a202372f4fab6d",
+      "bytes": 13005,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/shrunken_pz_schedule.rs",
+      "sha256": "80663c3205704be4307cb603f92d63a9fc3640ec4ab2a0a82ef7a07047048379",
+      "bytes": 46979,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs",
+      "sha256": "c4aa31e02adbe98c38aacc0b05ac369dffb72570d3d2a0b4928438665eb1fb04",
+      "bytes": 167579,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/sign_storage.rs",
+      "sha256": "8a6b6f225668b152380c63cf94a36b5afb5c56814f2316d981767141e8084937",
+      "bytes": 1665,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/sign_storage_selftest.rs",
+      "sha256": "829be1481337a1ae9e8c0331cd7f01795ab2631f51fde9811f7a08fc17bb54f3",
+      "bytes": 15800,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/tail_metadata_codec.rs",
+      "sha256": "49ec06027ca5fd7f18ea598cbd0bca5edb92c4c3e6d3ad8ea80b5ec2e1d62739",
+      "bytes": 4925,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/tail_metadata_codec_selftest.rs",
+      "sha256": "b28a1b203be6313a84d7ac3ae5bd90e08102ffd9e1a86520ef48d1d051bf7f5e",
+      "bytes": 5063,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/mod.rs",
+      "sha256": "c05f4cb7b0d5ce152a36fe5bbbe14fb442d51b073093152de137e8f553b4231c",
+      "bytes": 28706,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/mod_arith.rs",
+      "sha256": "a454ad589bfda84963ea3aa12af1acb4a7bf8709c06b39a982639ad2ede1d90b",
+      "bytes": 10852,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/rfold_exact_selftest.rs",
+      "sha256": "c4ffcc9d6c591572bcd4b8b76c2c55273e1030114b107d398e9a71df8c4e9197",
+      "bytes": 18980,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/trailmix_port/rfold_mbu.rs",
+      "sha256": "9ad11ff615c1066dcabcd4ecf1b3e0311d5730eacdb37940d630c367394fbffe",
+      "bytes": 34232,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/venting.rs",
+      "sha256": "7b6f5b77e4660fce15b252b5d0681f38f0314644174ef7ff9582d4832274adbc",
+      "bytes": 89097,
+      "unchanged": true
+    },
+    {
+      "path": "src/point_add/zero_scratch_neg.rs",
+      "sha256": "cd1217898eb9877f1e8f0fbb4b05b5a927dd1ecf2ac6eeebbb588cf69a32b8ed",
+      "bytes": 4458,
+      "unchanged": true
+    },
+    {
+      "path": "src/sim.rs",
+      "sha256": "f0c72f2a280cd68acee1dbf8282098f72d6b3bf4311e0abf96d122fe002256d7",
+      "bytes": 8572,
+      "unchanged": true
+    },
+    {
+      "path": "src/weierstrass_elliptic_curve.rs",
+      "sha256": "ecfca15ee3b831c243fbea559ff4b8937be47fe591a4f14786ec2b9bfb30bded",
+      "bytes": 4485,
+      "unchanged": true
+    }
+  ],
+  "retained_original_file_count": 137,
+  "removed_unreferenced_research_artifacts": [
+    {
+      "path": "src/point_add/memory/2026-06-06-tony-anton-audit-loop.md",
+      "sha256": "bf7e9673efe5f1508ed6d92cfd02a21c51cee7e2d42c2680af8255dd9aae6474",
+      "reason_categories": [
+        "private_absolute_path"
+      ]
+    },
+    {
+      "path": "src/point_add/memory/2026-09-04-outer-exact-rfold.md",
+      "sha256": "ee472ac48d9a7502cc9e8225c1c4b7158ec5432b21ddab9f1071149e90e7405d",
+      "reason_categories": [
+        "private_absolute_path"
+      ]
+    },
+    {
+      "path": "src/point_add/memory/2026-09-05-exact-boolean-pass.md",
+      "sha256": "d91691be613d65c5656019026494354bb329cbe7c26a7a565bbce71349a9fdde",
+      "reason_categories": [
+        "private_absolute_path"
+      ]
+    },
+    {
+      "path": "src/point_add/memory/2026-09-05-midq-all-constant-folds.md",
+      "sha256": "abe54f880e192798c1710d9de74ce66c863743af4c425640815f45e712fc2104",
+      "reason_categories": [
+        "private_absolute_path",
+        "private_campaign_path"
+      ]
+    },
+    {
+      "path": "src/point_add/memory/2026-09-05-midq-cell-folds.md",
+      "sha256": "2508cb94954145f1313d0205d9dc15bcd476ebd895aad9bb25dfadf4b4c4e50c",
+      "reason_categories": [
+        "private_absolute_path",
+        "private_campaign_path"
+      ]
+    },
+    {
+      "path": "src/point_add/memory/2026-09-05-narrow-coefficients.md",
+      "sha256": "bb1d6daf5ef13d94bc991c99b109b7079cec4a6ebe1481a03141957567bcf949",
+      "reason_categories": [
+        "private_absolute_path",
+        "private_campaign_path"
+      ]
+    },
+    {
+      "path": "src/point_add/memory/2026-09-05-tail-metadata-codec.md",
+      "sha256": "5b6282fbce7fd2121764654ff3c962544085d2b68b2b5efed2d1c3bbcca627fc",
+      "reason_categories": [
+        "private_absolute_path",
+        "private_campaign_path"
+      ]
+    },
+    {
+      "path": "src/point_add/memory/CHECKPOINT_CAP_AWARE.patch",
+      "sha256": "073a707cfb49f17cda34b6337b8cdb2d5e7321a18bd73111f878302dc52a5907",
+      "reason_categories": [
+        "private_absolute_path",
+        "private_campaign_path"
+      ]
+    },
+    {
+      "path": "src/point_add/memory/CHECKPOINT_CAP_MANIFEST.json",
+      "sha256": "a308e7705ef0c6d347342df2e7a384c2f55c61bb9d53d50a7a5b946348f055d4",
+      "reason_categories": [
+        "private_campaign_path"
+      ]
+    },
+    {
+      "path": "src/point_add/memory/CHECKPOINT_CAP_SOURCE_GUARD.json",
+      "sha256": "0bad74ac50a4b616a609e51884906008d11b99b2a1b5536e9acd8152214b2b37",
+      "reason_categories": [
+        "private_absolute_path",
+        "private_campaign_path"
+      ]
+    },
+    {
+      "path": "src/point_add/memory/profile-all-constants-remote.sh",
+      "sha256": "ef7ea8b43bbb4f7c0f24ad686c76c213799dc512d777bd5da1b311c203087aac",
+      "reason_categories": [
+        "private_absolute_path",
+        "private_campaign_path"
+      ]
+    },
+    {
+      "path": "src/point_add/memory/validate-field-remote.sh",
+      "sha256": "a0264ed4117884b293b4969b0beeb33479439d1223fec5164eb8f6ec0d98b549",
+      "reason_categories": [
+        "private_absolute_path",
+        "private_campaign_path"
+      ]
+    },
+    {
+      "path": "src/point_add/memory/validate-narrow-coefficients-remote.sh",
+      "sha256": "ac4cb6987156b28a0e0b23e1a0905e0790af664e64437043e74f0bd81c3ca982",
+      "reason_categories": [
+        "private_absolute_path",
+        "private_campaign_path",
+        "server_endpoint"
+      ]
+    },
+    {
+      "path": "src/point_add/arith/compare.rs.patch",
+      "sha256": "2b87b5539cef64da2e71644c38405deba2d2e7a40733ecdfa274f37c41b1f9fe",
+      "reason_categories": [
+        "private_absolute_path",
+        "auxiliary_research_document"
+      ]
+    },
+    {
+      "path": "src/point_add/newarith/chunked_compare_proof.md",
+      "sha256": "9d513c9d179de6b81b3002b4360a0c32578cfc630bcd35e2761a26bf309971b0",
+      "reason_categories": [
+        "private_absolute_path",
+        "auxiliary_research_document"
+      ]
+    },
+    {
+      "path": "src/point_add/newarith/chunked_compare_results.md",
+      "sha256": "1b9c5e8e006fa40a6615fe43f2fbd364cf8a6c94f839aea6b72354a0dfbdb170",
+      "reason_categories": [
+        "private_absolute_path",
+        "auxiliary_research_document"
+      ]
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/payload_sign_loan_proof.md",
+      "sha256": "fd91524acc587307dd4e79394d3b8d3825b2f8556511f81c8b9b5d303d0b16a2",
+      "reason_categories": [
+        "private_absolute_path",
+        "auxiliary_research_document"
+      ]
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/sign_storage_proof.md",
+      "sha256": "091a97c60939eb04a138c59572942311d6b85ba557352c5094c5d3e0005ccfe5",
+      "reason_categories": [
+        "private_absolute_path",
+        "auxiliary_research_document"
+      ]
+    }
+  ],
+  "baked_configuration": {
+    "caps": {
+      "MIDQ_OUTER_VENT_QCAP": 1009,
+      "MIDQ_PZ_VENT_QCAP": 1009,
+      "MIDQ_PREFIX_QCAP": 1009,
+      "MIDQ_CHUNK_COMPARE_QCAP": 1009,
+      "MIDQ_CONTROLLED_ADD_QCAP": 1009,
+      "MIDQ_CELL_QCAP": 1009,
+      "MIDQ_ZERO_SCRATCH_QCAP": 1009
+    },
+    "MIDQ_CHECKPOINT_CAP_AWARE": 1,
+    "TRAILMIX_TAIL_NONCE": 599
+  },
+  "validation": {
+    "source_identity": "verified except declared nonce update",
+    "fresh_build": "passed, defaults only",
+    "FS_fingerprint": "matches full-simulation winner599",
+    "trusted_harness": {
+      "tests": 9024,
+      "classical": 0,
+      "phase": 0,
+      "ancilla": 0
+    },
+    "metrics": {
+      "toffoli": 11433616,
+      "qubits": 1010
+    }
+  },
+  "nonce_only_change": {
+    "file": "src/point_add/trailmix_port/mod.rs",
+    "from": 34691,
+    "to": 599
+  }
+}

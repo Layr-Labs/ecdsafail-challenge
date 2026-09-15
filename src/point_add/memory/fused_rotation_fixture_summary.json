@@ -1,0 +1,18 @@
+{
+  "cases": 512,
+  "inputs": 64,
+  "rounds": [
+    0,
+    1,
+    2,
+    7,
+    31,
+    63,
+    127,
+    223
+  ],
+  "packet_sha256": "3b1184c6e253cf591c3763cf71a4c66060734733ec5dba528295e2f06456daaa",
+  "support_script_sha256": "f41e01d333e2a3db7d613ce9eb5b3423dd6e84b60d1a8dc232eca5e837af278b",
+  "full_trajectory_rotation_comparisons": 14336,
+  "scope": "Exact-transition classical certificates and literal phase predicate; actual native tests remain separate"
+}
