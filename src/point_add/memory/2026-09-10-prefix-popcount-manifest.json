@@ -1,0 +1,74 @@
+{
+  "candidate": "prefix-popcount",
+  "status": "frozen for remote validation",
+  "predecessor": "prefix-no-terminal",
+  "flags": {
+    "MIDQ_PREFIX_NO_TERMINAL": "1",
+    "MIDQ_PREFIX_POPCOUNT": "1"
+  },
+  "new_flag_default": "off",
+  "persistent_allocation": "same eight counter qubits; low six store quotient popcount",
+  "capacity": "all configured quotient widths<64; no empirical count cap",
+  "cut_contract": "C-=popcount(q) before tail; C+=popcount(q) after tail inverse",
+  "counter_update_raw_ccx": 12,
+  "counter_update_temp_ancillas": 3,
+  "local_evidence": [
+    "modified Rust modules parsed without reformatting inherited files",
+    "new Rust modules rustfmt checked",
+    "integer model 5992 small +46080 secp transitions passed",
+    "static KG layer expansion gives12 raw CCX",
+    "all inherited trusted files byte-identical"
+  ],
+  "pending": [
+    "remote build",
+    "emitted gate selftest",
+    "actual-width complete boundary cost census",
+    "flag-off predecessor artifact identity",
+    "whole-prefix/circuit frozen and independent quantum checks",
+    "trusted benchmark and measured Q/T"
+  ],
+  "measured_Q": null,
+  "measured_T": null,
+  "changes_vs_predecessor_excluding_this_manifest": [
+    {
+      "path": "src/point_add/memory/2026-09-10-prefix-popcount.md",
+      "predecessor_sha256": null,
+      "candidate_sha256": "bc16b32a7f5dc58fcdf20246017dbf96b02af3788b955f91087efac3274a999e"
+    },
+    {
+      "path": "src/point_add/memory/2026-09-10-prefix-popcount.patch",
+      "predecessor_sha256": null,
+      "candidate_sha256": "c78f4aebe74a60780e55f6713c91a77384218a421bff0f01d439847ee2bfce69"
+    },
+    {
+      "path": "src/point_add/memory/prefix-popcount-model-results.json",
+      "predecessor_sha256": null,
+      "candidate_sha256": "cbdac5185915f0715b1192fe071c7862ff129cf8c10e7a8e1377d4424426ffc7"
+    },
+    {
+      "path": "src/point_add/memory/prefix-popcount-model.py",
+      "predecessor_sha256": null,
+      "candidate_sha256": "47d1b12871b29051f9a78ab68aa759c72a86db29ffe40516ea39a4d143fe2891"
+    },
+    {
+      "path": "src/point_add/mod.rs",
+      "predecessor_sha256": "b9f376e9b0b239e00c53366cf3f331f9411ae62f7fc97b826eef7c2c2d96f4f1",
+      "candidate_sha256": "607be060c3a867dfbecd0c2a8bdc0937e12d2891efef4cd26a00b1daca86f8e6"
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/prefix_popcount.rs",
+      "predecessor_sha256": null,
+      "candidate_sha256": "4ff5e2d8a789d2f5313892e8ed973ed40347aa403f8689fb56aa7e92f007d236"
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/prefix_popcount_selftest.rs",
+      "predecessor_sha256": null,
+      "candidate_sha256": "04400c04909e4a94f6a7694971d0570518f0ec8dc16a725cd34f7176389394ed"
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/shrunken_pz_state_machine.rs",
+      "predecessor_sha256": "fb8e2d2441f754877a0afaa4fb5abfecde2d8ea90aaf768b0ccb69b397fa0bee",
+      "candidate_sha256": "44b50814d2f17a7c3666685b8a43fdf4794e1951ca75cb2aeec439b71b022a82"
+    }
+  ]
+}
