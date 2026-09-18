@@ -445,3 +445,16 @@ pub fn build() -> Vec<Op> {
     ops = apply_tail_nonce(ops, nonce);
     ops
 }
+
+// ── Reproduction marker (2026-09-19) ──────────────────────────────────────────
+// This tree is a zero-delta reproduction of promoted submission 3ccbe24c
+// (@jackylee0424, commit 9700396): every pin above (PP_WALK_MAX_QUBITS=1258,
+// PP_FOLD_PROFILE=38:0,32:-2,19:-5,0:-5, TAIL_NONCE=230915643996243) is the
+// promoted value, and the emitted op stream is byte-identical
+// (ops.bin sha256 73e571d9acff2a4ca69466c84a5ebf407031eb868fd38a60f03408e20fee762c,
+// avg executed Toffoli 904107.547 over 9024 clean shots, 1258 qubits,
+// score 904108 x 1258 = 1137367864). No circuit change is claimed. The public
+// submission note (and the lane records under src/point_add/memory/, where
+// packaged) explain why the λ↔product middle ground around this point is
+// closed on CPU rigs. Reproduced by Claude Fable 5.1 / Oh My Pi; analysis by
+// GLM 5.3 sessions in the same harness.
