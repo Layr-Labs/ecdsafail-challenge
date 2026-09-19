@@ -1,0 +1,66 @@
+{
+  "candidate": "inverse-top-compare",
+  "status": "frozen for remote validation",
+  "predecessor": "fused-top-compare",
+  "flag": "MIDQ_TAIL_INVERSE_TOP_COMPARE",
+  "default": "off",
+  "scope": "Only signed_add cleanup called from inverse apply; generic and forward signed_add remain full-width",
+  "proof": "Canonical doubled coefficient has distance>=V>2^137; folded comparison gap>2^136",
+  "support": "Qualified exact-transition support; guard is construction-only",
+  "predicate": {
+    "lhs": "target[136..256]",
+    "rhs": "source[136..256]",
+    "retained_bits": 120
+  },
+  "requires_forward_fused": false,
+  "local_evidence": [
+    "new Rust selftest formatting passed;modified owner/dispatch parsed",
+    "512fixture scalar inverse/full/top/old-target checks pass",
+    "allfour inverse sign/carry cases covered",
+    "independent theorem/scope/witness review by prefix_arithmetic",
+    "forward fused and generic comparator modules unchanged",
+    "trusted files byte-identical"
+  ],
+  "pending": [
+    "remote build",
+    "native512fixture inverse/roundtrip/census suite",
+    "explicit offsupport native phase witness",
+    "flagoff predecessor and generic scope byte identity",
+    "full frozen and independent quantum regression",
+    "trusted benchmark/Q/T"
+  ],
+  "measured_Q": null,
+  "measured_T": null,
+  "changes_vs_predecessor_excluding_manifest": [
+    {
+      "path": "src/point_add/memory/TAIL_INVERSE_TOP_COMPARE.patch",
+      "predecessor_sha256": null,
+      "candidate_sha256": "742d70a8e9815b98bb5e78df460f7f2d7adbd584ef5a46df6ff6e2a3a1b71025"
+    },
+    {
+      "path": "src/point_add/memory/TAIL_INVERSE_TOP_COMPARE_ALGEBRA.json",
+      "predecessor_sha256": null,
+      "candidate_sha256": "9397bf2004fc99384a65cabda3d23a0769594e8bdb397bc0910e75fc87045cd3"
+    },
+    {
+      "path": "src/point_add/memory/TAIL_INVERSE_TOP_COMPARE_PROOF.md",
+      "predecessor_sha256": null,
+      "candidate_sha256": "8125659a1943e9ae426fb08c6904e6db9c9f3c1065bdfdcbae03bde7c9d28aec"
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/cell_folds.rs",
+      "predecessor_sha256": "00ed5541d7ea0913c1cf4125bbaf4dc253c6dbaffecf88f44201f6847161764c",
+      "candidate_sha256": "884213c542ccc41c073e30506d9ba261d43eefeb37a2f1baa8a3784ef26b10dc"
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/cell_folds_selftest.rs",
+      "predecessor_sha256": "60efc34bdc157abd476dd2d4b69399a3216b9bb720cd6574254b79468943593d",
+      "candidate_sha256": "3ba87811217da4641308a13426890eb4885390889edbcbbd5db16790a553e550"
+    },
+    {
+      "path": "src/point_add/trailmix_port/inversion/inverse_top_compare_selftest.rs",
+      "predecessor_sha256": null,
+      "candidate_sha256": "9d8f417f1c681e999a9070b79c0bb3c7055b3d7256b204c8a6f1f2065418d129"
+    }
+  ]
+}
