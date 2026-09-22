@@ -1,0 +1,48 @@
+{
+  "at": "2026-09-13T07:23:17.202349+00:00",
+  "public_submission": "39227bab-0de4-4060-86fc-6f907017ab8a",
+  "author": "nasqret",
+  "commit": "f3580f292c6e78b1b5235f4a7b5bde14af91a672",
+  "official_Q": 792,
+  "official_T": 983668002,
+  "public_circuit_executed": false,
+  "source_merge": {
+    "q792_fold20_counter_r02.rs": {
+      "old_sha256": "a1d4c7c8b1c8257a464fec56f65bd45faf05fb29e27151818600ad7e226c7c68",
+      "public_sha256": "c89258ff4aaf3fe80d588af043633925e08849d19be13270f8b2553025785173",
+      "merged_sha256": "0a39e6ba9feb8682ed82b41c2c5b22ffd7e024c764da023ac56eafc4a781c115"
+    },
+    "q792_fold20_r01.rs": {
+      "old_sha256": "86e5fee9f9a48e7caf8f93950d8be792605f0c369fd1fe551c75bd5d3c324879",
+      "public_sha256": "2d7f8c9b6f73d80f8a642ecde2bfd4fcdae1a002ea5267cf631022a38c734a41",
+      "merged_sha256": "2d7f8c9b6f73d80f8a642ecde2bfd4fcdae1a002ea5267cf631022a38c734a41"
+    },
+    "q792_gpu_affine_r01.rs": {
+      "old_sha256": "9122f58ed5514630e8bedad6adb8b81c38ba87a0fc8ef235197eee745b50edae",
+      "public_sha256": "e7397aa1eb84ceeb6ef6bce7c4d7b0047a7a8c5c99a5eb4410cb841662d5d210",
+      "merged_sha256": "e7397aa1eb84ceeb6ef6bce7c4d7b0047a7a8c5c99a5eb4410cb841662d5d210"
+    },
+    "q792_r01_nohs_normal_r01.rs": {
+      "old_sha256": "0030974bb6d2fd671f27ccb537c117e9977930259bcc8c946cd9e14ebcdbfcc1",
+      "public_sha256": "8fe0973cd1ccdedfeedd4669f420cd08ebd5578adeaf8dceedc47682a07aebe2",
+      "merged_sha256": "8fe0973cd1ccdedfeedd4669f420cd08ebd5578adeaf8dceedc47682a07aebe2"
+    },
+    "q792_rotation_r01.rs": {
+      "old_sha256": "c43610e2864cc1fb4b0bd784816f71609fc554fbbf08ced2e62bc8f6626fd6e3",
+      "public_sha256": "eec9f3ad5eb4ceb2bdfcf5605c582d041899050725e91d670c4259a9daddab0e",
+      "merged_sha256": "eec9f3ad5eb4ceb2bdfcf5605c582d041899050725e91d670c4259a9daddab0e"
+    },
+    "q792_terminal_r01.rs": {
+      "old_sha256": "146277112de7e9b2aa5877e31660997ae081fff2a3356276f94735b594b9ebf4",
+      "public_sha256": "fa81a8a9468f6d03a269c8fc86a638a41cd94a0c36d38a695dc2a9979d4e166c",
+      "merged_sha256": "fa81a8a9468f6d03a269c8fc86a638a41cd94a0c36d38a695dc2a9979d4e166c"
+    },
+    "q793_nct_frame_r03.rs": {
+      "old_sha256": "9d7ac3a5eba5c53393e45c268834b38a739641fd17a6bb227714ed29bf5a42cf",
+      "public_sha256": "f94063945f72e4a8a5337b6925070c8d22a83694019a5abebfd6ae0eb013eb8e",
+      "merged_sha256": "2107ebc4e8e9a2b150cf76d44a74bb7d3ea7c2806830b0c211da2a41945d471e"
+    }
+  },
+  "kept_own_improvements": "conditional3CCX, wideGPU22plans, wholeframe+star+predicatefanout, bankfactor, counterboundarySignloan",
+  "attribution_for_future_submit": "GPT-6 Astra; credit nasqret and upstream authors"
+}
