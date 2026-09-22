@@ -1,0 +1,276 @@
+//! Component tests and a complete update/predicate/handoff cost census.
+use super::*;
+use crate::circuit::{analyze_ops, Op};
+use crate::sim::Simulator;
+use sha3::{
+    digest::{ExtendableOutput, Update, XofReader},
+    Shake256,
+};
+
+struct Measurements(Option<u8>, sha3::Shake256Reader);
+impl Measurements {
+    fn new(mode: usize) -> Self {
+        let mut h = Shake256::default();
+        h.update(b"prefix-popcount-component-20260910");
+        Self(
+            [Some(0), Some(255), Some(0x55), None][mode],
+            h.finalize_xof(),
+        )
+    }
+}
+impl XofReader for Measurements {
+    fn read(&mut self, out: &mut [u8]) {
+        if let Some(v) = self.0 {
+            out.fill(v)
+        } else {
+            self.1.read(out)
+        }
+    }
+}
+fn emitted(ops: &[Op]) -> usize {
+    ops.iter()
+        .filter(|o| matches!(o.kind, OperationType::CCX | OperationType::CCZ))
+        .count()
+}
+fn checked_pair(
+    ops: &[Op],
+    split: usize,
+    ids: &[QubitId],
+    inputs: &[usize],
+    expected: &[usize],
+) -> usize {
+    let (nq, nb, _, _) = analyze_ops(ops.iter());
+    let nq = nq.max(ids.iter().map(|q| q.0 + 1).max().unwrap());
+    for op in ops {
+        op.validate()
+    }
+    for mode in 0..4 {
+        let mut rng = Measurements::new(mode);
+        let mut sim = Simulator::new(nq as usize, nb as usize + 1, &mut rng);
+        for (batch, want) in inputs.chunks(64).zip(expected.chunks(64)) {
+            let live = u64::MAX >> (64 - batch.len());
+            sim.clear_for_shot();
+            for (bit, id) in ids.iter().enumerate() {
+                *sim.qubit_mut(*id) = batch.iter().enumerate().fold(0, |v, (lane, word)| {
+                    v | (((word >> bit) & 1) as u64) << lane
+                });
+            }
+            sim.phase = 0x935a_7601_d4ef_a871;
+            for (part, words) in [(&ops[..split], want), (&ops[split..], batch)] {
+                // Native checker verifies every reset before execution as well.
+                predicate_clear_selftest::checked_apply(&mut sim, part, live);
+                assert_eq!(
+                    sim.phase & live,
+                    0x935a_7601_d4ef_a871 & live,
+                    "phase changed"
+                );
+                for (bit, id) in ids.iter().enumerate() {
+                    let w = words.iter().enumerate().fold(0, |v, (lane, word)| {
+                        v | (((word >> bit) & 1) as u64) << lane
+                    });
+                    assert_eq!(sim.qubit(*id) & live, w & live, "data bit {bit}");
+                }
+                for (i, v) in sim.qubits.iter().enumerate() {
+                    if !ids.contains(&QubitId(i as u64)) {
+                        assert_eq!(v & live, 0, "scratch {i}")
+                    }
+                }
+            }
+        }
+    }
+    inputs.len() * 4
+}
+fn increment_roundtrip() -> usize {
+    let mut c = Circuit::new();
+    let counter = c.alloc_qreg_bits("counter", 8);
+    let role = c.alloc_qreg("role");
+    let active = c.alloc_qreg("active");
+    let ids: Vec<_> = counter
+        .iter()
+        .chain([&role, &active])
+        .map(|q| QubitId(q.id().into()))
+        .collect();
+    update(&mut c, &counter, &role, &active, false);
+    let split = c.b.ops.len();
+    update(&mut c, &counter, &role, &active, true);
+    let inputs: Vec<_> = (0..1usize << ids.len()).collect();
+    let expected: Vec<_> = inputs
+        .iter()
+        .map(|v| {
+            let count = v & 63;
+            let role = (v >> 8) & 1;
+            let active = (v >> 9) & 1;
+            let next = (count as isize + active as isize * (1 - 2 * role as isize)) & 63;
+            (v & !63) | next as usize
+        })
+        .collect();
+    checked_pair(&c.b.ops, split, &ids, &inputs, &expected)
+}
+fn cut_roundtrip(n: usize) -> usize {
+    let mut c = Circuit::new();
+    let q = c.alloc_qreg_bits("q", n);
+    let counter = c.alloc_qreg_bits("counter", 8);
+    let ids: Vec<_> = q
+        .iter()
+        .chain(&counter)
+        .map(|q| QubitId(q.id().into()))
+        .collect();
+    from_quotient(&mut c, &counter, &q, true);
+    let split = c.b.ops.len();
+    from_quotient(&mut c, &counter, &q, false);
+    let expected: Vec<_> = (0..1usize << n).collect();
+    let inputs: Vec<_> = expected
+        .iter()
+        .map(|q| q | ((q.count_ones() as usize) << n))
+        .collect();
+    checked_pair(&c.b.ops, split, &ids, &inputs, &expected)
+}
+fn cached_boundary(measured: bool, chunked: bool, position: usize) -> usize {
+    std::env::set_var("MIDQ_MEASURE_PREDICATE", if measured { "1" } else { "0" });
+    std::env::set_var("MIDQ_CHUNKED_PREDICATE", if chunked { "1" } else { "0" });
+    let mut c = Circuit::new();
+    let a = c.alloc_qreg_bits("a", 2);
+    let b = c.alloc_qreg_bits("b", 2);
+    let ca = c.alloc_qreg_bits("ca", 2);
+    let cb = c.alloc_qreg_bits("cb", 2);
+    let q = c.alloc_qreg_bits("q", 6);
+    let counter = c.alloc_qreg_bits("counter", 8);
+    let parity = c.alloc_qreg("parity");
+    let ids: Vec<_> = a
+        .iter()
+        .chain(&b)
+        .chain(&ca)
+        .chain(&cb)
+        .chain(&q)
+        .chain(&counter)
+        .chain([&parity])
+        .map(|q| QubitId(q.id().into()))
+        .collect();
+    let active = compute_active(&mut c, &[]);
+    let role = c.alloc_qreg("role");
+    c.cx(&q[position], &role);
+    update(&mut c, &counter, &role, &active, false);
+    c.x(&q[position]);
+    c.x(&role);
+    c.cx(&q[position], &role);
+    c.zero_and_free(role);
+    swap_no_terminal(&mut c, &a, &b, &ca, &cb, &counter[..BITS], &parity);
+    uncompute_active(&mut c, &[], &active);
+    c.zero_and_free(active);
+    let split = c.b.ops.len();
+    // The post-step count controls the inverse swap BEFORE its decrement/update.
+    swap_no_terminal(&mut c, &a, &b, &ca, &cb, &counter[..BITS], &parity);
+    let active = compute_active(&mut c, &[]);
+    let role = c.alloc_qreg("role.reverse");
+    c.x(&role);
+    c.cx(&q[position], &role);
+    c.x(&q[position]);
+    update(&mut c, &counter, &role, &active, true);
+    c.cx(&q[position], &role);
+    c.zero_and_free(role);
+    uncompute_active(&mut c, &[], &active);
+    c.zero_and_free(active);
+    let mut inputs = Vec::new();
+    let mut expected = Vec::new();
+    for rows in 0..256usize {
+        for quotient in 0..64usize {
+            for parity in 0..2usize {
+                let after = quotient ^ (1 << position);
+                if (rows >> 2) & 3 == 0 || (after == 0 && rows & 3 == 0) {
+                    continue;
+                }
+                let mut out_rows = rows;
+                let mut out_parity = parity;
+                if after == 0 {
+                    let changed = (rows ^ (rows >> 2)) & 0x33;
+                    out_rows ^= changed ^ (changed << 2);
+                    out_parity ^= 1
+                }
+                inputs.push(
+                    rows | (quotient << 8)
+                        | ((quotient.count_ones() as usize) << 14)
+                        | (parity << 22),
+                );
+                expected.push(
+                    out_rows
+                        | (after << 8)
+                        | ((after.count_ones() as usize) << 14)
+                        | (out_parity << 22),
+                );
+            }
+        }
+    }
+    checked_pair(&c.b.ops, split, &ids, &inputs, &expected)
+}
+pub(crate) fn run() {
+    let mut checked = increment_roundtrip();
+    for n in [1, 6, 9] {
+        checked += cut_roundtrip(n)
+    }
+    for measured in [false, true] {
+        for chunked in [false, true] {
+            for pos in [0, 2, 5] {
+                checked += cached_boundary(measured, chunked, pos);
+            }
+        }
+    }
+    eprintln!("PREFIX_POPCOUNT_SELFTEST PASS cases={checked}; +/-1 with active0/1, upper counter bits preserved, q-preserving cut erase/restore, update-before-swap and inverse order, phase, pre-reset checks and scratch; no whole-prefix certificate");
+}
+
+pub(crate) fn profile() {
+    crate::point_add::trailmix_port::configure_sub1000_trailmix_route();
+    std::env::set_var("MIDQ_PREFIX_NO_TERMINAL", "1");
+    std::env::set_var("MIDQ_PREFIX_POPCOUNT", "1");
+    use crate::point_add::trailmix_port::inversion::shrunken_pz_schedule::reg_widths;
+    let mut totals = [0usize; 2];
+    let mut peaks = [0u64; 2];
+    let mut qmin = usize::MAX;
+    let mut qmax = 0;
+    for i in 0..MIDQ_PZ_CUT {
+        let (wa, wb, wca, wcb, wq) = reg_widths(i);
+        let wg = trailmix_ab_width(wa.max(wb));
+        let wc = trailmix_cacb_width(wca.max(wcb));
+        let wq = trailmix_q_width_step(wq, wa, wb, wca, wcb);
+        qmin = qmin.min(wq);
+        qmax = qmax.max(wq);
+        for which in 0..2 {
+            let mut c = Circuit::new();
+            let _passenger =
+                c.alloc_qreg_bits("profile.passenger", 256 + 1 + trailmix_srot_width() + 1);
+            let a = c.alloc_qreg_bits("a", wg);
+            let b = c.alloc_qreg_bits("b", wg);
+            let ca = c.alloc_qreg_bits("ca", wc);
+            let cb = c.alloc_qreg_bits("cb", wc);
+            let q = c.alloc_qreg_bits("q", wq);
+            let counter = c.alloc_qreg_bits("counter", trailmix_counter_width());
+            let parity = c.alloc_qreg("parity");
+            let role = c.alloc_qreg("profile.existing.role");
+            let active = compute_active(&mut c, &[]);
+            assert!(enabled(&counter), "production popcount guard failed");
+            if which == 1 {
+                update(&mut c, &counter, &role, &active, false)
+            }
+            let word = if which == 0 { &q[..] } else { &counter[..BITS] };
+            swap_no_terminal(&mut c, &a, &b, &ca, &cb, word, &parity);
+            swap_no_terminal(&mut c, &a, &b, &ca, &cb, word, &parity);
+            if which == 1 {
+                update(&mut c, &counter, &role, &active, true)
+            }
+            uncompute_active(&mut c, &[], &active);
+            c.zero_and_free(active);
+            totals[which] += emitted(&c.b.ops);
+            peaks[which] = peaks[which].max(c.b.peak_qubits as u64);
+            if i + 1 == MIDQ_PZ_CUT && which == 1 {
+                let start = c.b.ops.len();
+                from_quotient(&mut c, &counter, &q, true);
+                from_quotient(&mut c, &counter, &q, false);
+                let edge = emitted(&c.b.ops[start..]);
+                totals[which] += edge;
+                peaks[which] = peaks[which].max(c.b.peak_qubits as u64);
+                eprintln!("PREFIX_POPCOUNT_PROFILE handoff_pair_emitted={edge} q_at_cut={wq}");
+            }
+        }
+    }
+    let saved = 2 * (totals[0] as i64 - totals[1] as i64);
+    eprintln!("PREFIX_POPCOUNT_PROFILE old_pair={} cached_pair_including_updates_and_handoff={} full_point_add_raw_saved={saved} old_helper_peak={} cached_helper_peak={} q_width_min={qmin} q_width_max={qmax} cached_bits={BITS}; raw component census before global compiler, not executed T",totals[0],totals[1],peaks[0],peaks[1]);
+}
