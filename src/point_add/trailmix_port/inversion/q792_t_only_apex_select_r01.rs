@@ -1,0 +1,3 @@
+//! Public complete apex choice. Both adapters restore the identical physical ABI.
+use crate::point_add::trailmix_port::circuit::{Circuit,QReg};
+pub(super)fn emit_with_loan(c:&mut Circuit,m:&[QReg],p1:&QReg,p2:&QReg,w1:&[QReg],w2:&[QReg],h:&[QReg],n:usize,j:usize,held:bool){let at=c.b.ops.len();let owned=c.b.next_qubit;super::q792_t_only_apex_r05::emit_with_loan(c,m,p1,p2,w1,w2,h,n,j,held);let new=c.b.ops.split_off(at);super::q792_t_only_apex_r03::emit_with_loan(c,m,p1,p2,w1,w2,h,n,j,held);let old=c.b.ops.split_off(at);let price=|v:&[crate::circuit::Op]|v.iter().filter(|o|o.kind==crate::circuit::OperationType::CCX).count();let select=price(&new)<price(&old);c.b.ops.extend(if select{new}else{old});assert_eq!(owned,c.b.next_qubit);}
