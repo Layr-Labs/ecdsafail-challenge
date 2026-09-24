@@ -1,0 +1,36 @@
+=== quantum_ecc: build_circuit (untrusted stage) ===
+
+-- building circuit --
+FOLD20_PHASELEASE_R01_BUILT j=0 ops=87580 T=46051 interfaceQ=564
+FOLD20_PHASELEASE_R01_CLOCK_PASS j=0 active=29952
+FOLD20_PHASELEASE_R01_BUILT j=1 ops=108502 T=55049 interfaceQ=564
+FOLD20_PHASELEASE_R01_CLOCK_PASS j=1 active=49664
+FOLD20_PHASELEASE_R01_BUILT j=2 ops=88064 T=46195 interfaceQ=564
+FOLD20_PHASELEASE_R01_CLOCK_PASS j=2 active=35072
+FOLD20_PHASELEASE_R01_BUILT j=3 ops=107786 T=54905 interfaceQ=564
+FOLD20_PHASELEASE_R01_CLOCK_PASS j=3 active=42240
+{"kind":"candidate actual dynamic three-hole dual-cargo R01","active_lanes":156928,"offguard_lanes":199680,"A0":35452,"A1":1404,"A254_S1_v1_cargo":248,"overflow_endpoint":1172,"results":[{"clock":0,"active_lanes":29952,"ops":87580,"T":46051,"extra_allocations":0},{"clock":1,"active_lanes":49664,"ops":108502,"T":55049,"extra_allocations":0},{"clock":2,"active_lanes":35072,"ops":88064,"T":46195,"extra_allocations":0},{"clock":3,"active_lanes":42240,"ops":107786,"T":54905,"extra_allocations":0}],"whole_q793_proven":false}
+FOLD20_PHASELEASE_R01_PASS active=156928 offguard=199680; actual folded20 ranges, A0/A1, two independent cargo bits, q1/q2 gather, three physical holes, packed width2/1 endpoints, normalized b2 HA restored, literal inverse/allphase; no whole-circuit claim
+	Command being timed: "prlimit --as=8000000000 timeout 1200s /home/agentyczny-zdzich/Desktop/projekty/ecdsa/.autoresearch/q792-memo-joint-20260913.s9u6rt86/stage-r06-workspace/target/release/build_circuit"
+	User time (seconds): 1.94
+	System time (seconds): 0.01
+	Percent of CPU this job got: 97%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:02.00
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 47596
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 11853
+	Voluntary context switches: 24
+	Involuntary context switches: 15
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
