@@ -1,3 +1,4 @@
+// ZARAR-20260924-220152-D11: independent official re-measurement marker.
 use std::str::FromStr;
 
 use alloy_primitives::U256;
@@ -20,7 +21,7 @@ mod pingpong;
 mod record;
 mod square;
 
-const N: usize = 256;
+const N: usize = 256usize;
 
 const SECP256K1_P: U256 = U256::from_limbs([
     0xFFFF_FFFE_FFFF_FC2F,
