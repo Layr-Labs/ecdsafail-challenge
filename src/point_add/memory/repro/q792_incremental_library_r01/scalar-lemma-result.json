@@ -1,0 +1,11 @@
+{
+  "at": "2026-09-13T11:36:05.269068+00:00",
+  "status": "PASS",
+  "example_all_inputs": 16,
+  "independent_direct_simulation_programs": 512,
+  "exhaustive_full_state_cases": 50640,
+  "inverse": true,
+  "premise": "p is never a control in D, arbitrary initial p and every other wire",
+  "phase": "NCT permutations, no phase gates",
+  "script_sha256": "1b77f28be3aa5f8563c123bad03992c181790b82982390d6e4d7c48eea691525"
+}
