@@ -15,6 +15,13 @@ const OP_KINDS: usize = OperationType::DebugPrint as usize + 1;
 
 pub struct Builder {
     ops: Vec<Op>,
+    model: bool,
+    model_depth: usize,
+    model_total: usize,
+    model_weighted: f64,
+    model_phase_native: usize,
+    model_phase_weighted: f64,
+    model_max: u32,
     /// Ops of each kind emitted since the last [`Builder::set_phase`]; only the
     /// two Toffoli kinds are reported, but indexing by `kind` is cheaper than
     /// branching on it.
@@ -36,6 +43,9 @@ impl Builder {
     pub fn new() -> Self {
         Self {
             ops: Vec::new(),
+            model: false, // Always emit operations; no count-only research mode.
+            model_depth: 0, model_total: 0, model_weighted: 0.0,
+            model_phase_native: 0, model_phase_weighted: 0.0, model_max: 0,
             phase_kind_ops: [0; OP_KINDS],
             next_qubit: 0,
             next_bit: 0,
@@ -51,6 +61,11 @@ impl Builder {
         }
     }
     pub fn take_ops(&mut self) -> Vec<Op> {
+        if self.model {
+            eprintln!("MODEL_PHASE {} {} {} {}", self.phase, self.peak_qubits,
+                self.model_phase_native, self.model_phase_weighted);
+            eprintln!("MODEL_TOTAL {} {} {}", self.model_max, self.model_total, self.model_weighted);
+        }
         std::mem::take(&mut self.ops)
     }
     fn push_op(&mut self, op: Op) {
@@ -66,12 +81,27 @@ impl Builder {
             );
         }
         self.phase_kind_ops[op.kind as usize] += 1;
-        self.ops.push(op);
+        if self.model {
+            match op.kind {
+                OperationType::PushCondition => self.model_depth += 1,
+                OperationType::PopCondition => self.model_depth -= 1,
+                OperationType::CCX | OperationType::CCZ => {
+                    let weight = 2.0_f64.powi(-(self.model_depth as i32));
+                    self.model_total += 1; self.model_weighted += weight;
+                    self.model_phase_native += 1; self.model_phase_weighted += weight;
+                }, _ => {}
+            }
+        } else { self.ops.push(op); }
     }
     /// Close the current phase: report its Toffoli count and peak width on
     /// stdout -- which is what `build_circuit` prints -- and start a new one.
     pub fn set_phase(&mut self, p: &'static str) {
-        self.peak_qubits = 0;
+        if self.model {
+            eprintln!("MODEL_PHASE {} {} {} {}", self.phase, self.peak_qubits,
+                self.model_phase_native, self.model_phase_weighted);
+        }
+        self.model_phase_native = 0; self.model_phase_weighted = 0.0;
+        self.peak_qubits = self.active_qubits;
         self.phase_kind_ops = [0; OP_KINDS];
         self.phase = p;
     }
@@ -94,6 +124,7 @@ impl Builder {
     /// `active_qubits`: a fresh `alloc_qubit` and a `reacquire` of a parked one.
     fn note_peak(&mut self) {
         self.peak_qubits = self.peak_qubits.max(self.active_qubits);
+        self.model_max = self.model_max.max(self.active_qubits);
     }
 
     #[track_caller]

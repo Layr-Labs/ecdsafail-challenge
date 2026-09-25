@@ -16,7 +16,7 @@ use crate::circuit::QubitId;
 /// starts clean, and after the first CX `u[0]` already holds what a clean
 /// carry-in wire would have held — so it serves as the first nonlinear control
 /// and no wire is needed either way.
-fn cmp_lt_phase(circ: &mut Builder, u: &[QubitId], v: &[QubitId], borrow_in: Option<QubitId>) {
+pub(crate) fn cmp_lt_phase(circ: &mut Builder, u: &[QubitId], v: &[QubitId], borrow_in: Option<QubitId>) {
     let n = u.len();
     assert_eq!(v.len(), n);
     // Two bits is the narrowest comparison any caller asks for: the walk's
@@ -24,6 +24,17 @@ fn cmp_lt_phase(circ: &mut Builder, u: &[QubitId], v: &[QubitId], borrow_in: Opt
     // `walk_low_chunk` only splits when `low >= 4`, which leaves it `low - 2`
     // bits wide.
     assert!(n > 1);
+    // A source-bit predictor may now lie inside a widened comparison window.
+    // If it is the first source bit, MAJ(!u0,v0,v0)=v0: that whole position
+    // is redundant. Otherwise restore the predictor before its operand bit
+    // is read, and recreate the first control only for the final phase erase.
+    // No separate predictor copy or extra nonlinear gate is necessary.
+    if borrow_in==Some(v[0]) {
+        assert!(n>=3,"aliased low seed needs at least two remaining comparison bits");
+        return cmp_lt_phase(circ,&u[1..],&v[1..],borrow_in);
+    }
+    let operand_seed=borrow_in.is_some_and(|q|v[1..].contains(&q));
+    assert!(!borrow_in.is_some_and(|q|u.contains(&q)),"seed cannot alias the accumulator");
     let last = n - 1;
 
     let carries = circ.alloc_qubits(last);
@@ -36,6 +47,7 @@ fn cmp_lt_phase(circ: &mut Builder, u: &[QubitId], v: &[QubitId], borrow_in: Opt
         p
     });
     circ.ccx(first_ctrl, v[0], carries[0]);
+    if operand_seed {circ.cx(u[0],borrow_in.unwrap());}
     circ.cx(carries[0], u[0]);
     for i in 1..last {
         circ.cx(u[i], v[i]);
@@ -64,6 +76,7 @@ fn cmp_lt_phase(circ: &mut Builder, u: &[QubitId], v: &[QubitId], borrow_in: Opt
     circ.hmr(carries[0], m0);
     match borrow_in {
         Some(p) => {
+            if operand_seed {circ.cx(u[0],p);}
             circ.cz_if(p, v[0], m0);
             circ.cx(u[0], p);
         }

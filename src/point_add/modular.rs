@@ -4,7 +4,7 @@ use super::compare::erase_with_compare;
 use super::const_arith::cadd_const_trunc;
 use super::pingpong::walk_max_qubits;
 use super::{fold_guard, pinned_env, Builder, SECP256K1_P};
-use crate::circuit::QubitId;
+use crate::circuit::{BitId, QubitId};
 
 // Width of the measured-erasure comparisons in this file, and nowhere else in
 // the tree. One bit finer than `fold_guard` by the balance rule derived in
@@ -59,12 +59,73 @@ pub fn ripple_add(
     carry_in: Option<QubitId>,
     carry_out: Option<QubitId>,
 ) {
-    ripple_add_proved(circ, addend, acc, carry_in, carry_out, Carry0::Full, Carry1::Full);
+    ripple_add_proved(circ, addend, acc, carry_in, carry_out, Carry0::Full, Carry1::Full, None, None, None, None);
+}
+
+/// Finish a vented sum, consume its overflow while the top arithmetic carry
+/// is still live, then perform the ordinary measured internal unwind.
+///
+/// The consumer receives (overflow, unchanged source top, sum top, carry into
+/// top). It must preserve the source/sum/carry frame and may mutate only
+/// disjoint operands. The lower positions in this slice remain folded until
+/// the unwind, so they are not yet readable as source or sum bits.
+pub(crate) fn ripple_add_consume(
+    circ: &mut Builder, addend: &[QubitId], acc: &[QubitId],
+    carry_in: Option<QubitId>, carry_out: QubitId,
+    consumer: impl FnOnce(&mut Builder, QubitId, QubitId, QubitId, Option<QubitId>),
+) {
+    let n=acc.len(); assert!(n>=1); assert_eq!(addend.len(),n);
+    let carries=circ.alloc_qubits(n-1);
+    let previous=|i:usize|if i==0 {carry_in} else {Some(carries[i-1])};
+    for i in 0..n {
+        carry_step(circ,addend[i],acc[i],previous(i),
+            if i+1==n {carry_out} else {carries[i]});
+    }
+    if let Some(p)=previous(n-1) {circ.cx(p,addend[n-1]);}
+    circ.cx(addend[n-1],acc[n-1]);
+    consumer(circ,carry_out,addend[n-1],acc[n-1],previous(n-1));
+    for i in (0..n-1).rev() {
+        unwind_carry_step(circ,addend[i],acc[i],previous(i),carries[i]);
+    }
+}
+
+/// X-erase an outgoing carry using the live completed top-bit frame.
+/// o = a*s XOR a XOR a*c XOR s*c XOR c, with c=0 when absent.
+pub(crate) fn erase_overflow_from_frame(
+    circ: &mut Builder, overflow: QubitId, source_top: QubitId,
+    sum_top: QubitId, carry_into_top: Option<QubitId>,
+) {
+    let m=circ.alloc_bit(); circ.hmr(overflow,m);
+    circ.z_if(source_top,m); circ.cz_if(source_top,sum_top,m);
+    if let Some(c)=carry_into_top {
+        circ.z_if(c,m); circ.cz_if(source_top,c,m); circ.cz_if(sum_top,c,m);
+    }
+    circ.free_bit(m); circ.free(overflow);
+}
+
+/// [`ripple_add`] with one deferred X-measurement phase applied to an arithmetic
+/// carry before that carry's own measurement unwind changes its representation.
+/// `carry_index == 0` names the carry out of the slice's bit 0.
+pub fn ripple_add_with_deferred_phase(
+    circ: &mut Builder,
+    addend: &[QubitId],
+    acc: &[QubitId],
+    carry_in: Option<QubitId>,
+    carry_out: Option<QubitId>,
+    deferred: Option<(usize, BitId)>,
+) {
+    ripple_add_proved(
+        circ, addend, acc, carry_in, carry_out, Carry0::Full, Carry1::Full, deferred, None, None, None,
+    );
 }
 
 fn ripple_add_proved(
     circ: &mut Builder, addend: &[QubitId], acc: &[QubitId],
     carry_in: Option<QubitId>, carry_out: Option<QubitId>, c0: Carry0, c1: Carry1,
+    mut deferred: Option<(usize, BitId)>,
+    known_output: Option<&[(bool, Vec<QubitId>)]>,
+    known_terminal: Option<bool>,
+    borrowed: Option<&[QubitId]>,
 ) {
     let width = acc.len();
     let k = addend.len();
@@ -81,7 +142,12 @@ fn ripple_add_proved(
     } else {
         width.saturating_sub(2)
     };
-    let mut carries = circ.alloc_qubits(owned);
+    let mut carries = if let Some(qs)=borrowed {
+        assert!(carry_out.is_none() && k+1==width);
+        assert_eq!(qs.len(),owned);
+        assert!(qs.iter().all(|q|!acc.contains(q) && !addend.contains(q)));
+        qs.to_vec()
+    } else {circ.alloc_qubits(owned)};
     carries.extend(carry_out);
     let previous = |i: usize| {
         if i == 0 {
@@ -95,8 +161,28 @@ fn ripple_add_proved(
     // and it always has a previous carry because `k >= 1`.
     let zero_prev = |i: usize| previous(i).expect("a zero-addend position always has a carry in");
 
+    if let Some(output)=known_output {
+        assert!(carry_in.is_none() && carry_out.is_none() && deferred.is_none());
+        assert_eq!(k+1,width);assert_eq!(output.len(),width);
+        // sum[j] = original_addend[j] XOR original_acc[j] XOR carry[j-1].
+        // The caller supplies a proved affine expression for the resulting
+        // sum. Compute ALL carries while those original source bits are still
+        // intact, before the normal ripple folds anything into its operands.
+        for (i,&q) in carries.iter().enumerate() {
+            let j=i+1;
+            circ.cx(addend[j],q);circ.cx(acc[j],q);
+            if output[j].0 {circ.x(q);}
+            for &s in &output[j].1 {circ.cx(s,q);}
+        }
+    }
+
     for i in 0..carries.len() {
-        if i == 0 && c0 != Carry0::Full {
+        if known_output.is_some() {
+            // Carries already contain arithmetic carries. Preserve the usual
+            // folded operand state so the terminal step and exact measured
+            // unwind below remain unchanged.
+            if let Some(prev)=previous(i) {circ.cx(prev,addend[i]);circ.cx(prev,acc[i]);}
+        } else if i == 0 && c0 != Carry0::Full {
             assert!(carry_in.is_none() && k >= 2 && width >= 4);
             if c0 == Carry0::IsAddend0 { circ.cx(addend[0], carries[0]); }
         } else if i == 1 && c1 == Carry1::CopiesCarry0 {
@@ -126,16 +212,31 @@ fn ripple_add_proved(
             circ.cx(addend[top], acc[top]);
         }
     } else {
-        terminal_step(circ, addend, acc, previous(width - 2));
+        let terminal=known_terminal.or_else(|| {
+            known_output.filter(|_|super::env_flag("SQ_ROW0_MEASURE_TOP") || super::env_flag("SQ_ROW_ALL_MEASURE_TOP"))
+                .map(|output| {assert!(output[width-1].1.is_empty());output[width-1].0})
+        });
+        if let Some(desired)=terminal {
+            terminal_step_known(circ,addend,acc,previous(width-2),desired);
+        } else {terminal_step(circ, addend, acc, previous(width - 2));}
     }
 
     for i in (0..owned).rev() {
+        if deferred.as_ref().is_some_and(|(at, _)| *at == i) {
+            let (_, phase) = deferred.take().unwrap();
+            // At this point `carries[i]` is still the arithmetic carry. The
+            // first CX in `unwind_carry_step` changes it to the CCX product.
+            circ.z_if(carries[i], phase);
+            circ.free_bit(phase);
+        }
         if i < k {
-            unwind_carry_step(circ, addend[i], acc[i], previous(i), carries[i]);
+            if borrowed.is_some() {unwind_carry_step_lent(circ,addend[i],acc[i],previous(i),carries[i]);}
+            else {unwind_carry_step(circ, addend[i], acc[i], previous(i), carries[i]);}
         } else {
             unwind_zero_step(circ, acc[i], zero_prev(i), carries[i]);
         }
     }
+    assert!(deferred.is_none(), "deferred phase did not name an owned ripple carry");
 }
 
 /// Undo a zero-addend stage: erase `carry = acc AND previous` in the X basis,
@@ -233,6 +334,29 @@ fn terminal_step(
     circ.cx(addend[i], acc[i]);
 }
 
+/// Exact inverse producer only: if the resulting top bit is the known
+/// constant d, recover its OLD value from the terminal carry expression and
+/// any top addend. X-measure it and repair all terms with Clifford gates.
+/// This replaces one terminal CCX with one extra measurement, no scratch wire.
+fn terminal_step_known(circ:&mut Builder,addend:&[QubitId],acc:&[QubitId],previous:Option<QubitId>,desired:bool) {
+    let n=acc.len();let k=addend.len();assert!(n>=2 && k<=n);let i=n-2;
+    if i>=k {
+        let p=previous.expect("padded stage has incoming carry");
+        let m=circ.alloc_bit();circ.hmr(acc[n-1],m);
+        if desired {circ.x(acc[n-1]);circ.z_if(acc[n-1],m);}
+        circ.cz_if(p,acc[i],m);circ.free_bit(m);
+        circ.cx(p,acc[i]);return;
+    }
+    if let Some(p)=previous {circ.cx(p,addend[i]);circ.cx(p,acc[i]);}
+    let m=circ.alloc_bit();circ.hmr(acc[n-1],m);
+    if desired {circ.x(acc[n-1]);circ.z_if(acc[n-1],m);}
+    if let Some(p)=previous {circ.z_if(p,m);}
+    if n-1<k {circ.z_if(addend[n-1],m);}
+    circ.cz_if(addend[i],acc[i],m);circ.free_bit(m);
+    if let Some(p)=previous {circ.cx(p,addend[i]);}
+    circ.cx(addend[i],acc[i]);
+}
+
 /// Controlled add of the folding constant `f = 2^32 + 977` into the low `lsbs`
 /// bits of `reg`, conditioned on `ctrl`. Carries past bit `lsbs` are dropped.
 ///
@@ -277,10 +401,23 @@ pub fn ripple_add_lent(
     carry_in: Option<QubitId>,
     lent: QubitId,
 ) {
+    ripple_add_lent_with_deferred_phase(circ, addend, acc, carry_in, lent, None);
+}
+
+/// [`ripple_add_lent`] with a deferred phase attached to one arithmetic carry.
+/// The hook also supports the final carry stored on `lent` (index `width - 3`).
+pub fn ripple_add_lent_with_deferred_phase(
+    circ: &mut Builder,
+    addend: &[QubitId],
+    acc: &[QubitId],
+    carry_in: Option<QubitId>,
+    lent: QubitId,
+    mut deferred: Option<(usize, BitId)>,
+) {
     let width = addend.len();
     assert_eq!(width, acc.len(), "ripple_add_lent: width mismatch");
     if width < 3 {
-        ripple_add(circ, addend, acc, carry_in, None);
+        ripple_add_with_deferred_phase(circ, addend, acc, carry_in, None, deferred);
         return;
     }
     // Owned carries for positions 0..width-3; the lent wire takes the carry out
@@ -301,10 +438,21 @@ pub fn ripple_add_lent(
     carry_step(circ, addend[owned], acc[owned], previous(owned), lent);
     terminal_step(circ, addend, acc, Some(lent));
 
+    if deferred.as_ref().is_some_and(|(at, _)| *at == owned) {
+        let (_, phase) = deferred.take().unwrap();
+        circ.z_if(lent, phase);
+        circ.free_bit(phase);
+    }
     unwind_carry_step_lent(circ, addend[owned], acc[owned], previous(owned), lent);
     for i in (0..owned).rev() {
+        if deferred.as_ref().is_some_and(|(at, _)| *at == i) {
+            let (_, phase) = deferred.take().unwrap();
+            circ.z_if(carries[i], phase);
+            circ.free_bit(phase);
+        }
         unwind_carry_step(circ, addend[i], acc[i], previous(i), carries[i]);
     }
+    assert!(deferred.is_none(), "deferred phase did not name a lent-ripple carry");
 }
 
 /// [`unwind_carry_step`] for a lent carry wire: same erasure and phase repair,
@@ -328,6 +476,40 @@ fn unwind_carry_step_lent(
         circ.cx(previous, addend);
     }
     circ.cx(addend, acc);
+}
+
+/// Wrapped add on the structural subspace addend[n-1]==addend[n-2].
+/// Borrow the redundant top source bit for the last carry, in addition to an
+/// optional already-clean caller loan. Both are restored, with exact phase.
+pub(crate) fn ripple_add_source_sign_loan(
+    circ:&mut Builder,addend:&[QubitId],acc:&[QubitId],carry_in:Option<QubitId>,
+    lent:Option<QubitId>,mut deferred:Option<(usize,BitId)>,
+) {
+    let n=addend.len();assert_eq!(n,acc.len());
+    assert!(n>=3+usize::from(lent.is_some()));
+    let owned=n-3-usize::from(lent.is_some());
+    let high=addend[n-1];let copy=addend[n-2];
+    assert!(!acc.contains(&high));
+    if let Some(q)=lent{assert!(!acc.contains(&q)&&!addend.contains(&q));}
+    circ.cx(copy,high);
+    let mut carries=circ.alloc_qubits(owned);
+    carries.extend(lent);carries.push(high);
+    let previous=|i:usize|if i==0{carry_in}else{Some(carries[i-1])};
+    for i in 0..carries.len(){carry_step(circ,addend[i],acc[i],previous(i),carries[i]);}
+    // The terminal's incoming carry occupies the old source top. Restore the
+    // original penultimate source before adding the identical top source bit.
+    let i=n-2;
+    circ.cx(high,copy);circ.cx(high,acc[i]);
+    circ.ccx(copy,acc[i],acc[n-1]);circ.cx(high,acc[n-1]);
+    circ.cx(high,copy);circ.cx(copy,acc[n-1]);circ.cx(copy,acc[i]);
+    for i in (0..carries.len()).rev(){
+        if deferred.as_ref().is_some_and(|(at,_)|*at==i){
+            let(_,m)=deferred.take().unwrap();circ.z_if(carries[i],m);circ.free_bit(m);
+        }
+        if i<owned{unwind_carry_step(circ,addend[i],acc[i],previous(i),carries[i]);}
+        else{unwind_carry_step_lent(circ,addend[i],acc[i],previous(i),carries[i]);}
+    }
+    assert!(deferred.is_none());circ.cx(copy,high);
 }
 
 pub fn addsub_full(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], inverse: bool) {
@@ -479,9 +661,28 @@ pub fn mod_sub_vented(circ: &mut Builder, x: &[QubitId], y: &[QubitId]) {
 pub enum Carry0 { Full, IsAddend0, Zero }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Carry1 { Full, CopiesCarry0 }
+/// Wrapped wide add on a subspace with a proved affine output word. This is
+/// NOT an unrestricted adder: incorrect output expressions violate its ABI.
+pub(crate) fn add_wide_known_output(circ:&mut Builder, value:&[QubitId], acc:&[QubitId], output:&[(bool,Vec<QubitId>)],borrowed:Option<&[QubitId]>) {
+    ripple_add_proved(circ,value,acc,None,None,Carry0::Full,Carry1::Full,None,Some(output),None,borrowed);
+}
+/// Borrowed carries arrive zero and remain owned by the caller. This receiver
+/// is restricted to a wide triangular row, where every carry has an addend.
+pub(crate) fn addsub_wide_borrowed(circ:&mut Builder,value:&[QubitId],acc:&[QubitId],inverse:bool,c0:Carry0,c1:Carry1,result_top:Option<bool>,borrowed:&[QubitId]) {
+    if inverse {circ.x_all(acc);}
+    ripple_add_proved(circ,value,acc,None,None,c0,c1,None,None,result_top.map(|v|v^inverse),Some(borrowed));
+    if inverse {circ.x_all(acc);}
+}
+/// Caller proves the top result bit, without claiming any other output bits.
+/// The complement frame flips that bit for the inner adder when subtracting.
+pub(crate) fn addsub_wide_known_top(circ:&mut Builder,value:&[QubitId],acc:&[QubitId],inverse:bool,c0:Carry0,c1:Carry1,result_top:bool) {
+    if inverse {circ.x_all(acc);}
+    ripple_add_proved(circ,value,acc,None,None,c0,c1,None,None,Some(result_top^inverse),None);
+    if inverse {circ.x_all(acc);}
+}
 pub fn addsub_full_low(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], inverse: bool, c0: Carry0, c1: Carry1) {
     if inverse { circ.x_all(acc); }
-    ripple_add_proved(circ, value, acc, None, None, c0, c1);
+    ripple_add_proved(circ, value, acc, None, None, c0, c1, None, None, None, None);
     if inverse { circ.x_all(acc); }
 }
 pub fn addsub_wide_low(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], inverse: bool, c0: Carry0, c1: Carry1) {

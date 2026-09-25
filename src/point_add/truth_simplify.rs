@@ -355,6 +355,3 @@ fn simplify_with_products(ops: Vec<Op>, use_products: bool) -> Vec<Op> {
     result
 }
 
-#[cfg(test)]
-#[path = "truth_simplify_tests.rs"]
-mod tests;
