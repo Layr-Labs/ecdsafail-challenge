@@ -191,3 +191,53 @@ pub(crate) fn direct_add_phase_transport(c:&mut Builder,map:&[Vec<QubitId>],b:&[
     assert_eq!(c.active_qubits(),base);
     pending
 }
+
+/// One chunk of the direct ripple, as in [`direct_add_phase_transport`]:
+/// carries chained from `prev`; a non-final chunk XORs its carry-out into
+/// `out`; the sum bits are finished in `b` and the ladder is unwound.
+fn direct_chunk(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],at:usize,w:usize,prev:QubitId,out:Option<QubitId>){
+    use super::pingpong::{fold_step,unwind_fold_step};
+    let end=at+w;
+    let work=c.alloc_qubits(if out.is_none(){w.saturating_sub(2)}else{w-1});
+    for i in 0..work.len(){let carry=if i==0{prev}else{work[i-1]};fold_step(c,b[at+i],carry,work[i],&map[at+i],false);}
+    let carry=work.last().copied().unwrap_or(prev);
+    if let Some(q)=out{fold_step(c,b[end-1],carry,q,&map[end-1],true);}else if w==1{
+        c.cx(prev,b[at]);for &s in &map[at]{c.cx(s,b[at]);}
+    }else{
+        fold_step(c,b[end-2],carry,b[end-1],&map[end-2],true);
+        for &s in &map[end-1]{c.cx(s,b[end-1]);}
+    }
+    for i in(0..work.len()).rev(){let carry=if i==0{prev}else{work[i-1]};unwind_fold_step(c,b[at+i],carry,work[i],&map[at+i]);}
+    c.free_vec(&work);
+}
+
+/// SQ_HOLD_BOUNDARY forward: the same exact chunked add, but every non-final
+/// chunk's carry-out stays live (no hmr, no compare). Returns those wires.
+pub(crate) fn direct_add_hold(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId,p:&Plan)->Vec<QubitId>{
+    assert_eq!(p.sizes.iter().sum::<usize>(),b.len());let base=c.active_qubits();
+    let k=p.sizes.len();let mut held=Vec::new();let mut at=0;let mut prev=incoming;
+    for(j,&w)in p.sizes.iter().enumerate(){
+        let out=if j+1<k{Some(c.alloc_qubit())}else{None};
+        direct_chunk(c,map,b,at,w,prev,out);
+        if let Some(q)=out{held.push(q);prev=q;}at+=w;
+    }
+    assert_eq!(c.active_qubits(),base+held.len() as u32);
+    held
+}
+
+/// SQ_HOLD_BOUNDARY inverse, called on the complemented accumulator with the
+/// forward's plan and map. The complemented add has the same chunk carries as
+/// the forward add, so chunk j run with out = held[j] returns it to zero.
+/// Chunks run high-to-low so each reads held[j-1] before it is cleared.
+pub(crate) fn direct_add_unhold(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId,p:&Plan,held:Vec<QubitId>){
+    assert_eq!(p.sizes.iter().sum::<usize>(),b.len());let base=c.active_qubits();
+    let k=p.sizes.len();assert_eq!(held.len(),k-1);
+    let starts:Vec<usize>=p.sizes.iter().scan(0,|s,&w|{let a=*s;*s+=w;Some(a)}).collect();
+    for j in(0..k).rev(){
+        let prev=if j==0{incoming}else{held[j-1]};
+        let out=if j+1<k{Some(held[j])}else{None};
+        direct_chunk(c,map,b,starts[j],p.sizes[j],prev,out);
+        if let Some(q)=out{c.release_clean(q);}
+    }
+    assert_eq!(c.active_qubits()+held.len() as u32,base);
+}

@@ -47,7 +47,7 @@ fn env_raw(name: &str) -> Option<String> {
         "PP_DEPTH_PROFILE" => "0:0",
         "PP_DIRECT_ENDPOINT" => "1",
         "PP_DIRECT_FOLD" => "1",
-        "PP_FLAG_SHAPE" => "38:0,25:-2,0:-2",
+        "PP_FLAG_SHAPE" => "38:0,25:-1,0:-3",
         "PP_FLAG_WIDEN_DIV" => "38",
         "PP_FOLD_PROFILE" => "38:0,32:-1,19:-4,0:-4",
         "PP_FOLD_WIDEN" => "0",
@@ -80,6 +80,7 @@ fn env_raw(name: &str) -> Option<String> {
         "PP_REUSE_DIV_PARITY" => "1",
         "PP_REUSE_MUL_SELECTORS" => "1",
         "PP_ROUNDS_MUL" => "698",
+        "PP_SEED_SHORT_MUL_F_COST" => "1",
         "PP_SIMPLIFY" => "product,affine,quadratic,truth",
         "PP_SOURCE_SIGN_GROW" => "1",
         "PP_SOURCE_SIGN_LOAN" => "0",
@@ -102,11 +103,14 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_DEFER_CROSS_PHASE" => "1",
         "SQ_DIAG_PRELOAD" => "1",
         "SQ_FIT_CROSS" => "1",
+        "SQ_HIGH_CARRY_LOAN" => "1",
+        "SQ_HOLD_BOUNDARY" => "1",
         "SQ_LEND_ASSEMBLY_ZEROS" => "1",
         "SQ_LEND_RETAINED_ANDS" => "2",
         "SQ_LEND_RETAINED_CROSS2" => "2",
         "SQ_LEND_RETAINED_ZEROS" => "1",
         "SQ_ODD_NODE_TOPS" => "1",
+        "SQ_OWN_TOP_ZEROS" => "1",
         "SQ_ROW0_CARRY" => "1",
         "SQ_ROW0_INVERSE_CARRIES" => "1",
         "SQ_ROW_ALL_MEASURE_TOP" => "1",
@@ -117,7 +121,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_CROSS" => "1",
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
-        "TAIL_NONCE" => "9342055114",
+        "TAIL_NONCE" => "9422592313",
         _ => return None,
     };
     Some(value.to_owned())
@@ -221,7 +225,7 @@ fn build_point_add() -> Vec<Op> {
     circ.take_ops()
 }
 
-/// Emit the fixed I10 circuit and accepted public-validation nonce 9342055114.
+/// Emit the fixed I10 circuit and accepted public-validation nonce 9422592313.
 pub fn build() -> Vec<Op> {
     let mut ops = build_point_add();
     // Exact op-stream post-passes, ported from the 2026-09-04 warpspeed

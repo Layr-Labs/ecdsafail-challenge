@@ -428,6 +428,9 @@ struct K2Retained {
     /// The high half's own retained scratch, when [`sq_split_b_min`] split it.
     high: Option<Box<K2Retained>>,
     cross_phase: Option<(super::width_composition::Plan,Vec<(usize,BitId)>)>,
+    /// SQ_HOLD_BOUNDARY: live boundary carries of the fitted assembly, cleared
+    /// by the inverse assembly's high-to-low chunk ripple.
+    held: Vec<QubitId>,
 }
 
 /// Recursion policy: a sum half of at least this many bits is split again
@@ -489,6 +492,9 @@ fn square_b(circ: &mut Builder, bs: &[QubitId], b2: &[QubitId]) -> Option<Box<K2
     let mut t = inner.to_vec();
     t.push(r.carry);
     restore_square_sum(circ,a,&t);
+    // SQ_HIGH_CARRY_LOAN: t - a = b < 2^|b| left r.carry at exactly |0>, and
+    // nothing reads it until square_b_inv re-forms the in-place sum.
+    if super::env_flag("SQ_HIGH_CARRY_LOAN") {circ.release_clean(r.carry);}
     Some(Box::new(r))
 }
 
@@ -499,6 +505,7 @@ fn square_b_inv(circ: &mut Builder, bs: &[QubitId], b2: &[QubitId], retained: Op
     match retained {
         None => tri_square(circ, bs, b2, true),
         Some(r) => {
+            if super::env_flag("SQ_HIGH_CARRY_LOAN") {circ.reacquire(r.carry);}
             let (a, inner) = bs.split_at(bs.len() / 2);
             let mut t = inner.to_vec();
             t.push(r.carry);
@@ -545,24 +552,69 @@ fn tri_square_k2r_flat(circ: &mut Builder, x: &[QubitId], product: &[QubitId]) -
 /// Retain all internal boundary carries and pay their full phase cleanup.
 /// No fold/comparison truncation window is changed by this helper.
 fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
-    recover:Option<(super::width_composition::Plan,Vec<(usize,BitId)>)>)
+    recover:Option<(super::width_composition::Plan,Vec<(usize,BitId)>)>,held:&mut Vec<QubitId>)
     ->Option<(super::width_composition::Plan,Vec<(usize,BitId)>)> {
-    let room=super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
+    let mut room=super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
     if recover.is_some() || (super::env_flag("SQ_FIT_CROSS") && acc.len().saturating_sub(2)>room) {
+        // SQ_OWN_TOP_ZEROS: this node's own top cross bits are zero for every
+        // input (2ab < 2^(lo+hi+1)); add them as zero addend bits and lend them.
+        let tops=if super::env_flag("SQ_OWN_TOP_ZEROS"){own_top_zero_bits(cross,acc)}else{Vec::new()};
+        for &q in &tops{circ.release_clean(q);}
+        room+=tops.len();
         if inverse {circ.x_all(acc);}
         let n=acc.len()-1;
         let(plan,fixes)=recover.unwrap_or_else(||((room..=room.max(n)).find_map(|r|super::width_composition::direct_plan(n,r)).unwrap(),Vec::new()));
-        let map:Vec<Vec<QubitId>>=(1..acc.len()).map(|i|cross.get(i).copied().into_iter().collect()).collect();
+        let map:Vec<Vec<QubitId>>=(1..acc.len()).map(|i|cross.get(i).copied().filter(|q|!tops.contains(q)).into_iter().collect()).collect();
+        // SQ_HOLD_BOUNDARY: keep the chunk carry-outs live instead of measuring
+        // them. The inverse (forced onto this plan) recreates the same carries
+        // and XORs each back to zero, so no boundary phase ever needs repair.
+        if !inverse && super::env_flag("SQ_HOLD_BOUNDARY") {
+            *held=super::width_composition::direct_add_hold(circ,&map,&acc[1..],cross[0],&plan);
+            rehome_held(circ,held,&tops);
+            return Some((plan,Vec::new()));
+        }
+        if inverse && !held.is_empty() {
+            super::width_composition::direct_add_unhold(circ,&map,&acc[1..],cross[0],&plan,std::mem::take(held));
+            circ.x_all(acc);
+            for &q in &tops{circ.reacquire(q);}
+            return None;
+        }
         // bit0 of the source is zero, so acc[0] and the first carry stay put.
         let defer=!inverse && super::env_flag("SQ_DEFER_CROSS_PHASE");
         let pending=super::width_composition::direct_add_phase_transport(circ,&map,&acc[1..],cross[0],&plan,defer,&fixes);
         if inverse {circ.x_all(acc);}
+        for &q in &tops{circ.reacquire(q);}
         if super::env_flag("SQ_FIT_CROSS_TRACE") {eprintln!("FIT_CROSS {} {} {} {} {}",acc.len(),room,plan.peak,plan.extra2,inverse as u8);}
         if defer{return Some((plan,pending));}
     } else if cut_sqident() {
         addsub_wide_low(circ,cross,acc,inverse,Carry0::Zero,Carry1::Full);
     } else {addsub_wide(circ,cross,acc,inverse);}
     None
+}
+
+/// SQ_OWN_TOP_ZEROS: a node's retained cross holds 2ab in 2*(hi+1) bits, and
+/// 2ab < 2^(lo+hi+1): its top bit, and the one below when lo < hi, are zero.
+/// `acc` is product[lo..], of length 2m - lo = lo + 2hi.
+fn own_top_zero_bits(cross:&[QubitId],acc:&[QubitId])->Vec<QubitId>{
+    let n=cross.len();let hi=n/2-1;let lo=acc.len()-2*hi;
+    assert!(n%2==0 && lo<=hi && hi<=lo+1,"own_top_zero_bits: unexpected node shape");
+    if lo<hi{vec![cross[n-1],cross[n-2]]}else{vec![cross[n-1]]}
+}
+
+/// SQ_HOLD_BOUNDARY: a held carry may have been allocated on a wire that is
+/// currently lent (assembly loans, own top zeros). Reacquire every other lent
+/// wire, then move each such carry to a fresh wire (2 CX) so the lent wire is
+/// |0> and live again in its own role. No Toffoli, no measurement.
+fn rehome_held(circ:&mut Builder,held:&mut [QubitId],lent:&[QubitId]){
+    for &q in lent{if !held.contains(&q){circ.reacquire(q);}}
+    for h in held.iter_mut(){
+        if lent.contains(h){let f=circ.alloc_qubit();circ.cx(*h,f);circ.cx(f,*h);*h=f;}
+    }
+}
+fn assembly_repay_held(circ:&mut Builder,x:&[QubitId],product:&[QubitId],qs:Vec<QubitId>,held:&mut [QubitId]){
+    if held.is_empty(){assembly_repay(circ,x,product,qs);return;}
+    if qs.is_empty(){return;}
+    rehome_held(circ,held,&qs);circ.cx(x[0],product[0]);
 }
 
 /// The full sum is exactly a+b; removing a restores b and clears its extra
@@ -640,9 +692,10 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
     // product += 2ab << lo, exact full ripple to the top (x^2 < 2^(2m), so the
     // top never overflows).
     let loans=assembly_loans(circ,x,product,low.as_deref(),sum.as_deref(),high.as_deref());
-    let cross_phase=add_cross(circ,&cross,&product[lo..],false,None);
-    assembly_repay(circ,x,product,loans);
-    K2Retained { carry, cross, low, sum, high, cross_phase }
+    let mut held=Vec::new();
+    let cross_phase=add_cross(circ,&cross,&product[lo..],false,None,&mut held);
+    assembly_repay_held(circ,x,product,loans,&mut held);
+    K2Retained { carry, cross, low, sum, high, cross_phase, held }
 }
 
 /// Inverse of `tri_square_k2r`, consuming its retained scratch. Requires
@@ -655,7 +708,7 @@ fn tri_square_k2r_inv(
 ) {
     let m = x.len();
     assert_eq!(product.len(), 2 * m);
-    let K2Retained { carry, cross, low, sum, high, cross_phase } = retained;
+    let K2Retained { carry, cross, low, sum, high, cross_phase, mut held } = retained;
     let lo = m / 2;
     let (a, bs) = x.split_at(lo);
     let (a2, b2) = product.split_at(2 * lo);
@@ -663,7 +716,8 @@ fn tri_square_k2r_inv(
     t.push(carry);
     // product -= 2ab << lo: the halves are pure a^2 / b^2 again.
     let loans=assembly_loans(circ,x,product,low.as_deref(),sum.as_deref(),high.as_deref());
-    assert!(add_cross(circ,&cross,&product[lo..],true,cross_phase).is_none());
+    assert!(add_cross(circ,&cross,&product[lo..],true,cross_phase,&mut held).is_none());
+    assert!(held.is_empty(),"SQ_HOLD_BOUNDARY: held carries not cleared");
     assembly_repay(circ,x,product,loans);
     // cross: 2ab -> t^2, then clear it with the inverse square (which also
     // restores t if its own split modified it).

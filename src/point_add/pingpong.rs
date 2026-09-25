@@ -3032,6 +3032,17 @@ fn replay_double_add(
     let mut k = flag_compare(round) + usize::from(a5_policy() == "mul-f-plus1-early200" && (2..202).contains(&round));
     let borrow = if wide && matches!(a5_policy(), "mul-f-seed" | "mul-fb-seed") {
         Some(source[N - k - 1])
+    } else if !wide && env_flag("PP_SEED_SHORT_MUL_F_COST") {
+        // EXP PP_SEED_SHORT_MUL_F_COST: cost mode, as CMP_SEED_ALL on the divide.
+        // A seeded (k-1)-bit window has the error of the unseeded k-bit one and
+        // costs one Toffoli less. Excludes the keep-width variant and refinements.
+        assert!(!env_flag("PP_SEED_SHORT_MUL_F"),"short multiply seed: pick cost or keep-width mode");
+        for knob in ["PP_REFINE_UNSEEDED_F","PP_REFINE_SEEDED_F"] {
+            assert_eq!(super::optional_env::<usize>(knob).unwrap_or(0),0,
+                "short multiply cost seeding excludes flag refinement composition");
+        }
+        k -= 1;
+        Some(source[N-k-1])
     } else if !wide && env_flag("PP_SEED_SHORT_MUL_F") {
         // Extend source-bit prediction to the previously unseeded narrow
         // multiply flag sites. Keep the complete old comparison window;

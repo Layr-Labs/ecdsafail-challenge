@@ -31,8 +31,10 @@ fn plan(circ:&Builder,round:usize,multiply:bool,fw:usize)->Option<Plan> {
     if prefix+1>=hi-lo {return None;}
     let mut fk=if multiply {flag_compare(round)+usize::from(a5_policy()=="mul-f-plus1-early200"&&(2..202).contains(&round))}
         else {flag_compare(round)+usize::from(policy_width(round)>=flag_widen_div())};
-    let seeded=if multiply {policy_width(round)>=38 && matches!(a5_policy(),"mul-f-seed"|"mul-fb-seed")}else{env_flag("CMP_SEED_ALL")};
-    if !multiply && seeded {fk-=1;}
+    // EXP PP_SEED_SHORT_MUL_F_COST: the plain path's narrow multiply F compare is one bit shorter.
+    let short_cost=multiply && policy_width(round)<38 && env_flag("PP_SEED_SHORT_MUL_F_COST") && !env_flag("PP_SEED_SHORT_MUL_F_COST_NOPLAN");
+    let seeded=if multiply {(policy_width(round)>=38 && matches!(a5_policy(),"mul-f-seed"|"mul-fb-seed")) || short_cost}else{env_flag("CMP_SEED_ALL")};
+    if (!multiply && seeded) || short_cost {fk-=1;}
     if !seeded {fk=refined_unseeded_width(fk,N,"PP_REFINE_UNSEEDED_F");}
     let saving=(fk-1)as f64/2.0-missing as f64/2.0-(low as f64-33.0);
     if saving<=0.0 {return None;}
