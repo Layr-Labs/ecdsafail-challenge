@@ -50,7 +50,7 @@ fn env_raw(name: &str) -> Option<String> {
         "PP_FLAG_SHAPE" => "38:0,25:-2,0:-2",
         "PP_FLAG_WIDEN_DIV" => "38",
         "PP_FOLD_PROFILE" => "38:0,32:-1,19:-4,0:-4",
-        "PP_FOLD_WIDEN" => "242",
+        "PP_FOLD_WIDEN" => "0",
         "PP_HEAD_DIV" => "192",
         "PP_HEAD_MUL" => "403",
         "PP_JOINT_GUARD" => "0",
@@ -61,6 +61,8 @@ fn env_raw(name: &str) -> Option<String> {
         "PP_MID_BATCH_MUL" => "32",
         "PP_NEW_REPLAY" => "1",
         "PP_PREBIAS_RETAIN_BITS" => "32",
+        "PP_PREBIAS_DOUBLE" => "1",
+        "PP_PREBIAS_DOUBLE_FALLBACK" => "1",
         "PP_Q1208_HELPERS" => "1",
         "PP_R2" => "648",
         "PP_REPLAY_CHUNK_COMPARE" => "21",
@@ -69,10 +71,11 @@ fn env_raw(name: &str) -> Option<String> {
         "PP_REPLAY_FOLD_WINDOW_MUL" => "54",
         "PP_REPLAY_SIGN_LOAN" => "1",
         "PP_REPLAY_SIGN_LOAN_MUL" => "1",
-        "PP_RETAIN_EXACT_DIV" => "1",
+        "PP_RETAIN_EXACT_DIV" => "0",
         "PP_RETAIN_EXACT_EXTRA_DIV" => "4",
         "PP_RETAIN_EXACT_EXTRA_MUL" => "4",
-        "PP_RETAIN_EXACT_MUL" => "1",
+        "PP_RETAIN_EXACT_MUL" => "0",
+        "PP_RETAIN_LATE_WIDEN" => "3",
         "PP_RETAIN_REBALANCE" => "1",
         "PP_REUSE_DIV_PARITY" => "1",
         "PP_REUSE_MUL_SELECTORS" => "1",
@@ -95,6 +98,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_BORROW_ROW_CARRIES" => "0",
         "SQ_B_POLICY" => "7",
         "SQ_C_POLICY" => "7",
+        "SQ_CIN_SPREAD" => "1",
         "SQ_DEFER_CROSS_PHASE" => "1",
         "SQ_DIAG_PRELOAD" => "1",
         "SQ_FIT_CROSS" => "1",
@@ -102,6 +106,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_LEND_RETAINED_ANDS" => "2",
         "SQ_LEND_RETAINED_CROSS2" => "2",
         "SQ_LEND_RETAINED_ZEROS" => "1",
+        "SQ_ODD_NODE_TOPS" => "1",
         "SQ_ROW0_CARRY" => "1",
         "SQ_ROW0_INVERSE_CARRIES" => "1",
         "SQ_ROW_ALL_MEASURE_TOP" => "1",
@@ -112,7 +117,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_CROSS" => "1",
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
-        "TAIL_NONCE" => "7978492",
+        "TAIL_NONCE" => "9342055114",
         _ => return None,
     };
     Some(value.to_owned())
@@ -216,7 +221,7 @@ fn build_point_add() -> Vec<Op> {
     circ.take_ops()
 }
 
-/// Emit the fixed I10 circuit and accepted public-validation nonce7978492.
+/// Emit the fixed I10 circuit and accepted public-validation nonce 9342055114.
 pub fn build() -> Vec<Op> {
     let mut ops = build_point_add();
     // Exact op-stream post-passes, ported from the 2026-09-04 warpspeed

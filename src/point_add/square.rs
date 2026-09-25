@@ -91,7 +91,82 @@ fn row_addsub(
     circ.x(ctrl);
 }
 
+/// SQ_CIN_SPREAD: triangular row with the diagonal spread bit riding in on the
+/// ripple's carry-in. The complement frame is driven by X gates plus CX from
+/// `xi` (instead of X on `xi` itself), so the wire `xi` stays intact and can be
+/// the carry-in. The row then computes `acc += (2 xi - 1)(v + xi)
+/// = (2 xi - 1) v + xi`, i.e. it also adds `xi * 2^(2i+1)`, which is the spread
+/// bit of `xi`. A carry-in costs no Toffoli.
+fn row_addsub_cin(circ:&mut Builder, xi:QubitId, operand:&[QubitId], acc:&[QubitId], inverse:bool,
+                  first_copies_operand:bool, known_output:Option<&[(bool,Vec<QubitId>)]>,
+                  borrowed:Option<&[QubitId]>) {
+    let k=operand.len();
+    assert_eq!(acc.len(),k+1);
+    if inverse { circ.x(acc[k]); circ.cx(xi,acc[k]); }
+    circ.x_all(&acc[..k]); circ.cx_all(xi,&acc[..k]);
+    if inverse { circ.x_all(acc); }
+    let c0=if first_copies_operand {Carry0::IsAddend0} else {Carry0::Full};
+    // Inverse rows restore a state that never reached bit i+m (see
+    // SQ_ROW_ALL_MEASURE_TOP); in the subtraction frame that top reads 1.
+    let top=(known_output.is_none() && inverse && super::env_flag("SQ_ROW_ALL_MEASURE_TOP")).then_some(true);
+    super::modular::ripple_add_proved(circ,operand,acc,Some(xi),None,c0,Carry1::Full,None,known_output,top,borrowed);
+    if inverse { circ.x_all(acc); }
+    circ.x_all(&acc[..k]); circ.cx_all(xi,&acc[..k]);
+    if !inverse { circ.x(acc[k]); circ.cx(xi,acc[k]); }
+}
+
+/// SQ_CIN_SPREAD inverse correction: add `x + ~x_low << m` back. The rows alone
+/// never reach product[2m-1], and the lone spread CX on that bit has already
+/// been undone, so the result's top bit is zero: measured terminal.
+fn diag_correction_known_top(circ:&mut Builder, x:&[QubitId], product:&[QubitId]) {
+    let m=x.len();
+    let pads=circ.alloc_qubits(m);
+    for i in 0..m-1 { circ.cx(x[i],pads[i]); circ.x(pads[i]); }
+    let mut value=x.to_vec();
+    value.extend_from_slice(&pads);
+    let c0=if cut_sqident() {Carry0::IsAddend0} else {Carry0::Full};
+    super::modular::addsub_wide_known_top(circ,&value,product,false,c0,Carry1::Full,false);
+    for i in 0..m-1 { circ.x(pads[i]); circ.cx(x[i],pads[i]); }
+    circ.free_vec(&pads);
+}
+
+/// SQ_CIN_SPREAD leaf: rows carry the whole diagonal spread through their
+/// carry-in, the top spread bit x[m-1]*2^(2m-1) is one CX onto a still-zero
+/// wire, and only the correction subtract remains. No preload, no spread add.
+fn tri_square_cin(circ:&mut Builder, x:&[QubitId], product:&[QubitId], inverse:bool) {
+    let m=x.len();
+    assert_eq!(product.len(),2*m);
+    assert!(m>=3);
+    if inverse {
+        circ.cx(x[m-1],product[2*m-1]);
+        diag_correction_known_top(circ,x,product);
+    }
+    for r in 0..m-1 {
+        let i=if inverse { m-2-r } else { r };
+        let row=&product[2*i+1..i+m+1];
+        let borrowed=super::env_flag("SQ_BORROW_ROW_CARRIES").then(|| &product[m+i+1..2*m-1]);
+        if inverse && i==0 && super::env_flag("SQ_ROW0_INVERSE_CARRIES") {
+            // Before row 0 the product is all zero, so every framed output bit
+            // is known: x0 on the k low bits, 1 on the top.
+            let k=m-1;
+            let mut out=vec![(false,vec![x[0]]);k];
+            out.push((true,Vec::new()));
+            row_addsub_cin(circ,x[0],&x[1..],row,true,false,Some(&out),borrowed);
+            continue;
+        }
+        // Forward row 0 sees a zero window: framed acc[0] = NOT x0 = NOT carry_in,
+        // so its first carry is x[1].
+        let first=super::env_flag("SQ_ROW0_CARRY") && !inverse && i==0;
+        row_addsub_cin(circ,x[i],&x[i+1..],row,inverse,first,None,borrowed);
+    }
+    if !inverse {
+        circ.cx(x[m-1],product[2*m-1]);
+        diag_correction(circ,x,product,true);
+    }
+}
+
 fn tri_square(circ: &mut Builder, x: &[QubitId], product: &[QubitId], inverse: bool) {
+    if super::env_flag("SQ_CIN_SPREAD") { tri_square_cin(circ,x,product,inverse); return; }
     let m = x.len();
     assert_eq!(product.len(), 2 * m);
     assert_ne!(m, 0);
@@ -545,7 +620,13 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
     let cross = circ.alloc_qubits(2 * t.len());
     let sum = if flat { tri_square(circ, &t, &cross, false); None }
               else { square_half(circ, &t, &cross, policy_min(1, sq_split_sum_min())) };
-    if cut_sqident() {
+    // SQ_ODD_NODE_TOPS: with lo = hi-1, t^2 - a^2 = b(2a+b) < 2^(2hi+1), so the
+    // top of the 2(hi+1)-bit cross word is zero after this subtraction.
+    let odd_tops = lo < m - lo && super::env_flag("SQ_ODD_NODE_TOPS");
+    if odd_tops {
+        let c1=if cut_sqident(){Carry1::CopiesCarry0}else{Carry1::Full};
+        super::modular::addsub_wide_known_top(circ,a2,&cross,true,Carry0::Full,c1,false);
+    } else if cut_sqident() {
         addsub_wide_low(circ, a2, &cross, true, Carry0::Full, Carry1::CopiesCarry0);
     } else {
         sub_wide(circ, a2, &cross);
@@ -586,7 +667,13 @@ fn tri_square_k2r_inv(
     assembly_repay(circ,x,product,loans);
     // cross: 2ab -> t^2, then clear it with the inverse square (which also
     // restores t if its own split modified it).
-    if cut_sqident() {
+    if lo < m - lo && super::env_flag("SQ_ODD_NODE_TOPS") {
+        // 2ab + b^2 = b(2a+b) < 2^(2hi+1) when lo = hi-1: zero top after the re-add.
+        let (c0,c1)=if cut_sqident(){(Carry0::Zero,Carry1::CopiesCarry0)}else{(Carry0::Full,Carry1::Full)};
+        super::modular::addsub_wide_known_top(circ,b2,&cross,false,c0,c1,false);
+        if cut_sqident() { addsub_wide_low(circ, a2, &cross, false, Carry0::Full, Carry1::CopiesCarry0); }
+        else { add_wide(circ, a2, &cross); }
+    } else if cut_sqident() {
         addsub_wide_low(circ, b2, &cross, false, Carry0::Zero, Carry1::CopiesCarry0);
         addsub_wide_low(circ, a2, &cross, false, Carry0::Full, Carry1::CopiesCarry0);
     } else {

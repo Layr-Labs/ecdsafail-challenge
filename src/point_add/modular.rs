@@ -119,7 +119,7 @@ pub fn ripple_add_with_deferred_phase(
     );
 }
 
-fn ripple_add_proved(
+pub(crate) fn ripple_add_proved(
     circ: &mut Builder, addend: &[QubitId], acc: &[QubitId],
     carry_in: Option<QubitId>, carry_out: Option<QubitId>, c0: Carry0, c1: Carry1,
     mut deferred: Option<(usize, BitId)>,
@@ -162,7 +162,9 @@ fn ripple_add_proved(
     let zero_prev = |i: usize| previous(i).expect("a zero-addend position always has a carry in");
 
     if let Some(output)=known_output {
-        assert!(carry_in.is_none() && carry_out.is_none() && deferred.is_none());
+        // The pre-pass reads carry[j-1] = addend[j]^acc[j]^sum[j] for j >= 1 only,
+        // which does not involve a carry-in, so SQ_CIN_SPREAD's rows may pass one.
+        assert!(carry_out.is_none() && deferred.is_none());
         assert_eq!(k+1,width);assert_eq!(output.len(),width);
         // sum[j] = original_addend[j] XOR original_acc[j] XOR carry[j-1].
         // The caller supplies a proved affine expression for the resulting
@@ -182,6 +184,14 @@ fn ripple_add_proved(
             // folded operand state so the terminal step and exact measured
             // unwind below remain unchanged.
             if let Some(prev)=previous(i) {circ.cx(prev,addend[i]);circ.cx(prev,acc[i]);}
+        } else if i == 0 && c0 == Carry0::IsAddend0 && carry_in.is_some() {
+            // SQ_CIN_SPREAD row 0: the caller proves acc[0] == NOT carry_in, so
+            // MAJ(addend0, acc0, carry_in) == addend0. Copy it, then fold the
+            // carry-in into both operands exactly as carry_step leaves them.
+            let cin = carry_in.unwrap();
+            circ.cx(addend[0], carries[0]);
+            circ.cx(cin, addend[0]);
+            circ.cx(cin, acc[0]);
         } else if i == 0 && c0 != Carry0::Full {
             assert!(carry_in.is_none() && k >= 2 && width >= 4);
             if c0 == Carry0::IsAddend0 { circ.cx(addend[0], carries[0]); }

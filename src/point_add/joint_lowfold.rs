@@ -57,6 +57,10 @@ pub(super) fn try_replay(circ:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId
     if p.exact {eprintln!("EXACT_RETAINED_FOLD mul {} {}",round,fw);}
     let mut incoming=None;
     let mut previous=None;
+    // EXP PP_PREBIAS_DOUBLE: bit 0 leaves the main add. z0 = s^a0 by CX, and the
+    // missing carry s&a0 joins the fold's own bit-1 carry (the two are exclusive).
+    let pre=multiply && env_flag("PP_PREBIAS_DOUBLE");
+    if pre {circ.cx(a[0],b[0]);}
     for &(lo,hi)in &p.bounds {
         let next=circ.alloc_qubit();
         if hi==N {
@@ -68,7 +72,7 @@ pub(super) fn try_replay(circ:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId
                 |c,o,at,st,carry|{
                     GUARD.with(|g|{assert!(g.replace(if p.exact {None}else{Some(p.bits)}).is_none());});
                     if let Some(d)=doubled {
-                        if env_flag("PP_JOINT_MUL_FOLD"){fold_double_joint(c,&b[..fw],sign,a[0],d,o);}else{fold_double_reused(c,&b[..fw],sign,d,o);}
+                        if env_flag("PP_JOINT_MUL_FOLD"){fold_double_joint(c,&b[..fw],sign,a[0],d,o,pre);}else{fold_double_reused(c,&b[..fw],sign,d,o);}
                         c.cx(b[0],d);c.cx(sign,d);c.cx(a[0],d);c.cx(o,d);c.free(d);
                     }else{fold_halve_reused(c,&b[..fw],sign,o);}
                     GUARD.with(|g|g.set(None));
@@ -79,11 +83,13 @@ pub(super) fn try_replay(circ:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId
                 // Exact: carry(a+b+incoming) = [sum<a]+[sum=a]*incoming.
                 erase_with_compare(circ,mid,&b[lo..split],&a[lo..split],incoming);circ.free(mid);
             }
-        }else{ripple_add(circ,&a[lo..hi],&b[lo..hi],incoming,Some(next));}
+        }else{let at=if pre&&lo==0{1}else{lo};ripple_add(circ,&a[at..hi],&b[at..hi],incoming,Some(next));}
         if let Some((q,plo,phi))=previous {
             let(k,seeded)=boundary_repair_spec(round,multiply,plo,phi);
             circ.record_replay_site('B',round,phi,k);
-            erase_with_compare(circ,q,&b[phi-k..phi],&a[phi-k..phi],seeded.then(||a[phi-k-1]));circ.free(q);
+            // A full first-chunk compare must skip bit 0, which the add no longer covers.
+            let from=if pre&&plo==0&&phi==k{1}else{phi-k};
+            erase_with_compare(circ,q,&b[from..phi],&a[from..phi],seeded.then(||a[phi-k-1]));circ.free(q);
         }
         incoming=Some(next);previous=Some((next,lo,hi));
     }

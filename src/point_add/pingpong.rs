@@ -807,6 +807,15 @@ fn fold_shape() -> &'static [(usize, isize)] {
 // today and would make regenerating the width schedule move the level too.
 pinned_env!(fold_widen, "PP_FOLD_WIDEN");
 
+/// EXP: extra window bits for the retained (32-bit cut) fold routes in late
+/// rounds, `PP_RETAIN_LATE_WIDEN` bits where the policy width is below
+/// `PP_RETAIN_LATE_BELOW` (default 32). Unset means no change.
+fn retained_window(fold_window: usize, round: usize) -> usize {
+    let widen = super::optional_env::<usize>("PP_RETAIN_LATE_WIDEN").unwrap_or(0);
+    let below = super::optional_env::<usize>("PP_RETAIN_LATE_BELOW").unwrap_or(32);
+    if policy_width(round) < below { fold_window + widen } else { fold_window }
+}
+
 /// Window offset for `round`, relative to the direction's pinned base.
 fn fold_offset(round: usize) -> isize {
     band_at(fold_shape(), policy_width(round)) + isize::from(round < fold_widen())
@@ -2828,7 +2837,7 @@ fn replay_add_halve(
     fold_window: usize,
     round: usize,
 ) {
-    if retained_prebias::try_replay(circ,sign,source,target,fold_window,round) {return;}
+    if retained_prebias::try_replay(circ,sign,source,target,retained_window(fold_window,round),round) {return;}
     if env_flag("PP_JOINT_PREBIAS_DIV") && joint_prebias::eligible(circ,round) {
         joint_prebias::joint_prebias_div(circ,sign,source,target,fold_window,round);return;
     }
@@ -2929,15 +2938,19 @@ fn replay_double_add(
     let doubled_out = start_doubling(circ, target);
 
     circ.cx_all(sign, target);
-    if joint_lowfold::try_replay(circ,sign,source,target,fold_window,round,Some(doubled_out)) {
+    if joint_lowfold::try_replay(circ,sign,source,target,retained_window(fold_window,round),round,Some(doubled_out)) {
         circ.cx_all(sign,target);return;
     }
-    let add_out = chunked_add(circ, source, target, round, true);
+    // EXP PP_PREBIAS_DOUBLE_FALLBACK: as the retained route, bit 0 leaves the add.
+    let pre=env_flag("PP_PREBIAS_DOUBLE_FALLBACK") && env_flag("PP_REUSE_MUL_SELECTORS") && env_flag("PP_JOINT_MUL_FOLD");
+    let add_out = if pre {
+        circ.cx(source[0],target[0]);chunked_add(circ, &source[1..], &target[1..], round, true)
+    } else {chunked_add(circ, source, target, round, true)};
 
     if env_flag("PP_REUSE_MUL_SELECTORS") {
         if env_flag("PP_JOINT_MUL_FOLD") {
             assert!(!split_fold(),"joint receiver is exact; do not silently compose a split fold");
-            fold_double_joint(circ,&target[..fold_window],sign,source[0],doubled_out,add_out);
+            fold_double_joint(circ,&target[..fold_window],sign,source[0],doubled_out,add_out,pre);
         } else {
             fold_double_reused(circ, &target[..fold_window], sign, doubled_out, add_out);
         }
@@ -3072,12 +3085,17 @@ fn fold_double_reused(circ: &mut Builder, target: &[QubitId], sign: QubitId,
 /// Thus doubled_out can be released while the upper fold runs, provided
 /// add_out stays in its ORIGINAL frame. Derive plus_f from the new z0
 /// instead of retaining it in add_out. All mapping changes are Clifford.
-fn fold_double_joint(c:&mut Builder,z:&[QubitId],s:QubitId,v0:QubitId,d:QubitId,o:QubitId) {
+fn fold_double_joint(c:&mut Builder,z:&[QubitId],s:QubitId,v0:QubitId,d:QubitId,o:QubitId,pre:bool) {
     let base=c.active_qubits();let w=z.len();assert!(w>=2);
     assert!(!z.contains(&v0) && ![s,d,o].contains(&v0));
     c.cx(s,o);let a=and_clean(c,d,o);c.cx(s,o);
     let m=and_clean(c,a,s);c.cx(m,a); // a=plus2, m=minus
-    c.cx(d,o);let first=and_clean(c,z[0],o);
+    c.cx(d,o);
+    // pre: the main add skipped bit 0, so its carry s&v0 is still owed. It is
+    // exclusive with z0&(d^o) (z0=s^v0), and their sum is MAJ(s,v0,d^o).
+    let first=if pre {
+        c.cx(o,s);c.cx(o,v0);let h=and_clean(c,s,v0);c.cx(o,h);c.cx(o,s);c.cx(o,v0);h
+    }else{and_clean(c,z[0],o)};
     c.cx(o,z[0]);c.cx(d,o); // finish bit0 and restore original add_out
 
     for q in [z[0],s,v0,o] {c.cx(q,d);}
@@ -3120,7 +3138,11 @@ fn fold_double_joint(c:&mut Builder,z:&[QubitId],s:QubitId,v0:QubitId,d:QubitId,
 
     }
     c.reacquire(d);for q in [z[0],s,v0,o] {c.cx(q,d);}
+    if pre {
+        c.cx(d,o);c.cx(o,s);c.cx(o,v0);c.cx(o,first);and_uncompute(c,first,s,v0);c.cx(o,s);c.cx(o,v0);c.cx(d,o);
+    }else{
     c.cx(d,o);c.cx(o,z[0]);and_uncompute(c,first,z[0],o);c.cx(o,z[0]);c.cx(d,o);
+    }
     c.cx(m,a);and_uncompute(c,m,a,s);
     c.cx(s,o);and_uncompute(c,a,d,o);c.cx(s,o);
     assert_eq!(c.active_qubits(),base,"joint-fold ownership");
