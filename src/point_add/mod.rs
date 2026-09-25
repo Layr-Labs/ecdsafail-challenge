@@ -50,7 +50,7 @@ fn env_raw(name: &str) -> Option<String> {
         "PP_FLAG_SHAPE" => "38:0,25:-1,0:-3",
         "PP_FLAG_WIDEN_DIV" => "38",
         "PP_FOLD_PROFILE" => "38:0,32:-1,19:-4,0:-4",
-        "PP_FOLD_WIDEN" => "0",
+        "PP_FOLD_WIDEN" => "76",
         "PP_HEAD_DIV" => "192",
         "PP_HEAD_MUL" => "403",
         "PP_JOINT_GUARD" => "0",
@@ -75,7 +75,7 @@ fn env_raw(name: &str) -> Option<String> {
         "PP_RETAIN_EXACT_EXTRA_DIV" => "4",
         "PP_RETAIN_EXACT_EXTRA_MUL" => "4",
         "PP_RETAIN_EXACT_MUL" => "0",
-        "PP_RETAIN_LATE_WIDEN" => "3",
+        "PP_RETAIN_LATE_WIDEN" => "0",
         "PP_RETAIN_REBALANCE" => "1",
         "PP_REUSE_DIV_PARITY" => "1",
         "PP_REUSE_MUL_SELECTORS" => "1",
@@ -121,7 +121,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_CROSS" => "1",
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
-        "TAIL_NONCE" => "9422592313",
+        "TAIL_NONCE" => "9444541598",
         _ => return None,
     };
     Some(value.to_owned())
@@ -225,7 +225,7 @@ fn build_point_add() -> Vec<Op> {
     circ.take_ops()
 }
 
-/// Emit the fixed I10 circuit and accepted public-validation nonce 9422592313.
+/// Emit the fixed I10 circuit and accepted public-validation nonce 9444541598.
 pub fn build() -> Vec<Op> {
     let mut ops = build_point_add();
     // Exact op-stream post-passes, ported from the 2026-09-04 warpspeed
