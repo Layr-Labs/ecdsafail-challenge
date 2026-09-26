@@ -43,6 +43,7 @@ fn env_raw(name: &str) -> Option<String> {
         "PP_CF_END_CHUNK" => "8",
         "PP_CHUNK_SHAPE" => "38:0,25:-2,0:-4",
         "PP_CUT_SQIDENT" => "1",
+        "PP_WALK_EXTRA_ROUNDS" => "683:4:1",
         "PP_CUT_WALKLOAN" => "1",
         "PP_DEPTH_PROFILE" => "0:0",
         "PP_DIRECT_ENDPOINT" => "1",
@@ -105,6 +106,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_FIT_CROSS" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
+        "SQ_ASM_TAIL" => "21",
         "SQ_LEND_ASSEMBLY_ZEROS" => "1",
         "SQ_LEND_RETAINED_ANDS" => "2",
         "SQ_LEND_RETAINED_CROSS2" => "2",
@@ -122,7 +124,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_CROSS" => "1",
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
-        "TAIL_NONCE" => "14939365091",
+        "TAIL_NONCE" => "16778008906",
         _ => return None,
     };
     Some(value.to_owned())

@@ -762,7 +762,24 @@ fn value_width(round: usize) -> usize {
     let threshold=super::optional_env::<usize>("PP_WALK_GUARD_MAX_WIDTH").unwrap_or(VALUE_WIDTH-1).min(VALUE_WIDTH-1);
     // Saturating at threshold+1 prevents an upward jump when a decreasing
     // schedule first enters the guarded band. Never exceed the initial rails.
-    if width<=threshold{(width+extra).min(threshold+1)}else{width}
+    let base=if width<=threshold{(width+extra).min(threshold+1)}else{width};
+    (base as isize+walk_extra(round)) as usize
+}
+
+/// Per-round physical walk-width edits, `start:len:delta,...`
+/// (PP_WALK_EXTRA_ROUNDS). Physical rails only, like the guard bits; the
+/// policy width that shapes folds and compares is unchanged.
+fn walk_extra(round: usize) -> isize {
+    static SLOT: std::sync::OnceLock<Vec<(usize,usize,isize)>> = std::sync::OnceLock::new();
+    let edits=SLOT.get_or_init(|| {
+        let spec=super::optional_env::<String>("PP_WALK_EXTRA_ROUNDS").unwrap_or_default();
+        spec.split(',').map(str::trim).filter(|s| !s.is_empty()).map(|s| {
+            let f: Vec<&str>=s.split(':').collect();
+            assert!(f.len()==3,"PP_WALK_EXTRA_ROUNDS: {s:?} is not start:len:delta");
+            (f[0].parse().unwrap(),f[1].parse().unwrap(),f[2].parse().unwrap())
+        }).collect()
+    });
+    edits.iter().filter(|e| round>=e.0 && round<e.0+e.1).map(|e| e.2).sum()
 }
 
 // A precision experiment must not silently change the replay's fold/compare

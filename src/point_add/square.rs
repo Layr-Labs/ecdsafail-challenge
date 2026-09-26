@@ -567,11 +567,16 @@ fn tri_square_k2r_flat(circ: &mut Builder, x: &[QubitId], product: &[QubitId]) -
 fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
     recover:Option<(super::width_composition::Plan,Vec<(usize,BitId)>)>,held:&mut Vec<QubitId>)
     ->Option<(super::width_composition::Plan,Vec<(usize,BitId)>)> {
+    // SQ_ASM_TAIL=E: ripple the carry only E bits past the cross word. The
+    // bits above hold b^2 and are random, so a carry reaches E bits in with
+    // probability about 2^-E. An approximate cut, priced as a sell.
+    let full=acc;
+    let acc=match super::optional_env::<usize>("SQ_ASM_TAIL"){Some(e)=>&full[..full.len().min(cross.len()+e)],None=>full};
     let mut room=super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
     if recover.is_some() || (super::env_flag("SQ_FIT_CROSS") && acc.len().saturating_sub(2)>room) {
         // SQ_OWN_TOP_ZEROS: this node's own top cross bits are zero for every
         // input (2ab < 2^(lo+hi+1)); add them as zero addend bits and lend them.
-        let tops=if super::env_flag("SQ_OWN_TOP_ZEROS"){own_top_zero_bits(cross,acc)}else{Vec::new()};
+        let tops=if super::env_flag("SQ_OWN_TOP_ZEROS"){own_top_zero_bits(cross,full)}else{Vec::new()};
         for &q in &tops{circ.release_clean(q);}
         room+=tops.len();
         if inverse {circ.x_all(acc);}
