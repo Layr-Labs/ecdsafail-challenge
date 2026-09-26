@@ -18,7 +18,12 @@
 use super::modular::{addsub_full_low, addsub_wide_low, Carry0, Carry1, add_wide, addsub_full, addsub_wide, mod_addsub, sub_wide};
 use super::{fold_guard, pinned_env, Builder, N};
 use crate::circuit::{QubitId,BitId};
+use alloy_primitives::U256;
 fn cut_sqident() -> bool { super::env_flag("PP_CUT_SQIDENT") }
+/// SQ_ROW0_COPY: every SQ_CIN_SPREAD leaf stores `x^2 - 2` (row 0 becomes a
+/// Clifford copy), each node's product and cross carry known constant offsets,
+/// and the square's total offset is pre-added classically in `coord_add3x`.
+fn row0_copy() -> bool { super::env_flag("SQ_ROW0_COPY") && super::env_flag("SQ_CIN_SPREAD") }
 /// The low-diagonal preload ([`diag_preload`]). Off by default: with this clear
 /// the file emits exactly the stream it did before the lever existed.
 fn diag_preload_on() -> bool { super::env_flag("SQ_DIAG_PRELOAD") }
@@ -145,6 +150,14 @@ fn tri_square_cin(circ:&mut Builder, x:&[QubitId], product:&[QubitId], inverse:b
         let i=if inverse { m-2-r } else { r };
         let row=&product[2*i+1..i+m+1];
         let borrowed=super::env_flag("SQ_BORROW_ROW_CARRIES").then(|| &product[m+i+1..2*m-1]);
+        if i==0 && row0_copy() {
+            // SQ_ROW0_COPY: row 0 on the zero window would leave
+            // F = x0 ? v+1 : 2^k - v. Store F - 1 = x0 ? v : ~v instead (top bit
+            // zero), which is Clifford and self-inverse. The leaf then holds
+            // x^2 - 2; see [`sub_square_offset`] for where the 2 goes.
+            for j in 0..m-1 { circ.cx(x[j+1],row[j]); circ.x(row[j]); circ.cx(x[0],row[j]); }
+            continue;
+        }
         if inverse && i==0 && super::env_flag("SQ_ROW0_INVERSE_CARRIES") {
             // Before row 0 the product is all zero, so every framed output bit
             // is known: x0 on the k low bits, 1 on the top.
@@ -615,6 +628,7 @@ fn assembly_repay_held(circ:&mut Builder,x:&[QubitId],product:&[QubitId],qs:Vec<
     if held.is_empty(){assembly_repay(circ,x,product,qs);return;}
     if qs.is_empty(){return;}
     rehome_held(circ,held,&qs);circ.cx(x[0],product[0]);
+    if row0_copy(){circ.x(product[1]);}
 }
 
 /// The full sum is exactly a+b; removing a restores b and clears its extra
@@ -637,11 +651,15 @@ fn assembly_loans(circ:&mut Builder,x:&[QubitId],product:&[QubitId],
     if let Some(r)=sum{retained_zero_bits(r,hi+1,&mut qs);}
     if let Some(r)=high{retained_zero_bits(r,hi,&mut qs);}
     circ.cx(x[0],product[0]);
+    // SQ_ROW0_COPY: the low half holds a^2 + Na with Na = 2 (mod 4), so
+    // product[1] is one rather than zero here.
+    if row0_copy(){circ.x(product[1]);}
     for &q in &qs{circ.release_clean(q);}qs
 }
 fn assembly_repay(circ:&mut Builder,x:&[QubitId],product:&[QubitId],qs:Vec<QubitId>){
     if qs.is_empty(){return;}
     for q in qs{circ.reacquire(q);}circ.cx(x[0],product[0]);
+    if row0_copy(){circ.x(product[1]);}
 }
 
 fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], flat: bool) -> K2Retained {
@@ -683,12 +701,17 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
     } else {
         sub_wide(circ, a2, &cross);
     }
+    // SQ_ROW0_COPY: b2 holds b^2 + Nb with Nb = 2 (mod 4), so its bit 1 is
+    // always set. Clearing it subtracts b2 - 2, which keeps the bit-1 carry
+    // identity below and adds 2 to this node's cross offset.
+    if row0_copy() {circ.x(b2[1]);}
     if super::env_flag("SQ_ZERO_TOP_CROSS") {
         // 2ab < 2^(lo+hi+1), while cross has 2*(hi+1) bits: its top is zero.
         let (c0,c1)=if cut_sqident(){(Carry0::Zero,Carry1::CopiesCarry0)}else{(Carry0::Full,Carry1::Full)};
         super::modular::addsub_wide_known_top(circ,b2,&cross,true,c0,c1,false);
     } else if cut_sqident() {addsub_wide_low(circ,b2,&cross,true,Carry0::Zero,Carry1::CopiesCarry0);}
     else {sub_wide(circ,b2,&cross);}
+    if row0_copy() {circ.x(b2[1]);}
     // product += 2ab << lo, exact full ripple to the top (x^2 < 2^(2m), so the
     // top never overflows).
     let loans=assembly_loans(circ,x,product,low.as_deref(),sum.as_deref(),high.as_deref());
@@ -724,14 +747,20 @@ fn tri_square_k2r_inv(
     if lo < m - lo && super::env_flag("SQ_ODD_NODE_TOPS") {
         // 2ab + b^2 = b(2a+b) < 2^(2hi+1) when lo = hi-1: zero top after the re-add.
         let (c0,c1)=if cut_sqident(){(Carry0::Zero,Carry1::CopiesCarry0)}else{(Carry0::Full,Carry1::Full)};
+        if row0_copy() {circ.x(b2[1]);}
         super::modular::addsub_wide_known_top(circ,b2,&cross,false,c0,c1,false);
+        if row0_copy() {circ.x(b2[1]);}
         if cut_sqident() { addsub_wide_low(circ, a2, &cross, false, Carry0::Full, Carry1::CopiesCarry0); }
         else { add_wide(circ, a2, &cross); }
     } else if cut_sqident() {
+        if row0_copy() {circ.x(b2[1]);}
         addsub_wide_low(circ, b2, &cross, false, Carry0::Zero, Carry1::CopiesCarry0);
+        if row0_copy() {circ.x(b2[1]);}
         addsub_wide_low(circ, a2, &cross, false, Carry0::Full, Carry1::CopiesCarry0);
     } else {
+        if row0_copy() {circ.x(b2[1]);}
         add_wide(circ, b2, &cross);
+        if row0_copy() {circ.x(b2[1]);}
         add_wide(circ, a2, &cross);
     }
     square_half_inv(circ, &t, &cross, sum);
@@ -780,6 +809,9 @@ fn retained_cross2_bits(r:&K2Retained,x:&[QubitId],out:&mut Vec<Cross2Loan>) {
 }
 fn cross2_erase(circ:&mut Builder,l:Cross2Loan) {
     // cross[2] = a0*t1 ^ a1*t0 ^ a0*t0 ^ a0, for t=a+b.
+    // SQ_ROW0_COPY: bit 2 is flipped (see cross2_restore); unflip it first so
+    // the phase repair below stays exact rather than off by (-1)^m.
+    if row0_copy(){circ.x(l.q);}
     let m=circ.alloc_bit();circ.hmr(l.q,m);
     circ.cz_if(l.a0,l.t1,m);circ.cz_if(l.a1,l.t0,m);
     circ.cz_if(l.a0,l.t0,m);circ.z_if(l.a0,m);circ.free_bit(m);
@@ -788,6 +820,9 @@ fn cross2_restore(circ:&mut Builder,l:Cross2Loan) {
     // Two products after an exactly restored Clifford source-frame change.
     circ.cx(l.t0,l.t1);circ.x(l.t1);circ.ccx(l.a0,l.t1,l.q);
     circ.x(l.t1);circ.cx(l.t0,l.t1);circ.ccx(l.a1,l.t0,l.q);
+    // SQ_ROW0_COPY: every node's cross offset is 4 (mod 8), which flips bit 2
+    // and leaves bits 0 and 1 alone. The erase only changes by a global phase.
+    if row0_copy(){circ.x(l.q);}
 }
 
 /// Materialise `x^2` in a fresh register, run `folds` against it, then uncompute
@@ -841,6 +876,52 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
     circ.free_vec(&product);
     OUTER_SQUARE_POLICY.with(|p| p.set(old_policy));
     if price_branches {circ.set_phase("square_between");}
+}
+
+/// SQ_ROW0_COPY offsets, mod p, mirroring the split decisions of
+/// [`tri_square_k2r_inner`]. A leaf stores `x^2 - 2`. A node stores
+/// `x^2 + Na + c 2^lo + Nb 2^(2 lo)`, where its cross holds `2ab + c` with
+/// `c = Nt - Na - Nb + 2` (the 2 is the cleared bit 1 of b2).
+fn k2r_offset(m: usize, flat: bool) -> U256 {
+    let p = super::SECP256K1_P;
+    let leaf = p - U256::from(2);
+    let lo = m / 2;
+    let hi = m - lo;
+    let child = |len: usize, min: usize, flat_child: bool| {
+        if !flat && len >= min { k2r_offset(len, flat_child) } else { leaf }
+    };
+    let nb = child(hi, policy_min(2, sq_split_b_min()), true);
+    let na = child(lo, policy_min(0, sq_split_low_min()), false);
+    let nt = child(hi + 1, policy_min(1, sq_split_sum_min()), false);
+    let neg = |v: U256| if v.is_zero() { v } else { p - v };
+    let c = nt.add_mod(neg(na), p).add_mod(neg(nb), p).add_mod(U256::from(2), p);
+    let pow = |k: usize| (U256::from(1) << k).reduce_mod(p);
+    na.add_mod(c.mul_mod(pow(lo), p), p).add_mod(nb.mul_mod(pow(2 * lo), p), p)
+}
+
+fn square_offset(len: usize, policy_name: &str) -> U256 {
+    let old = OUTER_SQUARE_POLICY.with(|p| p.replace(super::optional_env::<usize>(policy_name)));
+    let n = k2r_offset(len, false);
+    OUTER_SQUARE_POLICY.with(|p| p.set(old));
+    n
+}
+
+/// What [`sub_square`] leaves `out` short by under SQ_ROW0_COPY, mod p: each
+/// branch's product offset times that branch's fold weight. The caller adds
+/// it back classically. Zero with the knob off.
+pub(super) fn sub_square_offset() -> U256 {
+    if !row0_copy() { return U256::ZERO; }
+    let p = super::SECP256K1_P;
+    let h = N / 2;
+    let pow = |k: usize| (U256::from(1) << k).reduce_mod(p);
+    let two_n = super::modular::f();
+    let na = square_offset(h, "SQ_A_POLICY");
+    let nb = square_offset(h, "SQ_B_POLICY");
+    let nc = square_offset(h + 1, "SQ_C_POLICY");
+    // out -= A (1 - 2^h) + B (2^N - 2^h) + C 2^h.
+    let wa = U256::from(1).add_mod(p - pow(h), p);
+    let wb = two_n.add_mod(p - pow(h), p);
+    na.mul_mod(wa, p).add_mod(nb.mul_mod(wb, p), p).add_mod(nc.mul_mod(pow(h), p), p)
 }
 
 pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {

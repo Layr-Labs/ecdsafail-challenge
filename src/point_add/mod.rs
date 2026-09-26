@@ -37,7 +37,7 @@ const SECP256K1_P: U256 = U256::from_limbs([
 fn env_raw(name: &str) -> Option<String> {
     let value = match name {
         "CMP_SEED_ALL" => "1",
-        "ERASE_COMPARE" => "22",
+        "ERASE_COMPARE" => "23",
         "FOLD_GUARD" => "24",
         "PP_CF_DEFER_WALK_PHASE" => "1",
         "PP_CF_END_CHUNK" => "8",
@@ -112,6 +112,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ODD_NODE_TOPS" => "1",
         "SQ_OWN_TOP_ZEROS" => "1",
         "SQ_ROW0_CARRY" => "1",
+        "SQ_ROW0_COPY" => "1",
         "SQ_ROW0_INVERSE_CARRIES" => "1",
         "SQ_ROW_ALL_MEASURE_TOP" => "1",
         "SQ_SPARSE_CORRECTION" => "0",
@@ -121,7 +122,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_CROSS" => "1",
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
-        "TAIL_NONCE" => "9444541598",
+        "TAIL_NONCE" => "14939365091",
         _ => return None,
     };
     Some(value.to_owned())

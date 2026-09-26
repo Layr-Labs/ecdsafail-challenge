@@ -1,6 +1,7 @@
 use super::modular::{mod_add, mod_rsub_vented_loaded, mod_sub_vented};
 use super::{Builder, N};
 use crate::circuit::{BitId, QubitId};
+use alloy_primitives::U256;
 
 /// secp256k1 uses `p = 2^256 - C`, so `2^256 == C (mod p)`. The same constant
 /// [`super::modular::f`] derives from the modulus, in the width this file's
@@ -68,7 +69,16 @@ pub fn coord_rsub(circ: &mut Builder, x: &[QubitId], coord: &[BitId]) {
 pub fn coord_add3x(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
     assert_eq!(dst.len(), N);
     assert_eq!(coord.len(), N);
-    let three_coord = classical_times3_mod_q(circ, coord);
+    let mut three_coord = classical_times3_mod_q(circ, coord);
+    // SQ_ROW0_COPY: the square that follows leaves x2 short by a constant;
+    // add it here with the classical coordinate, where it costs no Toffoli.
+    let offset = super::square::sub_square_offset();
+    if !offset.is_zero() {
+        let shifted = classical_add_const_mod_q(circ, &three_coord, offset);
+        zero(circ, &three_coord);
+        circ.free_bit_vec(&three_coord);
+        three_coord = shifted;
+    }
     against_coord(circ, &three_coord, true, |circ, temp| {
         mod_add(circ, temp, dst);
     });
@@ -116,6 +126,38 @@ fn classical_times3_mod_q(circ: &mut Builder, coord: &[BitId]) -> Vec<BitId> {
     }
 
     for reg in [&tmp, &av, &r, &s] {
+        zero(circ, reg);
+        circ.free_bit_vec(reg);
+    }
+    result
+}
+
+/// `(v + k) mod p` for `v < p` and a constant `k < p`, in freshly allocated
+/// classical bits. Same conditional subtraction as [`classical_times3_mod_q`].
+fn classical_add_const_mod_q(circ: &mut Builder, v: &[BitId], k: U256) -> Vec<BitId> {
+    assert_eq!(v.len(), N);
+    let r = circ.alloc_bits(N + 1);
+    copy_into(circ, &r, v);
+    circ.bit_store0(r[N]);
+    let addend = circ.alloc_bits(N);
+    for (i, &b) in addend.iter().enumerate() {
+        if k.bit(i) { circ.bit_store1(b); } else { circ.bit_store0(b); }
+    }
+    classical_add_into(circ, &r, &addend);
+    zero(circ, &addend);
+    circ.free_bit_vec(&addend);
+
+    // r < 2p, so r + C < 2^257 and its top bit is exactly "r >= p".
+    let tmp = circ.alloc_bits(N + 1);
+    copy_into(circ, &tmp, &r);
+    classical_add_const(circ, &tmp, C);
+    let result = circ.alloc_bits(N);
+    for i in 0..N {
+        circ.bit_xor_into(tmp[i], r[i]);
+        circ.bit_copy(result[i], r[i]);
+        circ.bit_and_xor_into(result[i], tmp[N], tmp[i]);
+    }
+    for reg in [&tmp, &r] {
         zero(circ, reg);
         circ.free_bit_vec(reg);
     }
