@@ -114,7 +114,11 @@ fn row_addsub_cin(circ:&mut Builder, xi:QubitId, operand:&[QubitId], acc:&[Qubit
     // Inverse rows restore a state that never reached bit i+m (see
     // SQ_ROW_ALL_MEASURE_TOP); in the subtraction frame that top reads 1.
     let top=(known_output.is_none() && inverse && super::env_flag("SQ_ROW_ALL_MEASURE_TOP")).then_some(true);
+    if let Some(out)=known_output.filter(|_|super::env_flag("SQ_ROW1_STREAM")) {
+        super::stream_wide::add(circ,operand,acc,Some(xi),out);
+    } else {
     super::modular::ripple_add_proved(circ,operand,acc,Some(xi),None,c0,Carry1::Full,None,known_output,top,borrowed);
+    }
     if inverse { circ.x_all(acc); }
     circ.x_all(&acc[..k]); circ.cx_all(xi,&acc[..k]);
     if !inverse { circ.x(acc[k]); circ.cx(xi,acc[k]); }
@@ -156,6 +160,12 @@ fn tri_square_cin(circ:&mut Builder, x:&[QubitId], product:&[QubitId], inverse:b
             // zero), which is Clifford and self-inverse. The leaf then holds
             // x^2 - 2; see [`sub_square_offset`] for where the 2 goes.
             for j in 0..m-1 { circ.cx(x[j+1],row[j]); circ.x(row[j]); circ.cx(x[0],row[j]); }
+            continue;
+        }
+        if inverse && i==1 && row0_copy() && super::env_flag("SQ_ROW1_INVERSE_CARRIES") {
+            let out=row1_known_output(x);
+            if super::env_flag("I48_TRACE"){eprintln!("I48_ROW1 {} {}",m,circ.active_qubits());}
+            row_addsub_cin(circ,x[1],&x[2..],row,true,false,Some(&out),borrowed);
             continue;
         }
         if inverse && i==0 && super::env_flag("SQ_ROW0_INVERSE_CARRIES") {
@@ -967,3 +977,19 @@ pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
     circ.free(sum_carry);
 }
 
+
+// Before row1, only row0 ran. Physical product[j]=x[j]^1^x0 for1<=j<m,
+// and all higher bits are zero. In the inverse adder frame, low outputs
+// additionally XOR x1 and the top output is1.
+fn row1_known_output(x:&[QubitId])->Vec<(bool,Vec<QubitId>)> {
+    let m=x.len();assert!(m>=3);let k=m-2;
+    let mut out:Vec<_>=(0..k).map(|j|if j+3<m {(true,vec![x[j+3],x[0],x[1]])}else{(false,vec![x[1]])}).collect();
+    out.push((true,Vec::new()));out
+}
+pub(super) fn i48_row_fixture(c:&mut Builder,x:&[QubitId],product:&[QubitId]) {
+    let m=x.len();let row=&product[3..m+2];let out=row1_known_output(x);
+    row_addsub_cin(c,x[1],&x[2..],row,true,false,Some(&out),None);
+}
+pub(super) fn i48_leaf_fixture(c:&mut Builder,x:&[QubitId],product:&[QubitId],inverse:bool) {
+    tri_square_cin(c,x,product,inverse);
+}

@@ -390,8 +390,14 @@ fn divide_traversal(
     }
     let mut next = plan.r1;
     while next<=plan.r2 {
-        let end=(next..=next.saturating_add(batch_span).min(plan.r2))
+        let mut end=(next..=next.saturating_add(batch_span).min(plan.r2))
             .min_by_key(|&r|(r+1+2*value_width((r+1).min(plan.rounds-1)),r)).unwrap();
+        if let Some(profile)=env_raw("I12_DIV_PROFILE") {
+            end=next;
+            for item in profile.split(',') {let(a,b)=item.split_once(':').unwrap();let a=a.parse::<usize>().unwrap();let b=b.parse::<usize>().unwrap();if a<=next&&next<=b {end=b.min(plan.r2);break;}}
+        }
+        if env_flag("I12_BATCH_TRACE") {eprintln!("I12_DIV_BATCH {} {}",next,end);}
+
         for r in next..=end {
             let (sign, depth, phase) = walk_round_phase(circ, u, v, r, defer_walk_phase());
             tape.push(sign);
@@ -524,6 +530,11 @@ fn multiply_traversal(
         for r in (lo..hi).rev() {
             if footprint(r)<footprint(hi) {lo=r+1;break;}
         }
+        if let Some(profile)=env_raw("I12_MUL_PROFILE") {
+            lo=hi;
+            for item in profile.split(',') {let(a,b)=item.split_once(':').unwrap();let a=a.parse::<usize>().unwrap();let b=b.parse::<usize>().unwrap();if b<=hi&&hi<=a {lo=b.max(plan.r1);break;}}
+        }
+        if env_flag("I12_BATCH_TRACE") {eprintln!("I12_MUL_BATCH {} {}",hi,lo);}
         for r in(lo..=hi).rev() {
             if c2fix[r].is_some() {
                 let s=c2_term_sign(circ,u,v);
@@ -755,7 +766,7 @@ fn parse_width_schedule(spec: &str) -> Vec<usize> {
     out
 }
 
-fn value_width(round: usize) -> usize {
+fn parent_value_width(round: usize) -> usize {
     let width=width_schedule()[round];
     let extra=super::optional_env::<usize>("PP_WALK_GUARD_BITS").unwrap_or(0);
     assert!(extra<=4,"bounded walk guard experiment");
@@ -766,20 +777,20 @@ fn value_width(round: usize) -> usize {
     (base as isize+walk_extra(round)) as usize
 }
 
-/// Per-round physical walk-width edits, `start:len:delta,...`
-/// (PP_WALK_EXTRA_ROUNDS). Physical rails only, like the guard bits; the
-/// policy width that shapes folds and compares is unchanged.
-fn walk_extra(round: usize) -> isize {
-    static SLOT: std::sync::OnceLock<Vec<(usize,usize,isize)>> = std::sync::OnceLock::new();
-    let edits=SLOT.get_or_init(|| {
-        let spec=super::optional_env::<String>("PP_WALK_EXTRA_ROUNDS").unwrap_or_default();
-        spec.split(',').map(str::trim).filter(|s| !s.is_empty()).map(|s| {
-            let f: Vec<&str>=s.split(':').collect();
-            assert!(f.len()==3,"PP_WALK_EXTRA_ROUNDS: {s:?} is not start:len:delta");
-            (f[0].parse().unwrap(),f[1].parse().unwrap(),f[2].parse().unwrap())
-        }).collect()
-    });
-    edits.iter().filter(|e| round>=e.0 && round<e.0+e.1).map(|e| e.2).sum()
+// I45's independently checked compatibility rule: the corrected-round
+// set and one-bit narrower-round set are separate, explicit public schedules.
+fn i45_narrow(round:usize)->bool {
+    static SET:std::sync::OnceLock<std::collections::BTreeSet<usize>>=std::sync::OnceLock::new();
+    SET.get_or_init(||env_raw("I45_NARROW_ROUNDS").unwrap_or_default().split(',').filter(|s|!s.is_empty()).map(|s|s.parse().unwrap()).collect()).contains(&round)
+}
+
+fn value_width(round:usize)->usize {
+    let w=parent_value_width(round);
+    if i45_narrow(round) {
+        assert!(i41_corrected(round));
+        assert!(round>=5 && w==parent_value_width(round-1) && w==parent_value_width(round-2));
+        w-1
+    } else {w}
 }
 
 // A precision experiment must not silently change the replay's fold/compare
@@ -1604,6 +1615,22 @@ fn defer_walk_phase() -> bool {
     env_flag("PP_CF_DEFER_WALK_PHASE")
 }
 
+fn i41_corrected(round:usize)->bool {
+    static SET:std::sync::OnceLock<std::collections::BTreeSet<usize>>=std::sync::OnceLock::new();
+    SET.get_or_init(|| {
+        let mut set=std::collections::BTreeSet::new();
+        if let Some(text)=env_raw("I41_ROUNDS") {for v in text.split(',').filter(|s|!s.is_empty()) {
+            let r:usize=v.parse().unwrap();assert!(r>=3);assert!(set.insert(r));
+        }}set
+    }).contains(&round)
+}
+
+fn i41_bridges(c:&Builder,m:usize)->usize {
+    let room=walk_max_qubits().saturating_sub(c.active_qubits() as usize);
+    let bridges=m.saturating_sub(2+room);
+    assert!(bridges<m-2,"signed average needs one owned carry wire");bridges
+}
+
 fn walk_round_phase(
     circ: &mut Builder,
     u: &mut Vec<QubitId>,
@@ -1660,10 +1687,17 @@ fn walk_round_phase(
     } else {
         WalkRule::Quarter
     };
+    if i41_corrected(round) {
+        assert!(!quarter && guard.is_none());
+        let b=i41_bridges(circ,m);
+        if env_flag("I41_TRACE"){eprintln!("I41_AVG F {} {} {} {}",round,m,b,circ.active_qubits());}
+        super::average::forward(circ,source,target,sign,b);
+        return (sign,Vec::new(),None);
+    }
     // Previous forward target is now the source. Its halving explicitly copied
     // its sign bit; retain that promise only if this round did not shrink it.
     let source_sign_loan=env_flag("PP_SOURCE_SIGN_LOAN") && !quarter && round>=3
-        && m>=6 && width==value_width(round-1);
+        && !i41_corrected(round-1) && m>=6 && width==value_width(round-1);
     let phase = walk_add(circ, sign, source, target, true, rule, defer_boundary, None, source_sign_loan);
     let depth = if quarter {
         // C4-W: the register holds W = S/2, whose valuation is the halving depth
@@ -1771,6 +1805,14 @@ fn walk_back_round_phase(
         }
         None => sign,
     };
+    if i41_corrected(round) {
+        assert!(depth.is_empty() && deferred.is_none());
+        let room=walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
+        let b=m.saturating_sub(3+room);
+        if env_flag("I41_TRACE"){eprintln!("I41_AVG B {} {} {} {}",round,m,b,circ.active_qubits());}
+        super::average::reverse(circ,source,target,sign,b);
+        circ.cx(target[0],sign);circ.cx(source[0],sign);circ.free(sign);return;
+    }
     // C4-W: a round is a quarter round exactly when it carries a record; the
     // guard wire is recomputed off that record (0 <=> the guard fired).
     let quarter = !depth.is_empty();
@@ -1803,7 +1845,28 @@ fn walk_back_round_phase(
     // grow_to has just created the source's top sign copy. This is a fresh
     // structural promise even on a path already affected by truncation.
     let source_sign_loan=env_flag("PP_SOURCE_SIGN_GROW") && source_grew && !quarter && m>=6;
-    let generated = walk_add(circ, sign, source, target, false, rule, false, deferred, source_sign_loan);
+    // The known-output top-copy receiver is fixed enabled in this submission.
+    let known_top=true
+        && !quarter && m>=6 && (round==3 || (round>=4 && !i41_corrected(round-2) && width==value_width(round-2)));
+    // I72: round1's disjoint high increment maps 000->001 or 111->000.
+    // Its top two output bits are zero, even with the original low truncation.
+    // Reverse round3 restores that output; complementing by sign preserves
+    // their equality. This uses the unchanged native-tested top-copy receiver.
+    if round==3 && known_top {assert!(m==N+1 && round1_window(m)<=N-2);}
+    let mut generated=None;
+    if round==2 && !quarter && deferred.is_none() && !super::env_flag("I32_DISABLE") {
+        if !super::env_flag("I33_DISABLE") {
+            assert!(!half_f_minus_one().bit(1)); // source[0] used by sign cleanup stays unchanged
+            super::round2_fused::receive(circ,source,target,sign,round1_window(m),half_f_minus_one()>>1,N-2);
+            super::round2_fused::mark();
+        } else {
+            super::round2_receiver::receive(circ,source,target,sign,round1_window(m),half_f_minus_one()>>1,N-2);
+        }
+    } else {
+        super::modular::with_top_copy(circ,target,known_top,|circ|{
+          generated=walk_add(circ,sign,source,target,false,rule,false,deferred,source_sign_loan);
+        });
+    }
     assert!(generated.is_none());
     circ.x(sign);
     if let Some(w) = guard {
@@ -1877,7 +1940,8 @@ fn walk_add(
 ) -> Option<DeferredWalkPhase> {
     assert!(!(defer_boundary && deferred.is_some()));
     let loan = cut_walkloan();
-    let split=walk_low_chunk(circ, source.len(), loan, source_sign_loan);
+    let result_loan=deferred.is_none() && (!source_sign_loan || env_flag("I76_SOURCE_TOP_LOAN")) && super::modular::result_top_loan_enabled(target);
+    let split=walk_low_chunk(circ, source.len(), loan, source_sign_loan,result_loan);
     if source_sign_loan && env_flag("PP_SOURCE_SIGN_LOAN_TRACE") {
         eprintln!("SOURCE_SIGN_LOAN {} {} {}",source.len(),circ.active_qubits(),split.unwrap_or(0));
     }
@@ -2051,7 +2115,7 @@ fn walk_add_single(
         let room = walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
         if source_sign_loan {
             super::modular::ripple_add_source_sign_loan(circ,&source[2..],&target[2..],Some(carry2),Some(target[0]),deferred);
-        } else if env_flag("PP_Q1208_HELPERS") && source.len().saturating_sub(5) > room {
+        } else if env_flag("PP_Q1208_HELPERS") && source.len().saturating_sub(5+usize::from(deferred.is_none() && super::modular::result_top_loan_enabled(target))) > room {
             assert!(deferred.is_none(), "compact inverse ripple has no deferred-phase hook");
             let width=source.len()-2;
             super::compact_chunk_add::add(circ,&source[2..],&target[2..],Some(carry2),false,exact_walk_chunk_width(width,room));
@@ -2154,15 +2218,15 @@ fn walk_c2_term_drop(circ: &mut Builder, rule: WalkRule, source0: QubitId, g: Op
 /// narrower. The borrow needs a real ladder to lend into: below
 /// `MIN_WALK_WIDTH` the high ripple has no carry position to spare and the
 /// arithmetic is the pre-loan one.
-fn walk_low_chunk(circ: &Builder, m: usize, loan: bool, source_sign_loan: bool) -> Option<usize> {
+fn walk_low_chunk(circ: &Builder, m: usize, loan: bool, source_sign_loan: bool, result_loan:bool) -> Option<usize> {
     // `low` is a bit position, so it counts against the full value width.
     let n = m + 1;
     let low = (circ.active_qubits() as usize + m).saturating_sub(walk_max_qubits());
-    let single_fits_below = (if loan && m >= MIN_WALK_WIDTH { 5 } else { 4 })+usize::from(source_sign_loan);
+    let single_fits_below = (if loan && m >= MIN_WALK_WIDTH { 5 } else { 4 })+usize::from(source_sign_loan)+usize::from(result_loan);
     if n < 12 || low < single_fits_below {
         return None;
     }
-    let low = low-usize::from(loan)-usize::from(source_sign_loan);
+    let low = low-usize::from(loan)-usize::from(source_sign_loan)-usize::from(result_loan);
     (low + 2 <= n && low * 2 <= n).then_some(low)
 }
 
@@ -2582,8 +2646,19 @@ fn round1_forward(circ: &mut Builder, u: &[QubitId], v: &[QubitId]) -> QubitId {
 fn round1_reverse(circ: &mut Builder, u: &[QubitId], v: &[QubitId], sign: QubitId) {
     let m = u.len();
     assert_eq!(m, v.len());
-    sub_const(circ, &u[N - 2..], U256::from(1));
-    add_const(circ, &u[..round1_window(m)], half_f_minus_one() >> 1);
+    if super::round2_fused::take() {
+        // Round2 has already executed these exact inverse constants and left
+        // this source at X. Continue with the original affine round1 cleanup.
+    } else if !super::env_flag("I31_DISABLE") {
+        // After these two disjoint inverse constant operations, u is the
+        // arithmetic half of v XOR sign, before the existing affine cleanup.
+        let desired:Vec<_>=(0..m).map(|j|(false,vec![v[(j+1).min(m-1)],sign])).collect();
+        super::affine_constant::add_known(circ,&u[N-2..],U256::MAX,&desired[N-2..]);
+        super::affine_constant::add_known(circ,&u[..round1_window(m)],half_f_minus_one()>>1,&desired[..round1_window(m)]);
+    } else {
+        sub_const(circ, &u[N - 2..], U256::from(1));
+        add_const(circ, &u[..round1_window(m)], half_f_minus_one() >> 1);
+    }
     circ.cx_all(sign, u);
     circ.cx(v[m - 1], u[m - 1]);
     for j in (0..m - 1).rev() {
@@ -2854,6 +2929,19 @@ fn replay_add_halve(
     fold_window: usize,
     round: usize,
 ) {
+    let _scope=super::bridge::enter(round,false);
+    let before=circ.i35_cost();
+    replay_add_halve_impl(circ,sign,source,target,fold_window,round);
+    if env_flag("I35_CELLS"){eprintln!("I35_CELL {} {} {} {}",round,0,super::bridge::budget(),circ.i35_cost()-before);}
+}
+fn replay_add_halve_impl(
+    circ: &mut Builder,
+    sign: QubitId,
+    source: &[QubitId],
+    target: &[QubitId],
+    fold_window: usize,
+    round: usize,
+) {
     if retained_prebias::try_replay(circ,sign,source,target,retained_window(fold_window,round),round) {return;}
     if env_flag("PP_JOINT_PREBIAS_DIV") && joint_prebias::eligible(circ,round) {
         joint_prebias::joint_prebias_div(circ,sign,source,target,fold_window,round);return;
@@ -2943,6 +3031,19 @@ fn replay_add_halve(
 /// The inverse cell: `target <- 2*target + (-1)^sign * source (mod p)`, again
 /// with one pseudo-Mersenne correction ripple instead of two.
 fn replay_double_add(
+    circ: &mut Builder,
+    sign: QubitId,
+    source: &[QubitId],
+    target: &[QubitId],
+    fold_window: usize,
+    round: usize,
+) {
+    let _scope=super::bridge::enter(round,true);
+    let before=circ.i35_cost();
+    replay_double_add_impl(circ,sign,source,target,fold_window,round);
+    if env_flag("I35_CELLS"){eprintln!("I35_CELL {} {} {} {}",round,1,super::bridge::budget(),circ.i35_cost()-before);}
+}
+fn replay_double_add_impl(
     circ: &mut Builder,
     sign: QubitId,
     source: &[QubitId],
@@ -3190,7 +3291,7 @@ fn with_sign_copy_loans(circ:&mut Builder,loans:&[(QubitId,QubitId)],body:impl F
 fn forward_sign_copy_valid(w:usize,last:usize)->[bool;2] {
     if last<3{return[false,false];}
     let target=if last.is_multiple_of(2){1}else{0};let mut valid=[false,false];
-    valid[target]=w==value_width(last);valid[1-target]=w==value_width(last-1);valid
+    valid[target]=!i41_corrected(last) && w==value_width(last);valid[1-target]=!i41_corrected(last-1) && w==value_width(last-1);valid
 }
 fn with_forward_replay_sign_loans(circ:&mut Builder,u:&[QubitId],v:&[QubitId],last:usize,body:impl FnOnce(&mut Builder)) {
     if !env_flag("PP_REPLAY_SIGN_LOAN") || mod4_sign() || last<3 {body(circ);return;}
@@ -3485,7 +3586,7 @@ fn composition_bounds(c:&Builder,round:usize,multiply:bool)->Option<Vec<(usize,u
     if env_raw("PP_PIN_REPLAY_LAYOUT").is_some(){return None;}
     let room=walk_max_qubits().saturating_sub(c.active_qubits()as usize);
     let loans=REPLAY_SIGN_LOANS.with(|s|s.get());let old=room.saturating_sub(loans);
-    let layout=chunk_layout(N,old);
+    let layout=chunk_layout(N,old+super::bridge::budget());
     let fallback=layout.is_none() || old<replay_chunk_compare()+2;
     if env_flag("PP_NEW_REPLAY") {
         let extra=if fallback{2*N}else{layout.as_ref().unwrap()[..layout.as_ref().unwrap().len()-1]
@@ -3500,7 +3601,7 @@ fn composition_bounds(c:&Builder,round:usize,multiply:bool)->Option<Vec<(usize,u
     }
     if env_flag("PP_Q1208_HELPERS")&&fallback{return None;}
     let layout=layout?;
-    Some(loaned_chunk_bounds(&layout,room,loans,round,multiply))
+    Some(loaned_chunk_bounds(&layout,room+super::bridge::budget(),loans,round,multiply))
 }
 
 // Reserve final-frame room by filling spare earlier chunk capacity.
@@ -3509,7 +3610,7 @@ fn composition_bounds(c:&Builder,round:usize,multiply:bool)->Option<Vec<(usize,u
 // is an explicit phase-predicate change, requiring full-stream qualification.
 fn retained_rebalance(c:&Builder, old:&[(usize,usize)], round:usize, multiply:bool)->Vec<(usize,usize)> {
     if !env_flag("PP_RETAIN_REBALANCE") || old.len()<2 {return old.to_vec();}
-    let room=walk_max_qubits().saturating_sub(c.active_qubits()as usize);
+    let room=(walk_max_qubits()+super::bridge::budget()).saturating_sub(c.active_qubits()as usize);
     let mut sizes:Vec<_>=old.iter().map(|&(lo,hi)|hi-lo).collect();
     let last=sizes.len()-1;
     for j in 0..last {
@@ -3531,7 +3632,7 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
     let loans=REPLAY_SIGN_LOANS.with(|s|s.get());
     let old_ladder=ladder.saturating_sub(loans);
     let pinned=pinned_replay_bounds(addend.len(),round,multiply);
-    let layout = pinned.clone().or_else(||chunk_layout(addend.len(), old_ladder));
+    let layout = pinned.clone().or_else(||chunk_layout(addend.len(), old_ladder+super::bridge::budget()));
     if pinned.is_none() && env_flag("PP_NEW_REPLAY") {
         let old_fallback=layout.is_none() || old_ladder<replay_chunk_compare()+2;
         let old_extra2=if old_fallback {2*addend.len()} else {
@@ -3557,7 +3658,7 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
     let bounds = layout.unwrap_or_else(|| panic!("layout r={} mul={} live={} cap={} room={}", round, multiply, circ.active_qubits(), walk_max_qubits(), ladder));
     let adjusted=if pinned.is_some(){
         if env_flag("PP_PIN_REPLAY_RELAX_EXACT") {loaned_chunk_bounds(&bounds,ladder,addend.len(),round,multiply)}else{bounds.clone()}
-    }else{loaned_chunk_bounds(&bounds,ladder,loans,round,multiply)};
+    }else{loaned_chunk_bounds(&bounds,ladder+super::bridge::budget(),loans,round,multiply)};
     if loans>0 && env_flag("PP_REPLAY_SIGN_TRACE") {
         eprintln!("REPLAY_LOAN_LAYOUT {} {} {} {} {:?} {:?}",round,multiply as u8,old_ladder,ladder,bounds,adjusted);
     }
@@ -4118,3 +4219,20 @@ pub(crate) fn endpoint_sparse_sub(circ: &mut Builder, control: QubitId, value: &
 #[path="joint_lowfold.rs"] mod joint_lowfold;
 #[path="joint_prebias.rs"] mod joint_prebias;
 #[path="retained_prebias.rs"] mod retained_prebias;
+
+/// Per-round physical walk-width edits, `start:len:delta,...`
+/// (PP_WALK_EXTRA_ROUNDS). Physical rails only, like the guard bits; the
+/// policy width that shapes folds and compares is unchanged.
+fn walk_extra(round: usize) -> isize {
+    static SLOT: std::sync::OnceLock<Vec<(usize,usize,isize)>> = std::sync::OnceLock::new();
+    let edits=SLOT.get_or_init(|| {
+        let spec=super::optional_env::<String>("PP_WALK_EXTRA_ROUNDS").unwrap_or_default();
+        spec.split(',').map(str::trim).filter(|s| !s.is_empty()).map(|s| {
+            let f: Vec<&str>=s.split(':').collect();
+            assert!(f.len()==3,"PP_WALK_EXTRA_ROUNDS: {s:?} is not start:len:delta");
+            (f[0].parse().unwrap(),f[1].parse().unwrap(),f[2].parse().unwrap())
+        }).collect()
+    });
+    edits.iter().filter(|e| round>=e.0 && round<e.0+e.1).map(|e| e.2).sum()
+}
+

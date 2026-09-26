@@ -43,7 +43,8 @@ impl Builder {
     pub fn new() -> Self {
         Self {
             ops: Vec::new(),
-            model: false, // Always emit operations; no count-only research mode.
+            // Count-only model mode is disabled in this submission.
+            model: false,
             model_depth: 0, model_total: 0, model_weighted: 0.0,
             model_phase_native: 0, model_phase_weighted: 0.0, model_max: 0,
             phase_kind_ops: [0; OP_KINDS],
@@ -60,6 +61,8 @@ impl Builder {
             replay_sites: ReplaySites::new(),
         }
     }
+    pub(crate) fn i35_cost(&self)->f64{self.model_weighted}
+    pub fn i13_dims(&self)->(usize,usize){(self.next_qubit as usize,self.next_bit as usize)}
     pub fn take_ops(&mut self) -> Vec<Op> {
         if self.model {
             eprintln!("MODEL_PHASE {} {} {} {}", self.phase, self.peak_qubits,

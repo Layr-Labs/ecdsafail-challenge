@@ -59,6 +59,14 @@ pub fn ripple_add(
     carry_in: Option<QubitId>,
     carry_out: Option<QubitId>,
 ) {
+    if carry_out.is_none() && result_top_loan_enabled(acc) {ripple_add_result_top_loan(circ,addend,acc,carry_in,None,false);return;}
+    let owned=if carry_out.is_some(){acc.len().saturating_sub(1)}else{acc.len().saturating_sub(2)};
+    let missing=(circ.active_qubits()as usize+owned).saturating_sub(walk_max_qubits());
+    if addend.len()==acc.len() && acc.len()>=3 && !has_top_copy(acc)
+        && missing>0 && missing<=super::bridge::budget() && missing<owned {
+        if super::env_flag("I35_TRACE"){eprintln!("I35_BRIDGE plain {} {}",acc.len(),missing);}
+        super::bridge::add(circ,addend,acc,carry_in,carry_out,missing);return;
+    }
     ripple_add_proved(circ, addend, acc, carry_in, carry_out, Carry0::Full, Carry1::Full, None, None, None, None);
 }
 
@@ -75,6 +83,11 @@ pub(crate) fn ripple_add_consume(
     consumer: impl FnOnce(&mut Builder, QubitId, QubitId, QubitId, Option<QubitId>),
 ) {
     let n=acc.len(); assert!(n>=1); assert_eq!(addend.len(),n);
+    let missing=(circ.active_qubits()as usize+n-1).saturating_sub(walk_max_qubits());
+    if n>=3 && missing>0 && missing<=super::bridge::budget() && missing<n-1 {
+        if super::env_flag("I35_TRACE"){eprintln!("I35_BRIDGE consume {} {}",n,missing);}
+        super::bridge::run(circ,addend,acc,carry_in,Some(carry_out),missing,|c,o,a,s,p|consumer(c,o.unwrap(),a,s,p));return;
+    }
     let carries=circ.alloc_qubits(n-1);
     let previous=|i:usize|if i==0 {carry_in} else {Some(carries[i-1])};
     for i in 0..n {
@@ -114,6 +127,7 @@ pub fn ripple_add_with_deferred_phase(
     carry_out: Option<QubitId>,
     deferred: Option<(usize, BitId)>,
 ) {
+    if carry_out.is_none() && deferred.is_none() && result_top_loan_enabled(acc) {ripple_add_result_top_loan(circ,addend,acc,carry_in,None,false);return;}
     ripple_add_proved(
         circ, addend, acc, carry_in, carry_out, Carry0::Full, Carry1::Full, deferred, None, None, None,
     );
@@ -316,6 +330,7 @@ fn terminal_step(
     acc: &[QubitId],
     previous: Option<QubitId>,
 ) {
+    if has_top_copy(acc){terminal_top_copy(circ,addend,acc,previous);return;}
     let n = acc.len();
     let k = addend.len();
     let i = n - 2;
@@ -426,6 +441,7 @@ pub fn ripple_add_lent_with_deferred_phase(
 ) {
     let width = addend.len();
     assert_eq!(width, acc.len(), "ripple_add_lent: width mismatch");
+    if deferred.is_none() && result_top_loan_enabled(acc) {ripple_add_result_top_loan(circ,addend,acc,carry_in,Some(lent),false);return;}
     if width < 3 {
         ripple_add_with_deferred_phase(circ, addend, acc, carry_in, None, deferred);
         return;
@@ -497,6 +513,9 @@ pub(crate) fn ripple_add_source_sign_loan(
 ) {
     let n=addend.len();assert_eq!(n,acc.len());
     assert!(n>=3+usize::from(lent.is_some()));
+    if deferred.is_none() && result_top_loan_enabled(acc) && n>=4+usize::from(lent.is_some()) && super::env_flag("I76_SOURCE_TOP_LOAN") {
+        ripple_add_result_top_loan(circ,addend,acc,carry_in,lent,true);return;
+    }
     let owned=n-3-usize::from(lent.is_some());
     let high=addend[n-1];let copy=addend[n-2];
     assert!(!acc.contains(&high));
@@ -510,8 +529,14 @@ pub(crate) fn ripple_add_source_sign_loan(
     // original penultimate source before adding the identical top source bit.
     let i=n-2;
     circ.cx(high,copy);circ.cx(high,acc[i]);
-    circ.ccx(copy,acc[i],acc[n-1]);circ.cx(high,acc[n-1]);
-    circ.cx(high,copy);circ.cx(copy,acc[n-1]);circ.cx(copy,acc[i]);
+    if has_top_copy(acc){
+      let m=circ.alloc_bit();circ.hmr(acc[n-1],m);
+      circ.cz_if(copy,acc[i],m);circ.z_if(high,m);circ.z_if(acc[i],m);circ.free_bit(m);
+      circ.cx(high,copy);circ.cx(copy,acc[i]);circ.cx(acc[i],acc[n-1]);
+    }else{
+      circ.ccx(copy,acc[i],acc[n-1]);circ.cx(high,acc[n-1]);
+      circ.cx(high,copy);circ.cx(copy,acc[n-1]);circ.cx(copy,acc[i]);
+    }
     for i in (0..carries.len()).rev(){
         if deferred.as_ref().is_some_and(|(at,_)|*at==i){
             let(_,m)=deferred.take().unwrap();circ.z_if(carries[i],m);circ.free_bit(m);
@@ -699,3 +724,21 @@ pub fn addsub_wide_low(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], i
     assert!(value.len() <= acc.len());
     addsub_full_low(circ, value, acc, inverse, c0, c1);
 }
+
+
+// Research: known final top is a copy of its neighboring output bit.
+thread_local! {static TOP_COPY:std::cell::Cell<Option<(QubitId,QubitId)>>=const{std::cell::Cell::new(None)};}
+pub(crate) fn with_top_copy(c:&mut Builder,acc:&[QubitId],enabled:bool,body:impl FnOnce(&mut Builder)){
+ let pair=enabled.then(||(acc[acc.len()-1],acc[acc.len()-2]));
+ TOP_COPY.with(|v|{assert!(v.replace(pair).is_none());});body(c);TOP_COPY.with(|v|v.set(None));
+}
+fn has_top_copy(acc:&[QubitId])->bool{acc.len()>=2 && TOP_COPY.with(|v|v.get()==Some((acc[acc.len()-1],acc[acc.len()-2])))}
+fn terminal_top_copy(c:&mut Builder,a:&[QubitId],b:&[QubitId],previous:Option<QubitId>){
+ let n=b.len();let i=n-2;assert_eq!(a.len(),n);
+ if let Some(p)=previous{c.cx(p,a[i]);c.cx(p,b[i]);}
+ let m=c.alloc_bit();c.hmr(b[n-1],m);
+ c.z_if(a[n-1],m);c.cz_if(a[i],b[i],m);c.z_if(a[i],m);c.z_if(b[i],m);c.free_bit(m);
+ if let Some(p)=previous{c.cx(p,a[i]);}c.cx(a[i],b[i]);c.cx(b[i],b[n-1]);
+}
+
+include!("top_result_loan.rs");

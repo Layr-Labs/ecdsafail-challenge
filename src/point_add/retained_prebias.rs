@@ -72,10 +72,14 @@ pub(super)fn try_replay(c:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId],fw
   }else{ripple_add(c,&a[at..hi],&b[at..hi],cin,Some(out));}
   if j==0{joint_prebias::erase_initial(c,initial,a[0],sign,b[0]);}
   if let Some((carry,plo,phi))=previous{
-   let(k,seed)=boundary_repair_spec(r,false,plo,phi);c.record_replay_site('B',r,phi,k);
+   let(k,seed)=boundary_repair_spec(r,false,plo,phi);
    let full=plo==0&&phi==k;
+   let guard=super::super::optional_env::<usize>("I12_B_GUARD").unwrap_or(0);
+   let protected=(589..=620).contains(&r)||(642..=645).contains(&r)||(647..=648).contains(&r);
+   let width=if protected&&!full {(k+guard).min(phi-plo)}else{k};
+   c.record_replay_site('B',r,phi,width);
    if full{c.cx(b[0],sign);}
-   erase_with_compare(c,carry,&b[phi-k..phi],&a[phi-k..phi],if full{Some(sign)}else{seed.then(||a[phi-k-1])});c.free(carry);
+   erase_with_compare(c,carry,&b[phi-width..phi],&a[phi-width..phi],if full{Some(sign)}else{seed.then(||a[phi-k-1])});c.free(carry);
    if full{c.cx(b[0],sign);}
   }
   cin=Some(out);previous=Some((out,lo,hi));
