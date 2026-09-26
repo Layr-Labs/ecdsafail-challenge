@@ -124,7 +124,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_CROSS" => "1",
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
-        "TAIL_NONCE" => "16778008906",
+        "TAIL_NONCE" => "17706034936",
         _ => return None,
     };
     Some(value.to_owned())
