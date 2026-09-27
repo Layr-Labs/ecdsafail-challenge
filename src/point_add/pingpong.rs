@@ -3627,6 +3627,63 @@ fn retained_rebalance(c:&Builder, old:&[(usize,usize)], round:usize, multiply:bo
     if same {new} else {old.to_vec()}
 }
 
+// EXP PP_DROP_EXACT_LEAD: for a retained-frame receiver whose layout starts
+// with an EXACT leading chunk, replace the layout by an all-approximate one of
+// the same chunk count, [room, room-1, ..., remainder], so the final chunk is
+// narrow enough (<= room-32) for the joint low fold. The first boundary becomes
+// an ordinary seeded chunk compare (optionally WIDEN bits wider); every other
+// boundary keeps the same compare width/seed rule at a moved endpoint.
+// Returns the new bounds and dB, the added boundary-compare Toffoli (window-1)/2.
+fn drop_trace(round:usize,multiply:bool,tag:&str,info:String) {
+    if env_flag("PP_DROP_TRACE") {eprintln!("DROP_TRACE r={} mul={} {} {}",round,multiply as u8,tag,info);}
+}
+fn drop_exact_lead_exact(drop:bool,exact_missing:usize)->bool {
+    drop && super::optional_env::<usize>("PP_DROP_EXACT_LEAD_EXACT").is_some_and(|l|exact_missing<=l)
+}
+fn drop_exact_lead_minsave(drop:bool,saving:f64)->bool {
+    !drop || saving>=super::optional_env::<f64>("PP_DROP_EXACT_LEAD_MINSAVE").unwrap_or(f64::MIN)
+}
+fn drop_exact_lead_widen()->usize {
+    let w=super::optional_env::<usize>("PP_DROP_EXACT_LEAD_WIDEN").unwrap_or(1);
+    assert!(w<=8,"drop-lead widening limited to eight bits");w
+}
+fn drop_exact_lead(c:&Builder,old:&[(usize,usize)],round:usize,multiply:bool,fw:usize)->Option<(Vec<(usize,usize)>,f64)> {
+    if !env_flag("PP_DROP_EXACT_LEAD") || old.len()<2 || old[0].0!=0 {return None;}
+    match env_raw("PP_DROP_EXACT_LEAD_DIR").as_deref() {
+        None|Some("both")=>{}, Some("mul")=>if !multiply {return None;}, Some("div")=>if multiply {return None;},
+        Some(x)=>panic!("PP_DROP_EXACT_LEAD_DIR={x}"),
+    }
+    let min=super::optional_env::<usize>("PP_DROP_EXACT_LEAD_MIN").unwrap_or(2);
+    let widen=drop_exact_lead_widen();
+    let first=old[0].1;
+    if first<min || boundary_repair_spec(round,multiply,0,first)!=(first,false) {drop_trace(round,multiply,"notexactlead",format!("{:?}",old));return None;}
+    let bridge=if env_flag("PP_DROP_EXACT_LEAD_NOBRIDGE"){0}else{super::bridge::budget()};
+    let room=(walk_max_qubits()+bridge).saturating_sub(c.active_qubits() as usize);
+    let k=old.len();
+    let mut sizes:Vec<usize>=(0..k).map(|j|widest_chunk(j,room)).collect();
+    let head:usize=sizes[..k-1].iter().sum();
+    if head>=N {return None;}
+    let last=N-head;
+    sizes[k-1]=last;
+    if last<2 || last+32>room || N-last<fw || layout_ladder(&sizes)>room {drop_trace(round,multiply,"nofit",format!("room={} last={} fw={} {:?}",room,last,fw,old));return None;}
+    let new=to_bounds(&sizes);
+    let (k0,_)=boundary_repair_spec(round,multiply,new[0].0,new[0].1);
+    if new[0].1<k0+widen+2 {return None;}
+    let cost=|b:&[(usize,usize)],w0:usize|->f64 {b[..b.len()-1].iter().enumerate().map(|(j,&(lo,hi))|{
+        let(kk,_)=boundary_repair_spec(round,multiply,lo,hi);(kk+if j==0{w0}else{0})as f64-1.0}).sum::<f64>()/2.0};
+    let db=cost(&new,widen)-cost(old,0);
+    Some((new,db))
+}
+
+/// Seeded or plain window for the first boundary of a drop-lead layout,
+/// widened by PP_DROP_EXACT_LEAD_WIDEN bits; the seed moves with the window.
+fn drop_lead_first_compare(round:usize,multiply:bool,phi:usize)->(usize,bool) {
+    let(k,seeded)=boundary_repair_spec(round,multiply,0,phi);
+    let k=k+drop_exact_lead_widen();
+    assert!(phi>=k+2,"drop-lead first compare must fit its chunk");
+    (k,seeded)
+}
+
 fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: usize, multiply: bool) -> QubitId {
     let ladder = walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
     let loans=REPLAY_SIGN_LOANS.with(|s|s.get());

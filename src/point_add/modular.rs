@@ -6,6 +6,11 @@ use super::pingpong::walk_max_qubits;
 use super::{fold_guard, pinned_env, Builder, SECP256K1_P};
 use crate::circuit::{BitId, QubitId};
 
+fn peak_cmp_bits() -> Option<usize> {
+    static SLOT: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    *SLOT.get_or_init(|| super::optional_env("PP_F_PEAKCMP"))
+}
+
 // Width of the measured-erasure comparisons in this file, and nowhere else in
 // the tree. One bit finer than `fold_guard` by the balance rule derived in
 // `mod.rs`: a compare's Toffoli sit under a `push_condition` and execute half
@@ -605,7 +610,14 @@ fn peak_fitted_add(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], carry
     let mid = circ.alloc_qubit();
     ripple_add(circ, &value[..low], &acc[..low], None, Some(mid));
     ripple_add(circ, &value[low..], &acc[low..], Some(mid), Some(carry_out));
-    erase_with_compare(circ, mid, &acc[..low], &value[..low], None);
+    // PP_F_PEAKCMP=k: compare only the top k bits of the leading chunk
+    // (approximate, fails only when those k bits tie). Unset: exact.
+    match peak_cmp_bits() {
+        Some(k) if k >= 2 && low > k => {
+            erase_with_compare(circ, mid, &acc[low - k..low], &value[low - k..low], None)
+        }
+        _ => erase_with_compare(circ, mid, &acc[..low], &value[..low], None),
+    }
     circ.free(mid);
 }
 
