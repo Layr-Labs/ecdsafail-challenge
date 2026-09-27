@@ -118,8 +118,8 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_DIAG_PRELOAD" => "1",
         "SQ_FIT_CROSS" => "1",
         "SQ_LEND_ASSEMBLY_ZEROS" => "1",
-        "SQ_LEND_RETAINED_ANDS" => "2",
-        "SQ_LEND_RETAINED_CROSS2" => "2",
+        "SQ_LEND_RETAINED_ANDS" => "0",
+        "SQ_LEND_RETAINED_CROSS2" => "0",
         "SQ_LEND_RETAINED_ZEROS" => "1",
         "SQ_ODD_NODE_TOPS" => "1",
         "SQ_ROW0_CARRY" => "1",
@@ -133,7 +133,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "26225815260",
+        "TAIL_NONCE" => "280927235784453",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -298,6 +298,10 @@ pub fn build() -> Vec<Op> {
         }
     }
     ops = interned_witness::witnesses(ops);
+    ops = truth_simplify::simplify_products(ops);
+    ops = affine_simplify::simplify(ops);
+    ops = quadratic_simplify::simplify(ops);
+    ops = truth_simplify::simplify(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
