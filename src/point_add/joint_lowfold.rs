@@ -6,10 +6,35 @@ thread_local! { pub(super) static GUARD:std::cell::Cell<Option<usize>>=const{std
 
 fn low_bits(guard:usize)->usize { super::super::optional_env::<usize>("PP_JOINT_LOW_BITS").unwrap_or(32+guard) }
 
-#[derive(Debug)]
-struct Plan { bounds:Vec<(usize,usize)>, prefix:usize, guard:usize, bits:usize, saving:f64, exact:bool, dropped:bool }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn plan(circ:&Builder,round:usize,multiply:bool,fw:usize,drop:bool)->Option<Plan> {
+    #[test]
+    fn exact_multiplication_policy_never_selects_a_finite_low_cut() {
+        assert!(env_flag("PP_RETAIN_EXACT_MUL"));
+        let mut retained = 0;
+        for live in (1024..walk_max_qubits()).step_by(16) {
+            let mut circ = Builder::new();
+            circ.alloc_qubits(live);
+            for round in [2, 123, 351, 520, 680] {
+                for window in [70, 74] {
+                    if let Some(candidate) = plan(&circ, round, true, window) {
+                        assert!(candidate.exact, "round={round}, live={live}, window={window}");
+                        assert!(candidate.saving>0.0, "retaining carries must save modeled Toffolis");
+                        retained += 1;
+                    }
+                }
+            }
+        }
+        assert!(retained > 0, "the policy must preserve feasible exact retained folds");
+    }
+}
+
+#[derive(Debug)]
+struct Plan { bounds:Vec<(usize,usize)>, prefix:usize, guard:usize, bits:usize, saving:f64, exact:bool }
+
+fn plan(circ:&Builder,round:usize,multiply:bool,fw:usize)->Option<Plan> {
     if !multiply && env_raw("PP_PREBIAS_RETAIN_BITS").is_some() {return None;}
     let guard=super::super::optional_env::<usize>("PP_JOINT_GUARD")?;
     let low=if env_flag("PP_SPRINT_MIXED") && multiply && (364..=402).contains(&round) {29}else{low_bits(guard)};assert!((12..=fw).contains(&low) && !split_fold());
@@ -17,55 +42,55 @@ fn plan(circ:&Builder,round:usize,multiply:bool,fw:usize,drop:bool)->Option<Plan
     assert!(env_flag("PP_REUSE_DIV_PARITY") && env_flag("PP_REUSE_MUL_SELECTORS"));
     let room=walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
     let loans=REPLAY_SIGN_LOANS.with(|s|s.get());
-    let Some(old_bounds)=composition_bounds(circ,round,multiply) else {if !drop{drop_trace(round,multiply,"nocomp",String::new());}return None;};
-    let (bounds,db)=if drop {drop_exact_lead(circ,&old_bounds,round,multiply,fw)?}
-        else {(retained_rebalance(circ,&old_bounds,round,multiply),0.0)};
+    let old_bounds=composition_bounds(circ,round,multiply)?;
+    let bounds=retained_rebalance(circ,&old_bounds,round,multiply);
     if bounds.len()<2 {return None;}
     let &(lo,hi)=bounds.last()?;
     let (plo,phi)=bounds[bounds.len()-2];
     let (k,seeded)=boundary_repair_spec(round,multiply,plo,phi);
-    if lo<fw || phi-k-usize::from(seeded)<fw {drop_trace(round,multiply,"lofw",format!("drop={} fw={} {:?}",drop,fw,bounds));return None;}
+    if lo<fw || phi-k-usize::from(seeded)<fw {return None;}
     let need=(low-3).max(fw-34);
     let existing=walk_max_qubits()as isize-circ.active_qubits()as isize-(hi-lo)as isize-if multiply&&env_flag("PP_JOINT_MUL_FOLD"){3}else{4};
     let missing=(need as isize-existing).max(0)as usize;
     let prefix=if missing==0 {0} else {missing+1};
-    if prefix+1>=hi-lo {drop_trace(round,multiply,"prefix",format!("drop={} fw={} missing={} {:?}",drop,fw,missing,bounds));return None;}
+    if prefix+1>=hi-lo {return None;}
     let mut fk=if multiply {flag_compare(round)+usize::from(a5_policy()=="mul-f-plus1-early200"&&(2..202).contains(&round))}
         else {flag_compare(round)+usize::from(policy_width(round)>=flag_widen_div())};
-    // EXP PP_SEED_SHORT_MUL_F_COST: the plain path's narrow multiply F compare is one bit shorter.
-    let short_cost=multiply && policy_width(round)<38 && env_flag("PP_SEED_SHORT_MUL_F_COST") && !env_flag("PP_SEED_SHORT_MUL_F_COST_NOPLAN");
-    let seeded=if multiply {(policy_width(round)>=38 && matches!(a5_policy(),"mul-f-seed"|"mul-fb-seed")) || short_cost}else{env_flag("CMP_SEED_ALL")};
-    if (!multiply && seeded) || short_cost {fk-=1;}
+    let seeded=if multiply {policy_width(round)>=38 && matches!(a5_policy(),"mul-f-seed"|"mul-fb-seed")}else{env_flag("CMP_SEED_ALL")};
+    if !multiply && seeded {fk-=1;}
     if !seeded {fk=refined_unseeded_width(fk,N,"PP_REFINE_UNSEEDED_F");}
-    let saving=(fk-1)as f64/2.0-missing as f64/2.0-(low as f64-33.0)-db;
-    if saving<=0.0 {drop_trace(round,multiply,"saving",format!("drop={} fw={} fk={} missing={} db={} {:?}",drop,fw,fk,missing,db,bounds));return None;}
+    let saving=(fk-1)as f64/2.0-missing as f64/2.0-(low as f64-33.0);
+    #[cfg(test)]
+    super::super::measurement::replay::candidate_saving(saving);
+    if saving<=0.0 {return None;}
     // Release a bounded additional carry prefix to fit the full finite fold.
     // Outer B comparisons are unchanged; the inserted midpoint uses exact cleanup.
     let limit=super::super::optional_env::<usize>("PP_RETAIN_EXACT_EXTRA_MUL").unwrap_or(0);
     let exact_missing=((fw-3) as isize-existing).max(0) as usize;
     let exact_prefix=if exact_missing==0 {0}else{exact_missing+1};
-    let exact=(multiply && env_flag("PP_RETAIN_EXACT_MUL") && exact_missing<=limit || drop_exact_lead_exact(drop,exact_missing)) && exact_prefix+1<hi-lo;
+    let require_exact=env_flag(if multiply {"PP_RETAIN_EXACT_MUL"} else {"PP_RETAIN_EXACT_DIV"});
+    let exact=multiply && require_exact && exact_missing<=limit && exact_prefix+1<hi-lo;
+    if require_exact && !exact{return None;}
     let prefix=if exact {exact_prefix}else{prefix};
     let saving=if exact {saving-(exact_missing-missing) as f64/2.0-1.0}else{saving};
-    if !drop_exact_lead_minsave(drop,saving) {return None;}
-    Some(Plan{bounds,prefix,guard,bits:low,saving,exact,dropped:drop})
+    if saving<=0.0{return None;}
+    Some(Plan{bounds,prefix,guard,bits:low,saving,exact})
 }
 
 pub(super) fn try_replay(circ:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId],fw:usize,
     round:usize,doubled:Option<QubitId>)->bool {
     let multiply=doubled.is_some();
-    let Some(p)=plan(circ,round,multiply,fw,false).or_else(||plan(circ,round,multiply,fw,true))else{return false;};
-    if p.dropped {eprintln!("DROP_EXACT_LEAD mul={} r={} base={} saving={} bounds={:?}",multiply as u8,round,circ.active_qubits(),p.saving,p.bounds);}
+    let Some(p)=plan(circ,round,multiply,fw)else{return false;};
+    #[cfg(test)]
+    super::super::measurement::replay::plan(if p.exact {"joint-exact"}else{"joint"},&p.bounds,p.prefix,Some(p.saving));
+    #[cfg(test)]
+    if !p.exact {super::super::measurement::replay::site("low-cut",p.bits,fw,false,"joint_lowfold::try_replay");}
     eprintln!("JOINT_LOWFOLD r={} mul={} base={} last={} prefix={} guard={} saving={}",round,multiply as u8,
         circ.active_qubits(),p.bounds.last().unwrap().1-p.bounds.last().unwrap().0,p.prefix,p.guard,p.saving);
     if env_flag("PP_COMPOSE_TRACE"){eprintln!("COMPOSE_MUL {} {} {} {} {} {:?}",round,circ.active_qubits(),fw,p.bits,REPLAY_SIGN_LOANS.with(|s|s.get()),p.bounds);}
     if p.exact {eprintln!("EXACT_RETAINED_FOLD mul {} {}",round,fw);}
     let mut incoming=None;
     let mut previous=None;
-    // EXP PP_PREBIAS_DOUBLE: bit 0 leaves the main add. z0 = s^a0 by CX, and the
-    // missing carry s&a0 joins the fold's own bit-1 carry (the two are exclusive).
-    let pre=multiply && env_flag("PP_PREBIAS_DOUBLE");
-    if pre {circ.cx(a[0],b[0]);}
     for &(lo,hi)in &p.bounds {
         let next=circ.alloc_qubit();
         if hi==N {
@@ -77,7 +102,7 @@ pub(super) fn try_replay(circ:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId
                 |c,o,at,st,carry|{
                     GUARD.with(|g|{assert!(g.replace(if p.exact {None}else{Some(p.bits)}).is_none());});
                     if let Some(d)=doubled {
-                        if env_flag("PP_JOINT_MUL_FOLD"){fold_double_joint(c,&b[..fw],sign,a[0],d,o,pre);}else{fold_double_reused(c,&b[..fw],sign,d,o);}
+                        if env_flag("PP_JOINT_MUL_FOLD"){fold_double_joint(c,&b[..fw],sign,a[0],d,o,&b[fw..]);}else{fold_double_reused(c,&b[..fw],sign,d,o);}
                         c.cx(b[0],d);c.cx(sign,d);c.cx(a[0],d);c.cx(o,d);c.free(d);
                     }else{fold_halve_reused(c,&b[..fw],sign,o);}
                     GUARD.with(|g|g.set(None));
@@ -88,13 +113,11 @@ pub(super) fn try_replay(circ:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId
                 // Exact: carry(a+b+incoming) = [sum<a]+[sum=a]*incoming.
                 erase_with_compare(circ,mid,&b[lo..split],&a[lo..split],incoming);circ.free(mid);
             }
-        }else{let at=if pre&&lo==0{1}else{lo};ripple_add(circ,&a[at..hi],&b[at..hi],incoming,Some(next));}
+        }else{ripple_add(circ,&a[lo..hi],&b[lo..hi],incoming,Some(next));}
         if let Some((q,plo,phi))=previous {
-            let(k,seeded)=if p.dropped&&plo==0 {drop_lead_first_compare(round,multiply,phi)}else{boundary_repair_spec(round,multiply,plo,phi)};let k=if seeded&&plo>0{e_badj(round,multiply,k,phi,if hi==N{fw}else{1})}else{k};
+            let(k,seeded)=boundary_repair_spec(round,multiply,plo,phi);
             circ.record_replay_site('B',round,phi,k);
-            // A full first-chunk compare must skip bit 0, which the add no longer covers.
-            let from=if pre&&plo==0&&phi==k{1}else{phi-k};
-            erase_with_compare(circ,q,&b[from..phi],&a[from..phi],seeded.then(||a[phi-k-1]));circ.free(q);
+            erase_with_compare(circ,q,&b[phi-k..phi],&a[phi-k..phi],seeded.then(||a[phi-k-1]));circ.free(q);
         }
         incoming=Some(next);previous=Some((next,lo,hi));
     }

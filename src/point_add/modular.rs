@@ -6,11 +6,6 @@ use super::pingpong::walk_max_qubits;
 use super::{fold_guard, pinned_env, Builder, SECP256K1_P};
 use crate::circuit::{BitId, QubitId};
 
-fn peak_cmp_bits() -> Option<usize> {
-    static SLOT: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
-    *SLOT.get_or_init(|| super::optional_env("PP_F_PEAKCMP"))
-}
-
 // Width of the measured-erasure comparisons in this file, and nowhere else in
 // the tree. One bit finer than `fold_guard` by the balance rule derived in
 // `mod.rs`: a compare's Toffoli sit under a `push_condition` and execute half
@@ -64,15 +59,35 @@ pub fn ripple_add(
     carry_in: Option<QubitId>,
     carry_out: Option<QubitId>,
 ) {
-    if carry_out.is_none() && result_top_loan_enabled(acc) {ripple_add_result_top_loan(circ,addend,acc,carry_in,None,false);return;}
-    let owned=if carry_out.is_some(){acc.len().saturating_sub(1)}else{acc.len().saturating_sub(2)};
-    let missing=(circ.active_qubits()as usize+owned).saturating_sub(walk_max_qubits());
-    if addend.len()==acc.len() && acc.len()>=3 && !has_top_copy(acc)
-        && missing>0 && missing<=super::bridge::budget() && missing<owned {
-        if super::env_flag("I35_TRACE"){eprintln!("I35_BRIDGE plain {} {}",acc.len(),missing);}
-        super::bridge::add(circ,addend,acc,carry_in,carry_out,missing);return;
-    }
+    #[cfg(test)]
+    let _measurement = super::measurement::replay::default_part(super::measurement::replay::Part::MainAdd);
     ripple_add_proved(circ, addend, acc, carry_in, carry_out, Carry0::Full, Carry1::Full, None, None, None, None);
+}
+
+/// Vented addition when acc[0] is a copy of a preserved control. Reuse that
+/// redundant low bit for the incoming high-word carry; only overflow is new.
+pub(crate) fn add_with_low_copy(
+    circ:&mut Builder,addend:&[QubitId],acc:&[QubitId],copy:QubitId,
+)->QubitId{
+    #[cfg(test)]
+    let _measurement=super::measurement::replay::default_part(super::measurement::replay::Part::MainAdd);
+    assert!(!acc.is_empty() && addend.len()==acc.len());
+    assert!(!acc.contains(&copy));
+    if acc.len()==1 {
+        let out=circ.alloc_qubit();
+        circ.ccx(addend[0],copy,out);circ.cx(addend[0],acc[0]);
+        return out;
+    }
+    circ.cx(copy,acc[0]);
+    circ.ccx(addend[0],copy,acc[0]);
+    let room=walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
+    let plan=super::width_composition::plan_with_carry(acc.len()-1,room)
+        .expect("no workspace for the known-low-copy overflow");
+    let out=super::width_composition::add_with_carry(circ,&addend[1..],&acc[1..],Some(acc[0]),&plan);
+    let measured=circ.alloc_bit();circ.hmr(acc[0],measured);
+    circ.cz_if(addend[0],copy,measured);circ.free_bit(measured);
+    circ.cx(addend[0],acc[0]);circ.cx(copy,acc[0]);
+    out
 }
 
 /// Finish a vented sum, consume its overflow while the top arithmetic carry
@@ -87,12 +102,9 @@ pub(crate) fn ripple_add_consume(
     carry_in: Option<QubitId>, carry_out: QubitId,
     consumer: impl FnOnce(&mut Builder, QubitId, QubitId, QubitId, Option<QubitId>),
 ) {
+    #[cfg(test)]
+    let _measurement = super::measurement::replay::default_part(super::measurement::replay::Part::MainAdd);
     let n=acc.len(); assert!(n>=1); assert_eq!(addend.len(),n);
-    let missing=(circ.active_qubits()as usize+n-1).saturating_sub(walk_max_qubits());
-    if n>=3 && missing>0 && missing<=super::bridge::budget() && missing<n-1 {
-        if super::env_flag("I35_TRACE"){eprintln!("I35_BRIDGE consume {} {}",n,missing);}
-        super::bridge::run(circ,addend,acc,carry_in,Some(carry_out),missing,|c,o,a,s,p|consumer(c,o.unwrap(),a,s,p));return;
-    }
     let carries=circ.alloc_qubits(n-1);
     let previous=|i:usize|if i==0 {carry_in} else {Some(carries[i-1])};
     for i in 0..n {
@@ -113,6 +125,8 @@ pub(crate) fn erase_overflow_from_frame(
     circ: &mut Builder, overflow: QubitId, source_top: QubitId,
     sum_top: QubitId, carry_into_top: Option<QubitId>,
 ) {
+    #[cfg(test)]
+    let _measurement = super::measurement::replay::part(super::measurement::replay::Part::FErase);
     let m=circ.alloc_bit(); circ.hmr(overflow,m);
     circ.z_if(source_top,m); circ.cz_if(source_top,sum_top,m);
     if let Some(c)=carry_into_top {
@@ -132,13 +146,12 @@ pub fn ripple_add_with_deferred_phase(
     carry_out: Option<QubitId>,
     deferred: Option<(usize, BitId)>,
 ) {
-    if carry_out.is_none() && deferred.is_none() && result_top_loan_enabled(acc) {ripple_add_result_top_loan(circ,addend,acc,carry_in,None,false);return;}
     ripple_add_proved(
         circ, addend, acc, carry_in, carry_out, Carry0::Full, Carry1::Full, deferred, None, None, None,
     );
 }
 
-pub(crate) fn ripple_add_proved(
+fn ripple_add_proved(
     circ: &mut Builder, addend: &[QubitId], acc: &[QubitId],
     carry_in: Option<QubitId>, carry_out: Option<QubitId>, c0: Carry0, c1: Carry1,
     mut deferred: Option<(usize, BitId)>,
@@ -161,10 +174,36 @@ pub(crate) fn ripple_add_proved(
     } else {
         width.saturating_sub(2)
     };
+    if c0!=Carry0::Full || c1!=Carry1::Full {
+        assert!(carry_in.is_none() && k>=2 && width>=4);
+    }
+    if let Some(output)=known_output {
+        assert!(carry_in.is_none() && carry_out.is_none() && deferred.is_none());
+        assert_eq!(k+1,width);
+        assert_eq!(output.len(),width);
+    }
+    let room=walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
+    if !vented && borrowed.is_none() && deferred.is_none() && owned>room {
+        if let Some(chunk)=(1..width)
+            .filter(|&chunk|super::compact_chunk_add::workspace(k,width,chunk,false)<=room)
+            .max() {
+            super::compact_chunk_add::add(circ,addend,acc,carry_in,false,chunk);
+        } else if k==width {
+            if let Some(carry)=carry_in {
+                super::width_composition::add_wrapped_with_carry(circ,addend,acc,carry,None);
+            } else {
+                super::width_composition::add_wrapped(circ,addend,acc);
+            }
+        } else {
+            panic!("no exact wide-add layout fits {room} workspace qubits for {k}-into-{width} bits");
+        }
+        return;
+    }
     let mut carries = if let Some(qs)=borrowed {
-        assert!(carry_out.is_none() && k+1==width);
+        assert!(k >= owned, "borrowed carries require an addend at each internal stage");
         assert_eq!(qs.len(),owned);
         assert!(qs.iter().all(|q|!acc.contains(q) && !addend.contains(q)));
+        assert!(qs.iter().all(|&q|Some(q)!=carry_in && Some(q)!=carry_out));
         qs.to_vec()
     } else {circ.alloc_qubits(owned)};
     carries.extend(carry_out);
@@ -181,9 +220,7 @@ pub(crate) fn ripple_add_proved(
     let zero_prev = |i: usize| previous(i).expect("a zero-addend position always has a carry in");
 
     if let Some(output)=known_output {
-        // The pre-pass reads carry[j-1] = addend[j]^acc[j]^sum[j] for j >= 1 only,
-        // which does not involve a carry-in, so SQ_CIN_SPREAD's rows may pass one.
-        assert!(carry_out.is_none() && deferred.is_none());
+        assert!(carry_in.is_none() && carry_out.is_none() && deferred.is_none());
         assert_eq!(k+1,width);assert_eq!(output.len(),width);
         // sum[j] = original_addend[j] XOR original_acc[j] XOR carry[j-1].
         // The caller supplies a proved affine expression for the resulting
@@ -203,14 +240,6 @@ pub(crate) fn ripple_add_proved(
             // folded operand state so the terminal step and exact measured
             // unwind below remain unchanged.
             if let Some(prev)=previous(i) {circ.cx(prev,addend[i]);circ.cx(prev,acc[i]);}
-        } else if i == 0 && c0 == Carry0::IsAddend0 && carry_in.is_some() {
-            // SQ_CIN_SPREAD row 0: the caller proves acc[0] == NOT carry_in, so
-            // MAJ(addend0, acc0, carry_in) == addend0. Copy it, then fold the
-            // carry-in into both operands exactly as carry_step leaves them.
-            let cin = carry_in.unwrap();
-            circ.cx(addend[0], carries[0]);
-            circ.cx(cin, addend[0]);
-            circ.cx(cin, acc[0]);
         } else if i == 0 && c0 != Carry0::Full {
             assert!(carry_in.is_none() && k >= 2 && width >= 4);
             if c0 == Carry0::IsAddend0 { circ.cx(addend[0], carries[0]); }
@@ -335,7 +364,6 @@ fn terminal_step(
     acc: &[QubitId],
     previous: Option<QubitId>,
 ) {
-    if has_top_copy(acc){terminal_top_copy(circ,addend,acc,previous);return;}
     let n = acc.len();
     let k = addend.len();
     let i = n - 2;
@@ -406,6 +434,8 @@ pub fn add_f_window(
     lsbs: usize,
     first_carry_is_zero: bool,
 ) {
+    #[cfg(test)]
+    super::measurement::replay::site("fold-top", lsbs, reg.len(), false, "modular::add_f_window");
     assert!(lsbs <= reg.len(), "register too short for +f window");
     cadd_const_trunc(circ, &reg[..lsbs], f(), ctrl, first_carry_is_zero);
 }
@@ -434,6 +464,30 @@ pub fn ripple_add_lent(
     ripple_add_lent_with_deferred_phase(circ, addend, acc, carry_in, lent, None);
 }
 
+/// A vented addition with one internal carry on caller-owned clean workspace.
+pub(crate) fn ripple_add_lent_vented(
+    circ: &mut Builder,
+    addend: &[QubitId],
+    acc: &[QubitId],
+    carry_in: Option<QubitId>,
+    carry_out: QubitId,
+    lent: QubitId,
+) {
+    assert_eq!(addend.len(), acc.len());
+    if acc.len() < 2 {
+        ripple_add(circ, addend, acc, carry_in, Some(carry_out));
+        return;
+    }
+    let owned = circ.alloc_qubits(acc.len() - 2);
+    let mut carries = owned.clone();
+    carries.push(lent);
+    ripple_add_proved(
+        circ, addend, acc, carry_in, Some(carry_out), Carry0::Full, Carry1::Full,
+        None, None, None, Some(&carries),
+    );
+    circ.free_vec(&owned);
+}
+
 /// [`ripple_add_lent`] with a deferred phase attached to one arithmetic carry.
 /// The hook also supports the final carry stored on `lent` (index `width - 3`).
 pub fn ripple_add_lent_with_deferred_phase(
@@ -446,7 +500,6 @@ pub fn ripple_add_lent_with_deferred_phase(
 ) {
     let width = addend.len();
     assert_eq!(width, acc.len(), "ripple_add_lent: width mismatch");
-    if deferred.is_none() && result_top_loan_enabled(acc) {ripple_add_result_top_loan(circ,addend,acc,carry_in,Some(lent),false);return;}
     if width < 3 {
         ripple_add_with_deferred_phase(circ, addend, acc, carry_in, None, deferred);
         return;
@@ -518,9 +571,6 @@ pub(crate) fn ripple_add_source_sign_loan(
 ) {
     let n=addend.len();assert_eq!(n,acc.len());
     assert!(n>=3+usize::from(lent.is_some()));
-    if deferred.is_none() && result_top_loan_enabled(acc) && n>=4+usize::from(lent.is_some()) && super::env_flag("I76_SOURCE_TOP_LOAN") {
-        ripple_add_result_top_loan(circ,addend,acc,carry_in,lent,true);return;
-    }
     let owned=n-3-usize::from(lent.is_some());
     let high=addend[n-1];let copy=addend[n-2];
     assert!(!acc.contains(&high));
@@ -534,14 +584,8 @@ pub(crate) fn ripple_add_source_sign_loan(
     // original penultimate source before adding the identical top source bit.
     let i=n-2;
     circ.cx(high,copy);circ.cx(high,acc[i]);
-    if has_top_copy(acc){
-      let m=circ.alloc_bit();circ.hmr(acc[n-1],m);
-      circ.cz_if(copy,acc[i],m);circ.z_if(high,m);circ.z_if(acc[i],m);circ.free_bit(m);
-      circ.cx(high,copy);circ.cx(copy,acc[i]);circ.cx(acc[i],acc[n-1]);
-    }else{
-      circ.ccx(copy,acc[i],acc[n-1]);circ.cx(high,acc[n-1]);
-      circ.cx(high,copy);circ.cx(copy,acc[n-1]);circ.cx(copy,acc[i]);
-    }
+    circ.ccx(copy,acc[i],acc[n-1]);circ.cx(high,acc[n-1]);
+    circ.cx(high,copy);circ.cx(copy,acc[n-1]);circ.cx(copy,acc[i]);
     for i in (0..carries.len()).rev(){
         if deferred.as_ref().is_some_and(|(at,_)|*at==i){
             let(_,m)=deferred.take().unwrap();circ.z_if(carries[i],m);circ.free_bit(m);
@@ -610,14 +654,7 @@ fn peak_fitted_add(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], carry
     let mid = circ.alloc_qubit();
     ripple_add(circ, &value[..low], &acc[..low], None, Some(mid));
     ripple_add(circ, &value[low..], &acc[low..], Some(mid), Some(carry_out));
-    // PP_F_PEAKCMP=k: compare only the top k bits of the leading chunk
-    // (approximate, fails only when those k bits tie). Unset: exact.
-    match peak_cmp_bits() {
-        Some(k) if k >= 2 && low > k => {
-            erase_with_compare(circ, mid, &acc[low - k..low], &value[low - k..low], None)
-        }
-        _ => erase_with_compare(circ, mid, &acc[..low], &value[..low], None),
-    }
+    erase_with_compare(circ, mid, &acc[..low], &value[..low], None);
     circ.free(mid);
 }
 
@@ -737,20 +774,149 @@ pub fn addsub_wide_low(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], i
     addsub_full_low(circ, value, acc, inverse, c0, c1);
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::circuit::analyze_ops;
+    use crate::sim::Simulator;
+    use sha3::{digest::ExtendableOutput, Shake256};
 
-// Research: known final top is a copy of its neighboring output bit.
-thread_local! {static TOP_COPY:std::cell::Cell<Option<(QubitId,QubitId)>>=const{std::cell::Cell::new(None)};}
-pub(crate) fn with_top_copy(c:&mut Builder,acc:&[QubitId],enabled:bool,body:impl FnOnce(&mut Builder)){
- let pair=enabled.then(||(acc[acc.len()-1],acc[acc.len()-2]));
- TOP_COPY.with(|v|{assert!(v.replace(pair).is_none());});body(c);TOP_COPY.with(|v|v.set(None));
-}
-fn has_top_copy(acc:&[QubitId])->bool{acc.len()>=2 && TOP_COPY.with(|v|v.get()==Some((acc[acc.len()-1],acc[acc.len()-2])))}
-fn terminal_top_copy(c:&mut Builder,a:&[QubitId],b:&[QubitId],previous:Option<QubitId>){
- let n=b.len();let i=n-2;assert_eq!(a.len(),n);
- if let Some(p)=previous{c.cx(p,a[i]);c.cx(p,b[i]);}
- let m=c.alloc_bit();c.hmr(b[n-1],m);
- c.z_if(a[n-1],m);c.cz_if(a[i],b[i],m);c.z_if(a[i],m);c.z_if(b[i],m);c.free_bit(m);
- if let Some(p)=previous{c.cx(p,a[i]);}c.cx(a[i],b[i]);c.cx(b[i],b[n-1]);
-}
+    #[test]
+    fn wrapped_addition_fits_short_and_full_sources_without_truncating() {
+        for width in 4usize..=7 {
+            for source_width in 1..=width {
+                let room=if source_width==width {0}else{width-3};
+                if source_width<width && !(1..width).any(|chunk|
+                    super::super::compact_chunk_add::workspace(source_width,width,chunk,false)<=room) {
+                    continue;
+                }
+                for with_carry in [false,true] {
+                    let mut circ=Builder::new();
+                    let a=circ.alloc_qubits(source_width);
+                    let b=circ.alloc_qubits(width);
+                    let incoming=circ.alloc_qubit();
+                    circ.alloc_qubits(walk_max_qubits()-circ.active_qubits()as usize-room);
+                    let base=circ.active_qubits();
+                    ripple_add(&mut circ,&a,&b,with_carry.then_some(incoming),None);
+                    assert_eq!(circ.active_qubits(),base);
+                    let ops=circ.take_ops();
+                    let(nq,nb,_,_)=analyze_ops(ops.iter());
+                    assert!(nq<=walk_max_qubits()as u64);
+                    let source_mask=(1usize<<source_width)-1;
+                    let mask=(1usize<<width)-1;
+                    let assignments=1usize<<(source_width+width+1);
+                    for start in (0..assignments).step_by(64) {
+                        let mut rng=Shake256::default().finalize_xof();
+                        let mut sim=Simulator::new((nq as usize).max(source_width+width+1),nb as usize,&mut rng);
+                        let mut sums=vec![0;width];
+                        for lane in 0..64.min(assignments-start) {
+                            let value=start+lane;let x=value&source_mask;let y=(value>>source_width)&mask;
+                            let carry=value>>(source_width+width);
+                            for bit in 0..source_width{sim.qubits[a[bit].0 as usize]|=(((x>>bit)&1)as u64)<<lane;}
+                            for bit in 0..width{sim.qubits[b[bit].0 as usize]|=(((y>>bit)&1)as u64)<<lane;}
+                            sim.qubits[incoming.0 as usize]|=(carry as u64)<<lane;
+                            let sum=(x+y+if with_carry{carry}else{0})&mask;
+                            for bit in 0..width{sums[bit]|=(((sum>>bit)&1)as u64)<<lane;}
+                        }
+                        let mut expected=sim.qubits.clone();
+                        for bit in 0..width{expected[b[bit].0 as usize]=sums[bit];}
+                        sim.apply_iter(ops.iter());
+                        assert_eq!(sim.qubits,expected,"source={source_width}, width={width}, carry={with_carry}");
+                        assert_eq!(sim.phase,0);
+                    }
+                }
+            }
+        }
+    }
 
-include!("top_result_loan.rs");
+    #[test]
+    fn low_copy_addition_uses_one_qubit_and_preserves_phase() {
+        for width in 1usize..=6 {
+            let mut circ=Builder::new();
+            let a=circ.alloc_qubits(width);
+            let b=circ.alloc_qubits(width);
+            let copy=circ.alloc_qubit();
+            circ.alloc_qubits(walk_max_qubits()-circ.active_qubits()as usize-1);
+            let base=circ.active_qubits();
+            let out=add_with_low_copy(&mut circ,&a,&b,copy);
+            assert_eq!(circ.active_qubits(),base+1);
+            let ops=circ.take_ops();
+            let(nq,nb,_,_)=analyze_ops(ops.iter());
+            assert!(nq<=walk_max_qubits()as u64);
+            let mask=(1usize<<width)-1;
+            let assignments=1usize<<(2*width);
+            for start in (0..assignments).step_by(64) {
+                let mut rng=Shake256::default().finalize_xof();
+                let mut sim=Simulator::new(nq as usize,nb as usize,&mut rng);
+                let mut sums=vec![0;width+1];
+                for lane in 0..64.min(assignments-start) {
+                    let value=start+lane;let x=value&mask;let y=value>>width;
+                    for bit in 0..width {
+                        sim.qubits[a[bit].0 as usize]|=(((x>>bit)&1)as u64)<<lane;
+                        sim.qubits[b[bit].0 as usize]|=(((y>>bit)&1)as u64)<<lane;
+                    }
+                    sim.qubits[copy.0 as usize]|=((y&1)as u64)<<lane;
+                    for bit in 0..=width{sums[bit]|=((((x+y)>>bit)&1)as u64)<<lane;}
+                }
+                let mut expected=sim.qubits.clone();
+                for bit in 0..width{expected[b[bit].0 as usize]=sums[bit];}
+                expected[out.0 as usize]=sums[width];
+                sim.apply_iter(ops.iter());
+                assert_eq!(sim.qubits,expected,"width={width}");
+                assert_eq!(sim.phase,0);
+            }
+        }
+    }
+
+    #[test]
+    fn vented_lent_carry_saves_one_qubit_and_restores_exact_phase() {
+        for width in 1..=6 {
+            for with_incoming in [false, true] {
+                let mut circ = Builder::new();
+                let a = circ.alloc_qubits(width);
+                let b = circ.alloc_qubits(width);
+                let incoming = circ.alloc_qubit();
+                let outgoing = circ.alloc_qubit();
+                let lent = circ.alloc_qubit();
+                let base = circ.active_qubits();
+                ripple_add_lent_vented(
+                    &mut circ, &a, &b, with_incoming.then_some(incoming), outgoing, lent,
+                );
+                assert_eq!(circ.active_qubits(), base);
+                let ops = circ.take_ops();
+                let (nq, nb, _, _) = analyze_ops(ops.iter());
+                assert_eq!(nq.saturating_sub(base as u64) as usize, width.saturating_sub(2));
+                let mask = (1usize << width) - 1;
+                let assignments = 1usize << (2 * width + 1);
+                for start in (0..assignments).step_by(64) {
+                    let mut rng = Shake256::default().finalize_xof();
+                    let mut sim = Simulator::new((nq as usize).max(base as usize), nb as usize, &mut rng);
+                    let mut sums = vec![0; width];
+                    let mut overflow = 0;
+                    for lane in 0..64.min(assignments - start) {
+                        let assignment = start + lane;
+                        let x = assignment & mask;
+                        let y = (assignment >> width) & mask;
+                        let carry = (assignment >> (2 * width)) & 1;
+                        let sum = x + y + if with_incoming { carry } else { 0 };
+                        for bit in 0..width {
+                            sim.qubits[a[bit].0 as usize] |= (((x >> bit) & 1) as u64) << lane;
+                            sim.qubits[b[bit].0 as usize] |= (((y >> bit) & 1) as u64) << lane;
+                            sums[bit] |= (((sum >> bit) & 1) as u64) << lane;
+                        }
+                        sim.qubits[incoming.0 as usize] |= (carry as u64) << lane;
+                        overflow |= ((sum >> width) as u64) << lane;
+                    }
+                    let mut expected = sim.qubits.clone();
+                    for bit in 0..width {
+                        expected[b[bit].0 as usize] = sums[bit];
+                    }
+                    expected[outgoing.0 as usize] = overflow;
+                    sim.apply_iter(ops.iter());
+                    assert_eq!(sim.qubits, expected, "width={width}, incoming={with_incoming}");
+                    assert_eq!(sim.phase, 0);
+                }
+            }
+        }
+    }
+}

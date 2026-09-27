@@ -43,8 +43,7 @@ impl Builder {
     pub fn new() -> Self {
         Self {
             ops: Vec::new(),
-            // Count-only model mode is disabled in this submission.
-            model: false,
+            model: false, // Always emit operations; no count-only research mode.
             model_depth: 0, model_total: 0, model_weighted: 0.0,
             model_phase_native: 0, model_phase_weighted: 0.0, model_max: 0,
             phase_kind_ops: [0; OP_KINDS],
@@ -61,8 +60,6 @@ impl Builder {
             replay_sites: ReplaySites::new(),
         }
     }
-    pub(crate) fn i35_cost(&self)->f64{self.model_weighted}
-    pub fn i13_dims(&self)->(usize,usize){(self.next_qubit as usize,self.next_bit as usize)}
     pub fn take_ops(&mut self) -> Vec<Op> {
         if self.model {
             eprintln!("MODEL_PHASE {} {} {} {}", self.phase, self.peak_qubits,
@@ -72,6 +69,8 @@ impl Builder {
         std::mem::take(&mut self.ops)
     }
     fn push_op(&mut self, op: Op) {
+        #[cfg(test)]
+        super::measurement::record_op(self.phase, self.active_qubits, self.ops.len());
         // Tripwire, live only while tracing: every gate the score counts must
         // have been attributed by `ccx_census` first. CCX is the only scored
         // kind emitted today, so this is what a new CCZ path would trip.
@@ -98,7 +97,6 @@ impl Builder {
     }
     /// Close the current phase: report its Toffoli count and peak width on
     /// stdout -- which is what `build_circuit` prints -- and start a new one.
-    pub(crate) fn phase_name(&self) -> &'static str { self.phase }
     pub fn set_phase(&mut self, p: &'static str) {
         if self.model {
             eprintln!("MODEL_PHASE {} {} {} {}", self.phase, self.peak_qubits,
@@ -129,6 +127,8 @@ impl Builder {
     fn note_peak(&mut self) {
         self.peak_qubits = self.peak_qubits.max(self.active_qubits);
         self.model_max = self.model_max.max(self.active_qubits);
+        #[cfg(test)]
+        super::measurement::record_peak(self.phase, self.active_qubits);
     }
 
     #[track_caller]
@@ -447,6 +447,8 @@ impl Builder {
 
     /// Record one replay repair site; see [`ReplaySites::record`].
     pub fn record_replay_site(&mut self, kind: char, round: usize, pos: usize, width: usize) {
+        #[cfg(test)]
+        super::measurement::replay::record_replay_site(kind, round, pos, width);
         let at = self.at();
         self.replay_sites.record(at, kind, round, pos, width);
     }

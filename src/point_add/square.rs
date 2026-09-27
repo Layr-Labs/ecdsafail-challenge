@@ -15,15 +15,68 @@
 //! as a `bool` and never as a wire: `negate` turns an add into the
 //! complement-add-complement subtraction.
 
+#[cfg(test)]
+mod cross_loan_tests {
+    use super::*;
+    use alloy_primitives::U256;
+    use crate::circuit::analyze_ops;
+    use crate::sim::Simulator;
+    use ruint::Uint;
+    use sha3::{digest::ExtendableOutput, Shake256};
+
+    #[test]
+    fn child_zero_loans_preserve_squares_and_reverse_cleanup() {
+        for width in [64usize,65,128,129] {
+            let mut circ=Builder::new();
+            let x=circ.alloc_qubits(width);
+            circ.alloc_qubits(if width==129 {513-width}else{512-width});
+            let product=circ.alloc_qubits(2*width);
+            let old=OUTER_SQUARE_POLICY.with(|policy|policy.replace(Some(7)));
+            let retained=tri_square_k2r(&mut circ,&x,&product);
+            let forward=circ.take_ops();
+            tri_square_k2r_inv(&mut circ,&x,&product,retained);
+            let backward=circ.take_ops();
+            OUTER_SQUARE_POLICY.with(|policy|policy.set(old));
+            let(nq,nb,_,_)=analyze_ops(forward.iter().chain(&backward));
+            assert!(nq<=super::super::pingpong::walk_max_qubits()as u64);
+            let mut rng=Shake256::default().finalize_xof();
+            let mut sim=Simulator::new(nq as usize,nb as usize,&mut rng);
+            let mask=(U256::from(1)<<width)-U256::from(1);
+            let mut samples=Vec::new();
+            let mut state=0xf036_49aa_27cb_0185u64;
+            for lane in 0..64 {
+                let mut limbs=[0;4];
+                for word in &mut limbs {
+                    state^=state<<13;state^=state>>7;state^=state<<17;*word=state;
+                }
+                let value=match lane {
+                    0=>U256::ZERO,1=>U256::from(1),2=>mask,3=>U256::from(1)<<(width-1),
+                    _=>U256::from_limbs(limbs)&mask,
+                };
+                for (bit,q) in x.iter().enumerate(){sim.qubits[q.0 as usize]|=u64::from(value.bit(bit))<<lane;}
+                let mut limbs=[0;8];limbs[..4].copy_from_slice(value.as_limbs());
+                let value=Uint::<512,8>::from_limbs(limbs);
+                samples.push(value*value);
+            }
+            let initial=sim.qubits.clone();
+            sim.apply_iter(forward.iter());
+            for (lane,expected) in samples.iter().enumerate() {
+                for (bit,q) in product.iter().enumerate() {
+                    assert_eq!((sim.qubits[q.0 as usize]>>lane)&1,u64::from(expected.bit(bit)),
+                        "width={width}, lane={lane}, bit={bit}");
+                }
+            }
+            sim.apply_iter(backward.iter());
+            assert_eq!(sim.qubits,initial,"width={width}");
+            assert_eq!(sim.phase,0,"width={width}");
+        }
+    }
+}
+
 use super::modular::{addsub_full_low, addsub_wide_low, Carry0, Carry1, add_wide, addsub_full, addsub_wide, mod_addsub, sub_wide};
 use super::{fold_guard, pinned_env, Builder, N};
 use crate::circuit::{QubitId,BitId};
-use alloy_primitives::U256;
 fn cut_sqident() -> bool { super::env_flag("PP_CUT_SQIDENT") }
-/// SQ_ROW0_COPY: every SQ_CIN_SPREAD leaf stores `x^2 - 2` (row 0 becomes a
-/// Clifford copy), each node's product and cross carry known constant offsets,
-/// and the square's total offset is pre-added classically in `coord_add3x`.
-fn row0_copy() -> bool { super::env_flag("SQ_ROW0_COPY") && super::env_flag("SQ_CIN_SPREAD") }
 /// The low-diagonal preload ([`diag_preload`]). Off by default: with this clear
 /// the file emits exactly the stream it did before the lever existed.
 fn diag_preload_on() -> bool { super::env_flag("SQ_DIAG_PRELOAD") }
@@ -47,7 +100,7 @@ fn diag_split(m: usize) -> usize {
 }
 
 /// `f = 2^256 - p` in non-adjacent form: the value is `sum (-1)^neg * 2^shift`,
-/// i.e. `1 + 2^4 - 2^6 + 2^10 + 2^32`. Five terms against the constant's six set
+/// i.e. `1 + 2^4 - 2^6 + 2^10 + 2^32`. Five terms against the constant's seven set
 /// bits, and every fold of `f` in this file is driven off it.
 const F_NAF: [(usize, bool); 5] = [(0, false), (4, false), (6, true), (10, false), (32, false)];
 
@@ -96,100 +149,7 @@ fn row_addsub(
     circ.x(ctrl);
 }
 
-/// SQ_CIN_SPREAD: triangular row with the diagonal spread bit riding in on the
-/// ripple's carry-in. The complement frame is driven by X gates plus CX from
-/// `xi` (instead of X on `xi` itself), so the wire `xi` stays intact and can be
-/// the carry-in. The row then computes `acc += (2 xi - 1)(v + xi)
-/// = (2 xi - 1) v + xi`, i.e. it also adds `xi * 2^(2i+1)`, which is the spread
-/// bit of `xi`. A carry-in costs no Toffoli.
-fn row_addsub_cin(circ:&mut Builder, xi:QubitId, operand:&[QubitId], acc:&[QubitId], inverse:bool,
-                  first_copies_operand:bool, known_output:Option<&[(bool,Vec<QubitId>)]>,
-                  borrowed:Option<&[QubitId]>) {
-    let k=operand.len();
-    assert_eq!(acc.len(),k+1);
-    if inverse { circ.x(acc[k]); circ.cx(xi,acc[k]); }
-    circ.x_all(&acc[..k]); circ.cx_all(xi,&acc[..k]);
-    if inverse { circ.x_all(acc); }
-    let c0=if first_copies_operand {Carry0::IsAddend0} else {Carry0::Full};
-    // Inverse rows restore a state that never reached bit i+m (see
-    // SQ_ROW_ALL_MEASURE_TOP); in the subtraction frame that top reads 1.
-    let top=(known_output.is_none() && inverse && super::env_flag("SQ_ROW_ALL_MEASURE_TOP")).then_some(true);
-    if let Some(out)=known_output.filter(|_|super::env_flag("SQ_ROW1_STREAM")) {
-        super::stream_wide::add(circ,operand,acc,Some(xi),out);
-    } else {
-    super::modular::ripple_add_proved(circ,operand,acc,Some(xi),None,c0,Carry1::Full,None,known_output,top,borrowed);
-    }
-    if inverse { circ.x_all(acc); }
-    circ.x_all(&acc[..k]); circ.cx_all(xi,&acc[..k]);
-    if !inverse { circ.x(acc[k]); circ.cx(xi,acc[k]); }
-}
-
-/// SQ_CIN_SPREAD inverse correction: add `x + ~x_low << m` back. The rows alone
-/// never reach product[2m-1], and the lone spread CX on that bit has already
-/// been undone, so the result's top bit is zero: measured terminal.
-fn diag_correction_known_top(circ:&mut Builder, x:&[QubitId], product:&[QubitId]) {
-    let m=x.len();
-    let pads=circ.alloc_qubits(m);
-    for i in 0..m-1 { circ.cx(x[i],pads[i]); circ.x(pads[i]); }
-    let mut value=x.to_vec();
-    value.extend_from_slice(&pads);
-    let c0=if cut_sqident() {Carry0::IsAddend0} else {Carry0::Full};
-    super::modular::addsub_wide_known_top(circ,&value,product,false,c0,Carry1::Full,false);
-    for i in 0..m-1 { circ.x(pads[i]); circ.cx(x[i],pads[i]); }
-    circ.free_vec(&pads);
-}
-
-/// SQ_CIN_SPREAD leaf: rows carry the whole diagonal spread through their
-/// carry-in, the top spread bit x[m-1]*2^(2m-1) is one CX onto a still-zero
-/// wire, and only the correction subtract remains. No preload, no spread add.
-fn tri_square_cin(circ:&mut Builder, x:&[QubitId], product:&[QubitId], inverse:bool) {
-    let m=x.len();
-    assert_eq!(product.len(),2*m);
-    assert!(m>=3);
-    if inverse {
-        circ.cx(x[m-1],product[2*m-1]);
-        diag_correction_known_top(circ,x,product);
-    }
-    for r in 0..m-1 {
-        let i=if inverse { m-2-r } else { r };
-        let row=&product[2*i+1..i+m+1];
-        let borrowed=super::env_flag("SQ_BORROW_ROW_CARRIES").then(|| &product[m+i+1..2*m-1]);
-        if i==0 && row0_copy() {
-            // SQ_ROW0_COPY: row 0 on the zero window would leave
-            // F = x0 ? v+1 : 2^k - v. Store F - 1 = x0 ? v : ~v instead (top bit
-            // zero), which is Clifford and self-inverse. The leaf then holds
-            // x^2 - 2; see [`sub_square_offset`] for where the 2 goes.
-            for j in 0..m-1 { circ.cx(x[j+1],row[j]); circ.x(row[j]); circ.cx(x[0],row[j]); }
-            continue;
-        }
-        if inverse && i==1 && row0_copy() && super::env_flag("SQ_ROW1_INVERSE_CARRIES") {
-            let out=row1_known_output(x);
-            if super::env_flag("I48_TRACE"){eprintln!("I48_ROW1 {} {}",m,circ.active_qubits());}
-            row_addsub_cin(circ,x[1],&x[2..],row,true,false,Some(&out),borrowed);
-            continue;
-        }
-        if inverse && i==0 && super::env_flag("SQ_ROW0_INVERSE_CARRIES") {
-            // Before row 0 the product is all zero, so every framed output bit
-            // is known: x0 on the k low bits, 1 on the top.
-            let k=m-1;
-            let mut out=vec![(false,vec![x[0]]);k];
-            out.push((true,Vec::new()));
-            row_addsub_cin(circ,x[0],&x[1..],row,true,false,Some(&out),borrowed);
-            continue;
-        }
-        // Forward row 0 sees a zero window: framed acc[0] = NOT x0 = NOT carry_in,
-        // so its first carry is x[1].
-        let first=super::env_flag("SQ_ROW0_CARRY") && !inverse && i==0;
-        row_addsub_cin(circ,x[i],&x[i+1..],row,inverse,first,None,borrowed);
-    }
-    if !inverse {
-        circ.cx(x[m-1],product[2*m-1]);
-        diag_correction(circ,x,product,true);
-    }
-}
-
 fn tri_square(circ: &mut Builder, x: &[QubitId], product: &[QubitId], inverse: bool) {
-    if super::env_flag("SQ_CIN_SPREAD") { tri_square_cin(circ,x,product,inverse); return; }
     let m = x.len();
     assert_eq!(product.len(), 2 * m);
     assert_ne!(m, 0);
@@ -382,8 +342,20 @@ fn sparse_diag_add(circ: &mut Builder, map: &[Vec<QubitId>], acc: &[QubitId],
 /// above a register rather than a constant.
 fn window_add(circ: &mut Builder, negate: bool, value: &[QubitId], out: &[QubitId], shift: usize) {
     let top = shift + value.len() + fold_guard();
+    #[cfg(test)]
+    super::measurement::replay::site("square-window", top - shift, out.len() - shift, false, "square::window_add");
     assert!(top <= out.len());
-    addsub_wide(circ, value, &out[shift..top], negate);
+    let acc = &out[shift..top];
+    let room = super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
+    if acc.len().saturating_sub(2) > room {
+        let chunk = (1..=acc.len())
+            .filter(|&chunk| super::compact_chunk_add::workspace(value.len(), acc.len(), chunk, false) <= room)
+            .max()
+            .expect("no exact square-fold chunk layout fits the available qubits");
+        super::compact_chunk_add::add(circ, value, acc, None, negate, chunk);
+    } else {
+        addsub_wide(circ, value, acc, negate);
+    }
 }
 
 /// Fold a value whose high limb has wrapped past `2^N`. Since `2^N = f (mod
@@ -451,9 +423,6 @@ struct K2Retained {
     /// The high half's own retained scratch, when [`sq_split_b_min`] split it.
     high: Option<Box<K2Retained>>,
     cross_phase: Option<(super::width_composition::Plan,Vec<(usize,BitId)>)>,
-    /// SQ_HOLD_BOUNDARY: live boundary carries of the fitted assembly, cleared
-    /// by the inverse assembly's high-to-low chunk ripple.
-    held: Vec<QubitId>,
 }
 
 /// Recursion policy: a sum half of at least this many bits is split again
@@ -515,9 +484,6 @@ fn square_b(circ: &mut Builder, bs: &[QubitId], b2: &[QubitId]) -> Option<Box<K2
     let mut t = inner.to_vec();
     t.push(r.carry);
     restore_square_sum(circ,a,&t);
-    // SQ_HIGH_CARRY_LOAN: t - a = b < 2^|b| left r.carry at exactly |0>, and
-    // nothing reads it until square_b_inv re-forms the in-place sum.
-    if super::env_flag("SQ_HIGH_CARRY_LOAN") {circ.release_clean(r.carry);}
     Some(Box::new(r))
 }
 
@@ -528,7 +494,6 @@ fn square_b_inv(circ: &mut Builder, bs: &[QubitId], b2: &[QubitId], retained: Op
     match retained {
         None => tri_square(circ, bs, b2, true),
         Some(r) => {
-            if super::env_flag("SQ_HIGH_CARRY_LOAN") {circ.reacquire(r.carry);}
             let (a, inner) = bs.split_at(bs.len() / 2);
             let mut t = inner.to_vec();
             t.push(r.carry);
@@ -575,75 +540,24 @@ fn tri_square_k2r_flat(circ: &mut Builder, x: &[QubitId], product: &[QubitId]) -
 /// Retain all internal boundary carries and pay their full phase cleanup.
 /// No fold/comparison truncation window is changed by this helper.
 fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
-    recover:Option<(super::width_composition::Plan,Vec<(usize,BitId)>)>,held:&mut Vec<QubitId>)
+    recover:Option<(super::width_composition::Plan,Vec<(usize,BitId)>)>)
     ->Option<(super::width_composition::Plan,Vec<(usize,BitId)>)> {
-    // SQ_ASM_TAIL=E: ripple the carry only E bits past the cross word. The
-    // bits above hold b^2 and are random, so a carry reaches E bits in with
-    // probability about 2^-E. An approximate cut, priced as a sell.
-    let full=acc;
-    let acc=match super::optional_env::<usize>("SQ_ASM_TAIL"){Some(e)=>&full[..full.len().min(cross.len()+e)],None=>full};
-    let mut room=super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
+    let room=super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
     if recover.is_some() || (super::env_flag("SQ_FIT_CROSS") && acc.len().saturating_sub(2)>room) {
-        // SQ_OWN_TOP_ZEROS: this node's own top cross bits are zero for every
-        // input (2ab < 2^(lo+hi+1)); add them as zero addend bits and lend them.
-        let tops=if super::env_flag("SQ_OWN_TOP_ZEROS"){own_top_zero_bits(cross,full)}else{Vec::new()};
-        for &q in &tops{circ.release_clean(q);}
-        room+=tops.len();
         if inverse {circ.x_all(acc);}
         let n=acc.len()-1;
         let(plan,fixes)=recover.unwrap_or_else(||((room..=room.max(n)).find_map(|r|super::width_composition::direct_plan(n,r)).unwrap(),Vec::new()));
-        let map:Vec<Vec<QubitId>>=(1..acc.len()).map(|i|cross.get(i).copied().filter(|q|!tops.contains(q)).into_iter().collect()).collect();
-        // SQ_HOLD_BOUNDARY: keep the chunk carry-outs live instead of measuring
-        // them. The inverse (forced onto this plan) recreates the same carries
-        // and XORs each back to zero, so no boundary phase ever needs repair.
-        if !inverse && super::env_flag("SQ_HOLD_BOUNDARY") {
-            *held=super::width_composition::direct_add_hold(circ,&map,&acc[1..],cross[0],&plan);
-            rehome_held(circ,held,&tops);
-            return Some((plan,Vec::new()));
-        }
-        if inverse && !held.is_empty() {
-            super::width_composition::direct_add_unhold(circ,&map,&acc[1..],cross[0],&plan,std::mem::take(held));
-            circ.x_all(acc);
-            for &q in &tops{circ.reacquire(q);}
-            return None;
-        }
+        let map:Vec<Vec<QubitId>>=(1..acc.len()).map(|i|cross.get(i).copied().into_iter().collect()).collect();
         // bit0 of the source is zero, so acc[0] and the first carry stay put.
         let defer=!inverse && super::env_flag("SQ_DEFER_CROSS_PHASE");
         let pending=super::width_composition::direct_add_phase_transport(circ,&map,&acc[1..],cross[0],&plan,defer,&fixes);
         if inverse {circ.x_all(acc);}
-        for &q in &tops{circ.reacquire(q);}
         if super::env_flag("SQ_FIT_CROSS_TRACE") {eprintln!("FIT_CROSS {} {} {} {} {}",acc.len(),room,plan.peak,plan.extra2,inverse as u8);}
         if defer{return Some((plan,pending));}
     } else if cut_sqident() {
         addsub_wide_low(circ,cross,acc,inverse,Carry0::Zero,Carry1::Full);
     } else {addsub_wide(circ,cross,acc,inverse);}
     None
-}
-
-/// SQ_OWN_TOP_ZEROS: a node's retained cross holds 2ab in 2*(hi+1) bits, and
-/// 2ab < 2^(lo+hi+1): its top bit, and the one below when lo < hi, are zero.
-/// `acc` is product[lo..], of length 2m - lo = lo + 2hi.
-fn own_top_zero_bits(cross:&[QubitId],acc:&[QubitId])->Vec<QubitId>{
-    let n=cross.len();let hi=n/2-1;let lo=acc.len()-2*hi;
-    assert!(n%2==0 && lo<=hi && hi<=lo+1,"own_top_zero_bits: unexpected node shape");
-    if lo<hi{vec![cross[n-1],cross[n-2]]}else{vec![cross[n-1]]}
-}
-
-/// SQ_HOLD_BOUNDARY: a held carry may have been allocated on a wire that is
-/// currently lent (assembly loans, own top zeros). Reacquire every other lent
-/// wire, then move each such carry to a fresh wire (2 CX) so the lent wire is
-/// |0> and live again in its own role. No Toffoli, no measurement.
-fn rehome_held(circ:&mut Builder,held:&mut [QubitId],lent:&[QubitId]){
-    for &q in lent{if !held.contains(&q){circ.reacquire(q);}}
-    for h in held.iter_mut(){
-        if lent.contains(h){let f=circ.alloc_qubit();circ.cx(*h,f);circ.cx(f,*h);*h=f;}
-    }
-}
-fn assembly_repay_held(circ:&mut Builder,x:&[QubitId],product:&[QubitId],qs:Vec<QubitId>,held:&mut [QubitId]){
-    if held.is_empty(){assembly_repay(circ,x,product,qs);return;}
-    if qs.is_empty(){return;}
-    rehome_held(circ,held,&qs);circ.cx(x[0],product[0]);
-    if row0_copy(){circ.x(product[1]);}
 }
 
 /// The full sum is exactly a+b; removing a restores b and clears its extra
@@ -666,15 +580,25 @@ fn assembly_loans(circ:&mut Builder,x:&[QubitId],product:&[QubitId],
     if let Some(r)=sum{retained_zero_bits(r,hi+1,&mut qs);}
     if let Some(r)=high{retained_zero_bits(r,hi,&mut qs);}
     circ.cx(x[0],product[0]);
-    // SQ_ROW0_COPY: the low half holds a^2 + Na with Na = 2 (mod 4), so
-    // product[1] is one rather than zero here.
-    if row0_copy(){circ.x(product[1]);}
     for &q in &qs{circ.release_clean(q);}qs
 }
 fn assembly_repay(circ:&mut Builder,x:&[QubitId],product:&[QubitId],qs:Vec<QubitId>){
     if qs.is_empty(){return;}
     for q in qs{circ.reacquire(q);}circ.cx(x[0],product[0]);
-    if row0_copy(){circ.x(product[1]);}
+}
+
+// Child cross registers retain 2ab. Their constant zero bits are not operands
+// of the parent's cross subtraction/addition and can fund its carry ladder.
+fn child_cross_loans(
+    circ:&mut Builder,lo:usize,hi:usize,
+    low:Option<&K2Retained>,sum:Option<&K2Retained>,high:Option<&K2Retained>,
+)->Vec<QubitId>{
+    let mut loans=Vec::new();
+    if let Some(child)=low{retained_zero_bits(child,lo,&mut loans);}
+    if let Some(child)=sum{retained_zero_bits(child,hi+1,&mut loans);}
+    if let Some(child)=high{retained_zero_bits(child,hi,&mut loans);}
+    for &q in &loans{circ.release_clean(q);}
+    loans
 }
 
 fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], flat: bool) -> K2Retained {
@@ -705,35 +629,25 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
     let cross = circ.alloc_qubits(2 * t.len());
     let sum = if flat { tri_square(circ, &t, &cross, false); None }
               else { square_half(circ, &t, &cross, policy_min(1, sq_split_sum_min())) };
-    // SQ_ODD_NODE_TOPS: with lo = hi-1, t^2 - a^2 = b(2a+b) < 2^(2hi+1), so the
-    // top of the 2(hi+1)-bit cross word is zero after this subtraction.
-    let odd_tops = lo < m - lo && super::env_flag("SQ_ODD_NODE_TOPS");
-    if odd_tops {
-        let c1=if cut_sqident(){Carry1::CopiesCarry0}else{Carry1::Full};
-        super::modular::addsub_wide_known_top(circ,a2,&cross,true,Carry0::Full,c1,false);
-    } else if cut_sqident() {
+    let child_loans=child_cross_loans(circ,lo,m-lo,low.as_deref(),sum.as_deref(),high.as_deref());
+    if cut_sqident() {
         addsub_wide_low(circ, a2, &cross, true, Carry0::Full, Carry1::CopiesCarry0);
     } else {
         sub_wide(circ, a2, &cross);
     }
-    // SQ_ROW0_COPY: b2 holds b^2 + Nb with Nb = 2 (mod 4), so its bit 1 is
-    // always set. Clearing it subtracts b2 - 2, which keeps the bit-1 carry
-    // identity below and adds 2 to this node's cross offset.
-    if row0_copy() {circ.x(b2[1]);}
     if super::env_flag("SQ_ZERO_TOP_CROSS") {
         // 2ab < 2^(lo+hi+1), while cross has 2*(hi+1) bits: its top is zero.
         let (c0,c1)=if cut_sqident(){(Carry0::Zero,Carry1::CopiesCarry0)}else{(Carry0::Full,Carry1::Full)};
         super::modular::addsub_wide_known_top(circ,b2,&cross,true,c0,c1,false);
     } else if cut_sqident() {addsub_wide_low(circ,b2,&cross,true,Carry0::Zero,Carry1::CopiesCarry0);}
     else {sub_wide(circ,b2,&cross);}
-    if row0_copy() {circ.x(b2[1]);}
+    for q in child_loans{circ.reacquire(q);}
     // product += 2ab << lo, exact full ripple to the top (x^2 < 2^(2m), so the
     // top never overflows).
     let loans=assembly_loans(circ,x,product,low.as_deref(),sum.as_deref(),high.as_deref());
-    let mut held=Vec::new();
-    let cross_phase=add_cross(circ,&cross,&product[lo..],false,None,&mut held);
-    assembly_repay_held(circ,x,product,loans,&mut held);
-    K2Retained { carry, cross, low, sum, high, cross_phase, held }
+    let cross_phase=add_cross(circ,&cross,&product[lo..],false,None);
+    assembly_repay(circ,x,product,loans);
+    K2Retained { carry, cross, low, sum, high, cross_phase }
 }
 
 /// Inverse of `tri_square_k2r`, consuming its retained scratch. Requires
@@ -746,7 +660,7 @@ fn tri_square_k2r_inv(
 ) {
     let m = x.len();
     assert_eq!(product.len(), 2 * m);
-    let K2Retained { carry, cross, low, sum, high, cross_phase, mut held } = retained;
+    let K2Retained { carry, cross, low, sum, high, cross_phase } = retained;
     let lo = m / 2;
     let (a, bs) = x.split_at(lo);
     let (a2, b2) = product.split_at(2 * lo);
@@ -754,30 +668,19 @@ fn tri_square_k2r_inv(
     t.push(carry);
     // product -= 2ab << lo: the halves are pure a^2 / b^2 again.
     let loans=assembly_loans(circ,x,product,low.as_deref(),sum.as_deref(),high.as_deref());
-    assert!(add_cross(circ,&cross,&product[lo..],true,cross_phase,&mut held).is_none());
-    assert!(held.is_empty(),"SQ_HOLD_BOUNDARY: held carries not cleared");
+    assert!(add_cross(circ,&cross,&product[lo..],true,cross_phase).is_none());
     assembly_repay(circ,x,product,loans);
     // cross: 2ab -> t^2, then clear it with the inverse square (which also
     // restores t if its own split modified it).
-    if lo < m - lo && super::env_flag("SQ_ODD_NODE_TOPS") {
-        // 2ab + b^2 = b(2a+b) < 2^(2hi+1) when lo = hi-1: zero top after the re-add.
-        let (c0,c1)=if cut_sqident(){(Carry0::Zero,Carry1::CopiesCarry0)}else{(Carry0::Full,Carry1::Full)};
-        if row0_copy() {circ.x(b2[1]);}
-        super::modular::addsub_wide_known_top(circ,b2,&cross,false,c0,c1,false);
-        if row0_copy() {circ.x(b2[1]);}
-        if cut_sqident() { addsub_wide_low(circ, a2, &cross, false, Carry0::Full, Carry1::CopiesCarry0); }
-        else { add_wide(circ, a2, &cross); }
-    } else if cut_sqident() {
-        if row0_copy() {circ.x(b2[1]);}
+    let child_loans=child_cross_loans(circ,lo,m-lo,low.as_deref(),sum.as_deref(),high.as_deref());
+    if cut_sqident() {
         addsub_wide_low(circ, b2, &cross, false, Carry0::Zero, Carry1::CopiesCarry0);
-        if row0_copy() {circ.x(b2[1]);}
         addsub_wide_low(circ, a2, &cross, false, Carry0::Full, Carry1::CopiesCarry0);
     } else {
-        if row0_copy() {circ.x(b2[1]);}
         add_wide(circ, b2, &cross);
-        if row0_copy() {circ.x(b2[1]);}
         add_wide(circ, a2, &cross);
     }
+    for q in child_loans{circ.reacquire(q);}
     square_half_inv(circ, &t, &cross, sum);
     circ.free_vec(&cross);
     // Clear a^2, restoring a first if it was split, then uncompute t = a + b:
@@ -824,9 +727,6 @@ fn retained_cross2_bits(r:&K2Retained,x:&[QubitId],out:&mut Vec<Cross2Loan>) {
 }
 fn cross2_erase(circ:&mut Builder,l:Cross2Loan) {
     // cross[2] = a0*t1 ^ a1*t0 ^ a0*t0 ^ a0, for t=a+b.
-    // SQ_ROW0_COPY: bit 2 is flipped (see cross2_restore); unflip it first so
-    // the phase repair below stays exact rather than off by (-1)^m.
-    if row0_copy(){circ.x(l.q);}
     let m=circ.alloc_bit();circ.hmr(l.q,m);
     circ.cz_if(l.a0,l.t1,m);circ.cz_if(l.a1,l.t0,m);
     circ.cz_if(l.a0,l.t0,m);circ.z_if(l.a0,m);circ.free_bit(m);
@@ -835,9 +735,6 @@ fn cross2_restore(circ:&mut Builder,l:Cross2Loan) {
     // Two products after an exactly restored Clifford source-frame change.
     circ.cx(l.t0,l.t1);circ.x(l.t1);circ.ccx(l.a0,l.t1,l.q);
     circ.x(l.t1);circ.cx(l.t0,l.t1);circ.ccx(l.a1,l.t0,l.q);
-    // SQ_ROW0_COPY: every node's cross offset is 4 (mod 8), which flips bit 2
-    // and leaves bits 0 and 1 alone. The erase only changes by a global phase.
-    if row0_copy(){circ.x(l.q);}
 }
 
 /// Materialise `x^2` in a fresh register, run `folds` against it, then uncompute
@@ -893,52 +790,6 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
     if price_branches {circ.set_phase("square_between");}
 }
 
-/// SQ_ROW0_COPY offsets, mod p, mirroring the split decisions of
-/// [`tri_square_k2r_inner`]. A leaf stores `x^2 - 2`. A node stores
-/// `x^2 + Na + c 2^lo + Nb 2^(2 lo)`, where its cross holds `2ab + c` with
-/// `c = Nt - Na - Nb + 2` (the 2 is the cleared bit 1 of b2).
-fn k2r_offset(m: usize, flat: bool) -> U256 {
-    let p = super::SECP256K1_P;
-    let leaf = p - U256::from(2);
-    let lo = m / 2;
-    let hi = m - lo;
-    let child = |len: usize, min: usize, flat_child: bool| {
-        if !flat && len >= min { k2r_offset(len, flat_child) } else { leaf }
-    };
-    let nb = child(hi, policy_min(2, sq_split_b_min()), true);
-    let na = child(lo, policy_min(0, sq_split_low_min()), false);
-    let nt = child(hi + 1, policy_min(1, sq_split_sum_min()), false);
-    let neg = |v: U256| if v.is_zero() { v } else { p - v };
-    let c = nt.add_mod(neg(na), p).add_mod(neg(nb), p).add_mod(U256::from(2), p);
-    let pow = |k: usize| (U256::from(1) << k).reduce_mod(p);
-    na.add_mod(c.mul_mod(pow(lo), p), p).add_mod(nb.mul_mod(pow(2 * lo), p), p)
-}
-
-fn square_offset(len: usize, policy_name: &str) -> U256 {
-    let old = OUTER_SQUARE_POLICY.with(|p| p.replace(super::optional_env::<usize>(policy_name)));
-    let n = k2r_offset(len, false);
-    OUTER_SQUARE_POLICY.with(|p| p.set(old));
-    n
-}
-
-/// What [`sub_square`] leaves `out` short by under SQ_ROW0_COPY, mod p: each
-/// branch's product offset times that branch's fold weight. The caller adds
-/// it back classically. Zero with the knob off.
-pub(super) fn sub_square_offset() -> U256 {
-    if !row0_copy() { return U256::ZERO; }
-    let p = super::SECP256K1_P;
-    let h = N / 2;
-    let pow = |k: usize| (U256::from(1) << k).reduce_mod(p);
-    let two_n = super::modular::f();
-    let na = square_offset(h, "SQ_A_POLICY");
-    let nb = square_offset(h, "SQ_B_POLICY");
-    let nc = square_offset(h + 1, "SQ_C_POLICY");
-    // out -= A (1 - 2^h) + B (2^N - 2^h) + C 2^h.
-    let wa = U256::from(1).add_mod(p - pow(h), p);
-    let wb = two_n.add_mod(p - pow(h), p);
-    na.mul_mod(wa, p).add_mod(nb.mul_mod(wb, p), p).add_mod(nc.mul_mod(pow(h), p), p)
-}
-
 pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
     assert_eq!(y.len(), N);
     assert_eq!(out.len(), N);
@@ -975,21 +826,4 @@ pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
 
     restore_square_sum(circ,y_lo,&sum);
     circ.free(sum_carry);
-}
-
-
-// Before row1, only row0 ran. Physical product[j]=x[j]^1^x0 for1<=j<m,
-// and all higher bits are zero. In the inverse adder frame, low outputs
-// additionally XOR x1 and the top output is1.
-fn row1_known_output(x:&[QubitId])->Vec<(bool,Vec<QubitId>)> {
-    let m=x.len();assert!(m>=3);let k=m-2;
-    let mut out:Vec<_>=(0..k).map(|j|if j+3<m {(true,vec![x[j+3],x[0],x[1]])}else{(false,vec![x[1]])}).collect();
-    out.push((true,Vec::new()));out
-}
-pub(super) fn i48_row_fixture(c:&mut Builder,x:&[QubitId],product:&[QubitId]) {
-    let m=x.len();let row=&product[3..m+2];let out=row1_known_output(x);
-    row_addsub_cin(c,x[1],&x[2..],row,true,false,Some(&out),None);
-}
-pub(super) fn i48_leaf_fixture(c:&mut Builder,x:&[QubitId],product:&[QubitId],inverse:bool) {
-    tri_square_cin(c,x,product,inverse);
 }

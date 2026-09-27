@@ -46,6 +46,16 @@ pub(crate) fn plan(n:usize, room:usize)->Option<Plan> {
     cache.lock().unwrap().insert((n,room),best.clone());best
 }
 
+/// Plan for a preserved, caller-owned incoming carry, which replaces the
+/// zero-initialized carry otherwise needed by a one-block in-place addition.
+pub(crate) fn plan_with_carry(n:usize,room:usize)->Option<Plan> {
+    if room==1 && n>0 {
+        Some(Plan{sizes:vec![n],slow:true,extra2:2*n,peak:1})
+    } else {
+        plan(n,room)
+    }
+}
+
 fn erase_release(c:&mut Builder,q:QubitId,a:&[QubitId],b:&[QubitId],incoming:Option<QubitId>){
     let m=c.alloc_bit();c.hmr(q,m);c.release_clean(q);
     c.push_condition(m);
@@ -58,11 +68,65 @@ fn erase_release(c:&mut Builder,q:QubitId,a:&[QubitId],b:&[QubitId],incoming:Opt
 }
 
 fn inplace(c:&mut Builder,a:&[QubitId],b:&[QubitId],incoming:Option<QubitId>,out:QubitId){
+    low_workspace_add(c,a,b,incoming,Some(out),None);
+}
+
+/// Ancilla-free wrapped addition. The source MSB serves as a dirty carry;
+/// controlled swaps propagate it and the surrounding XOR frames cancel it.
+pub(crate) fn add_wrapped(c:&mut Builder,a:&[QubitId],b:&[QubitId]) {
+    assert!(!a.is_empty() && a.len()==b.len());
+    if a.len()==1 {c.cx(a[0],b[0]);return;}
+    let last=a.len()-1;
+    let carry=a[last];
+    let frame=|c:&mut Builder| {
+        for &q in a[..last].iter().chain(b) {c.cx(carry,q);}
+    };
+    frame(c);
+    for i in 0..last {
+        c.cx(carry,b[i]);
+        super::pingpong::cswap(c,b[i],carry,a[i]);
+    }
+    c.cx(carry,b[last]);
+    for i in (0..last).rev() {
+        super::pingpong::cswap(c,b[i],carry,a[i]);
+        c.cx(a[i],b[i]);
+    }
+    frame(c);
+}
+
+/// Wrapped MAJ/UMA addition using the live incoming carry, with no new qubits.
+pub(crate) fn add_wrapped_with_carry(
+    c: &mut Builder, a: &[QubitId], b: &[QubitId], incoming: QubitId,
+    deferred: Option<(usize, BitId)>,
+) {
+    low_workspace_add(c,a,b,Some(incoming),None,deferred);
+}
+
+fn low_workspace_add(
+    c: &mut Builder, a: &[QubitId], b: &[QubitId], incoming: Option<QubitId>,
+    out: Option<QubitId>, mut deferred: Option<(usize, BitId)>,
+) {
+    assert!(!a.is_empty() && a.len()==b.len());
     let seed=incoming.unwrap_or_else(||c.alloc_qubit());
-    for i in 0..a.len(){let p=if i==0{seed}else{a[i-1]};c.cx(a[i],b[i]);c.cx(a[i],p);c.ccx(p,b[i],a[i]);}
-    c.cx(a[a.len()-1],out);
-    for i in (0..a.len()).rev(){let p=if i==0{seed}else{a[i-1]};c.ccx(p,b[i],a[i]);c.cx(a[i],p);c.cx(p,b[i]);}
+    let carries = if out.is_some() { a.len() } else { a.len()-1 };
+    for i in 0..carries {
+        let p=if i==0{seed}else{a[i-1]};
+        c.cx(a[i],b[i]);c.cx(a[i],p);c.ccx(p,b[i],a[i]);
+        if deferred.as_ref().is_some_and(|(index,_)| *index==i) {
+            let (_,bit)=deferred.take().unwrap();
+            c.z_if(a[i],bit);c.free_bit(bit);
+        }
+    }
+    if let Some(out)=out {
+        c.cx(a[a.len()-1],out);
+    } else {
+        let last=a.len()-1;
+        c.cx(a[last],b[last]);
+        c.cx(if last==0{seed}else{a[last-1]},b[last]);
+    }
+    for i in (0..carries).rev(){let p=if i==0{seed}else{a[i-1]};c.ccx(p,b[i],a[i]);c.cx(a[i],p);c.cx(p,b[i]);}
     if incoming.is_none(){c.release_clean(seed);}
+    assert!(deferred.is_none(), "deferred phase did not name a low-workspace carry");
 }
 
 pub(crate) fn add(c:&mut Builder,a:&[QubitId],b:&[QubitId],p:&Plan)->QubitId{
@@ -73,6 +137,7 @@ pub(crate) fn add(c:&mut Builder,a:&[QubitId],b:&[QubitId],p:&Plan)->QubitId{
 /// of the caller's base, so the existing workspace plan is unchanged.
 pub(crate) fn add_with_carry(c:&mut Builder,a:&[QubitId],b:&[QubitId],initial:Option<QubitId>,p:&Plan)->QubitId{
     assert_eq!(a.len(),b.len());assert_eq!(p.sizes.iter().sum::<usize>(),a.len());
+    assert!(!(p.slow&&p.peak==1)||initial.is_some(),"one-workspace plan requires a live incoming carry");
     let base=c.active_qubits();let mut at=0;let mut incoming=initial;let mut flags=Vec::new();
     for (j,&w) in p.sizes.iter().enumerate(){
         let out=c.alloc_qubit();let end=at+w;
@@ -135,15 +200,50 @@ pub(crate) fn direct_plan(n:usize,room:usize)->Option<Plan>{
     }best
 }
 
-fn mapped_compare(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId){
-    use super::pingpong::{fold_step,with_selector_xor};
-    let n=b.len();let carries=c.alloc_qubits(n-1);c.x_all(b);
-    for i in 0..n-1{let prev=if i==0{incoming}else{carries[i-1]};fold_step(c,b[i],prev,carries[i],&map[i],false);}
-    let prev=if n==1{incoming}else{carries[n-2]};
-    if map[n-1].is_empty(){c.cz(b[n-1],prev);}else{
-        with_selector_xor(c,&map[n-1],prev,|c,s|{c.cz(b[n-1],s);c.cz(b[n-1],prev);c.cz(s,prev);});
+fn mapped_step(c:&mut Builder,b:QubitId,previous:Option<QubitId>,carry:QubitId,map:&[QubitId],finish:bool) {
+    if let Some(previous)=previous {
+        super::pingpong::fold_step(c,b,previous,carry,map,finish);
+    } else if !map.is_empty() {
+        super::pingpong::with_selector_xor(c,map,b,|c,source|{
+            c.ccx(source,b,carry);
+            if finish {c.cx(source,b);}
+        });
     }
-    for i in (0..n-1).rev(){let prev=if i==0{incoming}else{carries[i-1]};
+}
+
+fn mapped_unwind(c:&mut Builder,b:QubitId,previous:Option<QubitId>,carry:QubitId,map:&[QubitId]) {
+    if let Some(previous)=previous {
+        super::pingpong::unwind_fold_step(c,b,previous,carry,map);
+    } else {
+        let measured=c.alloc_bit();c.hmr(carry,measured);
+        if !map.is_empty() {
+            super::pingpong::with_selector_xor(c,map,b,|c,source|{
+                c.cz_if(source,b,measured);c.cx(source,b);
+            });
+        }
+        c.free_bit(measured);
+    }
+}
+
+fn mapped_compare(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:Option<QubitId>){
+    use super::pingpong::with_selector_xor;
+    let n=b.len();let carries=c.alloc_qubits(n-1);c.x_all(b);
+    for i in 0..n-1{let prev=if i==0{incoming}else{Some(carries[i-1])};mapped_step(c,b[i],prev,carries[i],&map[i],false);}
+    let prev=if n==1{incoming}else{Some(carries[n-2])};
+    if let Some(prev)=prev {
+        if map[n-1].is_empty(){c.cz(b[n-1],prev);}else{
+            with_selector_xor(c,&map[n-1],prev,|c,s|{c.cz(b[n-1],s);c.cz(b[n-1],prev);c.cz(s,prev);});
+        }
+    } else if !map[n-1].is_empty() {
+        with_selector_xor(c,&map[n-1],b[n-1],|c,s|c.cz(b[n-1],s));
+    }
+    for i in (0..n-1).rev(){let prev=if i==0{incoming}else{Some(carries[i-1])};
+        if prev.is_none() {
+            let m=c.alloc_bit();c.hmr(carries[i],m);
+            if !map[i].is_empty(){with_selector_xor(c,&map[i],b[i],|c,s|c.cz_if(s,b[i],m));}
+            c.free_bit(m);continue;
+        }
+        let prev=prev.unwrap();
         with_selector_xor(c,&map[i],prev,|c,s|{
             c.cx(prev,carries[i]);if s!=prev{c.cx(prev,s);}
             let m=c.alloc_bit();c.hmr(carries[i],m);c.cz_if(s,b[i],m);c.free_bit(m);
@@ -158,29 +258,36 @@ pub(crate) fn direct_add(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incomin
     assert!(direct_add_phase_transport(c,map,b,incoming,p,false,&[]).is_empty());
 }
 
+pub(crate) fn direct_add_zero(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],p:&Plan){
+    assert!(direct_add_optional_carry(c,map,b,None,p,false,&[]).is_empty());
+}
+
 /// Optionally retain classical measurement outcomes instead of comparing to
 /// repair boundary phases. A matching inverse recreates the SAME carries and
 /// applies these deferred Z corrections before normal exact cleanup.
 pub(crate) fn direct_add_phase_transport(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId,p:&Plan,defer:bool,recover:&[(usize,BitId)])->Vec<(usize,BitId)>{
-    use super::pingpong::{fold_step,unwind_fold_step};
+    direct_add_optional_carry(c,map,b,Some(incoming),p,defer,recover)
+}
+
+fn direct_add_optional_carry(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:Option<QubitId>,p:&Plan,defer:bool,recover:&[(usize,BitId)])->Vec<(usize,BitId)>{
     assert_eq!(p.sizes.iter().sum::<usize>(),b.len());let base=c.active_qubits();
     let mut at=0;let mut prev=incoming;let mut stages=Vec::new();
     for(j,&w)in p.sizes.iter().enumerate(){let last=j+1==p.sizes.len();let end=at+w;
         let out=if last{None}else{Some(c.alloc_qubit())};
         let work=c.alloc_qubits(if last{w.saturating_sub(2)}else{w-1});
-        for i in 0..work.len(){let carry=if i==0{prev}else{work[i-1]};fold_step(c,b[at+i],carry,work[i],&map[at+i],false);}
-        let carry=work.last().copied().unwrap_or(prev);
-        if let Some(q)=out{fold_step(c,b[end-1],carry,q,&map[end-1],true);}else if w==1{
-            c.cx(prev,b[at]);for &s in &map[at]{c.cx(s,b[at]);}
+        for i in 0..work.len(){let carry=if i==0{prev}else{Some(work[i-1])};mapped_step(c,b[at+i],carry,work[i],&map[at+i],false);}
+        let carry=work.last().copied().or(prev);
+        if let Some(q)=out{mapped_step(c,b[end-1],carry,q,&map[end-1],true);}else if w==1{
+            if let Some(prev)=prev{c.cx(prev,b[at]);}for &s in &map[at]{c.cx(s,b[at]);}
         }else{
-            fold_step(c,b[end-2],carry,b[end-1],&map[end-2],true);
+            mapped_step(c,b[end-2],carry,b[end-1],&map[end-2],true);
             for &s in &map[end-1]{c.cx(s,b[end-1]);}
         }
-        for i in(0..work.len()).rev(){let carry=if i==0{prev}else{work[i-1]};unwind_fold_step(c,b[at+i],carry,work[i],&map[at+i]);}
+        for i in(0..work.len()).rev(){let carry=if i==0{prev}else{Some(work[i-1])};mapped_unwind(c,b[at+i],carry,work[i],&map[at+i]);}
         c.free_vec(&work);
         if let Some(q)=out{
             for &(boundary,bit)in recover{if boundary==end{c.z_if(q,bit);c.free_bit(bit);}}
-            stages.push((at,end,prev,q));prev=q;
+            stages.push((at,end,prev,q));prev=Some(q);
         }at=end;
     }
     assert!(recover.iter().all(|(hi,_)|stages.iter().any(|(_,end,_,_)|hi==end)));
@@ -192,52 +299,196 @@ pub(crate) fn direct_add_phase_transport(c:&mut Builder,map:&[Vec<QubitId>],b:&[
     pending
 }
 
-/// One chunk of the direct ripple, as in [`direct_add_phase_transport`]:
-/// carries chained from `prev`; a non-final chunk XORs its carry-out into
-/// `out`; the sum bits are finished in `b` and the ladder is unwound.
-fn direct_chunk(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],at:usize,w:usize,prev:QubitId,out:Option<QubitId>){
-    use super::pingpong::{fold_step,unwind_fold_step};
-    let end=at+w;
-    let work=c.alloc_qubits(if out.is_none(){w.saturating_sub(2)}else{w-1});
-    for i in 0..work.len(){let carry=if i==0{prev}else{work[i-1]};fold_step(c,b[at+i],carry,work[i],&map[at+i],false);}
-    let carry=work.last().copied().unwrap_or(prev);
-    if let Some(q)=out{fold_step(c,b[end-1],carry,q,&map[end-1],true);}else if w==1{
-        c.cx(prev,b[at]);for &s in &map[at]{c.cx(s,b[at]);}
-    }else{
-        fold_step(c,b[end-2],carry,b[end-1],&map[end-2],true);
-        for &s in &map[end-1]{c.cx(s,b[end-1]);}
-    }
-    for i in(0..work.len()).rev(){let carry=if i==0{prev}else{work[i-1]};unwind_fold_step(c,b[at+i],carry,work[i],&map[at+i]);}
-    c.free_vec(&work);
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::circuit::analyze_ops;
+    use crate::sim::Simulator;
+    use sha3::{digest::ExtendableOutput, Shake256};
 
-/// SQ_HOLD_BOUNDARY forward: the same exact chunked add, but every non-final
-/// chunk's carry-out stays live (no hmr, no compare). Returns those wires.
-pub(crate) fn direct_add_hold(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId,p:&Plan)->Vec<QubitId>{
-    assert_eq!(p.sizes.iter().sum::<usize>(),b.len());let base=c.active_qubits();
-    let k=p.sizes.len();let mut held=Vec::new();let mut at=0;let mut prev=incoming;
-    for(j,&w)in p.sizes.iter().enumerate(){
-        let out=if j+1<k{Some(c.alloc_qubit())}else{None};
-        direct_chunk(c,map,b,at,w,prev,out);
-        if let Some(q)=out{held.push(q);prev=q;}at+=w;
+    #[test]
+    #[should_panic = "one-workspace plan requires a live incoming carry"]
+    fn one_workspace_plan_rejects_a_missing_carry() {
+        let mut circ=Builder::new();
+        let a=circ.alloc_qubits(3);
+        let b=circ.alloc_qubits(3);
+        let plan=plan_with_carry(3,1).unwrap();
+        add_with_carry(&mut circ,&a,&b,None,&plan);
     }
-    assert_eq!(c.active_qubits(),base+held.len() as u32);
-    held
-}
 
-/// SQ_HOLD_BOUNDARY inverse, called on the complemented accumulator with the
-/// forward's plan and map. The complemented add has the same chunk carries as
-/// the forward add, so chunk j run with out = held[j] returns it to zero.
-/// Chunks run high-to-low so each reads held[j-1] before it is cleared.
-pub(crate) fn direct_add_unhold(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId,p:&Plan,held:Vec<QubitId>){
-    assert_eq!(p.sizes.iter().sum::<usize>(),b.len());let base=c.active_qubits();
-    let k=p.sizes.len();assert_eq!(held.len(),k-1);
-    let starts:Vec<usize>=p.sizes.iter().scan(0,|s,&w|{let a=*s;*s+=w;Some(a)}).collect();
-    for j in(0..k).rev(){
-        let prev=if j==0{incoming}else{held[j-1]};
-        let out=if j+1<k{Some(held[j])}else{None};
-        direct_chunk(c,map,b,starts[j],p.sizes[j],prev,out);
-        if let Some(q)=out{c.release_clean(q);}
+    #[test]
+    fn live_incoming_carry_needs_only_one_workspace_qubit_for_overflow() {
+        for width in 1usize..=5 {
+            let plan=plan_with_carry(width,1).unwrap();
+            assert_eq!(plan.peak,1);
+            let mut circ=Builder::new();
+            let a=circ.alloc_qubits(width);
+            let b=circ.alloc_qubits(width);
+            let incoming=circ.alloc_qubit();
+            let base=circ.active_qubits();
+            let outgoing=add_with_carry(&mut circ,&a,&b,Some(incoming),&plan);
+            assert_eq!(circ.active_qubits(),base+1);
+            let ops=circ.take_ops();
+            let(nq,nb,_,_)=analyze_ops(ops.iter());
+            assert_eq!(nq,base as u64+1);
+            let mask=(1usize<<width)-1;
+            let assignments=1usize<<(2*width+1);
+            for start in (0..assignments).step_by(64) {
+                let mut rng=Shake256::default().finalize_xof();
+                let mut sim=Simulator::new(nq as usize,nb as usize,&mut rng);
+                let mut sums=vec![0;width+1];
+                for lane in 0..64.min(assignments-start) {
+                    let value=start+lane;let x=value&mask;let y=(value>>width)&mask;let cin=value>>(2*width);
+                    for bit in 0..width {
+                        sim.qubits[a[bit].0 as usize]|=(((x>>bit)&1)as u64)<<lane;
+                        sim.qubits[b[bit].0 as usize]|=(((y>>bit)&1)as u64)<<lane;
+                    }
+                    sim.qubits[incoming.0 as usize]|=(cin as u64)<<lane;
+                    let sum=x+y+cin;
+                    for bit in 0..=width{sums[bit]|=(((sum>>bit)&1)as u64)<<lane;}
+                }
+                let mut expected=sim.qubits.clone();
+                for bit in 0..width{expected[b[bit].0 as usize]=sums[bit];}
+                expected[outgoing.0 as usize]=sums[width];
+                sim.apply_iter(ops.iter());
+                assert_eq!(sim.qubits,expected,"width={width}");
+                assert_eq!(sim.phase,0);
+            }
+        }
     }
-    assert_eq!(c.active_qubits()+held.len() as u32,base);
+
+    #[test]
+    fn ancilla_free_adder_preserves_source_with_linear_toffoli_cost() {
+        for width in 1usize..=7 {
+            let mut circ=Builder::new();
+            let a=circ.alloc_qubits(width);
+            let b=circ.alloc_qubits(width);
+            let base=circ.active_qubits();
+            add_wrapped(&mut circ,&a,&b);
+            assert_eq!(circ.active_qubits(),base);
+            let ops=circ.take_ops();
+            let(nq,nb,_,_)=analyze_ops(ops.iter());
+            assert_eq!(nq,base as u64);
+            assert_eq!(ops.iter().filter(|op|op.kind==crate::circuit::OperationType::CCX).count(),2*width-2);
+            let mask=(1usize<<width)-1;
+            let assignments=1usize<<(2*width);
+            for start in (0..assignments).step_by(64) {
+                let mut rng=Shake256::default().finalize_xof();
+                let mut sim=Simulator::new(nq as usize,nb as usize,&mut rng);
+                let mut sums=vec![0;width];
+                for lane in 0..64.min(assignments-start) {
+                    let value=start+lane;let x=value&mask;let y=value>>width;
+                    let sum=(x+y)&mask;
+                    for bit in 0..width {
+                        sim.qubits[a[bit].0 as usize]|=(((x>>bit)&1)as u64)<<lane;
+                        sim.qubits[b[bit].0 as usize]|=(((y>>bit)&1)as u64)<<lane;
+                        sums[bit]|=(((sum>>bit)&1)as u64)<<lane;
+                    }
+                }
+                let mut expected=sim.qubits.clone();
+                for bit in 0..width{expected[b[bit].0 as usize]=sums[bit];}
+                sim.apply_iter(ops.iter());
+                assert_eq!(sim.qubits,expected,"width={width}");
+                assert_eq!(sim.phase,0);
+            }
+        }
+    }
+
+    #[test]
+    fn zero_carry_mapped_addition_needs_no_separate_initial_carry() {
+        for width in 1..=7 {
+            for room in 0..=width {
+                let Some(plan)=direct_plan(width,room) else {continue;};
+                for pattern in 0..4 {
+                    let mut circ=Builder::new();
+                    let selectors=circ.alloc_qubits(3);
+                    let b=circ.alloc_qubits(width);
+                    let map:Vec<Vec<QubitId>>=(0..width).map(|bit|{
+                        let mask=match pattern {0=>0,1=>1,2=>1<<(bit%3),_=>bit%8};
+                        selectors.iter().enumerate().filter_map(|(i,&q)|(mask&(1<<i)!=0).then_some(q)).collect()
+                    }).collect();
+                    let base=circ.active_qubits();
+                    direct_add_zero(&mut circ,&map,&b,&plan);
+                    assert_eq!(circ.active_qubits(),base);
+                    let ops=circ.take_ops();
+                    let(nq,nb,_,_)=analyze_ops(ops.iter());
+                    assert!(nq.saturating_sub(base as u64)<=room as u64);
+                    let limit=1usize<<width;
+                    for start in (0..8*limit).step_by(64) {
+                        let mut rng=Shake256::default().finalize_xof();
+                        let mut sim=Simulator::new((nq as usize).max(base as usize),nb as usize,&mut rng);
+                        let mut sums=vec![0;width];
+                        for lane in 0..64.min(8*limit-start) {
+                            let value=start+lane;let control=value/limit;let old=value%limit;
+                            let source:usize=map.iter().enumerate().map(|(bit,terms)|{
+                                let set=terms.iter().fold(0usize,|parity,q|parity^((control>>q.0)&1));
+                                set<<bit
+                            }).sum();
+                            let sum=(old+source)&(limit-1);
+                            for i in 0..3 {sim.qubits[i]|=(((control>>i)&1)as u64)<<lane;}
+                            for i in 0..width {
+                                sim.qubits[b[i].0 as usize]|=(((old>>i)&1)as u64)<<lane;
+                                sums[i]|=(((sum>>i)&1)as u64)<<lane;
+                            }
+                        }
+                        let mut expected=sim.qubits.clone();
+                        for i in 0..width{expected[b[i].0 as usize]=sums[i];}
+                        sim.apply_iter(ops.iter());
+                        assert_eq!(sim.qubits,expected,"width={width}, room={room}, pattern={pattern}");
+                        assert_eq!(sim.phase,0);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn wrapped_add_uses_no_qubits_and_preserves_deferred_carry_phase() {
+        for width in 1..=6 {
+            for phase_at in (0..width-1).map(Some).chain([None]) {
+                let mut circ = Builder::new();
+                let a = circ.alloc_qubits(width);
+                let b = circ.alloc_qubits(width);
+                let incoming = circ.alloc_qubit();
+                let deferred = phase_at.map(|index| (index, circ.alloc_bit()));
+                let base = circ.active_qubits();
+                add_wrapped_with_carry(&mut circ, &a, &b, incoming, deferred);
+                assert_eq!(circ.active_qubits(), base);
+                let ops = circ.take_ops();
+                let (nq, nb, _, _) = analyze_ops(ops.iter());
+                assert_eq!(nq, base as u64);
+                let mask = (1usize << width) - 1;
+                let assignments = 1usize << (2 * width + 1);
+                for start in (0..assignments).step_by(64) {
+                    let mut rng = Shake256::default().finalize_xof();
+                    let mut sim = Simulator::new(nq as usize, (nb as usize).max(1), &mut rng);
+                    sim.bits[0] = u64::MAX;
+                    let mut sums = vec![0; width];
+                    let mut phase = 0;
+                    for lane in 0..64.min(assignments-start) {
+                        let assignment = start+lane;
+                        let x = assignment & mask;
+                        let y = (assignment >> width) & mask;
+                        let carry = (assignment >> (2*width)) & 1;
+                        let sum = x+y+carry;
+                        for bit in 0..width {
+                            sim.qubits[a[bit].0 as usize] |= (((x>>bit)&1) as u64)<<lane;
+                            sim.qubits[b[bit].0 as usize] |= (((y>>bit)&1) as u64)<<lane;
+                            sums[bit] |= (((sum>>bit)&1) as u64)<<lane;
+                        }
+                        sim.qubits[incoming.0 as usize] |= (carry as u64)<<lane;
+                        if let Some(index)=phase_at {
+                            let low_mask=(1usize<<(index+1))-1;
+                            phase |= u64::from((x&low_mask)+(y&low_mask)+carry>low_mask)<<lane;
+                        }
+                    }
+                    let mut expected=sim.qubits.clone();
+                    for bit in 0..width {expected[b[bit].0 as usize]=sums[bit];}
+                    sim.apply_iter(ops.iter());
+                    assert_eq!(sim.qubits,expected,"width={width}, phase={phase_at:?}");
+                    assert_eq!(sim.phase,phase,"width={width}, phase={phase_at:?}");
+                }
+            }
+        }
+    }
 }

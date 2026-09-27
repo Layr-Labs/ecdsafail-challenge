@@ -3,7 +3,7 @@
 //! means their product. Atoms denote fixed functions, never mutable slots.
 //! An unsupported product or >32 monomials becomes one fresh whole-value atom.
 
-use crate::circuit::{analyze_ops, Op, OperationType, QubitOrBit, NO_BIT};
+use crate::circuit::{Op, OperationType, NO_BIT};
 
 const MONOMIAL_CAP: usize = 32;
 
@@ -41,7 +41,7 @@ impl Quadratic {
     }
 }
 
-use super::affine_simplify::{Rewrite, Support as AffineSupport};
+use super::affine_simplify::{rewrite_in_place, Inputs, Rewrite, Support as AffineSupport};
 use std::collections::BTreeSet;
 
 pub(super) struct Support {
@@ -53,33 +53,22 @@ pub(super) struct Support {
 }
 
 impl Support {
-    pub(super) fn new(ops: &[Op]) -> Self {
-        let (nq, nb, _, registers) = analyze_ops(ops.iter());
-        let mut quantum_inputs = vec![false; nq as usize];
-        let mut classical_inputs = vec![false; nb as usize];
-        for register in registers {
-            for slot in register {
-                match slot {
-                    QubitOrBit::Qubit(q) => quantum_inputs[q.0 as usize] = true,
-                    QubitOrBit::Bit(b) => classical_inputs[b.0 as usize] = true,
-                }
-            }
-        }
+    pub(super) fn new(inputs: &Inputs) -> Self {
         let mut state = Self {
-            qubits: vec![Quadratic::constant(false); nq as usize],
-            bits: vec![Quadratic::constant(false); nb as usize],
+            qubits: vec![Quadratic::constant(false); inputs.qubits.len()],
+            bits: vec![Quadratic::constant(false); inputs.bits.len()],
             base_condition: Quadratic::constant(true),
             condition_stack: Vec::new(),
             next_atom: 0,
         };
         // Both kinds of ABI slot are unknown. Repeated annotations for one
         // physical slot still describe the same value.
-        for (q, input) in quantum_inputs.into_iter().enumerate() {
+        for (q, &input) in inputs.qubits.iter().enumerate() {
             if input {
                 state.qubits[q] = state.fresh();
             }
         }
-        for (b, input) in classical_inputs.into_iter().enumerate() {
+        for (b, &input) in inputs.bits.iter().enumerate() {
             if input {
                 state.bits[b] = state.fresh();
             }
@@ -294,18 +283,15 @@ impl Support {
 /// Each interpreter sees every original operation, including operations that
 /// the output omits. Neither proof state consumes the other's rewritten stream.
 pub(crate) fn simplify(ops: Vec<Op>) -> Vec<Op> {
-    let mut affine = AffineSupport::new(&ops);
-    let mut quadratic = Support::new(&ops);
-    let mut result = Vec::with_capacity(ops.len());
-    for op in ops {
-        let affine_rewrite = affine.step(&op);
-        let quadratic_rewrite = quadratic.step(&op);
-        let rewrite = match affine_rewrite {
+    let inputs = Inputs::new(&ops);
+    let mut affine = AffineSupport::new(&inputs);
+    let mut quadratic = Support::new(&inputs);
+    rewrite_in_place(ops, |op| {
+        let affine_rewrite = affine.step(op);
+        let quadratic_rewrite = quadratic.step(op);
+        match affine_rewrite {
             Rewrite::Keep => quadratic_rewrite,
             proven => proven,
-        };
-        rewrite.emit(op, &mut result);
-    }
-    result
+        }
+    })
 }
-

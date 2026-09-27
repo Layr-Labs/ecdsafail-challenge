@@ -77,6 +77,14 @@ struct Best {
 
 impl PeakCensus {
     pub fn new() -> Self {
+        #[cfg(test)]
+        if super::measurement::capturing() {
+            return Self {
+                enabled: true,
+                op_hi: usize::MAX,
+                ..Self::default()
+            };
+        }
         // Both bounds or nothing: half a window is far likelier to be a typo
         // than an intent, and silently censusing the whole build would hide it.
         match (

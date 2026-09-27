@@ -45,29 +45,114 @@ pub(super) enum Rewrite {
     Drop,
     X,
     Cx(QubitId),
+    ComplementedCx(QubitId),
 }
 
 impl Rewrite {
-    pub(super) fn emit(self, op: Op, result: &mut Vec<Op>) {
+    fn operations(self, op: Op) -> [Option<Op>; 2] {
+        let mut replacement = Op::empty();
+        replacement.q_target = op.q_target;
+        replacement.c_condition = op.c_condition;
+        let mut second = None;
         match self {
-            Rewrite::Keep => result.push(op),
-            Rewrite::Drop => {}
-            rewrite => {
-                let mut replacement = Op::empty();
-                replacement.q_target = op.q_target;
-                replacement.c_condition = op.c_condition;
-                match rewrite {
-                    Rewrite::X => replacement.kind = OperationType::X,
-                    Rewrite::Cx(control) => {
-                        replacement.kind = OperationType::CX;
-                        replacement.q_control1 = control;
-                    }
-                    _ => unreachable!(),
-                }
-                replacement.validate();
-                result.push(replacement);
+            Rewrite::Keep => return [Some(op), None],
+            Rewrite::Drop => return [None, None],
+            Rewrite::X => replacement.kind = OperationType::X,
+            Rewrite::Cx(control) => {
+                replacement.kind = OperationType::CX;
+                replacement.q_control1 = control;
+            }
+            Rewrite::ComplementedCx(control) => {
+                replacement.kind = OperationType::X;
+                let mut cx = replacement;
+                cx.kind = OperationType::CX;
+                cx.q_control1 = control;
+                cx.validate();
+                second = Some(cx);
             }
         }
+        replacement.validate();
+        [Some(replacement), second]
+    }
+
+    pub(super) fn emit(self, op: Op, result: &mut Vec<Op>) {
+        result.extend(self.operations(op).into_iter().flatten());
+        #[cfg(test)]
+        super::measurement::rewritten_op(result.len());
+    }
+}
+
+pub(super) fn rewrite_in_place(
+    mut ops: Vec<Op>,
+    mut rewrite: impl FnMut(&Op) -> Rewrite,
+) -> Vec<Op> {
+    let mut insertions = Vec::new();
+    let (mut retained, mut emitted) = (0, 0);
+    ops.retain_mut(|op| {
+        let keep = match rewrite(op) {
+            Rewrite::Keep => true,
+            Rewrite::Drop => false,
+            proof => {
+                let [first, second] = proof.operations(*op);
+                let first = first.expect("non-dropping rewrite has an operation");
+                if let Some(second) = second {
+                    // Delay expansion so it cannot overwrite an unread original.
+                    insertions.push((retained, first));
+                    *op = second;
+                    emitted += 1;
+                } else {
+                    *op = first;
+                }
+                true
+            }
+        };
+        if keep {
+            retained += 1;
+            emitted += 1;
+        }
+        #[cfg(test)]
+        super::measurement::rewritten_op(emitted);
+        keep
+    });
+    if !insertions.is_empty() {
+        ops.resize(emitted, Op::empty());
+        let mut insertions = insertions.into_iter().rev().peekable();
+        let mut write = emitted;
+        for read in (0..retained).rev() {
+            write -= 1;
+            ops[write] = ops[read];
+            if insertions.peek().is_some_and(|(index, _)| *index == read) {
+                write -= 1;
+                ops[write] = insertions.next().unwrap().1;
+            }
+        }
+        assert_eq!(write, 0);
+        assert!(insertions.next().is_none());
+    }
+    ops
+}
+
+pub(super) struct Inputs {
+    pub(super) qubits: Vec<bool>,
+    pub(super) bits: Vec<bool>,
+}
+
+impl Inputs {
+    pub(super) fn new(ops: &[Op]) -> Self {
+        let (nq, nb, _, registers) = analyze_ops(ops.iter());
+        let mut inputs = Self {
+            qubits: vec![false; nq as usize],
+            bits: vec![false; nb as usize],
+        };
+        for register in registers {
+            for slot in register {
+                match slot {
+                    QubitOrBit::Qubit(q) => inputs.qubits[q.0 as usize] = true,
+                    QubitOrBit::Bit(b) => inputs.bits[b.0 as usize] = true,
+                }
+            }
+        }
+        inputs
     }
 }
 
@@ -80,33 +165,22 @@ pub(super) struct Support {
 }
 
 impl Support {
-    pub(super) fn new(ops: &[Op]) -> Self {
-        let (nq, nb, _, registers) = analyze_ops(ops.iter());
-        let mut quantum_inputs = vec![false; nq as usize];
-        let mut classical_inputs = vec![false; nb as usize];
-        for register in registers {
-            for slot in register {
-                match slot {
-                    QubitOrBit::Qubit(q) => quantum_inputs[q.0 as usize] = true,
-                    QubitOrBit::Bit(b) => classical_inputs[b.0 as usize] = true,
-                }
-            }
-        }
+    pub(super) fn new(inputs: &Inputs) -> Self {
         let mut state = Self {
-            qubits: vec![Affine::constant(false); nq as usize],
-            bits: vec![Affine::constant(false); nb as usize],
+            qubits: vec![Affine::constant(false); inputs.qubits.len()],
+            bits: vec![Affine::constant(false); inputs.bits.len()],
             base_condition: Affine::constant(true),
             condition_stack: Vec::new(),
             next_atom: 0,
         };
         // Both kinds of ABI slot are unknown. Repeated annotations for one
         // physical slot still describe the same value.
-        for (q, input) in quantum_inputs.into_iter().enumerate() {
+        for (q, &input) in inputs.qubits.iter().enumerate() {
             if input {
                 state.qubits[q] = state.fresh();
             }
         }
-        for (b, input) in classical_inputs.into_iter().enumerate() {
+        for (b, &input) in inputs.bits.iter().enumerate() {
             if input {
                 state.bits[b] = state.fresh();
             }
@@ -278,11 +352,129 @@ impl Support {
 /// Derive one pass of exact CCX support identities from this stream's ABI and
 /// operations. No saved operation indices, nonce assumptions or legacy passes.
 pub(crate) fn simplify(ops: Vec<Op>) -> Vec<Op> {
-    let mut state = Support::new(&ops);
-    let mut result = Vec::with_capacity(ops.len());
-    for op in ops {
-        state.step(&op).emit(op, &mut result);
-    }
-    result
+    let mut state = Support::new(&Inputs::new(&ops));
+    rewrite_in_place(ops, |op| state.step(op))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::circuit::{BitId, RegisterId};
+
+    fn input() -> Vec<Op> {
+        (2..7)
+            .map(|target| {
+                let mut op = Op::empty();
+                op.kind = OperationType::CCX;
+                op.q_control1 = QubitId(0);
+                op.q_control2 = QubitId(1);
+                op.q_target = QubitId(target);
+                if target % 2 == 0 {
+                    op.c_condition = BitId(0);
+                }
+                op
+            })
+            .collect()
+    }
+
+    #[test]
+    fn compaction_matches_all_keep_drop_weaken_and_expand_combinations() {
+        for mut choices in 0..5usize.pow(5) {
+            let original = input();
+            let mut expected = Vec::new();
+            let mut rewrites = Vec::new();
+            for &op in &original {
+                let choice = choices % 5;
+                choices /= 5;
+                let mut x = Op::empty();
+                x.kind = OperationType::X;
+                x.q_target = op.q_target;
+                x.c_condition = op.c_condition;
+                let mut cx = x;
+                cx.kind = OperationType::CX;
+                cx.q_control1 = QubitId(7);
+                let rewrite = match choice {
+                    0 => {
+                        expected.push(op);
+                        Rewrite::Keep
+                    }
+                    1 => Rewrite::Drop,
+                    2 => {
+                        expected.push(x);
+                        Rewrite::X
+                    }
+                    3 => {
+                        expected.push(cx);
+                        Rewrite::Cx(QubitId(7))
+                    }
+                    4 => {
+                        expected.extend([x, cx]);
+                        Rewrite::ComplementedCx(QubitId(7))
+                    }
+                    _ => unreachable!(),
+                };
+                rewrites.push(rewrite);
+            }
+            let mut rewrites = rewrites.into_iter();
+            let result = rewrite_in_place(original, |_| rewrites.next().unwrap());
+            assert!(rewrites.next().is_none());
+            assert_eq!(result, expected);
+            for op in result {
+                op.validate();
+            }
+        }
+    }
+
+    #[test]
+    fn nonexpanding_rewrites_reuse_the_input_allocation() {
+        let original = input();
+        let pointer = original.as_ptr();
+        let capacity = original.capacity();
+        let result = rewrite_in_place(original, |op| {
+            if op.q_target.0 % 2 == 0 {
+                Rewrite::Drop
+            } else {
+                Rewrite::X
+            }
+        });
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.as_ptr(), pointer);
+        assert_eq!(result.capacity(), capacity);
+        assert!(result.iter().all(|op| op.kind == OperationType::X));
+
+        let result = rewrite_in_place(result, |_| Rewrite::Drop);
+        assert!(result.is_empty());
+        assert_eq!(result.as_ptr(), pointer);
+        assert_eq!(result.capacity(), capacity);
+        assert!(rewrite_in_place(Vec::new(), |_| unreachable!()).is_empty());
+    }
+
+    #[test]
+    fn shared_inputs_distinguish_abi_slots_from_scratch_and_duplicates() {
+        let mut quantum = Op::empty();
+        quantum.kind = OperationType::AppendToRegister;
+        quantum.q_target = QubitId(2);
+        quantum.r_target = RegisterId(0);
+        let mut classical = Op::empty();
+        classical.kind = OperationType::AppendToRegister;
+        classical.c_target = BitId(11);
+        classical.r_target = RegisterId(1);
+        let mut scratch = Op::empty();
+        scratch.kind = OperationType::X;
+        scratch.q_target = QubitId(7);
+        let mut scratch_bit = Op::empty();
+        scratch_bit.kind = OperationType::BitStore1;
+        scratch_bit.c_target = BitId(13);
+        let inputs = Inputs::new(&[quantum, classical, quantum, scratch, scratch_bit]);
+        assert_eq!(inputs.qubits.len(), 8);
+        assert_eq!(inputs.bits.len(), 14);
+        assert_eq!(inputs.qubits.iter().filter(|&&input| input).count(), 1);
+        assert_eq!(inputs.bits.iter().filter(|&&input| input).count(), 1);
+        assert!(inputs.qubits[2] && inputs.bits[11]);
+        let state = Support::new(&inputs);
+        assert_eq!(state.next_atom, 2);
+        assert_eq!(state.qubits[2].atoms, [0]);
+        assert_eq!(state.bits[11].atoms, [1]);
+        assert!(state.qubits[7].is_zero() && state.bits[13].is_zero());
+    }
+}

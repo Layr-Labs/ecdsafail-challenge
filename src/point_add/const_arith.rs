@@ -92,6 +92,121 @@ pub fn sub_const(circ: &mut Builder, acc: &[QubitId], c: U256) {
     add_const(circ, acc, U256::ZERO.wrapping_sub(c));
 }
 
+pub(crate) fn multi_controlled_x_dirty(
+    circ: &mut Builder,
+    controls: &[QubitId],
+    target: QubitId,
+    dirty: &[QubitId],
+) {
+    match controls.len() {
+        0 => circ.x(target),
+        1 => circ.cx(controls[0], target),
+        2 => circ.ccx(controls[0], controls[1], target),
+        count => {
+            assert!(dirty.len() >= count - 2);
+            // Echo the dirty ladder with/without c0*c1. Every unknown dirty
+            // contribution cancels; only the complete control product remains.
+            for _ in 0..2 {
+                circ.ccx(controls[0], controls[1], dirty[0]);
+                for i in 1..count - 2 {
+                    circ.ccx(controls[i + 1], dirty[i - 1], dirty[i]);
+                }
+                circ.ccx(controls[count - 1], dirty[count - 3], target);
+                for i in (1..count - 2).rev() {
+                    circ.ccx(controls[i + 1], dirty[i - 1], dirty[i]);
+                }
+            }
+        }
+    }
+}
+
+fn non_adjacent_digits(constant: U256, width: usize) -> Vec<(usize, bool)> {
+    let mut digits = Vec::new();
+    let mut carry = false;
+    for bit in 0..width {
+        match (constant.bit(bit), carry) {
+            (false, false) | (true, true) => {}
+            _ => {
+                let negative = bit + 1 < width && constant.bit(bit + 1);
+                digits.push((bit, negative));
+                carry = negative;
+            }
+        }
+    }
+    digits
+}
+
+/// Exact controlled constant arithmetic, restoring a disjoint dirty register.
+/// A full borrowed word enables linear-cost increments. Use a clean carry when
+/// available to save Cliffords, or an ancilla-free adder when the budget is full.
+/// A shorter pool uses the multi-control echo ladder instead.
+pub(crate) fn controlled_const_dirty(
+    circ: &mut Builder,
+    acc: &[QubitId],
+    constant: U256,
+    control: QubitId,
+    dirty: &[QubitId],
+    inverse: bool,
+) {
+    assert!(!acc.is_empty() && acc.len() <= 256);
+    assert!(!acc.contains(&control));
+    assert!(dirty.len() >= acc.len().saturating_sub(2));
+    assert!(dirty.iter().all(|q| *q != control && !acc.contains(q)));
+    let digits = non_adjacent_digits(constant, acc.len());
+    if digits.is_empty() {
+        return;
+    }
+    let full_word = dirty.len() > acc.len();
+    let carry = (full_word && (circ.active_qubits() as usize) < super::pingpong::walk_max_qubits())
+        .then(|| circ.alloc_qubit());
+    for (shift, negative) in digits {
+        let inverse = inverse ^ negative;
+        let word = &acc[shift..];
+        if full_word {
+            // x-d-(~d)=x+1. Put the control below x so an unconditional
+            // increment propagates into x exactly when that control is one.
+            let mut extended = Vec::with_capacity(word.len() + 1);
+            extended.push(control);
+            extended.extend_from_slice(word);
+            let source = &dirty[..extended.len()];
+            if inverse {
+                circ.x(control);
+            } else {
+                circ.x_all(&extended);
+            }
+            let add = |circ: &mut Builder| {
+                if let Some(carry) = carry {
+                    super::width_composition::add_wrapped_with_carry(
+                        circ, source, &extended, carry, None,
+                    );
+                } else {
+                    super::width_composition::add_wrapped(circ, source, &extended);
+                }
+            };
+            add(circ);
+            circ.x_all(source);
+            add(circ);
+            circ.x_all(source);
+            if !inverse {
+                circ.x_all(&extended);
+                circ.x(control);
+            }
+            continue;
+        }
+        let mut controls = Vec::with_capacity(word.len());
+        controls.push(control);
+        for step in 0..word.len() {
+            let bit = if inverse { step } else { word.len() - 1 - step };
+            controls.truncate(1);
+            controls.extend_from_slice(&word[..bit]);
+            multi_controlled_x_dirty(circ, &controls, word[bit], dirty);
+        }
+    }
+    if let Some(carry) = carry {
+        circ.release_clean(carry);
+    }
+}
+
 /// Returns the number of low carry or borrow positions that are exactly zero.
 ///
 /// The first position is zero when the constant bit is clear or when the
@@ -199,11 +314,59 @@ fn carry_ladder(
     circ.free_vec(&owned);
 }
 
-/// `acc += c` when `ctrl`, over the whole of `acc` and mod `2^acc.len()`, with
-/// provably dead low carry positions removed.
-///
-/// The only carry dropped is the one off the top of `acc`, so a caller wanting
-/// a narrower truncation passes a narrower slice -- the slice *is* the window.
+/// Scratch width of the controlled-constant ladder, including dead low carries.
+pub(crate) fn cadd_const_workspace(
+    width: usize,
+    constant: U256,
+    first_carry_is_zero: bool,
+) -> usize {
+    assert!(width >= 2);
+    let last = width - 2;
+    width - 1 - dead_low_carry_run(|bit| constant.bit(bit), last, first_carry_is_zero)
+}
+
+/// Apply the same finite-width constant addition with a budgeted carry ladder.
+/// Bits above the window are borrowed only as dirty workspace and restored.
+pub(crate) fn cadd_const_fitted(
+    circ: &mut Builder,
+    reg: &[QubitId],
+    constant: U256,
+    control: QubitId,
+    width: usize,
+    first_carry_is_zero: bool,
+) {
+    assert!((2..=reg.len()).contains(&width));
+    let work = cadd_const_workspace(width, constant, first_carry_is_zero);
+    let acc = &reg[..width];
+    if work == 0 {
+        for (bit, &q) in acc.iter().enumerate() {
+            if constant.bit(bit) {
+                circ.cx(control, q);
+            }
+        }
+        return;
+    }
+    let room = super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
+    if work <= room {
+        cadd_const_trunc(circ, acc, constant, control, first_carry_is_zero);
+    } else if let Some(plan) = super::width_composition::direct_plan(width, room) {
+        let map = (0..width)
+            .map(|bit| {
+                if constant.bit(bit) {
+                    vec![control]
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect::<Vec<_>>();
+        super::width_composition::direct_add_zero(circ, &map, acc, &plan);
+    } else {
+        controlled_const_dirty(circ, acc, constant, control, &reg[width..], false);
+    }
+}
+
+/// `acc += c` when `ctrl`, modulo the width of `acc`, omitting provably dead
+/// low carries. Only the carry past the slice's top is dropped.
 pub fn cadd_const_trunc(
     circ: &mut Builder,
     acc: &[QubitId],
@@ -308,4 +471,271 @@ pub fn cadd_const_per_position_trunc(
         last,
         None,
     );
+}
+
+#[cfg(test)]
+mod dirty_tests {
+    use super::*;
+    use crate::circuit::analyze_ops;
+    use crate::sim::Simulator;
+    use sha3::{digest::ExtendableOutput, Shake256};
+
+    #[test]
+    fn fitted_constant_add_preserves_high_workspace_at_every_budget() {
+        for width in 3usize..=5 {
+            let mask = (1usize << width) - 1;
+            for constant in [0, 1, 3, mask] {
+                for room in [0, 2, width] {
+                    let mut circ = Builder::new();
+                    let reg = circ.alloc_qubits(2 * width + 1);
+                    let control = circ.alloc_qubit();
+                    let input_width = circ.active_qubits();
+                    circ.alloc_qubits(
+                        super::super::pingpong::walk_max_qubits() - input_width as usize - room,
+                    );
+                    let base = circ.active_qubits();
+                    cadd_const_fitted(&mut circ, &reg, U256::from(constant), control, width, false);
+                    assert_eq!(circ.active_qubits(), base);
+                    let ops = circ.take_ops();
+                    let (nq, nb, _, _) = analyze_ops(ops.iter());
+                    assert!(nq <= super::super::pingpong::walk_max_qubits() as u64);
+                    let assignments = 1usize << input_width;
+                    for start in (0..assignments).step_by(64) {
+                        let mut rng = Shake256::default().finalize_xof();
+                        let mut sim = Simulator::new(
+                            (nq as usize).max(input_width as usize),
+                            nb as usize,
+                            &mut rng,
+                        );
+                        let mut sums = vec![0; width];
+                        for lane in 0..64.min(assignments - start) {
+                            let value = start + lane;
+                            for bit in 0..input_width as usize {
+                                sim.qubits[bit] |= (((value >> bit) & 1) as u64) << lane;
+                            }
+                            let sum =
+                                ((value & mask) + constant * ((value >> control.0) & 1)) & mask;
+                            for bit in 0..width {
+                                sums[bit] |= (((sum >> bit) & 1) as u64) << lane;
+                            }
+                        }
+                        let mut expected = sim.qubits.clone();
+                        expected[..width].copy_from_slice(&sums);
+                        sim.apply_iter(ops.iter());
+                        assert_eq!(
+                            sim.qubits, expected,
+                            "width={width}, constant={constant}, room={room}"
+                        );
+                        assert_eq!(sim.phase, 0);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn signed_digits_reconstruct_constants_without_adjacent_terms() {
+        for width in 1..=12 {
+            let mask = (1usize << width) - 1;
+            for value in 0..=mask {
+                let digits = non_adjacent_digits(U256::from(value), width);
+                let reconstructed = digits.iter().fold(0isize, |sum, &(bit, negative)| {
+                    sum + if negative {
+                        -(1isize << bit)
+                    } else {
+                        1isize << bit
+                    }
+                });
+                assert_eq!(reconstructed as usize & mask, value);
+                assert!(digits.windows(2).all(|pair| pair[0].0 + 1 < pair[1].0));
+            }
+        }
+        assert_eq!(non_adjacent_digits(U256::MAX, 256), [(0, true)]);
+        assert_eq!(
+            non_adjacent_digits(super::super::modular::f(), 256),
+            [(0, false), (4, false), (6, true), (10, false), (32, false)]
+        );
+    }
+
+    #[test]
+    fn signed_field_offset_reduces_the_exact_toffoli_cost() {
+        let mut circ = Builder::new();
+        let acc = circ.alloc_qubits(64);
+        let control = circ.alloc_qubit();
+        let dirty = circ.alloc_qubits(65);
+        controlled_const_dirty(
+            &mut circ,
+            &acc,
+            super::super::modular::f(),
+            control,
+            &dirty,
+            false,
+        );
+        let ops = circ.take_ops();
+        let toffoli = ops
+            .iter()
+            .filter(|op| op.kind == crate::circuit::OperationType::CCX)
+            .count();
+        assert_eq!(toffoli, 1072);
+        assert!(toffoli < 1528, "binary expansion needs seven increments");
+    }
+
+    #[test]
+    fn constant_workspace_matches_the_emitted_carry_ladder() {
+        for width in [33, 40, 57, 73, 96] {
+            for constant in [
+                super::super::modular::f(),
+                super::super::modular::f() - U256::from(1),
+                (super::super::modular::f() - U256::from(1)) >> 1usize,
+            ] {
+                for first_zero in [false, true] {
+                    let mut circ = Builder::new();
+                    let acc = circ.alloc_qubits(width);
+                    let control = circ.alloc_qubit();
+                    let base = circ.active_qubits();
+                    cadd_const_trunc(&mut circ, &acc, constant, control, first_zero);
+                    let ops = circ.take_ops();
+                    assert_eq!(
+                        analyze_ops(ops.iter()).0 - base as u64,
+                        cadd_const_workspace(width, constant, first_zero) as u64,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn borrowed_register_increment_has_linear_toffoli_cost() {
+        for width in [16, 64, 128] {
+            let mut circ = Builder::new();
+            let acc = circ.alloc_qubits(width);
+            let control = circ.alloc_qubit();
+            let dirty = circ.alloc_qubits(width + 1);
+            let base = circ.active_qubits();
+            controlled_const_dirty(&mut circ, &acc, U256::from(1), control, &dirty, false);
+            assert_eq!(circ.active_qubits(), base);
+            let ops = circ.take_ops();
+            let toffoli = ops
+                .iter()
+                .filter(|op| op.kind == crate::circuit::OperationType::CCX)
+                .count();
+            assert_eq!(toffoli, 4 * width);
+            assert_eq!(analyze_ops(ops.iter()).0, base as u64 + 1);
+        }
+    }
+
+    #[test]
+    fn dirty_echo_restores_every_workspace_bit() {
+        for count in 0usize..=10 {
+            let mut circ = Builder::new();
+            let controls = circ.alloc_qubits(count);
+            let target = circ.alloc_qubit();
+            let dirty = circ.alloc_qubits(count.saturating_sub(2));
+            let base = circ.active_qubits();
+            multi_controlled_x_dirty(&mut circ, &controls, target, &dirty);
+            assert_eq!(circ.active_qubits(), base);
+            let ops = circ.take_ops();
+            let (nq, nb, _, _) = analyze_ops(ops.iter());
+            assert!(nq <= base as u64);
+            let assignments = 1usize << base;
+            for start in (0..assignments).step_by(64) {
+                let mut rng = Shake256::default().finalize_xof();
+                let mut sim = Simulator::new(base as usize, nb as usize, &mut rng);
+                let mut toggle = 0;
+                for lane in 0..64.min(assignments - start) {
+                    let value = start + lane;
+                    for bit in 0..base as usize {
+                        sim.qubits[bit] |= (((value >> bit) & 1) as u64) << lane;
+                    }
+                    let mask = (1usize << count) - 1;
+                    toggle |= u64::from(value & mask == mask) << lane;
+                }
+                let mut expected = sim.qubits.clone();
+                expected[target.0 as usize] ^= toggle;
+                sim.apply_iter(ops.iter());
+                let mask = if assignments - start >= 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << (assignments - start)) - 1
+                };
+                for word in &mut sim.qubits {
+                    *word &= mask;
+                }
+                assert_eq!(sim.qubits, expected, "controls={count}");
+                assert_eq!(sim.phase, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn dirty_constant_arithmetic_is_exact_in_both_directions() {
+        for width in 1usize..=6 {
+            let mask = (1usize << width) - 1;
+            for constant in [0, 1, 3 & mask, mask, 977 & mask, 488 & mask] {
+                for inverse in [false, true] {
+                    for mode in 0..3 {
+                        let linear = mode != 0;
+                        let mut circ = Builder::new();
+                        let acc = circ.alloc_qubits(width);
+                        let control = circ.alloc_qubit();
+                        let dirty = circ.alloc_qubits(if linear {
+                            width + 1
+                        } else {
+                            width.saturating_sub(2)
+                        });
+                        let base = circ.active_qubits();
+                        if mode == 2 {
+                            circ.alloc_qubits(
+                                super::super::pingpong::walk_max_qubits() - base as usize,
+                            );
+                        }
+                        let active = circ.active_qubits();
+                        controlled_const_dirty(
+                            &mut circ,
+                            &acc,
+                            U256::from(constant),
+                            control,
+                            &dirty,
+                            inverse,
+                        );
+                        assert_eq!(circ.active_qubits(), active);
+                        let ops = circ.take_ops();
+                        let (nq, nb, _, _) = analyze_ops(ops.iter());
+                        assert!(nq <= base as u64 + u64::from(mode == 1));
+                        let assignments = 1usize << base;
+                        for start in (0..assignments).step_by(64) {
+                            let mut rng = Shake256::default().finalize_xof();
+                            let mut sim = Simulator::new(
+                                (nq as usize).max(base as usize),
+                                nb as usize,
+                                &mut rng,
+                            );
+                            let mut sums = vec![0; width];
+                            for lane in 0..64.min(assignments - start) {
+                                let value = start + lane;
+                                for bit in 0..base as usize {
+                                    sim.qubits[bit] |= (((value >> bit) & 1) as u64) << lane;
+                                }
+                                let old = value & mask;
+                                let delta = constant * ((value >> width) & 1);
+                                let sum = if inverse {
+                                    old.wrapping_sub(delta)
+                                } else {
+                                    old + delta
+                                } & mask;
+                                for bit in 0..width {
+                                    sums[bit] |= (((sum >> bit) & 1) as u64) << lane;
+                                }
+                            }
+                            let mut expected = sim.qubits.clone();
+                            expected[..width].copy_from_slice(&sums);
+                            sim.apply_iter(ops.iter());
+                            assert_eq!(sim.qubits, expected, "width={width}, constant={constant}, inverse={inverse}, mode={mode}");
+                            assert_eq!(sim.phase, 0);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
