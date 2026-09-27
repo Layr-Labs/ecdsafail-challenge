@@ -55,8 +55,12 @@ fn plan(circ:&Builder,round:usize,multiply:bool,fw:usize,drop:bool)->Option<Plan
     let exact_missing=((fw-3) as isize-existing).max(0) as usize;
     let exact_prefix=if exact_missing==0 {0}else{exact_missing+1};
     let exact=(multiply && env_flag("PP_RETAIN_EXACT_MUL") && exact_missing<=limit || drop_exact_lead_exact(drop,exact_missing)) && exact_prefix+1<hi-lo;
+    // A dropped low-word carry is an independent error channel, unaffected
+    // by widening the outer fold. Fall back unless the complete fold fits.
+    if !exact { return None; }
     let prefix=if exact {exact_prefix}else{prefix};
     let saving=if exact {saving-(exact_missing-missing) as f64/2.0-1.0}else{saving};
+    if saving < 0.0 { return None; }
     if !drop_exact_lead_minsave(drop,saving) {return None;}
     Some(Plan{bounds,prefix,guard,bits:low,saving,exact,dropped:drop})
 }

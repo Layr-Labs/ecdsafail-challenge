@@ -24,6 +24,9 @@ mod pingpong;
 mod record;
 mod square;
 
+#[cfg(test)]
+mod precision_tests;
+
 const N: usize = 256;
 
 const SECP256K1_P: U256 = U256::from_limbs([
@@ -33,14 +36,14 @@ const SECP256K1_P: U256 = U256::from_limbs([
     0xFFFF_FFFF_FFFF_FFFF,
 ]);
 
-/// Fixed I10 configuration. Unlisted research switches are absent/off.
+/// Fixed resource and precision configuration. Unlisted switches are absent/off.
 /// The submission emits the same circuit regardless of inherited environment.
 fn env_raw(name: &str) -> Option<String> {
     let value = match name {
         "I76_SOURCE_TOP_LOAN" => "1",
         "I74_RESULT_TOP_LOAN" => "1",
         "SQ_LEND_RETAINED_CROSS3" => "0",
-        "I45_NARROW_ROUNDS" => "549,550,551,552,553,586,587,640,641,648,683,684,685,686",
+        "I45_NARROW_ROUNDS" => "",
         "I50_SPLIT_BRIDGE" => "1",
         "I35_CELLS" => "0",
         "I35_TRACE" => "0",
@@ -53,8 +56,8 @@ fn env_raw(name: &str) -> Option<String> {
         "I33_DISABLE" => "0",
         "I12_B_GUARD" => "4",
         "CMP_SEED_ALL" => "1",
-        "ERASE_COMPARE" => "24",
-        "FOLD_GUARD" => "25",
+        "ERASE_COMPARE" => "32",
+        "FOLD_GUARD" => "33",
         "PP_CF_DEFER_WALK_PHASE" => "1",
         "PP_CF_END_CHUNK" => "8",
         "PP_CHUNK_SHAPE" => "64:0,38:1,25:-2,0:-4",
@@ -78,15 +81,15 @@ fn env_raw(name: &str) -> Option<String> {
         "PP_PREBIAS_DOUBLE_FALLBACK" => "1",
         "PP_Q1208_HELPERS" => "1",
         "PP_R2" => "648",
-        "PP_REPLAY_CHUNK_COMPARE" => "21",
-        "PP_REPLAY_FLAG_COMPARE" => "20",
-        "PP_REPLAY_FOLD_WINDOW" => "54",
-        "PP_REPLAY_FOLD_WINDOW_MUL" => "54",
+        "PP_REPLAY_CHUNK_COMPARE" => "29",
+        "PP_REPLAY_FLAG_COMPARE" => "28",
+        "PP_REPLAY_FOLD_WINDOW" => "62",
+        "PP_REPLAY_FOLD_WINDOW_MUL" => "62",
         "PP_REPLAY_SIGN_LOAN" => "1",
         "PP_REPLAY_SIGN_LOAN_MUL" => "1",
         "PP_RETAIN_EXACT_DIV" => "1",
-        "PP_RETAIN_EXACT_EXTRA_DIV" => "4",
-        "PP_RETAIN_EXACT_EXTRA_MUL" => "4",
+        "PP_RETAIN_EXACT_EXTRA_DIV" => "64",
+        "PP_RETAIN_EXACT_EXTRA_MUL" => "64",
         "PP_RETAIN_EXACT_MUL" => "1",
         "PP_RETAIN_REBALANCE" => "1",
         "PP_REUSE_DIV_PARITY" => "1",
@@ -100,8 +103,8 @@ fn env_raw(name: &str) -> Option<String> {
         "PP_SPLIT_OVERLAP_BITS" => "1",
         "PP_SPRINT_MIXED" => "0",
         "PP_TAIL_DIV" => "682",
-        "PP_WALK_GUARD_BITS" => "1",
-        "PP_WALK_GUARD_MAX_WIDTH" => "64",
+        "PP_WALK_GUARD_BITS" => "12",
+        "PP_WALK_GUARD_MAX_WIDTH" => "258",
         "SQ_ALIAS_PRODUCT_LSB" => "1",
         "SQ_A_POLICY" => "7",
         "SQ_BORROW_ROW_CARRIES" => "0",
@@ -126,7 +129,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_CROSS" => "1",
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
-        // Accepted public-validation nonce from the production grind.
+        // Inherited identity-tail value, held fixed throughout these changes.
         "TAIL_NONCE" => "29234024713",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
@@ -147,7 +150,7 @@ fn env_raw(name: &str) -> Option<String> {
         "PP_FOLD_WIDEN" => "0",
         "PP_DROP_EXACT_LEAD" => "1",
         "PP_DROP_EXACT_LEAD_DIR" => "mul",
-        "PP_F_PEAKCMP" => "24",
+        "PP_F_PEAKCMP" => "32",
         // ---- stk2 (pr426-sub3): agent M's schedule-only levers on top of pkgFdP ----
         // Spec pr426-hunt/M/stk2.spec; reference build pr426-hunt/M/runs/stk2w
         // (ops md5 fed8ad7a5bd1fc23118c448286c2633d). PP_TAIL_MUL (was 655) and
@@ -166,7 +169,7 @@ fn env_raw(name: &str) -> Option<String> {
         // above so no arm shadows these; the first matching arm wins, so a key must never
         // appear twice. PP_N_* keys are pinned here too.
         // Mirror any change in the grinder: grind-bundle/grind-p426d Config::p426n2.
-        "PP_WALK_MAX_QUBITS" => "1250",
+        "PP_WALK_MAX_QUBITS" => "1249",
         "PP_N_HOLE2" => "1",
         // pkgJ1 (agent J): exact round-0/round-1 fold fusions, pr426-hunt/J/runs/pkgJ1.spec.
         "PP_J_XFUSE" => "1",
@@ -189,7 +192,6 @@ fn env_raw(name: &str) -> Option<String> {
         // removed above so no arm shadows these; the first matching arm wins, so a key must never
         // appear twice. Every other pkgJ1 pin is unchanged. Mirror any change in the grinder.
         "PP_WIDTH_SCHEDULE" => "259,258x19,257x6,256x2,255x5,254x3,253x4,252x3,251x2,250x5,249x2,248x4,247x3,246x2,245x5,244x2,243x3,242x3,241x3,240x3,239x4,238x3,237x2,236x4,235x2,234x3,233x2,232x4,231x4,230x2,229x3,228x4,227x2,226x3,225x3,224x2,223x2,222x4,221x2,220x4,219x3,218x2,217x4,216x2,215x3,214x3,213x2,212x3,211x4,210x2,209x3,208x2,207x3,206x3,205x2,204x2,203x4,202x3,201x3,200x4,199x2,198x3,197x2,196x3,195x3,194x2,193x3,192x3,191x3,190x2,189x3,188x2,187x3,186x2,185x3,184x3,183x2,182x3,181x3,180x3,179x3,178x2,177x4,176x2,175x3,174x3,173x3,172x2,171x3,170x3,169x2,168x3,167x3,166x2,165x3,164x2,163x3,162x3,161x3,160x2,159x3,158x3,157x2,156x3,155x2,154x3,153x3,152x2,151x3,150x3,149x2,148x3,147x2,146x3,145x2,144x3,143x3,142x3,141x3,140x2,139x3,138x3,137x2,136x3,135x2,134x3,133x2,132x3,131x2,130x3,129x3,128x3,127x2,126x3,125x2,124x2,123x3,122x2,121x3,120x2,119x2,118x3,117,116x4,115x2,114x3,113x2,112x3,111x3,110x2,109x3,108x2,107x3,106x3,105x3,104x3,103x3,102x2,101x3,100x2,99x3,98x3,97x2,96x3,95x3,94x2,93x3,92x3,91x2,90x3,89x2,88x5,87x2,86x4,84x2,83x3,82x2,81x3,80x2,79x2,78x3,77x2,76x3,75x2,74x2,73x3,72x3,71x2,70x3,69x2,68x4,67x3,66x2,65x3,64x4,63x2,62x2,61x3,60x2,59x2,58x2,57x2,56x2,55x3,54x3,53x2,52x2,51x2,50x5,49,48x2,47x3,46x3,45x2,44x3,43x3,42x2,41x2,40x2,39x3,38x2,37x2,36x3,35x3,34x3,33x2,32x2,31x2,30x3,29x2,28x4,27x2,26x2,25x3,24x2,23x2,22x2,21x3,20x3,19x2,18x3,17x2,16x2,15x3,14x2,13x2,12x2,11x2,10x2,9x4,8x12",
-        "I41_ROUNDS" => "36,45,52,61,62,68,71,74,77,80,89,95,100,101,104,110,119,129,130,135,144,150,153,158,161,167,172,175,182,183,513,518,525,528,533,538,539,542,549,550,551,552,553,571,583,586,587,591,611,618,621,633,640,641,648,655,658,683,684,685,686,687",
         "PP_N_BADJ" => "400-449:d:2,649-699:a:-1,554-615:m:-1,589-615:d:-1,616-648:m:1,350-553:d:1,250-349:d:1,350-399:m:1",
         "I12_MUL_PROFILE" => "657:657,656:656,655:655,654:653,652:651,650:649,648:641,640:640,639:639,638:638,637:633,632:624,623:621,620:620,619:616,615:609,608:603,602:592,591:591,590:586,585:585,584:584,583:583,582:574,573:571,570:566,565:538,537:533,532:528,527:525,524:518,517:516,515:513,512:507,506:502,501:495,494:440,439:438,437:437,436:432,431:427,426:424,423:423,422:420,419:419,418:414,413:409",
         "I12_DIV_PROFILE" => "192:192,193:193,194:194,195:195,196:196,197:197,198:198,199:199,200:200,201:201,202:202,203:203,204:204,205:205,206:206,207:207,208:208,209:209,210:210,211:211,212:212,213:213,214:214,215:215,216:216,217:217,218:218,219:219,220:220,221:221,222:222,223:223,224:224,225:225,226:226,227:227,228:228,229:229,230:230,231:231,232:232,233:233,234:234,235:235,236:236,237:237,238:238,239:239,240:240,241:241,242:242,243:243,244:244,245:245,246:246,247:247,248:248,249:250,251:255,256:392,393:393,394:394,395:395,396:396,397:397,398:398,399:399,400:400,401:401,402:402,403:403,404:404,405:405,406:406,407:407,408:408,409:409,410:410,411:411,412:412,413:413,414:414,415:415,416:416,417:417,418:418,419:419,420:420,421:421,422:422,423:423,424:424,425:425,426:426,427:427,428:428,429:429,430:430,431:433,434:434,435:438,439:439,440:441,442:442,443:444,445:496,497:497,498:498,499:499,500:500,501:501,502:502,503:503,504:504,505:505,506:506,507:507,508:508,509:509,510:510,511:511,512:512,513:513,514:514,515:515,516:516,517:517,518:518,519:519,520:520,521:522,523:523,524:524,525:525,526:526,527:527,528:528,529:529,530:530,531:531,532:532,533:533,534:534,535:535,536:536,537:537,538:538,539:572,573:573,574:574,575:575,576:576,577:577,578:578,579:579,580:580,581:581,582:582,583:583,584:584,585:585,586:588,589:596,597:597,598:598,599:599,600:600,601:601,602:602,603:604,605:606,607:608,609:610,611:611,612:613,614:615,616:617,618:618,619:620,621:622,623:624,625:625,626:626,627:627,628:628,629:629,630:630,631:631,632:632,633:633,634:634,635:635,636:636,637:637,638:638,639:639,640:640,641:641,642:642,643:643,644:644,645:645,646:646,647:647,648:648,649:664,665:666,667:668,669:670,671:671,672:672,673:673,674:674,675:675,676:676,677:677,678:678,679:679,680:680,681:681,682:682,683:683,684:684",
@@ -224,8 +226,8 @@ fn required_env<T: FromStr>(name: &str) -> T
 where
     <T as FromStr>::Err: std::fmt::Display,
 {
-    let raw = env_raw(name).unwrap_or_else(|| panic!("missing fixed I10 setting {name}"));
-    raw.parse().unwrap_or_else(|e| panic!("invalid fixed I10 setting {name}: {e}"))
+    let raw = env_raw(name).unwrap_or_else(|| panic!("missing fixed circuit setting {name}"));
+    raw.parse().unwrap_or_else(|e| panic!("invalid fixed circuit setting {name}: {e}"))
 }
 
 fn optional_env<T: FromStr>(name: &str) -> Option<T> {
@@ -244,7 +246,7 @@ use pinned_env;
 
 pinned_env!(fold_guard, "FOLD_GUARD");
 
-/// Rewrite the 96-op identity tail to encode the ground nonce. Only `q_target`
+/// Rewrite the 96-op identity tail to encode the fixed nonce. Only `q_target`
 /// changes (X;X pairs stay identities), so circuit function is untouched; the
 /// Fiat-Shamir seed is what moves.
 fn apply_tail_nonce(mut ops: Vec<Op>, nonce: u64) -> Vec<Op> {
@@ -312,7 +314,7 @@ fn build_point_add() -> Vec<Op> {
     circ.take_ops()
 }
 
-/// Emit the fixed I10 circuit and accepted public-validation nonce 9342055114.
+/// Emit the deterministic point adder, retaining the inherited identity tail.
 pub fn build() -> Vec<Op> {
     let mut ops = build_point_add();
     // Exact op-stream post-passes, ported from the 2026-09-04 warpspeed

@@ -102,7 +102,13 @@ impl Builder {
     /// Close the current phase: report its Toffoli count and peak width on
     /// stdout -- which is what `build_circuit` prints -- and start a new one.
     pub(crate) fn phase_name(&self) -> &'static str { self.phase }
+    #[cfg(test)]
+    pub(crate) fn record_walk_round(&self, round: usize, width: usize) {
+        super::precision_tests::record_walk(self.ops.len(), self.phase, round, width);
+    }
     pub fn set_phase(&mut self, p: &'static str) {
+        #[cfg(test)]
+        super::precision_tests::record_phase(self.ops.len(), p);
         if self.model {
             eprintln!("MODEL_PHASE {} {} {} {}", self.phase, self.peak_qubits,
                 self.model_phase_native, self.model_phase_weighted);
@@ -205,14 +211,28 @@ impl Builder {
     pub fn alloc_bits(&mut self, n: usize) -> Vec<BitId> {
         (0..n).map(|_| self.alloc_bit()).collect()
     }
+    #[track_caller]
     pub fn free(&mut self, q: QubitId) {
+        #[cfg(test)]
+        {
+            let caller = std::panic::Location::caller();
+            super::precision_tests::record_reset(self.ops.len(), caller.file(), caller.line());
+        }
         self.r(q);
         self.release_clean(q);
     }
     /// Return a qubit that the caller has unitarily restored to |0> without
     /// emitting a reset. This preserves the measurement stream when a clean
     /// temporary is parked and reused inside one reversible cell.
+    #[track_caller]
     pub fn release_clean(&mut self, q: QubitId) {
+        #[cfg(test)]
+        if !self.ops.last().is_some_and(|op| {
+            matches!(op.kind, OperationType::R | OperationType::Hmr) && op.q_target == q
+        }) {
+            let caller = std::panic::Location::caller();
+            super::precision_tests::record_release(self.ops.len(), q, caller.file(), caller.line());
+        }
         self.free_qubits
             .push(q.0.try_into().expect("qubit id fits in u32"));
         if self.active_qubits > 0 {
@@ -221,6 +241,7 @@ impl Builder {
         let at = self.at();
         self.peak_census.on_free(at, q.0);
     }
+    #[track_caller]
     pub fn free_vec(&mut self, qs: &[QubitId]) {
         for &q in qs {
             self.free(q);

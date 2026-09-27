@@ -11,12 +11,28 @@ use crate::circuit::QubitId;
 /// needs a wire at all: its carry step `MAJ(u_top, v_top, carry)` is wanted only
 /// as a phase, and `(-1)^(x^y) = (-1)^x (-1)^y` splits that MAJ into three CZs.
 ///
+/// If the full measured ladder exceeds the workspace budget, its high stages
+/// use in-place majority and inverse-majority instead. Each such stage trades
+/// one additional Toffoli for one fewer owned carry, without changing the
+/// comparison window or its predicate.
+///
 /// `borrow_in` is the borrow entering bit 0, for a caller that has already
 /// accounted for the bits below by other means. With `None` the comparison
 /// starts clean, and after the first CX `u[0]` already holds what a clean
 /// carry-in wire would have held — so it serves as the first nonlinear control
 /// and no wire is needed either way.
 pub(crate) fn cmp_lt_phase(circ: &mut Builder, u: &[QubitId], v: &[QubitId], borrow_in: Option<QubitId>) {
+    let room = super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
+    cmp_lt_phase_with_scratch(circ, u, v, borrow_in, room);
+}
+
+fn cmp_lt_phase_with_scratch(
+    circ: &mut Builder,
+    u: &[QubitId],
+    v: &[QubitId],
+    borrow_in: Option<QubitId>,
+    scratch: usize,
+) {
     let n = u.len();
     assert_eq!(v.len(), n);
     // Two bits is the narrowest comparison any caller asks for: the walk's
@@ -31,13 +47,15 @@ pub(crate) fn cmp_lt_phase(circ: &mut Builder, u: &[QubitId], v: &[QubitId], bor
     // No separate predictor copy or extra nonlinear gate is necessary.
     if borrow_in==Some(v[0]) {
         assert!(n>=3,"aliased low seed needs at least two remaining comparison bits");
-        return cmp_lt_phase(circ,&u[1..],&v[1..],borrow_in);
+        return cmp_lt_phase_with_scratch(circ,&u[1..],&v[1..],borrow_in,scratch);
     }
     let operand_seed=borrow_in.is_some_and(|q|v[1..].contains(&q));
     assert!(!borrow_in.is_some_and(|q|u.contains(&q)),"seed cannot alias the accumulator");
     let last = n - 1;
 
-    let carries = circ.alloc_qubits(last);
+    assert!(scratch > 0, "phase comparison requires one scratch qubit");
+    let owned = last.min(scratch);
+    let carries = circ.alloc_qubits(owned);
     circ.x_all(u);
 
     // Forward: borrow-prefix ladder over bits 0..last.
@@ -52,8 +70,14 @@ pub(crate) fn cmp_lt_phase(circ: &mut Builder, u: &[QubitId], v: &[QubitId], bor
     for i in 1..last {
         circ.cx(u[i], v[i]);
         circ.cx(u[i], u[i - 1]);
-        circ.ccx(u[i - 1], v[i], carries[i]);
-        circ.cx(carries[i], u[i]);
+        if i < owned {
+            circ.ccx(u[i - 1], v[i], carries[i]);
+            circ.cx(carries[i], u[i]);
+        } else {
+            // An in-place MAJ stores the same borrow prefix in u[i].
+            // Its inverse costs one extra Toffoli instead of a scratch wire.
+            circ.ccx(u[i - 1], v[i], u[i]);
+        }
     }
 
     // The top bit's carry step, as three Clifford CZs.
@@ -61,13 +85,17 @@ pub(crate) fn cmp_lt_phase(circ: &mut Builder, u: &[QubitId], v: &[QubitId], bor
     circ.cz(u[last], u[last - 1]);
     circ.cz(v[last], u[last - 1]);
 
-    // Inverse: every carry measured out and phase-repaired, zero Toffoli.
+    // Unwind owned products by measurement and in-place stages by inverse MAJ.
     for i in (1..last).rev() {
-        circ.cx(carries[i], u[i]);
-        let m = circ.alloc_bit();
-        circ.hmr(carries[i], m);
-        circ.cz_if(u[i - 1], v[i], m);
-        circ.free_bit(m);
+        if i < owned {
+            circ.cx(carries[i], u[i]);
+            let m = circ.alloc_bit();
+            circ.hmr(carries[i], m);
+            circ.cz_if(u[i - 1], v[i], m);
+            circ.free_bit(m);
+        } else {
+            circ.ccx(u[i - 1], v[i], u[i]);
+        }
         circ.cx(u[i], u[i - 1]);
         circ.cx(u[i], v[i]);
     }
@@ -118,4 +146,96 @@ pub fn erase_with_compare(
     cmp_lt_phase(circ, a, b, borrow_in);
     circ.pop_condition();
     circ.free_bit(bit);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::circuit::OperationType;
+    use crate::sim::Simulator;
+    use sha3::{digest::ExtendableOutput, Shake256};
+
+    #[test]
+    fn bounded_phase_comparison_exhaustive() {
+        for width in 2..=6 {
+            for scratch in 1..width {
+                for seed in 0..width + 2 {
+                    if seed == 2 && width == 2 {
+                        continue;
+                    }
+                    for conditional in [false, true] {
+                        let mut circ = Builder::new();
+                        let u = circ.alloc_qubits(width);
+                        let v = circ.alloc_qubits(width);
+                        let external = circ.alloc_qubit();
+                        let condition = circ.alloc_bit();
+                        let borrow = match seed {
+                            0 => None,
+                            1 => Some(external),
+                            _ => Some(v[seed - 2]),
+                        };
+                        if conditional {
+                            circ.push_condition(condition);
+                        }
+                        cmp_lt_phase_with_scratch(&mut circ, &u, &v, borrow, scratch);
+                        if conditional {
+                            circ.pop_condition();
+                        }
+                        let (nq, nb) = circ.i13_dims();
+                        assert!(nq <= 2 * width + 1 + scratch);
+                        let ops = circ.take_ops();
+                        for op in &ops {
+                            op.validate();
+                        }
+                        let steps = width - 1 - usize::from(seed == 2);
+                        assert_eq!(
+                            ops.iter().filter(|op| op.kind == OperationType::CCX).count(),
+                            2 * steps - steps.min(scratch)
+                        );
+                        let mut xof = Shake256::default().finalize_xof();
+                        let mut sim = Simulator::new(nq, nb, &mut xof);
+                        let mask = (1usize << width) - 1;
+                        for base in (0..1usize << (2 * width + 1)).step_by(64) {
+                            sim.clear_for_shot();
+                            sim.bits[condition.0 as usize] = 0xaaaa_aaaa_aaaa_aaaa;
+                            let mut expected_phase = 0u64;
+                            for shot in 0..64 {
+                                let state = base + shot;
+                                let a = state & mask;
+                                let b = state >> width & mask;
+                                let carry = match seed {
+                                    0 => false,
+                                    1 => state >> (2 * width) & 1 != 0,
+                                    _ => b >> (seed - 2) & 1 != 0,
+                                };
+                                if (!conditional || shot & 1 != 0)
+                                    && (a < b || (a == b && carry))
+                                {
+                                    expected_phase |= 1 << shot;
+                                }
+                                for (i, &q) in u.iter().chain(&v).chain([&external]).enumerate() {
+                                    sim.qubits[q.0 as usize] |= ((state >> i & 1) as u64) << shot;
+                                }
+                            }
+                            sim.apply_iter(ops.iter());
+                            assert_eq!(
+                                sim.phase, expected_phase,
+                                "width={width}, scratch={scratch}, seed={seed}"
+                            );
+                            assert!(sim.qubits[2 * width + 1..].iter().all(|&q| q == 0));
+                            for shot in 0..64 {
+                                let state = base + shot;
+                                for (i, &q) in u.iter().chain(&v).chain([&external]).enumerate() {
+                                    assert_eq!(
+                                        sim.qubits[q.0 as usize] >> shot & 1,
+                                        (state >> i & 1) as u64
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

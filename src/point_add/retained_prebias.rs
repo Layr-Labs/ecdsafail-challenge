@@ -28,8 +28,11 @@ fn plan(c:&Builder,r:usize,fw:usize,drop:bool)->Option<Plan>{
  let exact_missing=((fw-3) as isize-existing).max(0) as usize;
  let exact_prefix=if exact_missing==0{0}else{exact_missing+1};
  let exact=(env_flag("PP_RETAIN_EXACT_DIV") && exact_missing<=limit || drop_exact_lead_exact(drop,exact_missing)) && exact_prefix+1<hi-lo;
+ // Otherwise use the standard full-window replay rather than drop a low carry.
+ if !exact{return None;}
  let prefix=if exact{exact_prefix}else{prefix};
  let saving=if exact{saving-(exact_missing-missing) as f64/2.0-1.0}else{saving};
+ if saving<0.0{return None;}
  if !drop_exact_lead_minsave(drop,saving){return None;}
  Some(Plan{bounds,prefix,bits,saving,exact,dropped:drop})
 }
@@ -89,4 +92,3 @@ pub(super)fn try_replay(c:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId],fw
  }
  c.cx_all(sign,b);rotate_down(c,b);true
 }
-

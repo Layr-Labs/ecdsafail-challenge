@@ -120,14 +120,13 @@ fn dead_low_carry_run(
 /// over `dead..=last`; the positions below `dead` are the ones proved to carry
 /// nothing.
 ///
-/// Every carry is computed from the *original* `acc`, applied in a second pass,
-/// then measured out and phase-repaired in a third -- which is why the ladder
-/// costs one Toffoli per live position and none at all to unwind.
+/// Carries are computed from the original `acc`. The last carry is XORed
+/// directly into the top sum bit; only the internal carries need scratch wires
+/// and measurement-based uncomputation.
 ///
 /// `host`, when given, is a caller-owned wire lent to the ladder to carry the
-/// *top* position instead of one allocated here. It is HMR-cleared back to |0>
-/// with the rest but stays the caller's, so the ladder ends one wire lighter --
-/// which is the whole of what `csub_const_trunc_ctrl_low0` buys.
+/// highest internal position instead of one allocated here. It is HMR-cleared
+/// back to |0> with the rest but stays the caller's.
 fn carry_ladder(
     circ: &mut Builder,
     acc: &[QubitId],
@@ -137,9 +136,11 @@ fn carry_ladder(
     host: Option<QubitId>,
 ) {
     let n = acc.len();
-    assert!(dead <= last && last < n);
+    assert_eq!(last + 2, n);
     assert!(host.is_none_or(|h| !acc[dead..].contains(&h)));
-    let owned = circ.alloc_qubits(last + 1 - dead - usize::from(host.is_some()));
+    let internal = last.saturating_sub(dead);
+    let host = host.filter(|_| internal != 0);
+    let owned = circ.alloc_qubits(internal - usize::from(host.is_some()));
     let mut carries = owned.clone();
     carries.extend(host);
     // The carry into position `i` is the carry out of `i - 1`, which is a live
@@ -147,7 +148,7 @@ fn carry_ladder(
     let carry_into = |i: usize| -> Option<QubitId> { (i > dead).then(|| carries[i - 1 - dead]) };
 
     for i in dead..=last {
-        let target = carries[i - dead];
+        let target = if i == last { acc[n - 1] } else { carries[i - dead] };
         match (kctrl(i), carry_into(i)) {
             (Addend::Zero, None) => {}
             (Addend::One, None) => circ.cx(acc[i], target),
@@ -163,14 +164,14 @@ fn carry_ladder(
             Addend::One => circ.x(acc_i),
             Addend::Wire(kq) => circ.cx(kq, acc_i),
         }
-        if i > 0 && i - 1 <= last {
+        if i > 0 && i <= last {
             if let Some(ci) = carry_into(i) {
                 circ.cx(ci, acc_i);
             }
         }
     }
 
-    for i in (dead..=last).rev() {
+    for i in (dead..last).rev() {
         let m = circ.alloc_bit();
         circ.hmr(carries[i - dead], m);
         match (kctrl(i), carry_into(i)) {
@@ -247,7 +248,7 @@ pub fn csub_const_trunc(circ: &mut Builder, acc: &[QubitId], c: U256, ctrl: Qubi
 ///
 /// Bit 0's sum is `acc[0] ^ ctrl`, and the precondition makes that 0. Applying it
 /// up front both finishes that position and leaves `acc[0]` clean, so it can host
-/// the ladder's top carry instead of a wire of its own.
+/// the ladder's highest internal carry instead of a wire of its own.
 ///
 /// What is left is an ordinary subtraction. The borrow out of bit 0 is
 /// `~acc[0] & ctrl`, which the precondition also makes 0, so bits 1.. are a
@@ -308,4 +309,161 @@ pub fn cadd_const_per_position_trunc(
         last,
         None,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::circuit::OperationType;
+    use crate::sim::Simulator;
+    use sha3::{digest::ExtendableOutput, Shake256};
+
+    fn check_addition(n: usize, constant: usize, controlled: bool, subtract: bool, low0: bool) {
+        let mut circ = Builder::new();
+        let acc = circ.alloc_qubits(n);
+        let control = circ.alloc_qubit();
+        let c = U256::from(constant);
+        if low0 {
+            csub_const_trunc_ctrl_low0(&mut circ, &acc, c, control);
+        } else if controlled {
+            if subtract {
+                csub_const_trunc(&mut circ, &acc, c, control);
+            } else {
+                cadd_const_trunc(&mut circ, &acc, c, control, false);
+            }
+        } else if subtract {
+            sub_const(&mut circ, &acc, c);
+        } else {
+            add_const(&mut circ, &acc, c);
+        }
+        let (qubits, bits) = circ.i13_dims();
+        let ops = circ.take_ops();
+        for op in &ops {
+            op.validate();
+        }
+        assert!(qubits <= n + 1 + n.saturating_sub(2));
+        if controlled && !subtract && !low0 && constant & 1 != 0 {
+            assert_eq!(qubits, n + 1 + n - 2);
+            assert_eq!(
+                ops.iter().filter(|op| op.kind == OperationType::CCX).count(),
+                n - 1
+            );
+        }
+
+        let mask = (1usize << n) - 1;
+        let mut xof = Shake256::default().finalize_xof();
+        let mut sim = Simulator::new(qubits, bits, &mut xof);
+        for base in (0..2 * (mask + 1)).step_by(64) {
+            sim.clear_for_shot();
+            for shot in 0..64 {
+                let state = (base + shot) % (2 * (mask + 1));
+                let control_value = state >> n;
+                let mut input = state & mask;
+                if low0 {
+                    input = (input & !1) | control_value;
+                }
+                for (i, &q) in acc.iter().enumerate() {
+                    sim.qubits[q.0 as usize] |= ((input >> i & 1) as u64) << shot;
+                }
+                sim.qubits[control.0 as usize] |= (control_value as u64) << shot;
+            }
+            sim.apply_iter(ops.iter());
+            assert_eq!(sim.phase, 0, "phase: n={n}, c={constant}");
+            assert!(sim.qubits[n + 1..].iter().all(|&q| q == 0));
+            for shot in 0..64 {
+                let state = (base + shot) % (2 * (mask + 1));
+                let control_value = state >> n;
+                let mut input = state & mask;
+                if low0 {
+                    input = (input & !1) | control_value;
+                }
+                let addend = if !controlled || control_value != 0 { constant } else { 0 };
+                let expected = if subtract {
+                    input.wrapping_sub(addend) & mask
+                } else {
+                    (input + addend) & mask
+                };
+                let actual = acc.iter().enumerate().fold(0usize, |value, (i, &q)| {
+                    value | (((sim.qubits[q.0 as usize] >> shot) & 1) as usize) << i
+                });
+                assert_eq!(actual, expected, "n={n}, c={constant}, input={input}");
+                assert_eq!(
+                    (sim.qubits[control.0 as usize] >> shot) & 1,
+                    control_value as u64
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_carry_exhaustive_constants() {
+        for n in 2..=7 {
+            for constant in 0..1usize << n {
+                for controlled in [false, true] {
+                    for subtract in [false, true] {
+                        check_addition(n, constant, controlled, subtract, false);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_carry_exhaustive_borrowed_low_bit() {
+        for n in 3..=7 {
+            for constant in (1..1usize << n).step_by(2) {
+                check_addition(n, constant, true, true, true);
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_carry_exhaustive_position_controls() {
+        for n in 2..=6 {
+            let mut circ = Builder::new();
+            let acc = circ.alloc_qubits(n);
+            let source = circ.alloc_qubits(n);
+            let controls: Vec<_> = source.iter().copied().map(Some).collect();
+            cadd_const_per_position_trunc(&mut circ, &acc, &controls);
+            let (qubits, bits) = circ.i13_dims();
+            assert_eq!(qubits, 3 * n - 2);
+            let ops = circ.take_ops();
+            for op in &ops {
+                op.validate();
+            }
+            let mask = (1usize << n) - 1;
+            let states = 1usize << (2 * n);
+            let mut xof = Shake256::default().finalize_xof();
+            let mut sim = Simulator::new(qubits, bits, &mut xof);
+            for base in (0..states).step_by(64) {
+                sim.clear_for_shot();
+                for shot in 0..64 {
+                    let state = (base + shot) % states;
+                    for (i, &q) in acc.iter().chain(&source).enumerate() {
+                        sim.qubits[q.0 as usize] |= ((state >> i & 1) as u64) << shot;
+                    }
+                }
+                sim.apply_iter(ops.iter());
+                assert_eq!(sim.phase, 0);
+                assert!(sim.qubits[2 * n..].iter().all(|&q| q == 0));
+                for shot in 0..64 {
+                    let state = (base + shot) % states;
+                    let input = state & mask;
+                    let addend = state >> n;
+                    for (i, &q) in acc.iter().enumerate() {
+                        assert_eq!(
+                            (sim.qubits[q.0 as usize] >> shot) & 1,
+                            (((input + addend) >> i) & 1) as u64
+                        );
+                    }
+                    for (i, &q) in source.iter().enumerate() {
+                        assert_eq!(
+                            (sim.qubits[q.0 as usize] >> shot) & 1,
+                            ((addend >> i) & 1) as u64
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

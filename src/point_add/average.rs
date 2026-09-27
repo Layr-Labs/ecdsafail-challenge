@@ -74,3 +74,88 @@ pub(crate) fn reverse(c:&mut Builder,source:&[QubitId],target:&[QubitId],sign:Qu
     c.cx(source[0],target[0]);c.x(target[0]);
     c.cx_all(sign,source);c.x(sign);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sim::Simulator;
+    use sha3::{digest::ExtendableOutput, Shake256};
+
+    fn signed(value: usize, width: usize) -> i64 {
+        let value = value as i64;
+        if value & (1 << (width - 1)) != 0 {
+            value - (1 << width)
+        } else {
+            value
+        }
+    }
+
+    #[test]
+    fn signed_average_exhaustive_including_overflow() {
+        for width in 4..=7 {
+            for bridges in 0..=width - 4 {
+                let mut circ = Builder::new();
+                let source = circ.alloc_qubits(width);
+                let target = circ.alloc_qubits(width);
+                let sign = circ.alloc_qubit();
+                circ.cx(source[0], sign);
+                circ.cx(target[0], sign);
+                forward(&mut circ, &source, &target, sign, bridges);
+                let forward_ops = circ.take_ops();
+                reverse(&mut circ, &source, &target, sign, bridges);
+                circ.cx(source[0], sign);
+                circ.cx(target[0], sign);
+                circ.free(sign);
+                let reverse_ops = circ.take_ops();
+                let (nq, nb) = circ.i13_dims();
+                for op in forward_ops.iter().chain(&reverse_ops) {
+                    op.validate();
+                }
+                let mut xof = Shake256::default().finalize_xof();
+                let mut sim = Simulator::new(nq, nb, &mut xof);
+                let mask = (1usize << width) - 1;
+                for base in (0..1usize << (2 * width)).step_by(64) {
+                    sim.clear_for_shot();
+                    for shot in 0..64 {
+                        let state = base + shot;
+                        for (i, &q) in source.iter().chain(&target).enumerate() {
+                            sim.qubits[q.0 as usize] |= ((state >> i & 1) as u64) << shot;
+                        }
+                    }
+                    sim.apply_iter(forward_ops.iter());
+                    assert_eq!(sim.phase, 0);
+                    assert!(sim.qubits[2 * width + 1..].iter().all(|&q| q == 0));
+                    for shot in 0..64 {
+                        let state = base + shot;
+                        let a = state & mask;
+                        let b = state >> width;
+                        let subtract = (a ^ b) & 1 != 0;
+                        let a_odd = 2 * signed(a, width) + 1;
+                        let b_odd = 2 * signed(b, width) + 1;
+                        let average = (b_odd + if subtract { -a_odd } else { a_odd }) / 2;
+                        let expected = ((average - 1) / 2) as usize & mask;
+                        for (i, &q) in source.iter().enumerate() {
+                            assert_eq!((sim.qubits[q.0 as usize] >> shot) & 1, (a >> i & 1) as u64);
+                        }
+                        for (i, &q) in target.iter().enumerate() {
+                            assert_eq!(
+                                (sim.qubits[q.0 as usize] >> shot) & 1,
+                                (expected >> i & 1) as u64,
+                                "width={width}, source={a}, target={b}, bridges={bridges}"
+                            );
+                        }
+                    }
+                    sim.apply_iter(reverse_ops.iter());
+                    assert_eq!(sim.phase, 0);
+                    assert!(sim.qubits[2 * width..].iter().all(|&q| q == 0));
+                    for shot in 0..64 {
+                        let state = base + shot;
+                        for (i, &q) in source.iter().chain(&target).enumerate() {
+                            assert_eq!((sim.qubits[q.0 as usize] >> shot) & 1, (state >> i & 1) as u64);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

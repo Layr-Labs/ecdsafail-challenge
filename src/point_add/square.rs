@@ -15,7 +15,7 @@
 //! as a `bool` and never as a wire: `negate` turns an add into the
 //! complement-add-complement subtraction.
 
-use super::modular::{addsub_full_low, addsub_wide_low, Carry0, Carry1, add_wide, addsub_full, addsub_wide, mod_addsub, sub_wide};
+use super::modular::{addsub_wide_low, Carry0, Carry1, add_wide, addsub_full, addsub_wide, mod_addsub, sub_wide};
 use super::{fold_guard, pinned_env, Builder, N};
 use crate::circuit::{QubitId,BitId};
 use alloy_primitives::U256;
@@ -129,7 +129,7 @@ fn row_addsub_cin(circ:&mut Builder, xi:QubitId, operand:&[QubitId], acc:&[Qubit
 /// been undone, so the result's top bit is zero: measured terminal.
 fn diag_correction_known_top(circ:&mut Builder, x:&[QubitId], product:&[QubitId]) {
     let m=x.len();
-    let pads=circ.alloc_qubits(m);
+    let pads=circ.alloc_qubits(m-1);
     for i in 0..m-1 { circ.cx(x[i],pads[i]); circ.x(pads[i]); }
     let mut value=x.to_vec();
     value.extend_from_slice(&pads);
@@ -292,6 +292,7 @@ fn diag_spread(circ: &mut Builder, x: &[QubitId], product: &[QubitId], inverse: 
 /// `x + ~(x mod 2^(m-1)) << m`. The two halves occupy disjoint bit ranges, so
 /// they concatenate into one full-width term; building the complemented high
 /// half is Clifford, which saves an (m-1)-Toffoli carry ladder per correction.
+/// Its top bit is zero: the wide adder supplies it without a physical pad.
 fn diag_correction(circ: &mut Builder, x: &[QubitId], product: &[QubitId], inverse: bool) {
     let m = x.len();
     if super::env_flag("SQ_SPARSE_CORRECTION") {
@@ -303,7 +304,7 @@ fn diag_correction(circ: &mut Builder, x: &[QubitId], product: &[QubitId], inver
         circ.x(one); circ.free(one);
         return;
     }
-    let pads = circ.alloc_qubits(m);
+    let pads = circ.alloc_qubits(m - 1);
     for i in 0..m - 1 {
         circ.cx(x[i], pads[i]);
         circ.x(pads[i]);
@@ -311,8 +312,8 @@ fn diag_correction(circ: &mut Builder, x: &[QubitId], product: &[QubitId], inver
     let mut value = x.to_vec();
     value.extend_from_slice(&pads);
     if cut_sqident() && 2*m >= 4 {
-        addsub_full_low(circ, &value, product, inverse, Carry0::IsAddend0, Carry1::Full);
-    } else { addsub_full(circ, &value, product, inverse); }
+        addsub_wide_low(circ, &value, product, inverse, Carry0::IsAddend0, Carry1::Full);
+    } else { addsub_wide(circ, &value, product, inverse); }
     for i in 0..m - 1 {
         circ.x(pads[i]);
         circ.cx(x[i], pads[i]);
@@ -440,26 +441,38 @@ fn wcin_windows(circ: &mut Builder, negate: bool, high: &[QubitId], out: &[Qubit
         let win = &out[shift..top];
         let inv = negate ^ neg;
         if inv { circ.x_all(win); }
-        let owned = win.len() - 2;
         let room = super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
-        if room >= owned {
-            super::modular::ripple_add(circ, high, win, Some(c), None);
-        } else {
-            // One wire short: the carry-in hosts position 0's carry in place
-            // (a Cuccaro MAJ/UMA pair), one extra Toffoli for one fewer wire.
-            assert!(room + 1 >= owned, "WCIN window more than one wire over the peak: room {room} owned {owned}");
-            let (v0, a0) = (high[0], win[0]);
-            circ.cx(c, v0);
-            circ.cx(c, a0);
-            circ.ccx(v0, a0, c);
-            super::modular::ripple_add(circ, &high[1..], &win[1..], Some(c), None);
-            circ.ccx(v0, a0, c);
-            circ.cx(c, v0);
-            circ.cx(c, a0);
-            circ.cx(v0, a0);
-            circ.cx(c, a0);
-        }
+        wcin_window_add(circ, high, win, c, room);
         if inv { circ.x_all(win); }
+    }
+}
+
+/// Exact addition across the existing window; only the workspace changes.
+/// Chunk boundaries are erased with full-width comparisons, never truncated.
+fn wcin_window_add(circ: &mut Builder, high: &[QubitId], win: &[QubitId], c: QubitId, room: usize) {
+    assert!(!high.is_empty() && high.len() <= win.len());
+    let owned = win.len().saturating_sub(2);
+    if room >= owned {
+        super::modular::ripple_add(circ, high, win, Some(c), None);
+    } else if room + 1 == owned && high.len() > 1 {
+        // One Cuccaro MAJ/UMA pair trades one extra Toffoli for one wire.
+        let (v0, a0) = (high[0], win[0]);
+        circ.cx(c, v0);
+        circ.cx(c, a0);
+        circ.ccx(v0, a0, c);
+        super::modular::ripple_add(circ, &high[1..], &win[1..], Some(c), None);
+        circ.ccx(v0, a0, c);
+        circ.cx(c, v0);
+        circ.cx(c, a0);
+        circ.cx(v0, a0);
+        circ.cx(c, a0);
+    } else {
+        let plan = super::width_composition::direct_plan(win.len(), room)
+            .expect("WCIN window has no exact composition within its qubit budget");
+        assert!(plan.peak <= room);
+        let map: Vec<Vec<QubitId>> = (0..win.len())
+            .map(|i| high.get(i).copied().into_iter().collect()).collect();
+        super::width_composition::direct_add(circ, &map, win, c, &plan);
     }
 }
 
@@ -501,23 +514,46 @@ fn b_merged_folds(circ: &mut Builder, b2: &[QubitId], out: &[QubitId]) {
     assert!(s32 == 32 && !n32);
     let rot32 = rotate_by(b2, 32);
     let c = wcin_ripple(circ, true, &rot32, out);
-    let hi = |s: usize| &b2[N - s..];
-    let small = circ.alloc_qubits(11);
+    with_merged_high(circ, &b2[N - 32..], |circ, r| {
+        wcin_windows(circ, true, r, out, c);
+    });
+    wcin_finish(circ, true, &rot32, out, c);
+}
+
+/// Compute `high32 + high10 - high6 + high4`, consume it without changing
+/// either source, then clear it. For `high10 = 16u + v`, the small correction
+/// is `15u + v + floor(u/4) <= 975`, so ten bits suffice at every step.
+/// The final inverse additions have affine outputs and use the existing
+/// measured carry stream instead of recomputing their Toffoli ladders.
+fn with_merged_high(
+    circ: &mut Builder,
+    high: &[QubitId],
+    consume: impl FnOnce(&mut Builder, &[QubitId]),
+) {
+    assert_eq!(high.len(), 32);
+    let hi = |s: usize| &high[32 - s..];
+    let small = circ.alloc_qubits(10);
     for i in 0..10 { circ.cx(hi(10)[i], small[i]); }
     addsub_wide(circ, hi(6), &small, true);
     addsub_wide(circ, hi(4), &small, false);
     let r = circ.alloc_qubits(33);
     for i in 0..32 { circ.cx(hi(32)[i], r[i]); }
     addsub_wide(circ, &small, &r, false);
-    wcin_windows(circ, true, &r, out, c);
-    addsub_wide(circ, &small, &r, true);
+    consume(circ, &r);
+    // In the subtraction frame, ~r + small = ~high (including its zero
+    // extension). The stream reconstructs each carry from this known sum.
+    let mut restored_high: Vec<_> = high.iter().map(|&q| (true, vec![q])).collect();
+    restored_high.push((true, Vec::new()));
+    circ.x_all(&r);
+    super::stream_wide::add(circ, &small, &r, None, &restored_high);
+    circ.x_all(&r);
     for i in 0..32 { circ.cx(hi(32)[i], r[i]); }
     circ.free_vec(&r);
     addsub_wide(circ, hi(4), &small, true);
-    addsub_wide(circ, hi(6), &small, false);
+    let restored_small: Vec<_> = hi(10).iter().map(|&q| (false, vec![q])).collect();
+    super::stream_wide::add(circ, hi(6), &small, None, &restored_small);
     for i in 0..10 { circ.cx(hi(10)[i], small[i]); }
     circ.free_vec(&small);
-    wcin_finish(circ, true, &rot32, out, c);
 }
 
 /// PP_J_SFUSE: `fold_rotated(true, ..)` whose modular subtract keeps its
@@ -1174,4 +1210,304 @@ pub(super) fn i48_row_fixture(c:&mut Builder,x:&[QubitId],product:&[QubitId]) {
 }
 pub(super) fn i48_leaf_fixture(c:&mut Builder,x:&[QubitId],product:&[QubitId],inverse:bool) {
     tri_square_cin(c,x,product,inverse);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::circuit::{Op, OperationType};
+    use crate::sim::Simulator;
+    use sha3::digest::{ExtendableOutput, Update, XofReader};
+    use sha3::Shake256;
+
+    struct MergedHighFixture {
+        ops: Vec<Op>,
+        dims: (usize, usize),
+        input: Vec<QubitId>,
+        output: Vec<QubitId>,
+    }
+
+    fn merged_high_fixture(optimized: bool) -> MergedHighFixture {
+        let mut circ = Builder::new();
+        let input = circ.alloc_qubits(32);
+        let output = circ.alloc_qubits(33);
+        let consume = |circ: &mut Builder, r: &[QubitId]| {
+            for (&q, &target) in r.iter().zip(&output) { circ.cx(q, target); }
+        };
+        if optimized {
+            with_merged_high(&mut circ, &input, consume);
+        } else {
+            // Original eleven-bit correction and full-ripple inverse.
+            let hi = |s: usize| &input[32 - s..];
+            let small = circ.alloc_qubits(11);
+            for i in 0..10 { circ.cx(hi(10)[i], small[i]); }
+            addsub_wide(&mut circ, hi(6), &small, true);
+            addsub_wide(&mut circ, hi(4), &small, false);
+            let r = circ.alloc_qubits(33);
+            for i in 0..32 { circ.cx(hi(32)[i], r[i]); }
+            addsub_wide(&mut circ, &small, &r, false);
+            consume(&mut circ, &r);
+            addsub_wide(&mut circ, &small, &r, true);
+            for i in 0..32 { circ.cx(hi(32)[i], r[i]); }
+            circ.free_vec(&r);
+            addsub_wide(&mut circ, hi(4), &small, true);
+            addsub_wide(&mut circ, hi(6), &small, false);
+            for i in 0..10 { circ.cx(hi(10)[i], small[i]); }
+            circ.free_vec(&small);
+        }
+        assert_eq!(circ.active_qubits(), 65);
+        let dims = circ.i13_dims();
+        let ops = circ.take_ops();
+        for op in &ops { op.validate(); }
+        MergedHighFixture { ops, dims, input, output }
+    }
+
+    fn apply_clean<R: XofReader>(sim: &mut Simulator<'_, R>, ops: &[Op]) {
+        // Hoist conditions into a spare classical mask so every reset can be
+        // checked before execution without losing the simulator's block scope.
+        let condition_bit = BitId(sim.bits.len() as u64);
+        sim.bits.push(0);
+        sim.num_bits += 1;
+        let mut condition = u64::MAX;
+        let mut stack = Vec::new();
+        for op in ops {
+            if op.kind == OperationType::PushCondition {
+                stack.push(condition);
+                condition &= sim.bit(op.c_condition);
+                continue;
+            }
+            if op.kind == OperationType::PopCondition {
+                condition = stack.pop().expect("unbalanced condition stack");
+                continue;
+            }
+            let active = if op.c_condition == crate::circuit::NO_BIT {
+                condition
+            } else {
+                condition & sim.bit(op.c_condition)
+            };
+            if op.kind == OperationType::R {
+                assert_eq!(sim.qubit(op.q_target) & active, 0, "reset of a dirty ancilla");
+            }
+            *sim.bit_mut(condition_bit) = active;
+            let mut checked = *op;
+            checked.c_condition = condition_bit;
+            sim.apply_iter(std::iter::once(&checked));
+        }
+        assert!(stack.is_empty());
+        sim.bits.pop();
+        sim.num_bits -= 1;
+        assert_eq!(sim.phase, 0, "uncancelled measurement phase");
+    }
+
+    fn read_word<R: XofReader>(sim: &Simulator<'_, R>, reg: &[QubitId], lane: usize) -> u64 {
+        reg.iter().enumerate().fold(0, |value, (i, &q)| {
+            value | (((sim.qubit(q) >> lane) & 1) << i)
+        })
+    }
+
+    #[test]
+    fn merged_high_small_bound_and_resources() {
+        for h in 0u32..1024 {
+            let difference = h - (h >> 4);
+            let correction = difference + (h >> 6);
+            assert!(difference <= 960);
+            assert!(correction <= 975);
+        }
+        let old = merged_high_fixture(false);
+        let new = merged_high_fixture(true);
+        let toffoli = |ops: &[Op]| ops.iter()
+            .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ)).count();
+        assert_eq!((toffoli(&old.ops), toffoli(&new.ops)), (104, 59));
+        assert_eq!((old.dims.0, new.dims.0), (140, 139));
+    }
+
+    #[test]
+    fn merged_high_values_phases_and_uncomputation() {
+        let low_mask = (1u32 << 22) - 1;
+        let mut inputs = Vec::new();
+        for h in 0u32..1024 {
+            let correction = h - (h >> 4) + (h >> 6);
+            let boundary = (1 << 22) - correction;
+            for low in [0, 1, low_mask, low_mask >> 1, boundary - 1, boundary, boundary + 1] {
+                inputs.push((h << 22) | (low & low_mask));
+            }
+        }
+        let mut state = 0x7e57_1234u32;
+        for _ in 0..4096 {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            inputs.push(state);
+        }
+        assert_eq!(inputs.len() % 64, 0);
+        let output_mask = (1u64 << 33) - 1;
+        let initial_output = |x: u32| u64::from(x).wrapping_mul(0x9e37_79b9) & output_mask;
+        for optimized in [false, true] {
+            let fixture = merged_high_fixture(optimized);
+            let mut seed = Shake256::default();
+            seed.update(b"merged-high-exact-regression");
+            let mut reader = seed.finalize_xof();
+            let mut sim = Simulator::new(fixture.dims.0, fixture.dims.1, &mut reader);
+            for batch in inputs.chunks_exact(64) {
+                sim.clear_for_shot();
+                for (lane, &x) in batch.iter().enumerate() {
+                    for (i, &q) in fixture.input.iter().enumerate() {
+                        *sim.qubit_mut(q) |= u64::from((x >> i) & 1) << lane;
+                    }
+                    for (i, &q) in fixture.output.iter().enumerate() {
+                        *sim.qubit_mut(q) |= ((initial_output(x) >> i) & 1) << lane;
+                    }
+                }
+                for inverse in [false, true] {
+                    apply_clean(&mut sim, &fixture.ops);
+                    for (lane, &x) in batch.iter().enumerate() {
+                        let correction = (x >> 22) - (x >> 26) + (x >> 28);
+                        let expected = initial_output(x)
+                            ^ if inverse { 0 } else { u64::from(x) + u64::from(correction) };
+                        assert_eq!(read_word(&sim, &fixture.input, lane), u64::from(x));
+                        assert_eq!(read_word(&sim, &fixture.output, lane), expected);
+                    }
+                    for q in 0..fixture.dims.0 {
+                        let id = QubitId(q as u64);
+                        if !fixture.input.contains(&id) && !fixture.output.contains(&id) {
+                            assert_eq!(sim.qubit(id), 0, "live scratch after merged high");
+                        }
+                    }
+
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn wcin_window_budget_exhaustive() {
+        let mut seed = Shake256::default();
+        seed.update(b"wcin-window-exact-budget-regression");
+        let mut reader = seed.finalize_xof();
+        for width in 1usize..=7 {
+            for source_width in 1..=width {
+                let owned = width.saturating_sub(2);
+                for room in 0..=owned {
+                    if room < owned && !(room + 1 == owned && source_width > 1)
+                        && super::super::width_composition::direct_plan(width, room).is_none() {
+                        continue;
+                    }
+                    let mut circ = Builder::new();
+                    let source = circ.alloc_qubits(source_width);
+                    let target = circ.alloc_qubits(width);
+                    let incoming = circ.alloc_qubit();
+                    let base = circ.active_qubits() as usize;
+                    wcin_window_add(&mut circ, &source, &target, incoming, room);
+                    let forward = circ.take_ops();
+                    circ.x_all(&target);
+                    wcin_window_add(&mut circ, &source, &target, incoming, room);
+                    circ.x_all(&target);
+                    let inverse = circ.take_ops();
+                    assert_eq!(circ.active_qubits() as usize, base);
+                    let dims = circ.i13_dims();
+                    assert!(dims.0 <= base + room, "width {width}, source {source_width}, room {room}");
+                    for op in forward.iter().chain(&inverse) { op.validate(); }
+                    let mut sim = Simulator::new(dims.0, dims.1, &mut reader);
+                    let total = 1usize << base;
+                    let source_mask = (1usize << source_width) - 1;
+                    let target_mask = (1usize << width) - 1;
+                    for start in (0..total).step_by(64) {
+                        sim.clear_for_shot();
+                        for lane in 0..64 {
+                            let encoded = (start + lane) % total;
+                            for bit in 0..base {
+                                sim.qubits[bit] |= (((encoded >> bit) & 1) as u64) << lane;
+                            }
+                        }
+                        for (undo, ops) in [(false, &forward), (true, &inverse)] {
+                            apply_clean(&mut sim, ops);
+                            for lane in 0..64 {
+                                let encoded = (start + lane) % total;
+                                let a = encoded & source_mask;
+                                let b = (encoded >> source_width) & target_mask;
+                                let c = encoded >> (source_width + width);
+                                let expected = if undo { b } else { (a + b + c) & target_mask };
+                                assert_eq!(read_word(&sim, &source, lane), a as u64);
+                                assert_eq!(read_word(&sim, &target, lane), expected as u64);
+                                assert_eq!((sim.qubit(incoming) >> lane) & 1, c as u64);
+                            }
+                            assert!(sim.qubits[base..].iter().all(|&q| q == 0));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn wcin_window_production_budget() {
+        for (guard, room) in [25, 32, 40].into_iter()
+            .flat_map(|guard| [150, 149, 140].map(|room| (guard, room))) {
+            let mut circ = Builder::new();
+            let source = circ.alloc_qubits(130);
+            let target = circ.alloc_qubits(130 + guard);
+            let incoming = circ.alloc_qubit();
+            let base = circ.active_qubits() as usize;
+            wcin_window_add(&mut circ, &source, &target, incoming, room);
+            assert_eq!(circ.active_qubits() as usize, base);
+            assert!(circ.i13_dims().0 <= base + room);
+            for op in circ.take_ops() { op.validate(); }
+        }
+    }
+
+    #[test]
+    fn diagonal_correction_without_top_pad() {
+        let mut seed = Shake256::default();
+        seed.update(b"diagonal-correction-zero-extension");
+        let mut reader = seed.finalize_xof();
+        for m in 3usize..=7 {
+            let mut circ = Builder::new();
+            let input = circ.alloc_qubits(m);
+            let product = circ.alloc_qubits(2 * m);
+            diag_correction(&mut circ, &input, &product, true);
+            let forward = circ.take_ops();
+            diag_correction_known_top(&mut circ, &input, &product);
+            let inverse = circ.take_ops();
+            assert_eq!(circ.active_qubits() as usize, 3 * m);
+            let dims = circ.i13_dims();
+            assert_eq!(dims.0, 6 * m - 3);
+            let toffoli = forward.iter().chain(&inverse)
+                .filter(|op| matches!(op.kind, OperationType::CCX | OperationType::CCZ)).count();
+            assert_eq!(toffoli, 4 * m - 5);
+            for op in forward.iter().chain(&inverse) { op.validate(); }
+            let mut sim = Simulator::new(dims.0, dims.1, &mut reader);
+            let input_mask = (1u64 << m) - 1;
+            let low_mask = (1u64 << (m - 1)) - 1;
+            let product_mask = (1u64 << (2 * m)) - 1;
+            // Every input and every pre-correction word with the proved zero
+            // low bit and zero output top bit, including subtraction wrap.
+            for start in (0u64..1 << (3 * m - 2)).step_by(64) {
+                sim.clear_for_shot();
+                for lane in 0..64 {
+                    let encoded = start + lane as u64;
+                    let x = encoded & input_mask;
+                    let original = (encoded >> m) << 1;
+                    for (i, &q) in input.iter().enumerate() {
+                        *sim.qubit_mut(q) |= ((x >> i) & 1) << lane;
+                    }
+                    for (i, &q) in product.iter().enumerate() {
+                        *sim.qubit_mut(q) |= ((original >> i) & 1) << lane;
+                    }
+                }
+                for (undo, ops) in [(false, &forward), (true, &inverse)] {
+                    apply_clean(&mut sim, ops);
+                    for lane in 0..64 {
+                        let encoded = start + lane as u64;
+                        let x = encoded & input_mask;
+                        let original = (encoded >> m) << 1;
+                        let correction = x + ((low_mask ^ (x & low_mask)) << m);
+                        let expected = if undo { original } else {
+                            original.wrapping_sub(correction) & product_mask
+                        };
+                        assert_eq!(read_word(&sim, &input, lane), x);
+                        assert_eq!(read_word(&sim, &product, lane), expected);
+                    }
+                    assert!(sim.qubits[3 * m..].iter().all(|&q| q == 0));
+                }
+            }
+        }
+    }
 }

@@ -68,9 +68,12 @@ const VALUE_WIDTH: usize = N + 3;
 /// the bit-1-and-up slice -- `width - 1` wires -- and needs at least four.
 const MIN_WALK_WIDTH: usize = 5;
 
-/// Depth of the divide walk. [`width_schedule`] is generated for exactly this
-/// many rounds and is wrong for any other, so the two are one fact and the depth
-/// is not separately settable: to change it, regenerate the schedule.
+// The inherited depth sometimes loans nonterminal walk values as +/-1.
+// Extra narrow rounds address that independently of the validation nonce.
+const EXTRA_TERMINAL_ROUNDS: usize = 22;
+
+/// The division depth and expanded width schedule remain coupled, including
+/// the additional narrow convergence rounds.
 fn rounds_div() -> usize {
     width_schedule().len()
 }
@@ -78,7 +81,11 @@ fn rounds_div() -> usize {
 // Depth of the multiply walk, which converges in slightly fewer rounds. This one
 // IS free: it only has to stay within the schedule, and the rounds it drops are
 // the narrowest ones.
-pinned_env!(rounds_mul, "PP_ROUNDS_MUL");
+pinned_env!(base_rounds_mul, "PP_ROUNDS_MUL");
+
+fn rounds_mul() -> usize {
+    base_rounds_mul() + EXTRA_TERMINAL_ROUNDS
+}
 
 // Truncation windows for the measured-erasure repairs. Each one trades emitted
 // Toffoli against the intrinsic mismatch rate, so they are swept as a group;
@@ -747,16 +754,17 @@ fn restore_terminal(circ: &mut Builder, loans: &[(QubitId, QubitId)]) {
 
 // â”€â”€â”€ Width schedule â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-/// Per-round walk width schedule, optimised against the measured per-round
-/// magnitude distribution of the recurrence.
-///
-/// It is a knob only in the sense every other pinned value is -- overridable for
-/// a sweep without touching code. It is not fitted data you may hand-edit:
-/// narrowing it has been measured repeatedly and loses, and any change re-rolls
-/// the shot draw and invalidates the ground nonce.
+/// Inherited per-round magnitude schedule, extended with convergence rounds.
+/// `parent_value_width` adds physical guard bits without changing the replay's
+/// precision profiles. This measured schedule is not an all-input bound.
 fn width_schedule() -> &'static [usize] {
     static SLOT: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
-    SLOT.get_or_init(|| parse_width_schedule(&required_env::<String>("PP_WIDTH_SCHEDULE")))
+    SLOT.get_or_init(|| {
+        let mut widths = parse_width_schedule(&required_env::<String>("PP_WIDTH_SCHEDULE"));
+        let terminal_width = *widths.last().expect("nonempty walk schedule");
+        widths.extend(std::iter::repeat_n(terminal_width, EXTRA_TERMINAL_ROUNDS));
+        widths
+    })
 }
 
 /// Expand `"259x1,258x19,..."`, enforcing what the construction relies on:
@@ -798,7 +806,13 @@ fn parse_width_schedule(spec: &str) -> Vec<usize> {
 fn parent_value_width(round: usize) -> usize {
     let width=width_schedule()[round];
     let extra=super::optional_env::<usize>("PP_WALK_GUARD_BITS").unwrap_or(0);
-    assert!(extra<=4,"bounded walk guard experiment");
+    assert!(extra<=N,"walk guard must fit the field envelope");
+    // Retire one guard bit every four extra rounds, down to ten-bit rails.
+    // Dropping all five guards at once can truncate a slow-converging input.
+    let terminal_start = width_schedule().len() - EXTRA_TERMINAL_ROUNDS;
+    let extra = if round >= terminal_start {
+        extra.min(7).saturating_sub((round - terminal_start) / 4).max(extra.min(2))
+    } else { extra };
     let threshold=super::optional_env::<usize>("PP_WALK_GUARD_MAX_WIDTH").unwrap_or(VALUE_WIDTH-1).min(VALUE_WIDTH-1);
     // Saturating at threshold+1 prevents an upward jump when a decreasing
     // schedule first enters the guarded band. Never exceed the initial rails.
@@ -1645,13 +1659,9 @@ fn defer_walk_phase() -> bool {
 }
 
 fn i41_corrected(round:usize)->bool {
-    static SET:std::sync::OnceLock<std::collections::BTreeSet<usize>>=std::sync::OnceLock::new();
-    SET.get_or_init(|| {
-        let mut set=std::collections::BTreeSet::new();
-        if let Some(text)=env_raw("I41_ROUNDS") {for v in text.split(',').filter(|s|!s.is_empty()) {
-            let r:usize=v.parse().unwrap();assert!(r>=3);assert!(set.insert(r));
-        }}set
-    }).contains(&round)
+    // A wrapped signed sum followed by a shift can lose an overflow even
+    // when the average fits. Preserve the signed carry on every ordinary round.
+    round >= 3
 }
 
 fn i41_bridges(c:&Builder,m:usize)->usize {
@@ -1668,6 +1678,8 @@ fn walk_round_phase(
     defer_boundary: bool,
 ) -> (QubitId, Vec<QubitId>, Option<DeferredWalkPhase>) {
     let width = value_width(round);
+    #[cfg(test)]
+    circ.record_walk_round(round, width);
     shrink_to(circ, u, v, width);
     if round == 0 {
         let pre = PRE_A0.lock().unwrap().take();
@@ -1788,6 +1800,8 @@ fn walk_back_round_phase(
     deferred: Option<DeferredWalkPhase>,
 ) {
     let width = value_width(round);
+    #[cfg(test)]
+    circ.record_walk_round(round, width);
     let source_grew=u.len()<width;
     grow_to(circ, u, v, width);
     if round == 0 {
