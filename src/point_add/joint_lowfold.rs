@@ -2,6 +2,12 @@
 //! It preserves the original B comparisons, exactly erases the inserted
 //! prefix boundary and final overflow, and explicitly changes the low fold.
 use super::*;
+thread_local! { pub(super) static DPARK:std::cell::Cell<bool>=const{std::cell::Cell::new(false)}; }
+// PP_U_DPARK layout shadow: plan the chunk layout as if d still held a wire.
+thread_local! { pub(super) static DSHADOW:std::cell::Cell<usize>=const{std::cell::Cell::new(0)}; }
+pub(super) fn dshadow()->usize {DSHADOW.with(|p|p.get())}
+// PP_U_C0WIDE: with the prebias double, chunk 0 has no carry-in and one wire of slack.
+thread_local! { static C0SHIFT:std::cell::Cell<bool>=const{std::cell::Cell::new(false)}; }
 thread_local! { pub(super) static GUARD:std::cell::Cell<Option<usize>>=const{std::cell::Cell::new(None)}; }
 
 fn low_bits(guard:usize)->usize { super::super::optional_env::<usize>("PP_JOINT_LOW_BITS").unwrap_or(32+guard) }
@@ -21,12 +27,16 @@ fn plan(circ:&Builder,round:usize,multiply:bool,fw:usize,drop:bool)->Option<Plan
     let (bounds,db)=if drop {drop_exact_lead(circ,&old_bounds,round,multiply,fw)?}
         else {(retained_rebalance(circ,&old_bounds,round,multiply),0.0)};
     if bounds.len()<2 {return None;}
+    let bounds=if C0SHIFT.with(|c|c.get()) {
+        let n=bounds.len();if bounds[n-1].1-bounds[n-1].0<=2 {return None;}
+        bounds.iter().enumerate().map(|(j,&(lo,hi))|(if j==0{lo}else{lo+1},if j==n-1{hi}else{hi+1})).collect::<Vec<_>>()
+    } else {bounds};
     let &(lo,hi)=bounds.last()?;
     let (plo,phi)=bounds[bounds.len()-2];
     let (k,seeded)=boundary_repair_spec(round,multiply,plo,phi);
     if lo<fw || phi-k-usize::from(seeded)<fw {drop_trace(round,multiply,"lofw",format!("drop={} fw={} {:?}",drop,fw,bounds));return None;}
     let need=(low-3).max(fw-34);
-    let existing=walk_max_qubits()as isize-circ.active_qubits()as isize-(hi-lo)as isize-if multiply&&env_flag("PP_JOINT_MUL_FOLD"){3}else{4};
+    let existing=walk_max_qubits()as isize-circ.active_qubits()as isize-(hi-lo)as isize-if multiply&&env_flag("PP_JOINT_MUL_FOLD"){3}else{4}-(multiply&&DPARK.with(|p|p.get())) as isize;
     let missing=(need as isize-existing).max(0)as usize;
     let prefix=if missing==0 {0} else {missing+1};
     if prefix+1>=hi-lo {drop_trace(round,multiply,"prefix",format!("drop={} fw={} missing={} {:?}",drop,fw,missing,bounds));return None;}
@@ -54,7 +64,24 @@ fn plan(circ:&Builder,round:usize,multiply:bool,fw:usize,drop:bool)->Option<Plan
 pub(super) fn try_replay(circ:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId],fw:usize,
     round:usize,doubled:Option<QubitId>)->bool {
     let multiply=doubled.is_some();
-    let Some(p)=plan(circ,round,multiply,fw,false).or_else(||plan(circ,round,multiply,fw,true))else{return false;};
+    let mk=|circ:&Builder|plan(circ,round,multiply,fw,false).or_else(||plan(circ,round,multiply,fw,true));
+    let park=multiply&&DPARK.with(|p|p.get());
+    let shadow=|circ:&Builder|{DSHADOW.with(|p|p.set(1));let q=mk(circ);DSHADOW.with(|p|p.set(0));q};
+    // Pick the cheaper of the parked and the shadow layout: boundary compares minus fold saving.
+    let cost=|p:&Plan|p.bounds[..p.bounds.len()-1].iter().enumerate().map(|(j,&(lo,hi))|{
+        let (k,_)=if p.dropped&&j==0 {drop_lead_first_compare(round,multiply,hi)}else{boundary_repair_spec(round,multiply,lo,hi)};
+        (k as f64-1.0)/2.0}).sum::<f64>()-p.saving;
+    let c0=multiply&&env_flag("PP_U_C0WIDE")&&env_flag("PP_PREBIAS_DOUBLE");
+    let p=if c0 {
+        let mut cands=Vec::new();
+        for sh in [false,true] {C0SHIFT.with(|c|c.set(sh));cands.push(mk(circ));if park {cands.push(shadow(circ));}}
+        C0SHIFT.with(|c|c.set(false));
+        cands.into_iter().flatten().min_by(|x,y|cost(x).partial_cmp(&cost(y)).unwrap())
+    } else if park&&env_flag("PP_U_DPARK_BEST") {
+        match (mk(circ),shadow(circ)) {
+            (Some(a),Some(b))=>Some(if cost(&b)<cost(&a){b}else{a}),(a,b)=>a.or(b)}
+    } else {mk(circ).or_else(||if park {shadow(circ)} else {None})};
+    let Some(p)=p else{return false;};
     if p.dropped {eprintln!("DROP_EXACT_LEAD mul={} r={} base={} saving={} bounds={:?}",multiply as u8,round,circ.active_qubits(),p.saving,p.bounds);}
     eprintln!("JOINT_LOWFOLD r={} mul={} base={} last={} prefix={} guard={} saving={}",round,multiply as u8,
         circ.active_qubits(),p.bounds.last().unwrap().1-p.bounds.last().unwrap().0,p.prefix,p.guard,p.saving);
@@ -77,6 +104,9 @@ pub(super) fn try_replay(circ:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId
                 |c,o,at,st,carry|{
                     GUARD.with(|g|{assert!(g.replace(if p.exact {None}else{Some(p.bits)}).is_none());});
                     if let Some(d)=doubled {
+                        // PP_U_DPARK: d lives in b0 as d^sign^a0; take it back out.
+                        let d=if DPARK.with(|p|p.get()) {assert!(pre);
+                            let d=c.alloc_qubit();c.cx(b[0],d);c.cx(sign,d);c.cx(a[0],d);c.cx(d,b[0]);d} else {d};
                         if env_flag("PP_JOINT_MUL_FOLD"){fold_double_joint(c,&b[..fw],sign,a[0],d,o,pre);}else{fold_double_reused(c,&b[..fw],sign,d,o);}
                         c.cx(b[0],d);c.cx(sign,d);c.cx(a[0],d);c.cx(o,d);c.free(d);
                     }else{fold_halve_reused(c,&b[..fw],sign,o);}

@@ -37,6 +37,8 @@ pub struct Builder {
     peak_census: PeakCensus,
     ccx_census: CcxCensus,
     replay_sites: ReplaySites,
+    /// PP_J_SFUSE: parked wire ids a fresh allocation must not take.
+    avoid_ids: Vec<u32>,
 }
 
 impl Builder {
@@ -59,6 +61,7 @@ impl Builder {
             peak_census: PeakCensus::new(),
             ccx_census: CcxCensus::new(),
             replay_sites: ReplaySites::new(),
+            avoid_ids: Vec::new(),
         }
     }
     pub(crate) fn i35_cost(&self)->f64{self.model_weighted}
@@ -135,7 +138,13 @@ impl Builder {
     pub fn alloc_qubit(&mut self) -> QubitId {
         self.active_qubits += 1;
         self.note_peak();
-        let qid = if let Some(q) = self.free_qubits.pop() {
+        let pick = if self.avoid_ids.is_empty() {
+            self.free_qubits.pop()
+        } else {
+            let avoid = &self.avoid_ids;
+            self.free_qubits.iter().rposition(|f| !avoid.contains(f)).map(|pos| self.free_qubits.remove(pos))
+        };
+        let qid = if let Some(q) = pick {
             QubitId(q.into())
         } else {
             let q = self.next_qubit;
@@ -160,6 +169,10 @@ impl Builder {
         } else {
             (0..n).map(|_| self.alloc_qubit()).collect()
         }
+    }
+    /// PP_J_SFUSE: set the parked wires fresh allocations must skip.
+    pub fn set_avoid(&mut self, qs: &[QubitId]) {
+        self.avoid_ids = qs.iter().map(|q| q.0.try_into().expect("qubit id fits in u32")).collect();
     }
     pub fn alloc_bit(&mut self) -> BitId {
         if let Some(b) = self.free_bits.pop() {

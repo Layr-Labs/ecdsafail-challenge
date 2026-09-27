@@ -377,3 +377,78 @@ pub fn mod_rsub_r0fused(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], 
         eprintln!("J_RSUBFUSED {}", circ.i35_cost() - before);
     }
 }
+
+
+// ---- PP_J_SFUSE: the square's last subtraction + the multiply's round 0 ----
+//
+// The square's C branch ends `x -= rot(C)` with a full mod_addsub.  The next op
+// on x is the multiply walk's round-0 lift, exactly as coord_x_sub precedes the
+// divide's (PP_J_XFUSE): keep the borrow, let the lift arms absorb its -f fold,
+// then erase the borrow with the unchanged top-bit compare against rot(C)'s top
+// bits, which are still live inside with_square.  The window adds in between
+// stop below the compare window, so D's top bits are the same bits.
+
+pub fn j_sfuse() -> bool {
+    static SLOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SLOT.get_or_init(|| env_flag("PP_J_SFUSE"))
+}
+
+/// PP_J_SFUSE_B: the same fusion on the B branch, run last (see `sub_square`).
+pub fn j_sfuse_b() -> bool {
+    static SLOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SLOT.get_or_init(|| env_flag("PP_J_SFUSE_B"))
+}
+
+/// PP_J_WCIN: in the square's rotated folds the ripple's carry `c` is not
+/// folded by its own f_slice ladder.  Its `c*f` terms at 2^4, 2^6, 2^10, 2^32
+/// ride as carry-ins on the rotated fold's own NAF window adds (same shifts,
+/// same signs, carry-in is free), and only the unit term is added by a
+/// `PP_J_WCIN_W`-bit increment.  `c` is then erased by the unchanged top-bit
+/// compare, which no window reaches.
+pub fn j_wcin() -> bool {
+    static SLOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SLOT.get_or_init(|| env_flag("PP_J_WCIN"))
+}
+
+/// PP_J_WCIN_B0LAST (with PP_J_SFUSE_B): B's plain shift-0 subtract runs last
+/// and is the one fused into round 0, so the 2^32 term gets carry-in windows.
+pub fn j_wcin_b0last() -> bool {
+    static SLOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SLOT.get_or_init(|| env_flag("PP_J_WCIN_B0LAST"))
+}
+
+/// PP_J_BMERGE (needs WCIN_B0LAST): the B square's NAF folds at 2^4, 2^6,
+/// 2^10 and 2^32 share ONE set of (f-1) windows.  Their wrapped limbs are
+/// nested prefixes of b2's top bits, so the windows carry
+/// `R = high32 + high10 - high6 + high4` (0 <= R < 2^33) built in scratch from
+/// b2 and unbuilt after.  The 2^32 fold's carry rides those windows (WCIN);
+/// the three small folds keep the plain mod_addsub carry fold.
+pub fn j_bmerge() -> bool {
+    static SLOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SLOT.get_or_init(|| env_flag("PP_J_BMERGE"))
+}
+
+pub fn wcin_w() -> usize {
+    static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *SLOT.get_or_init(|| super::optional_env::<usize>("PP_J_WCIN_W").unwrap_or(super::fold_guard() + 1))
+}
+
+/// `acc <- acc - value (mod 2^256)`, the mod_addsub add; returns the live borrow.
+pub fn sub_keep_borrow_q(circ: &mut Builder, value: &[QubitId], acc: &[QubitId]) -> QubitId {
+    circ.x_all(acc);
+    let c = circ.alloc_qubit();
+    super::modular::peak_fitted_add(circ, value, acc, c);
+    circ.x_all(acc);
+    c
+}
+
+/// Erase a kept subtract borrow against a quantum subtrahend's top bits:
+/// `c = [~D_top < value_top]`, as mod_addsub's negated erase.
+pub fn erase_q_carry(circ: &mut Builder, c: QubitId, d_top: &[QubitId], value_top: &[QubitId]) {
+    assert_eq!(d_top.len(), erase_compare());
+    assert_eq!(value_top.len(), d_top.len());
+    circ.x_all(d_top);
+    erase_with_compare(circ, c, d_top, value_top, None);
+    circ.x_all(d_top);
+    circ.free(c);
+}

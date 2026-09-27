@@ -593,7 +593,7 @@ pub fn sub_wide(circ: &mut Builder, value: &[QubitId], acc: &[QubitId]) {
 /// leading-chunk bit under a half-time condition; no new failure site. The
 /// leading chunk is the narrowest that fits, so the plain add is emitted
 /// unchanged wherever it already fits -- the coordinate shell is byte-identical.
-fn peak_fitted_add(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], carry_out: QubitId) {
+pub(super) fn peak_fitted_add(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], carry_out: QubitId) {
     let width = value.len();
     let room = walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
     // Plain ladder: `width - 1` owned carries (the overflow is already counted
