@@ -74,7 +74,7 @@ pub(super)fn try_replay(c:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId],fw
   }else{ripple_add(c,&a[at..hi],&b[at..hi],cin,Some(out));}
   if j==0{joint_prebias::erase_initial(c,initial,a[0],sign,b[0]);}
   if let Some((carry,plo,phi))=previous{
-   let(k,seed)=if p.dropped&&plo==0{drop_lead_first_compare(r,false,phi)}else{boundary_repair_spec(r,false,plo,phi)};
+   let(k,seed)=if p.dropped&&plo==0{drop_lead_first_compare(r,false,phi)}else{boundary_repair_spec(r,false,plo,phi)};let k=if seed&&plo>0{e_badj(r,false,k,phi,if hi==N{fw}else{1})}else{k};
    let full=plo==0&&phi==k;
    let guard=super::super::optional_env::<usize>("I12_B_GUARD").unwrap_or(0);
    let protected=((589..=620).contains(&r)||(642..=645).contains(&r)||(647..=648).contains(&r))

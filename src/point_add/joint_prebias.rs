@@ -71,7 +71,7 @@ pub(super) fn joint_prebias_div(c:&mut Builder,sign:QubitId,a:&[QubitId],b:&[Qub
         ripple_add(c,&a[at..hi],&b[at..hi],cin,Some(out));
         if j==0 {erase_initial(c,initial,a[0],sign,b[0]);}
         if let Some((carry,plo,phi))=previous {
-            let(k,seeded)=boundary_repair_spec(round,false,plo,phi);
+            let(k,seeded)=boundary_repair_spec(round,false,plo,phi);let k=if seeded&&plo>0{e_badj(round,false,k,phi,1)}else{k};
             c.record_replay_site('B',round,phi,k);let w=phi-k..phi;
             let full_first=plo==0 && phi==k;
             if full_first {c.cx(b[0],sign);} // parity host temporarily holds g

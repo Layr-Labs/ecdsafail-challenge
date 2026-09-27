@@ -90,7 +90,7 @@ pub(super) fn try_replay(circ:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId
             }
         }else{let at=if pre&&lo==0{1}else{lo};ripple_add(circ,&a[at..hi],&b[at..hi],incoming,Some(next));}
         if let Some((q,plo,phi))=previous {
-            let(k,seeded)=if p.dropped&&plo==0 {drop_lead_first_compare(round,multiply,phi)}else{boundary_repair_spec(round,multiply,plo,phi)};
+            let(k,seeded)=if p.dropped&&plo==0 {drop_lead_first_compare(round,multiply,phi)}else{boundary_repair_spec(round,multiply,plo,phi)};let k=if seeded&&plo>0{e_badj(round,multiply,k,phi,if hi==N{fw}else{1})}else{k};
             circ.record_replay_site('B',round,phi,k);
             // A full first-chunk compare must skip bit 0, which the add no longer covers.
             let from=if pre&&plo==0&&phi==k{1}else{phi-k};

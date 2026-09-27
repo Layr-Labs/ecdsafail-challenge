@@ -369,6 +369,7 @@ fn divide_traversal(
     };
 
     let mut sign1_fix = None;
+    let mut sign2_fix = None;
     let mut c2fix: Vec<Option<BitId>> = vec![None; plan.rounds];
     for r in plan.head() {
         with_forward_replay_sign_loans(circ,u,v,plan.r1.saturating_sub(1),|circ|replay(circ,r,tape[r],&depths[r]));
@@ -376,6 +377,12 @@ fn divide_traversal(
         // the batch runs one wire lighter.
         if r == 1 {
             sign1_fix = Some(free_sign_bit(circ, tape[1]));
+        }
+        // PP_N_HOLE2: round 2's sign is dead after its own replay too; walkback
+        // recomputes it from the restored (z_2, z_3) pair (see `n_hole2`).
+        if r == 2 && n_hole2() {
+            assert!(depths[2].is_empty() && !c2_sheds(2, plan.rounds, plan.r1, &depths[2]));
+            sign2_fix = Some(free_sign_bit(circ, tape[2]));
         }
         if c2_sheds(r, plan.rounds, plan.r1, &depths[r]) {
             c2fix[r] = Some(free_sign_bit(circ, tape[r]));
@@ -441,6 +448,7 @@ fn divide_traversal(
         let fix = match r {
             0 => a0_fix,
             1 => sign1_fix,
+            2 if sign2_fix.is_some() => sign2_fix,
             _ => c2fix[r],
         };
         walk_back_round_phase(
@@ -477,6 +485,9 @@ fn multiply_traversal(
     // Under the quarter step the round-1 sign stays on the tape: one wire.
     let bchain_fix = (BCHAIN_J < plan.r1 && plan.r1 < plan.rounds && !mod4_sign())
         .then(|| free_sign_bit(circ, tape[BCHAIN_J]));
+    // PP_N_HOLE2: the invariant frees a second head sign (round 2).
+    let hole2_fix = (n_hole2() && bchain_fix.is_some() && 2 < plan.r1 && depths[2].is_empty())
+        .then(|| free_sign_bit(circ, tape[2]));
 
     // C2-record: the trailing tape window goes out before `coefficient`, which
     // is what takes this traversal to its peak.
@@ -554,9 +565,18 @@ fn multiply_traversal(
     }
 
     for r in plan.head().rev() {
+        if r == 2 {
+            if let Some(fix) = hole2_fix {
+                tape[2] = recompute_hole2_sign(circ, u, v, &tape, plan.r1, fix);
+            }
+        }
         if r == BCHAIN_J {
             if let Some(fix) = bchain_fix {
-                tape[BCHAIN_J] = recompute_bchain_sign(circ, u, v, &tape, plan.r1, fix);
+                tape[BCHAIN_J] = if hole2_fix.is_some() {
+                    recompute_sign1_invariant(circ, u, v, plan.r1, fix)
+                } else {
+                    recompute_bchain_sign(circ, u, v, &tape, plan.r1, fix)
+                };
             }
         }
         if c2fix[r].is_some() {
@@ -1793,6 +1813,18 @@ fn walk_back_round_phase(
     // this wire against the restored PRE-round operands, so it costs no extra
     // gate to give back.
     let sign = match fix {
+        Some(c) if round == 2 && n_hole2() => {
+            // sigma_2 = 1 ^ b1(z_2) ^ b2(z_2) ^ b1(z_3): the two linear tape
+            // relations (see `n_hole2`) evaluated at the post-round-2 pair.
+            let s = circ.alloc_qubit();
+            circ.x(s);
+            circ.cx(source[0], s);
+            circ.cx(source[1], s);
+            circ.cx(target[0], s);
+            circ.z_if(s, c);
+            circ.free_bit(c);
+            s
+        }
         Some(c) => {
             let s = circ.alloc_qubit();
             if !c2_shed() {
@@ -2849,6 +2881,77 @@ fn recompute_bchain_sign(
     s
 }
 
+/// `PP_N_HOLE2` (default off): free a THIRD tape wire per traversal (round 2's
+/// sign), at zero Toffoli.
+///
+/// Write the walk as `z_0 = p`, `z_1 = w` (round 0's output) and round `r >= 1`
+/// as `z_{r+1} = (z_{r-1} + (-1)^sigma_r z_r) / 2` with
+/// `sigma_r = b1(z_{r-1}) ^ b1(z_r)`. Reading the step backwards mod 8,
+/// `z_{r-1} = 2 z_{r+1} -+ z_r`, gives for either sign
+///
+/// ```text
+///     b1(z_{r-1}) = sigma_r ^ b1(z_r)
+///     b2(z_{r-1}) = b1(z_r) ^ b2(z_r) ^ b1(z_{r+1})
+/// ```
+///
+/// The first telescopes to `parity(sigma_1..sigma_k) = 1 ^ b1(z_k)` (what
+/// `recompute_bchain_sign` and round 1's `NOT v[1]` use). The second says
+/// `b2(z_k) ^ b1(z_{k+1})` is the same for every `k`; at `k = 0` it is
+/// `b2(p) ^ b1(z_1) = 1 ^ b1(z_1) = sigma_1`. So at ANY walk state
+/// `sigma_1 = b2(z_k) ^ b1(z_{k+1})`, independently of the tape: the tape carries
+/// two linear relations, not one. Exact for every shot (low bits of the walk are
+/// never truncated). A search over all truncated-state potentials finds no third
+/// low-bit relation, so this is the last free wire of this kind.
+fn n_hole2() -> bool {
+    static SLOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SLOT.get_or_init(|| env_flag("PP_N_HOLE2"))
+}
+
+/// Round `r1`'s operands at the idle pre-round-`r1` state: (target, source) =
+/// (z_{r1-1}, z_{r1}).
+fn round_pair<'a>(u: &'a [QubitId], v: &'a [QubitId], r1: usize) -> (&'a [QubitId], &'a [QubitId]) {
+    if r1.is_multiple_of(2) { (v, u) } else { (u, v) }
+}
+
+/// `sigma_1 = b2(z_{r1-1}) ^ b1(z_{r1})` (the invariant of [`n_hole2`]).
+fn recompute_sign1_invariant(
+    circ: &mut Builder,
+    u: &[QubitId],
+    v: &[QubitId],
+    r1: usize,
+    fix: BitId,
+) -> QubitId {
+    let (t, src) = round_pair(u, v, r1);
+    let s = circ.alloc_qubit();
+    circ.cx(t[2], s);
+    circ.cx(src[1], s);
+    circ.z_if(s, fix);
+    s
+}
+
+/// `sigma_2 = 1 ^ b1(z_{r1-1}) ^ sigma_1 ^ parity(tape[3..r1])`, with `sigma_1`
+/// taken from the invariant, so no other freed wire is read.
+fn recompute_hole2_sign(
+    circ: &mut Builder,
+    u: &[QubitId],
+    v: &[QubitId],
+    tape: &[QubitId],
+    r1: usize,
+    fix: BitId,
+) -> QubitId {
+    let (t, src) = round_pair(u, v, r1);
+    let s = circ.alloc_qubit();
+    circ.x(s);
+    circ.cx(t[1], s);
+    circ.cx(t[2], s);
+    circ.cx(src[1], s);
+    for &q in tape.iter().take(r1).skip(3) {
+        circ.cx(q, s);
+    }
+    circ.z_if(s, fix);
+    s
+}
+
 // â”€â”€â”€ The replay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// The replay's registers take turns the same way the walk's do.
@@ -3520,6 +3623,27 @@ fn seed_keep_width_for(boundary:bool)->bool {
         }
     }
     on
+}
+
+/// Port of agent E's PP_E_BADJ (renamed PP_N_BADJ) "lo-hi:dir:delta,...": shift the seeded B
+/// chunk-boundary compare width at the erase site only (planning keeps the unshifted width).
+/// dir is d, m or a. The seed moves with the window and stays at or above `floor`.
+/// Unset: returns k unchanged.
+pub(super) fn e_badj(round:usize,multiply:bool,k:usize,phi:usize,floor:usize)->usize {
+    let Some(spec)=env_raw("PP_N_BADJ") else {return k;};
+    for rule in spec.split(',').filter(|s|!s.is_empty()) {
+        let f:Vec<&str>=rule.split(':').collect();
+        assert_eq!(f.len(),3,"PP_N_BADJ rule {rule}");
+        let (lo,hi)=f[0].split_once('-').unwrap();
+        let (lo,hi):(usize,usize)=(lo.parse().unwrap(),hi.parse().unwrap());
+        let dir_ok=match f[1] {"a"=>true,"d"=>!multiply,"m"=>multiply,x=>panic!("PP_N_BADJ dir {x}")};
+        if dir_ok && (lo..=hi).contains(&round) {
+            let d:isize=f[2].parse().unwrap();
+            let nk=((k as isize+d).max(2) as usize).min(phi-1-floor);
+            return if d>=0 {nk.max(k)} else {nk.min(k)};
+        }
+    }
+    k
 }
 
 fn boundary_repair_spec(round:usize,multiply:bool,lo:usize,hi:usize)->(usize,bool) {
