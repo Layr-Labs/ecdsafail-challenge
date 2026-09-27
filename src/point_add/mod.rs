@@ -35,6 +35,9 @@ const SECP256K1_P: U256 = U256::from_limbs([
 
 /// Fixed I10 configuration. Unlisted research switches are absent/off.
 /// The submission emits the same circuit regardless of inherited environment.
+/// Treat the pinned search parameters as a coupled configuration: nearby nonce,
+/// width, and compare settings have produced invalid circuits even when the
+/// static operation count decreased. See `memory/2026-09-27-parameter-probes.md`.
 fn env_raw(name: &str) -> Option<String> {
     let value = match name {
         "I76_SOURCE_TOP_LOAN" => "1",
