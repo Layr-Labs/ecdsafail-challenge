@@ -54,7 +54,7 @@ fn env_raw(name: &str) -> Option<String> {
         "I12_B_GUARD" => "4",
         "CMP_SEED_ALL" => "1",
         "ERASE_COMPARE" => "24",
-        "FOLD_GUARD" => "25",
+        "FOLD_GUARD" => "21",
         "PP_CF_DEFER_WALK_PHASE" => "1",
         "PP_CF_END_CHUNK" => "8",
         "PP_CHUNK_SHAPE" => "64:0,38:1,25:-2,0:-4",
@@ -127,7 +127,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "280927324351371",
+        "TAIL_NONCE" => "141341059326522",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -144,7 +144,7 @@ fn env_raw(name: &str) -> Option<String> {
         // The first matching arm wins, so a key must never appear twice. Then mirror
         // it in the grinder's Config::p426fdp (GRIND_WIDEN / GRIND_FOLD_GUARD defaults).
         "PP_RETAIN_LATE_WIDEN" => "1",
-        "PP_FOLD_WIDEN" => "0",
+        "PP_FOLD_WIDEN" => "64",
         "PP_DROP_EXACT_LEAD" => "1",
         "PP_DROP_EXACT_LEAD_DIR" => "mul",
         "PP_F_PEAKCMP" => "24",
@@ -199,7 +199,7 @@ fn env_raw(name: &str) -> Option<String> {
         // Classical results bit-identical to r6a_dpark; paired dfailb -0.039 +- 0.069 over 512 nonces.
         "I35_PROFILE" => "621:1:1,622:1:1,623:1:1,641:0:1,646:0:1,658:1:1,659:1:1,660:1:1,661:1:1,662:1:1,663:1:1,664:1:1,665:1:1,666:1:1,667:1:1,668:1:1,669:1:1,670:1:1,671:1:1,672:1:1,673:1:1,674:1:1,675:1:1,676:1:1,677:1:1,678:1:1,679:1:1,680:1:1,681:1:1,682:1:1,683:1:1,684:1:1,685:1:1,686:1:1,687:1:1,688:1:1,689:1:1,690:1:1,691:1:1,692:1:1,693:1:1,694:1:1,695:1:1,696:1:1,697:1:1",
         "PP_HEAD_MUL" => "413",
-        "PP_FOLD_PROFILE" => "38:0,32:-1,19:-3,0:-4",
+        "PP_FOLD_PROFILE" => "38:0,32:0,19:-3,0:-4",
         // New exact constructions (agent J: square B-branch fusions; agent U: doubling-replay park).
         "PP_J_SFUSE_B" => "1",
         "PP_J_WCIN" => "1",
