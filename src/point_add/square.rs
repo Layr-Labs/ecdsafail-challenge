@@ -402,143 +402,12 @@ fn fold_rotated(
     let mut rotated = Vec::with_capacity(N);
     rotated.extend_from_slice(&high[..wrapped]);
     rotated.extend_from_slice(low);
-    if super::j_fuse::j_wcin() {
-        fold_rotated_wcin(circ, negate, &rotated, high, out);
-        return;
-    }
     mod_addsub(circ, negate, &rotated, out);
     // The unit term of `f * high` rode in on the rotate; the rest of the NAF
     // carries the `(f - 1) * high` that is left.
     for (shift, neg) in F_NAF.into_iter().skip(1) {
         window_add(circ, negate ^ neg, high, out, shift);
     }
-}
-
-/// PP_J_WCIN: [`fold_rotated`] with the ripple's carry folded through the NAF
-/// windows' carry-ins plus a narrow unit-term increment (see `j_fuse`).
-fn fold_rotated_wcin(circ: &mut Builder, negate: bool, rotated: &[QubitId], high: &[QubitId], out: &[QubitId]) {
-    let c = wcin_ripple(circ, negate, rotated, out);
-    wcin_windows(circ, negate, high, out, c);
-    wcin_finish(circ, negate, rotated, out, c);
-}
-
-fn wcin_ripple(circ: &mut Builder, negate: bool, rotated: &[QubitId], out: &[QubitId]) -> QubitId {
-    assert_eq!(rotated.len(), N);
-    let c = circ.alloc_qubit();
-    if negate { circ.x_all(out); }
-    super::modular::peak_fitted_add(circ, rotated, out, c);
-    if negate { circ.x_all(out); }
-    // out now holds D (mod 2^256); the value is D + s*c*f, s = -1 when negate.
-    c
-}
-
-fn wcin_windows(circ: &mut Builder, negate: bool, high: &[QubitId], out: &[QubitId], c: QubitId) {
-    let k = super::j_fuse::x_erase_width();
-    for (shift, neg) in F_NAF.into_iter().skip(1) {
-        let top = shift + high.len() + fold_guard();
-        assert!(top <= N - k, "WCIN window reaches the erase compare");
-        let win = &out[shift..top];
-        let inv = negate ^ neg;
-        if inv { circ.x_all(win); }
-        let owned = win.len() - 2;
-        let room = super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
-        if room >= owned {
-            super::modular::ripple_add(circ, high, win, Some(c), None);
-        } else {
-            // One wire short: the carry-in hosts position 0's carry in place
-            // (a Cuccaro MAJ/UMA pair), one extra Toffoli for one fewer wire.
-            assert!(room + 1 >= owned, "WCIN window more than one wire over the peak: room {room} owned {owned}");
-            let (v0, a0) = (high[0], win[0]);
-            circ.cx(c, v0);
-            circ.cx(c, a0);
-            circ.ccx(v0, a0, c);
-            super::modular::ripple_add(circ, &high[1..], &win[1..], Some(c), None);
-            circ.ccx(v0, a0, c);
-            circ.cx(c, v0);
-            circ.cx(c, a0);
-            circ.cx(v0, a0);
-            circ.cx(c, a0);
-        }
-        if inv { circ.x_all(win); }
-    }
-}
-
-fn wcin_finish(circ: &mut Builder, negate: bool, rotated: &[QubitId], out: &[QubitId], c: QubitId) {
-    let k = super::j_fuse::x_erase_width();
-    let w = super::j_fuse::wcin_w();
-    assert!(w <= N - k);
-    let unit = &out[..w];
-    if negate { circ.x_all(unit); }
-    super::const_arith::cadd_const_trunc(circ, unit, U256::from(1), c, false);
-    if negate { circ.x_all(unit); }
-    let top = &out[N - k..];
-    if negate { circ.x_all(top); }
-    super::compare::erase_with_compare(circ, c, top, &rotated[N - k..], None);
-    if negate { circ.x_all(top); }
-    circ.free(c);
-}
-
-fn rotate_by(value: &[QubitId], shift: usize) -> Vec<QubitId> {
-    assert_eq!(value.len(), N);
-    let mut rotated = Vec::with_capacity(N);
-    rotated.extend_from_slice(&value[N - shift..]);
-    rotated.extend_from_slice(&value[..N - shift]);
-    rotated
-}
-
-/// PP_J_BMERGE: `out -= b2 * (2^4 - 2^6 + 2^10 + 2^32) (mod p)` with one window
-/// set.  Every fold's `(f-1) * high_s` window term has sign `-` except the
-/// 2^6 one, so together they are `-(f-1) * R` with
-/// `R = high32 + high10 - high6 + high4` (the highs are b2's top s bits;
-/// high10 >= high6, so 0 <= R < 2^33).  The 2^32 fold runs last and its carry
-/// rides the merged windows exactly as in [`fold_rotated_wcin`].
-fn b_merged_folds(circ: &mut Builder, b2: &[QubitId], out: &[QubitId]) {
-    assert_eq!(b2.len(), N);
-    for (shift, neg) in F_NAF.into_iter().skip(1).take(3) {
-        mod_addsub(circ, true ^ neg, &rotate_by(b2, shift), out);
-    }
-    let (s32, n32) = F_NAF[4];
-    assert!(s32 == 32 && !n32);
-    let rot32 = rotate_by(b2, 32);
-    let c = wcin_ripple(circ, true, &rot32, out);
-    let hi = |s: usize| &b2[N - s..];
-    let small = circ.alloc_qubits(11);
-    for i in 0..10 { circ.cx(hi(10)[i], small[i]); }
-    addsub_wide(circ, hi(6), &small, true);
-    addsub_wide(circ, hi(4), &small, false);
-    let r = circ.alloc_qubits(33);
-    for i in 0..32 { circ.cx(hi(32)[i], r[i]); }
-    addsub_wide(circ, &small, &r, false);
-    wcin_windows(circ, true, &r, out, c);
-    addsub_wide(circ, &small, &r, true);
-    for i in 0..32 { circ.cx(hi(32)[i], r[i]); }
-    circ.free_vec(&r);
-    addsub_wide(circ, hi(4), &small, true);
-    addsub_wide(circ, hi(6), &small, false);
-    for i in 0..10 { circ.cx(hi(10)[i], small[i]); }
-    circ.free_vec(&small);
-    wcin_finish(circ, true, &rot32, out, c);
-}
-
-/// PP_J_SFUSE: `fold_rotated(true, ..)` whose modular subtract keeps its
-/// borrow; the borrow's fold moves into the multiply walk's round-0 lift, run
-/// here while the subtrahend is still live for the borrow's top-bit compare.
-/// `overhang` is an extra window at shift `low.len()` added before the lift.
-fn fold_rotated_sub_r0(circ: &mut Builder, low: &[QubitId], high: &[QubitId], out: &[QubitId], overhang: Option<&[QubitId]>) {
-    let wrapped = N - low.len();
-    assert!(high.len() >= wrapped);
-    let mut rotated = Vec::with_capacity(N);
-    rotated.extend_from_slice(&high[..wrapped]);
-    rotated.extend_from_slice(low);
-    let c = super::j_fuse::sub_keep_borrow_q(circ, &rotated, out);
-    for (shift, neg) in F_NAF.into_iter().skip(1) {
-        window_add(circ, true ^ neg, high, out, shift);
-    }
-    if let Some(o) = overhang {
-        window_add(circ, true, o, out, low.len());
-    }
-    let k = super::j_fuse::x_erase_width();
-    super::pingpong::j_pre_round0(circ, out, c, &rotated[N - k..]);
 }
 
 /// `out -+= value * 2^shift (mod p)` for a full-width value.
@@ -1011,9 +880,7 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
         }
     }
     for &q in &loans{circ.release_clean(q);}
-    if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() {SQ_LOANS.with(|l|*l.borrow_mut()=loans.clone());}
     folds(circ, &consumer_product);
-    if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() {SQ_LOANS.with(|l|l.borrow_mut().clear());}
     // Every consumer restores its temporary work and source. Reclaim the same
     // physical wire identities before the retained inverse consumes them.
     for &q in &loans{circ.reacquire(q);}
@@ -1072,11 +939,6 @@ pub(super) fn sub_square_offset() -> U256 {
     na.mul_mod(wa, p).add_mod(nb.mul_mod(wb, p), p).add_mod(nc.mul_mod(pow(h), p), p)
 }
 
-thread_local! {
-    /// PP_J_SFUSE: the wires `with_square` lent its folds; they come back.
-    pub(super) static SQ_LOANS: std::cell::RefCell<Vec<QubitId>> = std::cell::RefCell::new(Vec::new());
-}
-
 pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
     assert_eq!(y.len(), N);
     assert_eq!(out.len(), N);
@@ -1090,46 +952,6 @@ pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
         mod_addsub(circ, true, a2, out);
         fold_shifted(circ, false, a2, out, h);
     });
-
-    if super::j_fuse::j_sfuse_b() {
-        // PP_J_SFUSE_B: C before B, and B's last fold (the 2^32 NAF term, a
-        // subtract) fused into the multiply's round-0 lift. B's inverse has
-        // room for the four wires the early round 0 leaves standing.
-        let sum_carry = circ.alloc_qubit();
-        let mut sum = y_hi.to_vec();
-        sum.push(sum_carry);
-        add_wide(circ, y_lo, &sum);
-        with_square(circ, &sum, "SQ_C_POLICY", |circ, c2| {
-            fold_rotated(circ, true, &c2[..h], &c2[h..], out);
-            window_add(circ, true, &c2[2 * h..], out, h);
-        });
-        restore_square_sum(circ,y_lo,&sum);
-        circ.free(sum_carry);
-        with_square(circ, y_hi, "SQ_B_POLICY", |circ, b2| {
-            fold_shifted(circ, false, b2, out, h);
-            if super::j_fuse::j_wcin_b0last() {
-                if super::j_fuse::j_bmerge() {
-                    b_merged_folds(circ, b2, out);
-                } else {
-                    for (shift, neg) in F_NAF.into_iter().skip(1) {
-                        fold_shifted(circ, true ^ neg, b2, out, shift);
-                    }
-                }
-                let c = super::j_fuse::sub_keep_borrow_q(circ, b2, out);
-                let k = super::j_fuse::x_erase_width();
-                super::pingpong::j_pre_round0(circ, out, c, &b2[N - k..]);
-                return;
-            }
-            let last = F_NAF.len() - 1;
-            for (shift, neg) in F_NAF.into_iter().take(last) {
-                fold_shifted(circ, true ^ neg, b2, out, shift);
-            }
-            let (shift, neg) = F_NAF[last];
-            assert!(!neg && shift > 0);
-            fold_rotated_sub_r0(circ, &b2[..N - shift], &b2[N - shift..], out, None);
-        });
-        return;
-    }
 
     with_square(circ, y_hi, "SQ_B_POLICY", |circ, b2| {
         fold_shifted(circ, false, b2, out, h);
@@ -1147,12 +969,8 @@ pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
     // C is 258 bits, so its high limb overhangs the rotate by two bits; those
     // ride in on a separate window add at the same shift.
     with_square(circ, &sum, "SQ_C_POLICY", |circ, c2| {
-        if super::j_fuse::j_sfuse() {
-            fold_rotated_sub_r0(circ, &c2[..h], &c2[h..], out, Some(&c2[2 * h..]));
-        } else {
-            fold_rotated(circ, true, &c2[..h], &c2[h..], out);
-            window_add(circ, true, &c2[2 * h..], out, h);
-        }
+        fold_rotated(circ, true, &c2[..h], &c2[h..], out);
+        window_add(circ, true, &c2[2 * h..], out, h);
     });
 
     restore_square_sum(circ,y_lo,&sum);

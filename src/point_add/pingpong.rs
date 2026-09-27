@@ -297,14 +297,7 @@ fn pingpong(
     u.extend(circ.alloc_qubits(VALUE_WIDTH - N));
     let wanted_u = u.clone();
     let mut v = denominator.to_vec();
-    let pre = if matches!(direction, PingPongDirection::Multiply) { PRE_R0.lock().unwrap().take() } else { None };
-    match pre {
-        Some((ext, a0)) => {
-            v.extend(ext);
-            PRE_A0.lock().unwrap().replace(a0);
-        }
-        None => v.extend(circ.alloc_qubits(VALUE_WIDTH - N)),
-    }
+    v.extend(circ.alloc_qubits(VALUE_WIDTH - N));
     let wanted_v = v.clone();
 
     let plan = Plan::new(direction);
@@ -1670,8 +1663,7 @@ fn walk_round_phase(
     let width = value_width(round);
     shrink_to(circ, u, v, width);
     if round == 0 {
-        let pre = PRE_A0.lock().unwrap().take();
-        let a0 = match pre { Some(a0) => a0, None => round0_forward(circ, v) };
+        let a0 = round0_forward(circ, v);
         park_odd_bits(circ, u, v);
         return (a0, Vec::new(), None);
     }
@@ -2485,7 +2477,7 @@ fn erase_boundary_carry(
 fn round0_forward(circ: &mut Builder, v: &[QubitId]) -> QubitId {
     assert_eq!(v.len(), VALUE_WIDTH);
     if let Some((c, coord)) = super::j_fuse::take_x_carry() {
-        return round0_forward_fused(circ, v, c, |circ, c, d_top| super::j_fuse::erase_x_carry(circ, c, d_top, &coord));
+        return round0_forward_fused(circ, v, c, &coord);
     }
     let a0 = circ.alloc_qubit();
     circ.cx(v[0], a0);
@@ -2508,8 +2500,7 @@ fn round0_forward(circ: &mut Builder, v: &[QubitId]) -> QubitId {
 
 /// PP_J_XFUSE: [`round0_forward`] on `v = D` with the coordinate borrow `c`
 /// still live (true denominator `a = D - c*f`). See `j_fuse`.
-fn round0_forward_fused(circ: &mut Builder, v: &[QubitId], c: QubitId,
-    erase: impl FnOnce(&mut Builder, QubitId, &[QubitId])) -> QubitId {
+fn round0_forward_fused(circ: &mut Builder, v: &[QubitId], c: QubitId, coord: &[BitId]) -> QubitId {
     let before = circ.i35_cost();
     let a0 = circ.alloc_qubit();
     circ.cx(v[0], a0);
@@ -2532,7 +2523,7 @@ fn round0_forward_fused(circ: &mut Builder, v: &[QubitId], c: QubitId,
     circ.free(not_a1);
 
     let k = super::j_fuse::x_erase_width();
-    erase(circ, c, &v[N - 1 - k..N - 1]);
+    super::j_fuse::erase_x_carry(circ, c, &v[N - 1 - k..N - 1], coord);
     if env_flag("PP_J_TRACE") {
         eprintln!("J_R0FUSED {}", circ.i35_cost() - before);
     }
@@ -3285,30 +3276,17 @@ fn replay_double_add_impl(
 ) {
     let f = f();
 
-    // PP_U_DPARK: the bit shifted off the top stays in target[0] (which the
-    // prebias add never reads) as d^sign^source0, and is re-extracted onto its
-    // own wire only at the fold. One wire less across every chunk ladder.
-    let park=env_flag("PP_U_DPARK");
-    let doubled_out = if park {rotate_up(circ, target);target[0]} else {start_doubling(circ, target)};
-    joint_lowfold::DPARK.with(|p|p.set(park));
+    let doubled_out = start_doubling(circ, target);
 
     circ.cx_all(sign, target);
     if joint_lowfold::try_replay(circ,sign,source,target,retained_window(fold_window,round),round,Some(doubled_out)) {
-        joint_lowfold::DPARK.with(|p|p.set(false));
         circ.cx_all(sign,target);return;
     }
-    joint_lowfold::DPARK.with(|p|p.set(false));
     // EXP PP_PREBIAS_DOUBLE_FALLBACK: as the retained route, bit 0 leaves the add.
     let pre=env_flag("PP_PREBIAS_DOUBLE_FALLBACK") && env_flag("PP_REUSE_MUL_SELECTORS") && env_flag("PP_JOINT_MUL_FOLD");
-    // PP_U_DPARK fallback: target[0] holds d^sign. Without the prebias add it is
-    // read by the add, so take d out first; with it, only after the add.
-    let unpark=|circ:&mut Builder,v0:Option<QubitId>|{let d=circ.alloc_qubit();
-        circ.cx(target[0],d);circ.cx(sign,d);if let Some(v)=v0{circ.cx(v,d);}circ.cx(d,target[0]);d};
-    let doubled_out=if park&&!pre {unpark(circ,None)} else {doubled_out};
     let add_out = if pre {
         circ.cx(source[0],target[0]);chunked_add(circ, &source[1..], &target[1..], round, true)
     } else {chunked_add(circ, source, target, round, true)};
-    let doubled_out=if park&&pre {unpark(circ,Some(source[0]))} else {doubled_out};
 
     if env_flag("PP_REUSE_MUL_SELECTORS") {
         if env_flag("PP_JOINT_MUL_FOLD") {
@@ -3850,7 +3828,7 @@ fn pinned_replay_bounds(n:usize,round:usize,multiply:bool)->Option<Vec<(usize,us
 // uses only ordinary chunk sites; exact/low-work fallbacks remain untouched.
 fn composition_bounds(c:&Builder,round:usize,multiply:bool)->Option<Vec<(usize,usize)>> {
     if env_raw("PP_PIN_REPLAY_LAYOUT").is_some(){return None;}
-    let room=walk_max_qubits().saturating_sub(c.active_qubits()as usize+joint_lowfold::dshadow());
+    let room=walk_max_qubits().saturating_sub(c.active_qubits()as usize);
     let loans=REPLAY_SIGN_LOANS.with(|s|s.get());let old=room.saturating_sub(loans);
     let layout=chunk_layout(N,old+super::bridge::budget());
     let fallback=layout.is_none() || old<replay_chunk_compare()+2;
@@ -3876,7 +3854,7 @@ fn composition_bounds(c:&Builder,round:usize,multiply:bool)->Option<Vec<(usize,u
 // is an explicit phase-predicate change, requiring full-stream qualification.
 fn retained_rebalance(c:&Builder, old:&[(usize,usize)], round:usize, multiply:bool)->Vec<(usize,usize)> {
     if !env_flag("PP_RETAIN_REBALANCE") || old.len()<2 {return old.to_vec();}
-    let room=(walk_max_qubits()+super::bridge::budget()).saturating_sub(c.active_qubits()as usize+joint_lowfold::dshadow());
+    let room=(walk_max_qubits()+super::bridge::budget()).saturating_sub(c.active_qubits()as usize);
     let mut sizes:Vec<_>=old.iter().map(|&(lo,hi)|hi-lo).collect();
     let last=sizes.len()-1;
     for j in 0..last {
@@ -3924,14 +3902,14 @@ fn drop_exact_lead(c:&Builder,old:&[(usize,usize)],round:usize,multiply:bool,fw:
     let first=old[0].1;
     if first<min || boundary_repair_spec(round,multiply,0,first)!=(first,false) {drop_trace(round,multiply,"notexactlead",format!("{:?}",old));return None;}
     let bridge=if env_flag("PP_DROP_EXACT_LEAD_NOBRIDGE"){0}else{super::bridge::budget()};
-    let room=(walk_max_qubits()+bridge).saturating_sub(c.active_qubits() as usize+joint_lowfold::dshadow());
+    let room=(walk_max_qubits()+bridge).saturating_sub(c.active_qubits() as usize);
     let k=old.len();
     let mut sizes:Vec<usize>=(0..k).map(|j|widest_chunk(j,room)).collect();
     let head:usize=sizes[..k-1].iter().sum();
     if head>=N {return None;}
     let last=N-head;
     sizes[k-1]=last;
-    if last<2 || last+32+usize::from(multiply&&joint_lowfold::DPARK.with(|p|p.get())&&joint_lowfold::dshadow()==0)>room || N-last<fw || layout_ladder(&sizes)>room {drop_trace(round,multiply,"nofit",format!("room={} last={} fw={} {:?}",room,last,fw,old));return None;}
+    if last<2 || last+32>room || N-last<fw || layout_ladder(&sizes)>room {drop_trace(round,multiply,"nofit",format!("room={} last={} fw={} {:?}",room,last,fw,old));return None;}
     let new=to_bounds(&sizes);
     let (k0,_)=boundary_repair_spec(round,multiply,new[0].0,new[0].1);
     if new[0].1<k0+widen+2 {return None;}
@@ -4688,27 +4666,4 @@ fn j_double_unseed(circ: &mut Builder, sign: QubitId, source: &[QubitId], target
     if env_flag("PP_J_TRACE") {
         eprintln!("J_DOUBLEUNSEED {}", circ.i35_cost() - before);
     }
-}
-
-
-// ---- PP_J_SFUSE: the multiply's round 0, run early inside the square ----
-static PRE_R0: std::sync::Mutex<Option<(Vec<QubitId>, QubitId)>> = std::sync::Mutex::new(None);
-static PRE_A0: std::sync::Mutex<Option<QubitId>> = std::sync::Mutex::new(None);
-
-/// Run the multiply walk's round 0 on `x` (the next denominator) with the
-/// square's kept borrow `c`; erase `c` against `value_top`. The three envelope
-/// wires and `a0` are handed to the multiply's `pingpong`.
-pub(super) fn j_pre_round0(circ: &mut Builder, x: &[QubitId], c: QubitId, value_top: &[QubitId]) {
-    assert_eq!(x.len(), N);
-    assert_eq!(value_width(0), VALUE_WIDTH);
-    let loans = super::square::SQ_LOANS.with(|l| l.borrow().clone());
-    circ.set_avoid(&loans);
-    let ext = circ.alloc_qubits(VALUE_WIDTH - N);
-    let mut v = x.to_vec();
-    v.extend_from_slice(&ext);
-    let a0 = round0_forward_fused(circ, &v, c, |circ, c, d_top| super::j_fuse::erase_q_carry(circ, c, d_top, value_top));
-    circ.set_avoid(&[]);
-    assert!(!ext.contains(&a0) && !loans.contains(&a0) && !ext.iter().any(|q| loans.contains(q)));
-    let prev = PRE_R0.lock().unwrap().replace((ext, a0));
-    assert!(prev.is_none());
 }
