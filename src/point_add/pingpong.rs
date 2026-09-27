@@ -623,8 +623,10 @@ fn endpoint(
     numerator: &[QubitId],
 ) {
     let negate = |circ: &mut Builder| {
+        let before=circ.i35_cost();
         conditional_mod_negate(circ, u[u.len() - 1], coefficient);
         conditional_mod_negate(circ, v[v.len() - 1], numerator);
+        if env_flag("PP_J_TRACE"){eprintln!("J_ENDPOINT {} {} active={}",plan.direction==PingPongDirection::Divide,circ.i35_cost()-before,circ.active_qubits());}
     };
     match plan.direction {
         PingPongDirection::Divide => {
@@ -2474,6 +2476,9 @@ fn erase_boundary_carry(
 /// one sparse map: `q - p + a1*p + a0*(p+1)/2`.
 fn round0_forward(circ: &mut Builder, v: &[QubitId]) -> QubitId {
     assert_eq!(v.len(), VALUE_WIDTH);
+    if let Some((c, coord)) = super::j_fuse::take_x_carry() {
+        return round0_forward_fused(circ, v, c, &coord);
+    }
     let a0 = circ.alloc_qubit();
     circ.cx(v[0], a0);
     rotate_down(circ, v);
@@ -2491,6 +2496,105 @@ fn round0_forward(circ: &mut Builder, v: &[QubitId]) -> QubitId {
     circ.cx(v[VALUE_WIDTH - 1], not_a1);
     circ.free(not_a1);
     a0
+}
+
+/// PP_J_XFUSE: [`round0_forward`] on `v = D` with the coordinate borrow `c`
+/// still live (true denominator `a = D - c*f`). See `j_fuse`.
+fn round0_forward_fused(circ: &mut Builder, v: &[QubitId], c: QubitId, coord: &[BitId]) -> QubitId {
+    let before = circ.i35_cost();
+    let a0 = circ.alloc_qubit();
+    circ.cx(v[0], a0);
+    circ.cx(c, a0); // a0 = D0 ^ c
+    rotate_down(circ, v);
+    circ.cx(a0, v[VALUE_WIDTH - 1]);
+    circ.cx(c, v[VALUE_WIDTH - 1]);
+    // a1 = D1 ^ (c & !D0), and with c set !D0 = a0.
+    let t = and_clean(circ, c, a0);
+    let not_a1 = circ.alloc_qubit();
+    circ.x(not_a1);
+    circ.cx(v[0], not_a1);
+    circ.cx(t, not_a1);
+    and_uncompute(circ, t, c, a0);
+
+    round0_correction_fused(circ, v, not_a1, a0, c);
+    circ.cx_all(not_a1, &v[N..]);
+    circ.cx(a0, v[N - 1]);
+    circ.cx(v[VALUE_WIDTH - 1], not_a1);
+    circ.free(not_a1);
+
+    let k = super::j_fuse::x_erase_width();
+    super::j_fuse::erase_x_carry(circ, c, &v[N - 1 - k..N - 1], coord);
+    if env_flag("PP_J_TRACE") {
+        eprintln!("J_R0FUSED {}", circ.i35_cost() - before);
+    }
+    a0
+}
+
+/// The lift arms of [`round0_correction`] relabelled by the borrow `c`:
+/// magnitude f when a1 = a0 = c, h or h+1 when D0 = a0 ^ c is set (h+1 iff
+/// also !a1), zero otherwise.
+fn round0_correction_fused(circ: &mut Builder, v: &[QubitId], not_a1: QubitId, a0: QubitId, c: QubitId) {
+    let d0 = circ.alloc_qubit();
+    circ.cx(a0, d0);
+    circ.cx(c, d0);
+    let u1 = circ.alloc_qubit();
+    circ.cx(not_a1, u1);
+    circ.cx(c, u1); // [a1 == c]
+    circ.x(d0);
+    let pf = and_clean(circ, u1, d0);
+    circ.x(d0);
+    let hh = and_clean(circ, not_a1, d0);
+    let p0 = circ.alloc_qubit();
+    circ.cx(pf, p0);
+    circ.cx(hh, p0);
+    let pb = circ.alloc_qubit();
+    circ.cx(pf, pb);
+    circ.cx(d0, pb);
+
+    let width = f_slice();
+    let f = f();
+    let h = half_f_minus_one();
+    let controls: Vec<Option<QubitId>> = (0..width)
+        .map(|i| {
+            let (in_f, in_h) = (f.bit(i), h.bit(i));
+            if i == 0 {
+                assert!(in_f && !in_h);
+                return Some(p0);
+            }
+            match (in_f, in_h) {
+                (false, false) => None,
+                (true, false) => Some(pf),
+                (false, true) => Some(d0),
+                (true, true) => Some(pb),
+            }
+        })
+        .collect();
+    let a1 = circ.alloc_qubit();
+    circ.x(a1);
+    circ.cx(not_a1, a1);
+    circ.cx_all(a1, &v[..N]);
+    cadd_const_per_position_trunc(circ, &v[..width], &controls);
+    circ.cx_all(a1, &v[..N]);
+    circ.cx(not_a1, a1);
+    circ.x(a1);
+    circ.free(a1);
+
+    circ.cx(d0, pb);
+    circ.cx(pf, pb);
+    circ.free(pb);
+    circ.cx(hh, p0);
+    circ.cx(pf, p0);
+    circ.free(p0);
+    and_uncompute(circ, hh, not_a1, d0);
+    circ.x(d0);
+    and_uncompute(circ, pf, u1, d0);
+    circ.x(d0);
+    circ.cx(c, u1);
+    circ.cx(not_a1, u1);
+    circ.free(u1);
+    circ.cx(c, d0);
+    circ.cx(a0, d0);
+    circ.free(d0);
 }
 
 /// Compute `a AND c` onto a fresh wire: one Toffoli.
@@ -2577,6 +2681,18 @@ fn round0_reverse(circ: &mut Builder, v: &[QubitId], a0: QubitId) {
     assert_eq!(v.len(), VALUE_WIDTH);
     let not_a1 = circ.alloc_qubit();
     circ.cx(v[VALUE_WIDTH - 1], not_a1);
+    if super::j_fuse::defer_r0_reverse(circ.phase_name()) {
+        // PP_J_AFUSE / PP_J_RFUSE: shift only; the {f, 2f} correction and the
+        // erasure of a0 / !a1 move into the next coordinate op. The three new
+        // high bits are (a0, !a1, !a1) before the correction too.
+        circ.cx(not_a1, v[VALUE_WIDTH - 1]);
+        rotate_up(circ, v);
+        circ.cx(a0, v[N]);
+        circ.cx(not_a1, v[N + 1]);
+        circ.cx(not_a1, v[N + 2]);
+        super::j_fuse::stash_r0(a0, not_a1);
+        return;
+    }
 
     // Arithmetic left shift in the signed 259-bit envelope. The discarded sign
     // copy is redundant; the three new high bits are (a0,!a1,!a1).
@@ -2981,11 +3097,13 @@ fn replay_halving_round(
         // Rounds 0 and 1 run in the canonical frame; the signed frame is entered
         // once both registers hold a residue in [0,p). Neither folds, so
         // `fold_window` does not reach them -- they keep the pinned width.
-        0 => mod_halve_pm(circ, target),
-        1 => {
+        0 => if !super::j_fuse::j_yfuse() { mod_halve_pm(circ, target) },
+        1 => if j_seed1() {
+            j_seed_halve(circ, sign, source, target);
+        } else {
             seed_round_one(circ, sign, source, target);
             mod_halve_pm(circ, target);
-        }
+        },
         _ => {
             replay_add_halve(circ, sign, source, target, fold_window, round);
             if !depth.is_empty() {
@@ -3006,11 +3124,13 @@ fn replay_doubling_round(
 ) {
     let (source, target) = replay_operands(x, y, round);
     match round {
-        0 => mod_double_pm(circ, target),
-        1 => {
+        0 => if !super::j_fuse::j_yfuse() { mod_double_pm(circ, target) },
+        1 => if j_seed1() {
+            j_double_unseed(circ, sign, source, target);
+        } else {
             mod_double_pm(circ, target);
             seed_round_one_inverse(circ, sign, source, target);
-        }
+        },
         _ => {
             if !depth.is_empty() {
                 replay_extra_shift(circ, source, target, depth, round, false);
@@ -4417,3 +4537,133 @@ fn walk_extra(round: usize) -> isize {
     edits.iter().filter(|e| round>=e.0 && round<e.0+e.1).map(|e| e.2).sum()
 }
 
+
+
+// ---- PP_J_SEED1 (agent J): replay round 1's seed fused with its halving /
+// doubling. The divide's round 1 is `t <- (+-s)/2 (mod p)`: the conditional
+// negation's `(f-1)` correction and the halving's `f` correction are both
+// selected constants in the same low window, so one per-position ladder
+// subtracts `M = sign*(f-1) + par*f` (in {0, f-1, f, 2f-1}; `par` is the
+// negated seed's bit 0 and is known before either correction). The multiply's
+// round 1 is its exact inverse shape: one ladder adds `o*f + sign*(f-1)`.
+// The window is `f_slice()+1` because `2f-1` is one bit wider than `f`; the
+// guard above the constant is unchanged.
+
+fn j_seed1() -> bool {
+    static SLOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SLOT.get_or_init(|| env_flag("PP_J_SEED1"))
+}
+
+/// Control wires for adding `M(a, b)` per position over `1..width`, where
+/// `M(1,0) = ca`, `M(0,1) = cb`, `M(1,1) = cab` and `pab = a & b`.
+/// Returns the controls and the scratch wires that hold the combinations.
+fn j_seed1_controls(
+    circ: &mut Builder,
+    a: QubitId,
+    b: QubitId,
+    pab: QubitId,
+    ca: U256,
+    cb: U256,
+    cab: U256,
+    width: usize,
+) -> (Vec<Option<QubitId>>, Vec<(u8, QubitId)>) {
+    let mut wires: Vec<(u8, QubitId)> = Vec::new();
+    let mut controls = Vec::with_capacity(width - 1);
+    for i in 1..width {
+        let ka = ca.bit(i);
+        let kb = cb.bit(i);
+        let kp = ca.bit(i) ^ cb.bit(i) ^ cab.bit(i);
+        let mask = (ka as u8) | ((kb as u8) << 1) | ((kp as u8) << 2);
+        if mask == 0 {
+            controls.push(None);
+            continue;
+        }
+        let w = match wires.iter().find(|(m, _)| *m == mask) {
+            Some(&(_, w)) => w,
+            None => {
+                let w = circ.alloc_qubit();
+                if ka { circ.cx(a, w); }
+                if kb { circ.cx(b, w); }
+                if kp { circ.cx(pab, w); }
+                wires.push((mask, w));
+                w
+            }
+        };
+        controls.push(Some(w));
+    }
+    (controls, wires)
+}
+
+fn j_seed1_release(circ: &mut Builder, a: QubitId, b: QubitId, pab: QubitId, wires: Vec<(u8, QubitId)>) {
+    for (mask, w) in wires.into_iter().rev() {
+        if mask & 1 != 0 { circ.cx(a, w); }
+        if mask & 2 != 0 { circ.cx(b, w); }
+        if mask & 4 != 0 { circ.cx(pab, w); }
+        circ.free(w);
+    }
+}
+
+/// `target <- (+-source)/2 (mod p)` from a clear target.
+fn j_seed_halve(circ: &mut Builder, sign: QubitId, source: &[QubitId], target: &[QubitId]) {
+    let before = circ.i35_cost();
+    for i in 0..N {
+        circ.cx(source[i], target[i]);
+        circ.cx(sign, target[i]);
+    }
+    // target = T0; the residue is z = T0 - sign*(f-1), and z0 = T0_0.
+    let par = circ.alloc_qubit();
+    circ.cx(target[0], par);
+    let pab = circ.alloc_qubit();
+    circ.ccx(sign, par, pab);
+    let width = f_slice() + 1;
+    let fm1 = f_minus_one();
+    let two_f_m1 = f().wrapping_add(f_minus_one());
+    let (controls, wires) = j_seed1_controls(circ, sign, par, pab, fm1, f(), two_f_m1, width);
+    // Subtract M = sign*(f-1) + par*f in the complement frame. Position 0:
+    // ~T0_0 = !par plus M_0 = par is 1 with no carry.
+    circ.x_all(&target[..width]);
+    circ.cx(par, target[0]);
+    cadd_const_per_position_trunc(circ, &target[1..width], &controls);
+    circ.x_all(&target[..width]);
+    j_seed1_release(circ, sign, par, pab, wires);
+    let m = circ.alloc_bit();
+    circ.hmr(pab, m);
+    circ.cz_if(sign, par, m);
+    circ.free_bit(m);
+    circ.free(pab);
+    finish_halving(circ, target, par);
+    if env_flag("PP_J_TRACE") {
+        eprintln!("J_SEEDHALVE {}", circ.i35_cost() - before);
+    }
+}
+
+/// Exact inverse shape of [`j_seed_halve`]: `target <- 2*target (mod p)`, then
+/// the seed's conditional negation undone, leaving `target` clear.
+fn j_double_unseed(circ: &mut Builder, sign: QubitId, source: &[QubitId], target: &[QubitId]) {
+    let before = circ.i35_cost();
+    let o = start_doubling(circ, target);
+    // target = 2z mod 2^256 with bit 0 clear; add M = o*f + sign*(f-1).
+    let pab = circ.alloc_qubit();
+    circ.ccx(o, sign, pab);
+    let width = f_slice() + 1;
+    let two_f_m1 = f().wrapping_add(f_minus_one());
+    let (controls, wires) = j_seed1_controls(circ, o, sign, pab, f(), f_minus_one(), two_f_m1, width);
+    // Position 0: 0 + M_0 = o, no carry.
+    circ.cx(o, target[0]);
+    cadd_const_per_position_trunc(circ, &target[1..width], &controls);
+    j_seed1_release(circ, o, sign, pab, wires);
+    let m = circ.alloc_bit();
+    circ.hmr(pab, m);
+    circ.cz_if(o, sign, m);
+    circ.free_bit(m);
+    circ.free(pab);
+    circ.cx(target[0], o);
+    circ.free(o);
+    for i in (0..N).rev() {
+        circ.cx(sign, target[i]);
+        circ.cx(source[i], target[i]);
+    }
+    if env_flag("PP_J_TRACE") {
+        eprintln!("J_DOUBLEUNSEED {}", circ.i35_cost() - before);
+    }
+}

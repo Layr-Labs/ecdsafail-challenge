@@ -98,6 +98,7 @@ impl Builder {
     }
     /// Close the current phase: report its Toffoli count and peak width on
     /// stdout -- which is what `build_circuit` prints -- and start a new one.
+    pub(crate) fn phase_name(&self) -> &'static str { self.phase }
     pub fn set_phase(&mut self, p: &'static str) {
         if self.model {
             eprintln!("MODEL_PHASE {} {} {} {}", self.phase, self.peak_qubits,

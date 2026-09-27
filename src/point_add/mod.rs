@@ -131,7 +131,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "29130632960",
+        "TAIL_NONCE" => "28949644005",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -175,6 +175,12 @@ fn env_raw(name: &str) -> Option<String> {
         "PP_WALK_MAX_QUBITS" => "1250",
         "PP_N_BADJ" => "649-699:a:-1,554-615:m:-1,589-615:d:-1,616-648:m:1,350-553:d:1",
         "PP_N_HOLE2" => "1",
+        // pkgJ1 (agent J): exact round-0/round-1 fold fusions, pr426-hunt/J/runs/pkgJ1.spec.
+        "PP_J_XFUSE" => "1",
+        "PP_J_YFUSE" => "1",
+        "PP_J_AFUSE" => "1",
+        "PP_J_RFUSE" => "1",
+        "PP_J_SEED1" => "1",
         // ================== end pkgN2 package pins ==================
         _ => return None,
     };
@@ -248,10 +254,10 @@ fn build_point_add() -> Vec<Op> {
     let oy: &[BitId] = &circ.alloc_bits(N);
 
     circ.set_phase("coord_x_sub"); // x2 -= ox
-    coord_sub(circ, x, ox);
+    if j_fuse::j_xfuse() { classical::coord_sub_keep(circ, x, ox); } else { coord_sub(circ, x, ox); }
 
     circ.set_phase("coord_y_sub"); // y2 -= oy
-    coord_sub(circ, y, oy);
+    if j_fuse::j_yfuse() { classical::coord_sub_halve(circ, y, oy); } else { coord_sub(circ, y, oy); }
 
     circ.set_phase("divide"); // y2 /= x2
     divide(circ, y, x);
@@ -266,7 +272,7 @@ fn build_point_add() -> Vec<Op> {
     multiply(circ, y, x);
 
     circ.set_phase("coord_y_sub_final"); // y2 -= oy
-    coord_sub(circ, y, oy);
+    if j_fuse::j_yfuse() { classical::coord_double_sub(circ, y, oy); } else { coord_sub(circ, y, oy); }
 
     circ.set_phase("coord_rsub_final"); // x2 = ox - x2
     coord_rsub(circ, x, ox);
@@ -328,6 +334,7 @@ mod round2_receiver;
 mod round2_fused;
 
 mod bridge;
+mod j_fuse;
 
 mod average;
 

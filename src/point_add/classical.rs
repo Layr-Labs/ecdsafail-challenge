@@ -57,12 +57,37 @@ pub fn coord_sub(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
     });
 }
 
+/// PP_J_YFUSE: `dst <- (dst - coord)/2 (mod p)`.
+pub fn coord_sub_halve(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
+    against_coord(circ, coord, false, |circ, temp| {
+        super::j_fuse::mod_sub_halve(circ, temp, dst);
+    });
+}
+
+/// PP_J_YFUSE: `dst <- 2*dst - coord (mod p)`.
+pub fn coord_double_sub(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
+    against_coord(circ, coord, false, |circ, temp| {
+        super::j_fuse::mod_double_sub(circ, temp, dst);
+    });
+}
+
+/// PP_J_XFUSE: `dst <- dst - coord (mod 2^256)`, borrow kept for the walk.
+pub fn coord_sub_keep(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
+    against_coord(circ, coord, false, |circ, temp| {
+        super::j_fuse::mod_sub_keep_borrow(circ, temp, dst, coord);
+    });
+}
+
 pub fn coord_rsub(circ: &mut Builder, x: &[QubitId], coord: &[BitId]) {
     assert_eq!(x.len(), N);
     assert_eq!(coord.len(), N);
     let coord_p1 = classical_plus1_mod_2n(circ, coord);
+    let stash = super::j_fuse::take_r0();
     against_coord(circ, &coord_p1, true, |circ, temp| {
-        mod_rsub_vented_loaded(circ, temp, x);
+        match stash {
+            Some((a0, n)) => super::j_fuse::mod_rsub_r0fused(circ, temp, x, a0, n),
+            None => mod_rsub_vented_loaded(circ, temp, x),
+        }
     });
 }
 
@@ -79,8 +104,12 @@ pub fn coord_add3x(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
         circ.free_bit_vec(&three_coord);
         three_coord = shifted;
     }
+    let stash = super::j_fuse::take_r0();
     against_coord(circ, &three_coord, true, |circ, temp| {
-        mod_add(circ, temp, dst);
+        match stash {
+            Some((a0, n)) => super::j_fuse::mod_add_r0fused(circ, temp, dst, a0, n),
+            None => mod_add(circ, temp, dst),
+        }
     });
 }
 
