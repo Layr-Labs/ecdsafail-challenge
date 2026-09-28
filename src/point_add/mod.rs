@@ -127,7 +127,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "141341059326522",
+        "TAIL_NONCE" => "280927477331701",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -343,6 +343,8 @@ pub fn build() -> Vec<Op> {
         }
     }
     ops = interned_witness::witnesses(ops);
+    // Isolated exact-cost screen after the existing witness rewrite.
+    ops = truth_simplify::simplify_products(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
