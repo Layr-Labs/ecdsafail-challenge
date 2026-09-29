@@ -18,7 +18,7 @@ struct Plan { bounds:Vec<(usize,usize)>, prefix:usize, guard:usize, bits:usize, 
 fn plan(circ:&Builder,round:usize,multiply:bool,fw:usize,drop:bool)->Option<Plan> {
     if !multiply && env_raw("PP_PREBIAS_RETAIN_BITS").is_some() {return None;}
     let guard=super::super::optional_env::<usize>("PP_JOINT_GUARD")?;
-    let low=if env_flag("PP_SPRINT_MIXED") && multiply && (364..=402).contains(&round) {29}else{low_bits(guard)};assert!((12..=fw).contains(&low) && !split_fold());
+    let low=if env_flag("PP_SPRINT_MIXED") && multiply && (364..=402).contains(&round) {29}else{(low_bits(guard) as isize+super::super::go_slice("GO_JLB",round,if multiply{b'm'}else{b'd'})) as usize};assert!((12..=fw).contains(&low) && !split_fold());
 
     assert!(env_flag("PP_REUSE_DIV_PARITY") && env_flag("PP_REUSE_MUL_SELECTORS"));
     let room=walk_max_qubits().saturating_sub(circ.active_qubits()as usize);

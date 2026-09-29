@@ -17,6 +17,10 @@ use crate::circuit::QubitId;
 /// carry-in wire would have held — so it serves as the first nonlinear control
 /// and no wire is needed either way.
 pub(crate) fn cmp_lt_phase(circ: &mut Builder, u: &[QubitId], v: &[QubitId], borrow_in: Option<QubitId>) {
+    if super::dirty_boundary_probe::try_tail(circ,u,v,borrow_in){return;}
+    if super::constant_templates::square_compare(circ,u,v,borrow_in){return;}
+    let _dirty_trace=super::dirty_boundary_probe::Trace::new(circ,"cmp_lt_phase",u.len());
+
     let n = u.len();
     assert_eq!(v.len(), n);
     // Two bits is the narrowest comparison any caller asks for: the walk's

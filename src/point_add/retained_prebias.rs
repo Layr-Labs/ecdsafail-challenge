@@ -6,7 +6,7 @@ use super::*;
 struct Plan {bounds:Vec<(usize,usize)>,prefix:usize,bits:usize,saving:f64,exact:bool,dropped:bool}
 fn plan(c:&Builder,r:usize,fw:usize,drop:bool)->Option<Plan>{
  let base_bits=super::super::optional_env::<usize>("PP_PREBIAS_RETAIN_BITS")?;
- let bits=if env_flag("PP_SPRINT_MIXED") && (370..=402).contains(&r) {29}else{base_bits};
+ let bits=if env_flag("PP_SPRINT_MIXED") && (370..=402).contains(&r) {29}else{(base_bits as isize+super::super::go_slice("GO_PRB",r,b'd')) as usize};
  assert!(bits>=12&&bits<=fw&&fw>=36&&!split_fold());
  let room=walk_max_qubits().saturating_sub(c.active_qubits()as usize);
  let loans=REPLAY_SIGN_LOANS.with(|s|s.get());
@@ -75,6 +75,7 @@ pub(super)fn try_replay(c:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId],fw
   if j==0{joint_prebias::erase_initial(c,initial,a[0],sign,b[0]);}
   if let Some((carry,plo,phi))=previous{
    let(k,seed)=if p.dropped&&plo==0{drop_lead_first_compare(r,false,phi)}else{boundary_repair_spec(r,false,plo,phi)};let k=if seed&&plo>0{e_badj(r,false,k,phi,if hi==N{fw}else{1})}else{k};
+   let k=if seed&&plo==0&&!p.dropped{ab_capr(r,k,phi,if hi==N{fw}else{1})}else{k};
    let full=plo==0&&phi==k;
    let guard=super::super::optional_env::<usize>("I12_B_GUARD").unwrap_or(0);
    let protected=((589..=620).contains(&r)||(642..=645).contains(&r)||(647..=648).contains(&r))

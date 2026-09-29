@@ -25,6 +25,11 @@ pub(crate) fn run(c:&mut Builder,a:&[QubitId],b:&[QubitId],cin:Option<QubitId>,c
         c.free(boundary);
     } else {raw_run(c,a,b,cin,cout,bridges,consume);}
 }
+/// B7 (heo_carry S-C rail-split rule): the exact Gidney-bottom / Cuccaro-top hybrid on its own (`bridges` in-place
+/// stages at the top of the owned carries), with no I50 split-bridge wrapper.
+pub(crate) fn raw_add(c:&mut Builder,a:&[QubitId],b:&[QubitId],cin:Option<QubitId>,cout:Option<QubitId>,bridges:usize){
+    raw_run(c,a,b,cin,cout,bridges,|_,_,_,_,_|{});
+}
 fn raw_run(c:&mut Builder,a:&[QubitId],b:&[QubitId],cin:Option<QubitId>,cout:Option<QubitId>,bridges:usize,
     consume:impl FnOnce(&mut Builder,Option<QubitId>,QubitId,QubitId,Option<QubitId>)){
     let n=b.len();assert_eq!(a.len(),n);assert!(n>=3);
@@ -41,8 +46,14 @@ fn raw_run(c:&mut Builder,a:&[QubitId],b:&[QubitId],cin:Option<QubitId>,cout:Opt
     }
     if cout.is_some(){if let Some(p)=previous(n-1){c.cx(p,a[n-1]);}c.cx(a[n-1],b[n-1]);}
     else{let i=n-2;let p=previous(i);if let Some(p)=p{c.cx(p,a[i]);c.cx(p,b[i]);}
-        c.ccx(a[i],b[i],b[n-1]);if let Some(p)=p{c.cx(p,b[n-1]);}c.cx(a[n-1],b[n-1]);
-        if let Some(p)=p{c.cx(p,a[i]);}c.cx(a[i],b[i]);
+        c.ccx(a[i],b[i],b[n-1]);if let Some(p)=p{c.cx(p,b[n-1]);}
+        // B7b: alias-aware (K3b rail source-top loan through the B7 rail bridge): a[n-1] may BE a[n-2], a value
+        // copy whose real top wire is lent out; read the top bit from a[n-2] once it is restored. Same ops otherwise.
+        let alias=a[n-1]==a[i];
+        if !alias{c.cx(a[n-1],b[n-1]);}
+        if let Some(p)=p{c.cx(p,a[i]);}
+        if alias{c.cx(a[i],b[n-1]);}
+        c.cx(a[i],b[i]);
     }
     consume(c,cout,a[n-1],b[n-1],if cout.is_some(){previous(n-1)}else{None});
     for i in(0..owned).rev(){let p=previous(i);
@@ -65,6 +76,10 @@ pub(crate) fn enter(round:usize,multiply:bool)->Scope{
             assert!(p.insert((v[0],v[1]!=0),v[2]).is_none());
         }}p
     });
-    let b=profile.get(&(round,multiply)).copied().unwrap_or_else(||super::optional_env::<usize>("I35_BUDGET").unwrap_or(0));
+    let mut b=profile.get(&(round,multiply)).copied().unwrap_or_else(||super::optional_env::<usize>("I35_BUDGET").unwrap_or(0));
+    // K3b: per-cell bridge override (`K3B_BRIDGE` cell pin): "n" absolute, "+n"/"-n" relative to the profile.
+    if let Some(v)=super::heo::cell_pin("K3B_BRIDGE"){
+        b=if let Some(r)=v.strip_prefix('+'){b+r.parse::<usize>().unwrap()}else if let Some(r)=v.strip_prefix('-'){b.saturating_sub(r.parse::<usize>().unwrap())}else{v.parse().unwrap()};
+    }
     Scope(CURRENT.with(|v|v.replace(Some(b))))
 }

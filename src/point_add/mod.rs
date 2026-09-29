@@ -1,3 +1,8 @@
+mod fd_coordinate;
+mod back_seam;
+pub mod cross_chunk_probe;
+pub mod dirty_boundary_probe;
+pub mod fold_template;
 mod width_composition;
 mod compact_mapped_add;
 mod compact_chunk_add;
@@ -22,7 +27,10 @@ mod const_arith;
 mod modular;
 mod pingpong;
 mod record;
+// B3a: HEO(S,u) walk research seam. Inert unless HEO_WALK / HEO_RESEARCH is set.
+pub mod heo;
 mod square;
+mod moddiv_adapter;
 
 const N: usize = 256;
 
@@ -36,6 +44,11 @@ const SECP256K1_P: U256 = U256::from_limbs([
 /// Fixed I10 configuration. Unlisted research switches are absent/off.
 /// The submission emits the same circuit regardless of inherited environment.
 fn env_raw(name: &str) -> Option<String> {
+    // B3a research overlay: returns None (no effect) unless HEO_RESEARCH or
+    // HEO_WALK is set in the process environment. See heo::pinned_override.
+    if let Some(v) = heo::pinned_override(name) {
+        return Some(v);
+    }
     let value = match name {
         "I76_SOURCE_TOP_LOAN" => "1",
         "I74_RESULT_TOP_LOAN" => "1",
@@ -50,22 +63,29 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ROW1_INVERSE_CARRIES" => "1",
         "SQ_ROW1_STREAM" => "1",
         "SQ_ROW0_COPY" => "1",
+        "I41_ROUNDS" => "20,61,62,68,71,80,89,95,100,129,135,161,165,182,512,525,528,533,536,549,550,551,552,553,586,587,616,640,641,648,655,658,683,684,685,686,687",
         "I33_DISABLE" => "0",
+        "I35_PROFILE" => "408:1:1,409:1:1,410:1:1,411:1:1,412:1:1,413:1:1,414:1:1,415:1:1,416:1:1,417:1:1,418:1:1,419:1:1,420:1:1,421:1:1,422:1:1,423:1:1,512:1:1,513:1:1,514:1:1,515:1:1,516:1:1,517:1:1,518:1:1,519:1:1,520:1:1,521:1:1,522:1:1,523:1:1,524:1:1,525:1:1,526:1:1,527:1:1,528:1:1,529:1:1,530:1:1,531:1:1,532:1:1,533:1:1,534:1:1,535:1:1,547:1:1,574:1:1,575:1:1,576:1:1,577:1:1,578:1:1,579:1:1,580:1:1,581:1:1,582:1:1,583:1:1,584:1:1,585:1:1,586:1:1,587:1:1,588:1:1,589:1:1,590:1:1,591:1:1,609:0:1,619:0:2,620:0:2,620:1:1,621:1:1,622:1:1,623:1:1,624:1:1,625:1:1,626:1:1,627:1:1,628:1:1,629:1:1,630:1:1,631:1:1,632:1:1,633:1:1,634:1:1,635:1:1,636:1:1,637:1:1,638:1:1,639:1:1,646:1:1",
+        "I12_DIV_PROFILE" => "192:192,193:193,194:194,195:195,196:196,197:197,198:198,199:199,200:200,201:201,202:202,203:203,204:204,205:205,206:206,207:207,208:208,209:209,210:210,211:211,212:212,213:213,214:214,215:215,216:216,217:217,218:218,219:219,220:220,221:221,222:222,223:223,224:224,225:225,226:226,227:227,228:228,229:229,230:230,231:231,232:232,233:233,234:234,235:235,236:236,237:237,238:238,239:239,240:240,241:241,242:242,243:243,244:244,245:245,246:246,247:247,248:248,249:249,250:392,393:393,394:394,395:395,396:396,397:397,398:398,399:399,400:400,401:401,402:402,403:403,404:404,405:405,406:406,407:407,408:408,409:409,410:410,411:411,412:412,413:413,414:414,415:415,416:416,417:417,418:418,419:419,420:420,421:421,422:422,423:423,424:424,425:425,426:426,427:427,428:428,429:429,430:430,431:431,432:432,433:496,497:497,498:498,499:499,500:500,501:501,502:502,503:503,504:504,505:505,506:506,507:507,508:508,509:509,510:510,511:511,512:512,513:513,514:514,515:515,516:516,517:517,518:518,519:519,520:520,521:522,523:523,524:524,525:525,526:526,527:527,528:528,529:529,530:530,531:531,532:532,533:533,534:534,535:535,536:536,537:537,538:538,539:539,540:540,541:572,573:573,574:574,575:575,576:576,577:577,578:578,579:579,580:580,581:581,582:582,583:583,584:584,585:585,586:586,587:587,588:588,589:596,597:597,598:598,599:599,600:600,601:601,602:602,603:604,605:606,607:608,609:609,610:611,612:613,614:615,616:616,617:618,619:620,621:621,622:622,623:623,624:624,625:625,626:626,627:627,628:628,629:629,630:630,631:631,632:632,633:633,634:634,635:635,636:636,637:637,638:638,639:639,640:640,641:641,642:642,643:643,644:644,645:645,646:646,647:647,648:648,649:664,665:666,667:668,669:670,671:671,672:672,673:673,674:674,675:675,676:676,677:677,678:678,679:679,680:680,681:681,682:682,683:683,684:684",
+        "I12_MUL_PROFILE" => "654:653,652:651,650:649,648:648,647:647,646:646,645:640,639:639,638:638,637:625,624:620,619:618,617:616,615:609,608:602,601:595,594:592,591:586,585:585,584:584,583:579,578:574,573:571,570:567,566:548,547:547,546:542,541:539,538:536,535:533,532:528,527:525,524:512,511:503,502:502,501:495,494:424,423:423,422:420,419:415,414:410,409:409,408:408,407:403",
         "I12_B_GUARD" => "4",
         "CMP_SEED_ALL" => "1",
         "ERASE_COMPARE" => "24",
-        "FOLD_GUARD" => "21",
+        "FOLD_GUARD" => "25",
         "PP_CF_DEFER_WALK_PHASE" => "1",
         "PP_CF_END_CHUNK" => "8",
-        "PP_CHUNK_SHAPE" => "64:0,38:1,25:-3,0:-4",
+        "PP_CHUNK_SHAPE" => "64:0,38:1,25:-2,0:-4",
         "PP_CUT_SQIDENT" => "1",
         "PP_CUT_WALKLOAN" => "1",
         "PP_DEPTH_PROFILE" => "0:0",
         "PP_DIRECT_ENDPOINT" => "1",
         "PP_DIRECT_FOLD" => "1",
         "PP_FLAG_SHAPE" => "38:0,25:-1,0:-3",
-        "PP_FLAG_WIDEN_DIV" => "696",
+        "PP_FLAG_WIDEN_DIV" => "38",
+        "PP_FOLD_PROFILE" => "38:0,32:-1,19:-4,0:-4",
+        "PP_FOLD_WIDEN" => "242",
         "PP_HEAD_DIV" => "192",
+        "PP_HEAD_MUL" => "403",
         "PP_JOINT_GUARD" => "0",
         "PP_JOINT_LOW_BITS" => "32",
         "PP_JOINT_MUL_FOLD" => "1",
@@ -88,6 +108,7 @@ fn env_raw(name: &str) -> Option<String> {
         "PP_RETAIN_EXACT_EXTRA_DIV" => "4",
         "PP_RETAIN_EXACT_EXTRA_MUL" => "4",
         "PP_RETAIN_EXACT_MUL" => "1",
+        "PP_RETAIN_LATE_WIDEN" => "3",
         "PP_RETAIN_REBALANCE" => "1",
         "PP_REUSE_DIV_PARITY" => "1",
         "PP_REUSE_MUL_SELECTORS" => "1",
@@ -100,8 +121,11 @@ fn env_raw(name: &str) -> Option<String> {
         "PP_SPLIT_OVERLAP_BITS" => "1",
         "PP_SPRINT_MIXED" => "0",
         "PP_TAIL_DIV" => "682",
+        "PP_TAIL_MUL" => "655",
         "PP_WALK_GUARD_BITS" => "1",
         "PP_WALK_GUARD_MAX_WIDTH" => "64",
+        "PP_WALK_MAX_QUBITS" => "1251",
+        "PP_WIDTH_SCHEDULE" => "259,258x19,257x5,256x3,255x4,254x4,253x2,252x4,251x3,250x5,249x2,248x4,247x3,246x2,245x4,244x3,243x3,242x3,241x3,240x3,239x4,238x3,237x2,236x4,235x2,234x3,233x2,232x4,231x4,230x2,229x3,228x3,227x3,226x2,225x4,224x2,223x2,222x3,221x3,220x4,219x3,218x2,217x3,216x3,215x3,214x4,213x2,212x2,211x3,210x4,209x3,208x2,207x2,206x2,205x3,204x2,203x4,202x3,201x3,200x4,199x2,198x2,197x3,196x2,195x2,194x4,193x4,192x2,191x3,190x3,189x2,188x3,187x2,186x3,185x2,184x3,183x4,182x2,181x3,180x4,179x2,178x2,177x3,176x3,175,174x2,173x2,172x4,171x3,170x2,169x2,168x4,167x3,166x3,165x2,164x3,163x3,162x2,161x3,160x2,159x3,158x2,157x3,156x2,155x4,154x2,153x3,152x2,151x3,150x3,149x2,148x2,147x2,146x4,145x4,144x3,143x2,142x2,141x3,140x2,139x2,138x2,137x3,136x2,135x4,134x3,133x3,132x3,131x2,130x3,129x2,128x4,127x3,126x2,125x2,124x3,123x2,122x3,121x3,120x2,119x5,118x2,117x3,116x2,115x3,114x4,113x2,112x2,111x4,110x2,109x2,108x2,107x2,106x2,105x5,104x2,103x2,102x2,101x2,100x4,99x2,98x2,97x2,96x3,95x3,94x3,93x2,92x3,91x2,90x4,89x3,88x2,87x2,86x4,85x2,84,83x4,82x2,81x2,80x2,79x3,78x2,77x2,76x3,75,74x2,73x3,72x3,71x2,70x3,69x3,68x3,67x3,66x2,65x3,64x4,63x2,62x2,61x3,60x2,59x2,58x2,57x2,56x2,55x3,54x3,53x2,52x3,51x2,50x4,49x2,48x2,47x3,46x3,45x2,44x2,43x3,42x2,41x2,40x3,39x2,38x2,37x3,36x4,35x2,34x3,33x2,32x2,31x2,30x2,29x2,28x4,27x2,26x2,25x3,24x2,23x2,22x2,21x3,20x3,19x2,18x3,17x2,16x2,15x3,14x2,13x2,12x2,11x2,10x2,9x4,8x9,8x2",
         "SQ_ALIAS_PRODUCT_LSB" => "1",
         "SQ_A_POLICY" => "7",
         "SQ_BORROW_ROW_CARRIES" => "0",
@@ -112,8 +136,8 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_DIAG_PRELOAD" => "1",
         "SQ_FIT_CROSS" => "1",
         "SQ_LEND_ASSEMBLY_ZEROS" => "1",
-        "SQ_LEND_RETAINED_ANDS" => "0",
-        "SQ_LEND_RETAINED_CROSS2" => "0",
+        "SQ_LEND_RETAINED_ANDS" => "2",
+        "SQ_LEND_RETAINED_CROSS2" => "2",
         "SQ_LEND_RETAINED_ZEROS" => "1",
         "SQ_ODD_NODE_TOPS" => "1",
         "SQ_ROW0_CARRY" => "1",
@@ -127,89 +151,13 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "92100003699992",
+        "TAIL_NONCE" => "2748956028",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
         "SQ_OWN_TOP_ZEROS" => "1",
-        // ==================== pkgFdP + stk2 package pins (pr426-sub3) ====================
-        // Every knob that differs from PR 426 lives in this block and nowhere else;
-        // FOLD_WIDEN, RETAIN_LATE_WIDEN and WIDTH_SCHEDULE were removed from the
-        // alphabetical list above so no arm shadows these. Spec (pr426-hunt/R/q5.txt):
-        //   PP_RETAIN_LATE_WIDEN=1 PP_FOLD_WIDEN=0 PP_WIDTH_SCHEDULE=<PR 426>,8
-        //   PP_DROP_EXACT_LEAD=1 PP_DROP_EXACT_LEAD_DIR=mul PP_F_PEAKCMP=24
-        // The trailing ",8" adds one division round (699); PP_ROUNDS_MUL stays 698.
-        // Protection buy: change ONE line here (e.g. "PP_FOLD_WIDEN" => "12"), or for
-        // FOLD_GUARD move its line ("FOLD_GUARD" => "25", above) here with the new value.
-        // The first matching arm wins, so a key must never appear twice. Then mirror
-        // it in the grinder's Config::p426fdp (GRIND_WIDEN / GRIND_FOLD_GUARD defaults).
-        "PP_RETAIN_LATE_WIDEN" => "1",
-        "PP_FOLD_WIDEN" => "64",
-        "PP_DROP_EXACT_LEAD" => "1",
-        "PP_DROP_EXACT_LEAD_DIR" => "mul",
-        "PP_F_PEAKCMP" => "24",
-        // ---- stk2 (pr426-sub3): agent M's schedule-only levers on top of pkgFdP ----
-        // Spec pr426-hunt/M/stk2.spec; reference build pr426-hunt/M/runs/stk2w
-        // (ops md5 fed8ad7a5bd1fc23118c448286c2633d). PP_TAIL_MUL (was 655) and
-        // I12_MUL_PROFILE were removed from the alphabetical list above so no arm
-        // shadows these. Both only choose which late multiply walk rounds batch before
-        // their replays; no round, width, fold window, guard or compare width changes.
-        "PP_TAIL_MUL" => "657",
-        // r6a_dpark re-pins I12_MUL_PROFILE in its own block below.
-        // ================== end pkgFdP + stk2 package pins ==================
-        // ==================== pkgN2 package pins (pr426-n2) ====================
-        // pkgN2 = stk2 + agent N (PP_N_HOLE2, PP_N_BADJ) + N's schedule/qubit spec,
-        // pr426-hunt/N/runs/pkgN2.spec; reference build pr426-hunt/N/runs/pkgN2
-        // (ops md5 e17412f8fd54ee29ba011d8e46e1560e, 12,209,348 ops, Q1250).
-        // Lambda gate: 16.30 +- 0.18 on 512 nonces (est + 2 SE <= 18, CIRCUIT_CONTRACT.md).
-        // I41_ROUNDS, PP_WALK_MAX_QUBITS and PP_WIDTH_SCHEDULE were removed from the lists
-        // above so no arm shadows these; the first matching arm wins, so a key must never
-        // appear twice. PP_N_* keys are pinned here too.
-        // Mirror any change in the grinder: grind-bundle/grind-p426d Config::p426n2.
-        "PP_WALK_MAX_QUBITS" => "1250",
-        "PP_N_HOLE2" => "1",
-        // pkgJ1 (agent J): exact round-0/round-1 fold fusions, pr426-hunt/J/runs/pkgJ1.spec.
-        "PP_J_XFUSE" => "1",
-        "PP_J_YFUSE" => "1",
-        "PP_J_AFUSE" => "1",
-        "PP_J_RFUSE" => "1",
-        "PP_J_SEED1" => "1",
-        // r6a_dpark re-pins PP_WIDTH_SCHEDULE, I41_ROUNDS and PP_N_BADJ in its own block below.
-        // ================== end pkgN2 package pins ==================
-        // ==================== r6a_dpark package pins (pr426-r6) ====================
-        // r6a_dpark = pkgJ1 + agent J (PP_J_SFUSE_B, PP_J_WCIN, PP_J_WCIN_B0LAST, PP_J_BMERGE)
-        // + agent U (PP_U_DPARK, PP_U_DPARK_BEST, PP_U_C0WIDE) + U's re-derived schedules.
-        // Spec pr426-hunt/U/r6a_dpark.spec; reference build pr426-hunt/U/runs/r6adp
-        // (ops md5 f3ff6eff86829b2db538a99482579791 at reference TAIL_NONCE 26225815260, 12,194,112 ops, Q1250).
-        // Agent U CRN runs: gate Lambda 16.336 +- 0.253 (256 nonces from 793401000), holdout
-        // 16.590 +- 0.255 (256 from 793501000); pooled 16.463 +- 0.179, mean T 889,202.1
-        // (est + 2 SE <= 18 is required before grind or submit, CIRCUIT_CONTRACT.md).
-        // PP_WIDTH_SCHEDULE, I41_ROUNDS, PP_N_BADJ (pkgN2 block), I12_MUL_PROFILE (stk2 block),
-        // I12_DIV_PROFILE, I35_PROFILE, PP_HEAD_MUL and PP_FOLD_PROFILE (alphabetical list) were
-        // removed above so no arm shadows these; the first matching arm wins, so a key must never
-        // appear twice. Every other pkgJ1 pin is unchanged. Mirror any change in the grinder.
-        "PP_WIDTH_SCHEDULE" => "259,258x19,257x6,256x2,255x5,254x3,253x4,252x3,251x2,250x5,249x2,248x4,247x3,246x2,245x5,244x2,243x3,242x3,241x3,240x3,239x4,238x3,237x2,236x4,235x2,234x3,233x2,232x4,231x4,230x2,229x3,228x4,227x2,226x3,225x3,224x2,223x2,222x4,221x2,220x4,219x3,218x2,217x4,216x2,215x3,214x3,213x2,212x3,211x4,210x2,209x3,208x2,207x3,206x3,205x2,204x2,203x4,202x3,201x3,200x4,199x2,198x3,197x2,196x3,195x3,194x2,193x3,192x3,191x3,190x2,189x3,188x2,187x3,186x2,185x3,184x3,183x2,182x3,181x3,180x3,179x3,178x2,177x4,176x2,175x3,174x3,173x3,172x2,171x3,170x3,169x2,168x3,167x3,166x2,165x3,164x2,163x3,162x3,161x3,160x2,159x3,158x3,157x2,156x3,155x2,154x3,153x3,152x2,151x3,150x3,149x2,148x3,147x2,146x3,145x2,144x3,143x3,142x3,141x3,140x2,139x3,138x3,137x2,136x3,135x2,134x3,133x2,132x3,131x2,130x3,129x3,128x3,127x2,126x3,125x2,124x2,123x3,122x2,121x3,120x2,119x2,118x3,117,116x4,115x2,114x3,113x2,112x3,111x3,110x2,109x3,108x2,107x3,106x3,105x3,104x3,103x3,102x2,101x3,100x2,99x3,98x3,97x2,96x3,95x3,94x2,93x3,92x3,91x2,90x3,89x2,88x5,87x2,86x4,84x2,83x3,82x2,81x3,80x2,79x2,78x3,77x2,76x3,75x2,74x2,73x3,72x3,71x2,70x3,69x2,68x4,67x3,66x2,65x3,64x4,63x2,62x2,61x3,60x2,59x2,58x2,57x2,56x2,55x3,54x3,53x2,52x2,51x2,50x5,49,48x2,47x3,46x3,45x2,44x3,43x3,42x2,41x2,40x2,39x3,38x2,37x2,36x3,35x3,34x3,33x2,32x2,31x2,30x3,29x2,28x4,27x2,26x2,25x3,24x2,23x2,22x2,21x3,20x3,19x2,18x3,17x2,16x2,15x3,14x2,13x2,12x2,11x2,10x2,9x4,8x12",
-        "I41_ROUNDS" => "36,45,52,61,62,68,71,74,77,80,89,95,100,101,104,110,119,129,130,135,144,150,153,158,161,167,172,175,182,183,513,518,525,528,533,538,539,542,549,550,551,552,553,571,583,586,587,591,611,618,621,633,640,641,648,655,658,683,684,685,686,687",
-        "PP_N_BADJ" => "400-449:d:2,649-699:a:-1,554-615:m:-1,589-615:d:-1,616-648:m:1,350-553:d:1,250-349:d:1,350-399:m:1",
-        "I12_MUL_PROFILE" => "657:657,656:656,655:655,654:653,652:651,650:649,648:641,640:640,639:639,638:638,637:633,632:624,623:621,620:620,619:616,615:609,608:603,602:592,591:591,590:586,585:585,584:584,583:583,582:574,573:571,570:566,565:538,537:533,532:528,527:525,524:518,517:516,515:513,512:507,506:502,501:495,494:440,439:438,437:437,436:432,431:427,426:424,423:423,422:420,419:419,418:414,413:409",
-        "I12_DIV_PROFILE" => "192:192,193:193,194:194,195:195,196:196,197:197,198:198,199:199,200:200,201:201,202:202,203:203,204:204,205:205,206:206,207:207,208:208,209:209,210:210,211:211,212:212,213:213,214:214,215:215,216:216,217:217,218:218,219:219,220:220,221:221,222:222,223:223,224:224,225:225,226:226,227:227,228:228,229:229,230:230,231:231,232:232,233:233,234:234,235:235,236:236,237:237,238:238,239:239,240:240,241:241,242:242,243:243,244:244,245:245,246:246,247:247,248:248,249:250,251:255,256:392,393:393,394:394,395:395,396:396,397:397,398:398,399:399,400:400,401:401,402:402,403:403,404:404,405:405,406:406,407:407,408:408,409:409,410:410,411:411,412:412,413:413,414:414,415:415,416:416,417:417,418:418,419:419,420:420,421:421,422:422,423:423,424:424,425:425,426:426,427:427,428:428,429:429,430:430,431:433,434:434,435:438,439:439,440:441,442:442,443:444,445:496,497:497,498:498,499:499,500:500,501:501,502:502,503:503,504:504,505:505,506:506,507:507,508:508,509:509,510:510,511:511,512:512,513:513,514:514,515:515,516:516,517:517,518:518,519:519,520:520,521:522,523:523,524:524,525:525,526:526,527:527,528:528,529:529,530:530,531:531,532:532,533:533,534:534,535:535,536:536,537:537,538:538,539:572,573:573,574:574,575:575,576:576,577:577,578:578,579:579,580:580,581:581,582:582,583:583,584:584,585:585,586:588,589:596,597:597,598:598,599:599,600:600,601:601,602:602,603:604,605:606,607:608,609:610,611:611,612:613,614:615,616:617,618:618,619:620,621:622,623:624,625:625,626:626,627:627,628:628,629:629,630:630,631:631,632:632,633:633,634:634,635:635,636:636,637:637,638:638,639:639,640:640,641:641,642:642,643:643,644:644,645:645,646:646,647:647,648:648,649:664,665:666,667:668,669:670,671:671,672:672,673:673,674:674,675:675,676:676,677:677,678:678,679:679,680:680,681:681,682:682,683:683,684:684",
-        // r6i (agent O2): I35_PROFILE re-derived per cell after DPARK (spec pr426-hunt/O2/runs/r6i.spec,
-        // reference ops md5 ab7665628b337f4b25f696ff6874ba22 at TAIL_NONCE 26225815260). Bridges move to the
-        // multiply tail so the drop-exact-lead layout ends in an 8-bit last chunk (no prefix compare).
-        // Classical results bit-identical to r6a_dpark; paired dfailb -0.039 +- 0.069 over 512 nonces.
-        "I35_PROFILE" => "621:1:1,622:1:1,623:1:1,641:0:1,646:0:1,658:1:1,659:1:1,660:1:1,661:1:1,662:1:1,663:1:1,664:1:1,665:1:1,666:1:1,667:1:1,668:1:1,669:1:1,670:1:1,671:1:1,672:1:1,673:1:1,674:1:1,675:1:1,676:1:1,677:1:1,678:1:1,679:1:1,680:1:1,681:1:1,682:1:1,683:1:1,684:1:1,685:1:1,686:1:1,687:1:1,688:1:1,689:1:1,690:1:1,691:1:1,692:1:1,693:1:1,694:1:1,695:1:1,696:1:1,697:1:1",
-        "PP_HEAD_MUL" => "413",
-        "PP_FOLD_PROFILE" => "38:0,32:0,19:-3,0:-4",
-        // New exact constructions (agent J: square B-branch fusions; agent U: doubling-replay park).
-        "PP_J_SFUSE_B" => "1",
-        "PP_J_WCIN" => "1",
-        "PP_J_WCIN_B0LAST" => "1",
-        "PP_J_BMERGE" => "1",
-        "PP_U_DPARK" => "1",
-        "PP_U_DPARK_BEST" => "1",
-        "PP_U_C0WIDE" => "1",
-        // ================== end r6a_dpark package pins ==================
-        _ => return None,
+        // B3a: unpinned names stay None unless the research overlay is on.
+        _ => return heo::passthrough(name),
     };
     Some(value.to_owned())
 }
@@ -281,13 +229,17 @@ fn build_point_add() -> Vec<Op> {
     let oy: &[BitId] = &circ.alloc_bits(N);
 
     circ.set_phase("coord_x_sub"); // x2 -= ox
-    if j_fuse::j_xfuse() { classical::coord_sub_keep(circ, x, ox); } else { coord_sub(circ, x, ox); }
+    if fd_coordinate::enabled(){fd_coordinate::retained_coord_sub(circ,x,ox);}else if j_fuse::j_xfuse() { classical::coord_sub_keep(circ, x, ox); } else { coord_sub(circ, x, ox); }
 
     circ.set_phase("coord_y_sub"); // y2 -= oy
     if j_fuse::j_yfuse() { classical::coord_sub_halve(circ, y, oy); } else { coord_sub(circ, y, oy); }
 
     circ.set_phase("divide"); // y2 /= x2
-    divide(circ, y, x);
+    if heo::enabled() {
+        heo::divide(circ, y, x);
+    } else {
+        divide(circ, y, x);
+    }
 
     circ.set_phase("coord_add3x"); // x2 += 3*ox
     coord_add3x(circ, x, ox);
@@ -296,7 +248,11 @@ fn build_point_add() -> Vec<Op> {
     sub_square(circ, x, y);
 
     circ.set_phase("multiply"); // y2 *= x2
-    multiply(circ, y, x);
+    if heo::enabled() {
+        heo::multiply(circ, y, x);
+    } else {
+        multiply(circ, y, x);
+    }
 
     circ.set_phase("coord_y_sub_final"); // y2 -= oy
     if j_fuse::j_yfuse() { classical::coord_double_sub(circ, y, oy); } else { coord_sub(circ, y, oy); }
@@ -313,8 +269,129 @@ fn build_point_add() -> Vec<Op> {
 }
 
 /// Emit the fixed I10 circuit and accepted public-validation nonce 9342055114.
+// Accepted r007 build recipe. Installed before any OnceLock reads configuration.
+fn install_skywalk_submission_recipe() {
+    for (name, value) in [
+        ("HEO_WALK", "1"),
+        ("HEO_SCHEDULE", "carry"),
+        ("HEO_SEED", "base"),
+        ("HEO_FIT_MODE", "win"),
+        ("HEO_FIT_K", "24"),
+        ("HEO_ZONE", "1"),
+        ("HEO_R2D", "375"),
+        ("HEO_R2M", "370"),
+        ("HEO_CARRY_SEED", "fd"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1174"),
+        ("HEO_LT0", "1"),
+        ("HEO_BW", "inv"),
+        ("HEO_LT0_MUL", "1"),
+        ("HEO_LOAN_BOTH", "1"),
+        ("HEO_RAIL_MAX", "257"),
+        ("HEO_DB_SKIP", "1"),
+        ("HEO_DB_SKIP2", "1"),
+        ("HEO_LR1", "1"),
+        ("HEO_PIN_SQ_SPARSE_CORRECTION", "1"),
+        ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "3"),
+        ("HEO_PIN_I35_PROFILE", "600:0:1,602:0:1,640:0:1,642:0:1,644:0:1,646:0:1,672:0:1,673:0:1,674:0:1,675:0:1,676:0:1,677:0:1,678:0:1,679:0:1,680:0:1,681:0:1,682:0:1,683:0:1,684:0:1,685:0:1,686:0:1,687:0:1,688:0:1,689:0:1,690:0:1,691:0:1,692:0:1,693:0:1,694:0:1,695:0:1,696:0:1,697:0:1,698:0:1,620:1:1,591:1:1"),
+        ("HEO_HEAD_LIFO_N", "2"),
+        ("HEO_DIV_LIFO_N", "1"),
+        ("HEO_MULB_LIFO_N", "2"),
+        ("HEO_DIV_PARTIAL", "1"),
+        ("HEO_MULB_PARTIAL", "1"),
+        ("HEO_DIV_EARLY_P3", "1"),
+        ("HEO_O0_DEC", "1"),
+        ("HEO_O0M", "1"),
+        ("K3B_RAIL_LOAN", "1"),
+        ("HEO_MABSORB", "1"),
+        ("HEO_FAMA", "1"),
+        ("HEO_PARK_MBU", "1"),
+        ("HEO_PHASE_REPORT", "1"),
+        ("HEO_LEDGER_PRINT", "1"),
+        ("HEO_CODEC_SYNTH", "1"),
+        ("HEO_HEAD_PARTIAL", "1"),
+        ("PP_J_WCIN", "1"),
+        ("CLS_BMERGE_LITE", "1"),
+        ("PP_U_DPARK", "1"),
+        ("PP_U_DPARK_BEST", "1"),
+        ("PP_U_C0WIDE", "1"),
+        ("SKYWALK_SITE_TRACE", "1"),
+        ("DIRTY_BOUNDARY_MODE", "transport"),
+        ("FOLD_PACKED_BOUNDARIES", "1"),
+        ("CONST_BINDER_MODE", "packed"),
+        ("CONST_SQUARE_TRANSPORT", "1"),
+        ("HEO_CROSS_CHUNK", "1"),
+        ("FD_COORD_FUSE", "1"),
+        ("FD_COORD_LOW_ONE", "1"),
+        ("HEO_PIN_FOLD_GUARD", "21"),
+        ("HEO_PIN_PP_FOLD_WIDEN", "64"),
+        ("HEO_PIN_PP_FOLD_PROFILE", "38:0,32:-1,25:-2,19:-4,0:-4"),
+        ("PP_DROP_EXACT_LEAD", "1"),
+        ("PP_DROP_EXACT_LEAD_DIR", "mul"),
+        ("HEO_RAIL_TOP_RELEASE", "1"),
+        ("HEO_RAIL_TOP_ALIAS", "1"),
+        ("HEO_PIN_PP_WIDTH_SCHEDULE", "259,258x19,257x6,256x2,255x5,254x3,253x4,252x3,251x2,250x5,249x2,248x4,247x3,246x2,245x5,244x2,243x3,242x3,241x3,240x3,239x4,238x3,237x2,236x4,235x2,234x3,233x2,232x4,231x3,230x3,229x3,228x3,227x3,226x3,225x3,224x2,223x2,222x4,221x2,220x4,219x3,218x2,217x3,216x3,215x3,214x3,213x2,212x3,211x4,210x2,209x3,208x2,207x3,206x3,205x2,204x2,203x4,202x3,201x3,200x3,199x3,198x2,197x3,196x2,195x4,194x2,193x3,192x3,191x3,190x2,189x3,188x2,187x3,186x2,185x3,184x3,183x2,182x3,181x3,180x3,179x3,178x2,177x4,176x2,175x3,174x3,173x3,172x2,171x3,170x2,169x3,168x2,167x3,166x3,165x3,164x2,163x3,162x3,161x3,160x2,159x3,158x3,157x2,156x3,155x2,154x3,153x3,152x2,151x3,150x3,149x2,148x3,147x2,146x3,145x2,144x3,143x3,142x3,141x3,140x2,139x2,138x4,137x2,136x2,135x3,134x3,133x2,132x3,131x2,130x3,129x3,128x2,127x3,126x3,125x2,124x2,123x3,122x2,121x3,120x2,119x2,118x2,117x2,116x4,115x2,114x3,113x2,112x3,111x3,110x2,109x3,108x2,107x3,106x3,105x3,104x3,103x3,102x2,101x3,100x2,99x3,98x3,97x2,96x3,95x3,94x2,93x3,92x3,91x2,90x3,89x2,88x4,87x3,86x3,85,84x2,83x3,82x2,81x3,80x2,79x2,78x3,77x2,76x3,75x2,74x2,73x3,72x3,71x2,70x3,69x2,68x4,67x3,66x2,65x3,64x4,63,62x2,61x3,60x2,59x2,58x3,57x2,56x2,55x3,54x3,53x2,52x2,51x2,50x5,49,48x2,47x3,46x3,45x2,44x3,43x3,42x2,41x2,40x2,39x3,38x2,37x2,36x3,35x3,34x3,33x2,32x2,31x2,30x3,29x2,28x4,27x2,26x2,25x3,24x2,23x2,22x2,21x3,20x3,19x2,18x3,17x2,16x2,15x3,14x2,13x2,12x2,11x2,10x2,9x4,8x12"),
+        ("HEO_PIN_I41_ROUNDS", "36,45,52,61,62,68,71,74,77,80,89,95,100,101,104,110,119,129,130,135,144,150,153,158,161,167,172,175,182,183,513,518,525,528,533,538,539,542,549,550,551,552,553,571,583,586,587,591,611,618,621,633,640,641,648,655,658,683,684,685,686,687"),
+        ("HEO_PIN_PP_N_BADJ", "350-399:m:0,400-553:m:-1,554-599:m:-2,400-449:d:2,649-699:a:-1,554-615:m:-1,589-615:d:-1,616-648:m:1,350-553:d:1,250-349:d:1,350-399:m:1"),
+        ("HEO_PIN_PP_N_HOLE2", "1"),
+        ("HEO_PIN_I12_DIV_PROFILE", "192:192,193:193,194:194,195:195,196:196,197:197,198:198,199:199,200:200,201:201,202:202,203:203,204:204,205:205,206:206,207:207,208:208,209:209,210:210,211:211,212:212,213:213,214:214,215:215,216:216,217:217,218:218,219:219,220:220,221:221,222:222,223:223,224:224,225:225,226:226,227:227,228:228,229:229,230:230,231:231,232:232,233:233,234:234,235:235,236:236,237:237,238:238,239:239,240:240,241:241,242:242,243:243,244:244,245:245,246:246,247:247,248:248,249:251,252:255,256:256,257:392,393:393,394:394,395:395,396:396,397:397,398:398,399:399,400:400,401:401,402:402,403:403,404:404,405:405,406:406,407:407,408:408,409:409,410:410,411:411,412:412,413:413,414:414,415:415,416:416,417:417,418:418,419:419,420:420,421:421,422:422,423:423,424:424,425:425,426:426,427:427,428:428,429:429,430:430,431:433,434:434,435:438,439:439,440:441,442:442,443:445,446:496,497:497,498:498,499:499,500:500,501:501,502:502,503:503,504:504,505:505,506:506,507:507,508:508,509:509,510:510,511:511,512:512,513:513,514:514,515:515,516:516,517:517,518:518,519:519,520:520,521:522,523:523,524:524,525:525,526:526,527:527,528:528,529:529,530:530,531:531,532:532,533:533,534:534,535:535,536:536,537:537,538:538,539:539,540:572,573:573,574:574,575:575,576:576,577:577,578:578,579:579,580:580,581:581,582:582,583:583,584:584,585:586,587:588,589:596,597:597,598:598,599:599,600:600,601:601,602:603,604:604,605:606,607:608,609:610,611:611,612:613,614:615,616:617,618:618,619:620,621:622,623:624,625:625,626:626,627:627,628:628,629:629,630:630,631:631,632:632,633:633,634:634,635:635,636:636,637:637,638:638,639:639,640:640,641:641,642:642,643:643,644:644,645:645,646:646,647:647,648:648,649:665,666:666,667:668,669:670,671:671,672:672,673:673,674:674,675:675,676:676,677:677,678:678,679:679,680:680,681:681,682:682,683:683,684:684"),
+        ("HEO_PIN_PP_HEAD_MUL", "414"),
+        ("HEO_PIN_PP_J_WCIN", "1"),
+        ("HEO_PIN_PP_U_DPARK", "1"),
+        ("HEO_PIN_PP_U_DPARK_BEST", "1"),
+        ("HEO_PIN_PP_U_C0WIDE", "1"),
+        ("HEO_PIN_I12_MUL_PROFILE", "657:657,656:656,655:655,654:653,652:651,650:649,648:642,641:641,640:640,639:639,638:638,637:634,633:625,624:624,623:621,620:620,619:616,615:609,608:603,602:595,594:592,591:591,590:587,586:585,584:584,583:583,582:575,574:571,570:566,565:540,539:539,538:534,533:529,528:528,527:526,525:519,518:516,515:513,512:507,506:502,501:495,494:444,443:441,440:438,437:437,436:433,432:428,427:425,424:423,422:420,419:419,418:415,414:409,408:408,407:407,406:406,405:405,404:404,403:403,402:402,401:401,400:400"),
+        ("HEO_PIN_PP_TAIL_MUL", "662"),
+        ("GO_KEEP_SUM", "1"),
+        ("GO_KEEP_FOLD", "1"),
+        ("HEO_PIN_PP_RETAIN_LATE_WIDEN", "0"),
+        ("HEO_PIN_PP_N_CAPR", "621-648:18,649-665:16,350-399:20,450-499:20,150-199:20,50-99:20,200-349:20,500-549:20"),
+        ("HEO_PIN_SQ_ASM_TAIL", "20"),
+        ("HEO_PIN_ERASE_COMPARE", "25"),
+        ("HEO_PIN_PP_DROP_EXACT_LEAD_WIDEN", "0"),
+        ("HEO_PIN_PP_FLAG_WIDEN_DIV", "30"),
+        ("GO_JLB", "616-698:m:-1"),
+        ("GO_PRB", "631-698:-1"),
+        ("GO_B1", "1"),
+        ("GO_B2", "1"),
+        ("GO_B3_A", "0"),
+        ("GO_B3_B", "0"),
+        ("SQ_HIGH_EARLY_LOAN", "3"),
+        ("SQ_HIGH_EARLY_TRACE", "1"),
+        ("SQ_FLAT_SHARED_CARRIES", "1"),
+        ("SQ_FLAT_SHARE_C0", "1"),
+        ("SHARED_BMERGE_CARRIES", "7"),
+        ("SHARED_BMERGE_SOURCE_LOAN", "1"),
+        ("NATIVE_SFUSE_B", "4"),
+        ("HEO_CELL_INSIDE", "1"),
+        ("HEO_CARRY_CODEC", "1"),
+        ("HEO_REVERSE_CARRY_CODEC", "1"),
+        ("SKYWALK_MERGED_HIGH_STREAM", "3"),
+        ("TERMINAL_PAIR", "1"),
+        ("TERMINAL_FW", "50"),
+        ("HEO_CELL_HELPER_S1", "1"),
+        ("BACK_SEAM_FUSE", "3"),
+        ("HEO_S1_OUTPUT_ALIAS", "1"),
+        ("HEO_PIN_PP_CHUNK_SHAPE", "64:0,38:1,25:-3,0:-4"),
+        ("HEO_FREDKIN_OUTPUT_ALIAS", "1"),
+    ] { std::env::set_var(name, value); }
+    std::env::set_var("HEO_ENVELOPE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-0.txt"));
+    std::env::set_var("HEO_ENVELOPE_MUL", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-1.txt"));
+    std::env::set_var("HEO_PROXY_ENVELOPE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/env_front07_R393_clamp.txt"));
+    std::env::set_var("HEO_CELL_WINDOWS", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/windows_full_safe_mulB64.tsv"));
+    std::env::set_var("K3B_CELL_OVR", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/ovr_v025_lamneutral.txt"));
+}
+
 pub fn build() -> Vec<Op> {
+    install_skywalk_submission_recipe();
+    if std::env::var_os("SKYWALK_SQUARE_HIGH_PROBE").is_some(){square::high_probe();std::process::exit(0);}
+    if std::env::var_os("SKYWALK_MODDIV_ADAPTER_PROBE").is_some(){moddiv_adapter::probe();std::process::exit(0);}
     let mut ops = build_point_add();
+    // Effort-8 INT / B7b (`HEO_EMIT_ONLY=1`, research overlay only): stop after emission (the HEO phase report and
+    // K3B_CELL traces are complete here), skipping the simplifier chain and the ops.bin write. Sweep instrument.
+    if heo::research_on() && std::env::var("HEO_EMIT_ONLY").is_ok_and(|v| v == "1") {
+        eprintln!("HEO_EMIT_ONLY exit ops={}", ops.len());
+        std::process::exit(0);
+    }
     // Exact op-stream post-passes, ported from the 2026-09-04 warpspeed
     // campaign (R10 affine, R33 quadratic, R41 truth, R46 product). Each pass
     // re-derives value supports from the stream's own ABI and drops or weakens
@@ -343,8 +420,10 @@ pub fn build() -> Vec<Op> {
         }
     }
     ops = interned_witness::witnesses(ops);
-    // Isolated exact-cost screen after the existing witness rewrite.
-    ops = truth_simplify::simplify_products(ops);
+    if std::env::var("HEO_MABSORB").is_ok_and(|v| v == "1") {
+        // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
+        ops = mabsorb::absorb(ops);
+    }
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -368,3 +447,24 @@ mod j_fuse;
 mod average;
 
 mod stream_wide;
+
+/// GO r34 per-round slicing hook: env GO_<K> (or LAB_GO_<K>) = "lo-hi:dir:delta,..."
+/// dir a/d/m (or "lo-hi:delta" = any). First match wins. Unset = 0 (pinned circuit).
+pub(crate) fn go_slice(key: &str, round: usize, dir: u8) -> isize {
+    let Some(v) = env_raw(key) else { return 0 };
+    for it in v.split(',') {
+        let f: Vec<&str> = it.split(':').collect();
+        let (rng, d, del) = match f.len() { 2 => (f[0], "a", f[1]), 3 => (f[0], f[1], f[2]), _ => panic!("bad {key} {it}") };
+        let (lo, hi) = rng.split_once('-').expect("lo-hi");
+        let (lo, hi): (usize, usize) = (lo.parse().unwrap(), hi.parse().unwrap());
+        if round < lo || round > hi { continue; }
+        if d != "a" && d.as_bytes()[0] != dir { continue; }
+        return del.parse().unwrap();
+    }
+    0
+}
+
+mod mabsorb;
+pub mod constant_templates;
+
+mod native_sfuse_b;

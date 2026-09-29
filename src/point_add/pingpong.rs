@@ -98,7 +98,11 @@ pinned_env!(flag_widen_div, "PP_FLAG_WIDEN_DIV");
 // a modelled live set instead gives the same layout at every call: such a model
 // is high by exactly `MODEL_OVERCOUNT`, so its budget is only ever this knob plus
 // four, and its achieved peak this knob exactly.
-pinned_env!(pub(super) walk_max_qubits, "PP_WALK_MAX_QUBITS");
+pinned_env!(pub(super) walk_max_qubits_base, "PP_WALK_MAX_QUBITS");
+/// K3b pricing instrument: `K3B_EXTRA_ROOM=k` as a CELL pin raises the cap by k inside that cell only.
+pub(super) fn walk_max_qubits() -> usize {
+    (walk_max_qubits_base() as isize + super::heo::cell_pin("K3B_EXTRA_ROOM").map_or(0, |v| v.parse::<isize>().unwrap())) as usize
+}
 
 /// Wires a footprint *model* counts that the allocator has already taken back:
 /// the two tape signs [`free_sign_bit`] measures out early, and the walk's
@@ -214,7 +218,7 @@ impl Plan {
             PingPongDirection::Divide => replay_fold_window(),
             PingPongDirection::Multiply => replay_fold_window_mul(),
         };
-        base.checked_add_signed(fold_offset(round))
+        base.checked_add_signed(fold_offset(round)+super::go_slice("GO_FWIN",round,match self.direction{PingPongDirection::Divide=>b'd',_=>b'm'}))
             .expect("the fold shape keeps the window positive")
     }
 }
@@ -918,7 +922,7 @@ fn chunk_compare(round: usize) -> usize {
     static SLOT: std::sync::OnceLock<Vec<(usize, isize)>> = std::sync::OnceLock::new();
     let bands = SLOT.get_or_init(|| band_table("PP_CHUNK_SHAPE"));
     replay_chunk_compare()
-        .checked_add_signed(band_at(bands, policy_width(round)))
+        .checked_add_signed(band_at(bands, policy_width(round)) + heo_cmp_shift().0+super::go_slice("GO_CHUNK",round,b'a'))
         .expect("the chunk shape keeps the comparison positive")
 }
 
@@ -935,7 +939,7 @@ fn flag_compare(round: usize) -> usize {
     static SLOT: std::sync::OnceLock<Vec<(usize, isize)>> = std::sync::OnceLock::new();
     let bands = SLOT.get_or_init(|| band_table("PP_FLAG_SHAPE"));
     replay_flag_compare()
-        .checked_add_signed(band_at(bands, policy_width(round)))
+        .checked_add_signed(band_at(bands, policy_width(round)) + heo_cmp_shift().1+super::go_slice("GO_FLAG",round,b'a'))
         .expect("the flag shape keeps the comparison positive")
 }
 
@@ -1579,7 +1583,7 @@ fn replay_extra_shift(
     if forward {
         for i in 0..cap {
             let digit = and_clean(circ, unary[i], target[i]);
-            csub_const_trunc(circ, &target[i..i + f_slice()], f(), digit);
+            csub_const_trunc(circ, &target[i..i + super::modular::go_fs("GO_FG_PR")], f(), digit);
             circ.cx(digit, target[i]);
             and_uncompute(circ, digit, unary[i], target[i]);
         }
@@ -1591,7 +1595,7 @@ fn replay_extra_shift(
         for i in (0..cap).rev() {
             let digit = and_clean(circ, unary[i], target[i]);
             circ.cx(digit, target[i]);
-            cadd_const_trunc(circ, &target[i..i + f_slice()], f(), digit, false);
+            cadd_const_trunc(circ, &target[i..i + super::modular::go_fs("GO_FG_PR")], f(), digit, false);
             and_uncompute(circ, digit, unary[i], target[i]);
         }
     }
@@ -2560,7 +2564,7 @@ fn round0_correction_fused(circ: &mut Builder, v: &[QubitId], not_a1: QubitId, a
     circ.cx(pf, pb);
     circ.cx(d0, pb);
 
-    let width = f_slice();
+    let width = super::modular::go_fs("GO_FG_P");
     let f = f();
     let h = half_f_minus_one();
     let controls: Vec<Option<QubitId>> = (0..width)
@@ -2636,7 +2640,7 @@ fn round0_correction(circ: &mut Builder, v: &[QubitId], not_a1: QubitId, a0: Qub
 
     // Every arm's magnitude is `f` or `h`, so this is an ordinary truncated fold
     // of a 33-bit constant and takes the tree-wide slice.
-    let width = f_slice();
+    let width = super::modular::go_fs("GO_FG_P");
     let f = f();
     let h = half_f_minus_one();
     let controls: Vec<Option<QubitId>> = (0..width)
@@ -2719,7 +2723,7 @@ fn round0_reverse(circ: &mut Builder, v: &[QubitId], a0: QubitId) {
     circ.cx(not_a1_and_not_a0, selector_xor);
     // The selected magnitude is `f` or `2f`, so the constant is one bit wider
     // than [`f_slice`] assumes and the same guard has to sit above that.
-    let width = f_slice() + 1;
+    let width = super::modular::go_fs("GO_FG_P") + 1;
     let f = f();
     let controls: Vec<Option<QubitId>> = (0..width)
         .map(|i| match (f.bit(i), i > 0 && f.bit(i - 1)) {
@@ -2765,7 +2769,7 @@ fn round0_reverse(circ: &mut Builder, v: &[QubitId], a0: QubitId) {
 /// effective sell rate, so it wants about one bit less than the common guard.
 /// One bit here is four Toffoli, which is inside the rounding.
 fn round1_window(m: usize) -> usize {
-    (31 + fold_guard()).min(m)
+    (31 + super::modular::go_g("GO_FG_R1")).min(m)
 }
 
 /// `u <- (p + (-1)^sign * v) / 2`, with `u` still holding the classical `p`.
@@ -3174,8 +3178,8 @@ fn replay_add_halve_impl(
     fold_window: usize,
     round: usize,
 ) {
-    if retained_prebias::try_replay(circ,sign,source,target,retained_window(fold_window,round),round) {return;}
-    if env_flag("PP_JOINT_PREBIAS_DIV") && joint_prebias::eligible(circ,round) {
+    if heo_tie().is_none() && retained_prebias::try_replay(circ,sign,source,target,retained_window(fold_window,round),round) {return;}
+    if heo_tie().is_none() && env_flag("PP_JOINT_PREBIAS_DIV") && joint_prebias::eligible(circ,round) {
         joint_prebias::joint_prebias_div(circ,sign,source,target,fold_window,round);return;
     }
     let f = f();
@@ -3185,7 +3189,7 @@ fn replay_add_halve_impl(
     if env_flag("PP_REUSE_DIV_PARITY") {
         fold_halve_reused(circ, &target[..fold_window], sign, overflow);
         let mut k = flag_compare(round) + usize::from(policy_width(round) >= flag_widen_div());
-        let borrow = if env_flag("CMP_SEED_ALL") { if !seed_keep_width_for(false){k -= 1;} Some(source[N-k-1]) } else {None};
+        let borrow = if let Some(p)=heo_tie() {Some(p)} else if env_flag("CMP_SEED_ALL") { if !seed_keep_width_for(false){k -= 1;} Some(source[N-k-1]) } else {None};
         k=refined_flag_window(k,fold_window,borrow.is_some());
         circ.record_replay_site('F', round, N, k);
         trace_replay_predictor('F',round,false,N,k,source,borrow);
@@ -3249,7 +3253,7 @@ fn replay_add_halve_impl(
     circ.cx(overflow, parity);
     circ.cx(sign, parity);
     let mut k = flag_compare(round) + usize::from(policy_width(round) >= flag_widen_div());
-    let borrow = if env_flag("CMP_SEED_ALL") { if !seed_keep_width_for(false){k -= 1;} Some(source[N-k-1]) } else {None};
+    let borrow = if let Some(p)=heo_tie() {Some(p)} else if env_flag("CMP_SEED_ALL") { if !seed_keep_width_for(false){k -= 1;} Some(source[N-k-1]) } else {None};
     k=refined_flag_window(k,fold_window,borrow.is_some());
     circ.record_replay_site('F', round, N, k);
     trace_replay_predictor('F',round,false,N,k,source,borrow);
@@ -3293,7 +3297,7 @@ fn replay_double_add_impl(
     joint_lowfold::DPARK.with(|p|p.set(park));
 
     circ.cx_all(sign, target);
-    if joint_lowfold::try_replay(circ,sign,source,target,retained_window(fold_window,round),round,Some(doubled_out)) {
+    if heo_tie().is_none() && joint_lowfold::try_replay(circ,sign,source,target,retained_window(fold_window,round),round,Some(doubled_out)) {
         joint_lowfold::DPARK.with(|p|p.set(false));
         circ.cx_all(sign,target);return;
     }
@@ -3393,7 +3397,9 @@ fn replay_double_add_impl(
 
     let wide = policy_width(round) >= 38;
     let mut k = flag_compare(round) + usize::from(a5_policy() == "mul-f-plus1-early200" && (2..202).contains(&round));
-    let borrow = if wide && matches!(a5_policy(), "mul-f-seed" | "mul-fb-seed") {
+    let borrow = if let Some(p) = heo_tie() {
+        Some(p)
+    } else if wide && matches!(a5_policy(), "mul-f-seed" | "mul-fb-seed") {
         Some(source[N - k - 1])
     } else if !wide && env_flag("PP_SEED_SHORT_MUL_F_COST") {
         // EXP PP_SEED_SHORT_MUL_F_COST: cost mode, as CMP_SEED_ALL on the divide.
@@ -3460,6 +3466,8 @@ fn fold_double_reused(circ: &mut Builder, target: &[QubitId], sign: QubitId,
 /// add_out stays in its ORIGINAL frame. Derive plus_f from the new z0
 /// instead of retaining it in add_out. All mapping changes are Clifford.
 fn fold_double_joint(c:&mut Builder,z:&[QubitId],s:QubitId,v0:QubitId,d:QubitId,o:QubitId,pre:bool) {
+    let _dirty_trace=super::dirty_boundary_probe::Trace::new(c,"fold_double_joint",z.len());
+
     let base=c.active_qubits();let w=z.len();assert!(w>=2);
     assert!(!z.contains(&v0) && ![s,d,o].contains(&v0));
     c.cx(s,o);let a=and_clean(c,d,o);c.cx(s,o);
@@ -3788,6 +3796,20 @@ pub(super) fn e_badj(round:usize,multiply:bool,k:usize,phi:usize,floor:usize)->u
     k
 }
 
+/// AB round 20, PP_N_CAPR "lo-hi[:k],...": +1 bit on the seeded first-chunk (plo==0) div B erase, which
+/// PP_N_BADJ never reaches (it requires plo>0). Only sites whose width is k (if given). The window stays
+/// at or above floor+1 (floor=fw when the erase follows the fold on b[0..fw), else 1). Phase-only change.
+pub(super) fn ab_capr(round:usize,k:usize,phi:usize,floor:usize)->usize {
+    if env_flag("AB_TRACE"){eprintln!("ABCAP {} {} {} {}",round,k,phi,floor);}
+    let Some(spec)=env_raw("PP_N_CAPR") else {return k;};
+    for rule in spec.split(',').filter(|s|!s.is_empty()) {
+        let (r,w)=match rule.split_once(':'){Some((r,w))=>(r,Some(w.parse::<usize>().unwrap())),None=>(rule,None)};
+        let (lo,hi)=r.split_once('-').unwrap();
+        if (lo.parse::<usize>().unwrap()..=hi.parse().unwrap()).contains(&round) && w.map_or(true,|w|w==k) && k+2+floor<=phi {return k+1;}
+    }
+    k
+}
+
 fn boundary_repair_spec(round:usize,multiply:bool,lo:usize,hi:usize)->(usize,bool) {
     let mut compare=chunk_compare(round).min(hi-lo);
     let pre_seeded=multiply && policy_width(round)>=38 && compare<hi-lo
@@ -3951,12 +3973,14 @@ fn drop_lead_first_compare(round:usize,multiply:bool,phi:usize)->(usize,bool) {
 }
 
 fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: usize, multiply: bool) -> QubitId {
+    let _dirty_trace=super::dirty_boundary_probe::Trace::new(circ,"chunked_add",acc.len());
+
     let ladder = walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
     let loans=REPLAY_SIGN_LOANS.with(|s|s.get());
     let old_ladder=ladder.saturating_sub(loans);
     let pinned=pinned_replay_bounds(addend.len(),round,multiply);
     let layout = pinned.clone().or_else(||chunk_layout(addend.len(), old_ladder+super::bridge::budget()));
-    if pinned.is_none() && env_flag("PP_NEW_REPLAY") {
+    if pinned.is_none() && heo_tie().is_none() && env_flag("PP_NEW_REPLAY") {
         let old_fallback=layout.is_none() || old_ladder<replay_chunk_compare()+2;
         let old_extra2=if old_fallback {2*addend.len()} else {
             let bounds=layout.as_ref().unwrap();
@@ -3972,6 +3996,12 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
         if env_flag("PP_NEW_TRACE") {eprintln!("NEW_REPLAY {} {} {} {} {} {} {}",round,multiply as u8,circ.active_qubits(),ladder,old_fallback as u8,old_extra2,candidate.extra2);}
         if candidate.extra2<old_extra2 {
             let candidate=super::width_composition::plan(addend.len(),ladder.max(2)).unwrap();
+            if let Some(out)=super::cross_chunk_probe::try_native(circ,addend,acc,ladder,round,multiply,&candidate,|hi|{
+                let (k,seeded)=boundary_repair_spec(round,multiply,0,hi);
+                let predictor=if seeded{Some(hi-k-1)}else{None};
+                let width=if seeded{refined_seeded_width(k,hi,"PP_REFINE_SEEDED_B")}else{k};
+                (width,predictor)
+            }){return out;}
             return super::width_composition::add(circ,addend,acc,&candidate);
         }
     }
@@ -4005,8 +4035,14 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
         };
         // Erase the previous chunk's carry as soon as it has been consumed.
         if let Some((carry, plo, phi)) = previous {
-            let(compare,seeded)=boundary_repair_spec(round,multiply,plo,phi);
-            let borrow = if seeded {
+            let tie=heo_tie();
+            let(compare,seeded)=if tie.is_some(){(chunk_compare(round).min(phi-plo),false)}else{boundary_repair_spec(round,multiply,plo,phi)};
+            let borrow = if tie.is_some() {
+                // B3b fix: a whole leading chunk is compared EXACTLY with its true
+                // carry-in, which is 0 (the cell has none); the sign seed there is
+                // wrong on every tie (B2 CELL.md section 3 exception).
+                if plo == 0 && compare >= phi - plo { None } else { tie }
+            } else if seeded {
                 Some(addend[phi - compare - 1])
             } else { None };
             // Freeze the OLD predictor identity before widening the window.
@@ -4111,6 +4147,8 @@ pub(crate) fn fold_selected_single(
     minus_f: QubitId,
     first_carry: QubitId,
 ) {
+    let _dirty_trace=super::dirty_boundary_probe::Trace::new(circ,"fold_selected_single",acc.len());
+
     let width = acc.len();
     let negative_f = twos_complement_bits(f, width);
     let selectors = |i: usize| {
@@ -4399,7 +4437,7 @@ fn mod_halve_pm(circ: &mut Builder, target: &[QubitId]) {
     circ.cx(target[0], parity);
     // parity is an exact copy of target[0], so applying the bit-0 subtraction
     // early makes target[0] a clean host for the final measured borrow.
-    csub_const_trunc_ctrl_low0(circ, &target[..f_slice()], f(), parity);
+    csub_const_trunc_ctrl_low0(circ, &target[..super::modular::go_fs("GO_FG_P")], f(), parity);
     finish_halving(circ, target, parity);
 }
 
@@ -4407,7 +4445,7 @@ fn mod_double_pm(circ: &mut Builder, target: &[QubitId]) {
     let overflow = start_doubling(circ, target);
     // The rotation leaves target[0] clear, so the odd `f`'s first carry is
     // provably zero and the fold's ladder starts one position up.
-    add_f_window(circ, overflow, target, f_slice(), true);
+    add_f_window(circ, overflow, target, super::modular::go_fs("GO_FG_P"), true);
     circ.cx(target[0], overflow);
     circ.free(overflow);
 }
@@ -4417,7 +4455,7 @@ fn seed_round_one(circ: &mut Builder, sign: QubitId, source: &[QubitId], target:
         circ.cx(source[i], target[i]);
         circ.cx(sign, target[i]);
     }
-    csub_const_trunc(circ, &target[..f_slice()], f_minus_one(), sign);
+    csub_const_trunc(circ, &target[..super::modular::go_fs("GO_FG_P")], f_minus_one(), sign);
 }
 
 fn seed_round_one_inverse(
@@ -4426,7 +4464,7 @@ fn seed_round_one_inverse(
     source: &[QubitId],
     target: &[QubitId],
 ) {
-    cadd_const_trunc(circ, &target[..f_slice()], f_minus_one(), sign, false);
+    cadd_const_trunc(circ, &target[..super::modular::go_fs("GO_FG_P")], f_minus_one(), sign, false);
     for i in (0..N).rev() {
         circ.cx(sign, target[i]);
         circ.cx(source[i], target[i]);
@@ -4457,7 +4495,7 @@ fn conditional_mod_negate(circ: &mut Builder, control: QubitId, value: &[QubitId
     // carry window is the deliberately measured approximation.
     let chunk = super::required_env::<usize>("PP_CF_END_CHUNK");
     if chunk == 0 {
-        csub_const_trunc(circ, &value[..f_slice()], f_minus_one(), control);
+        csub_const_trunc(circ, &value[..super::modular::go_fs("GO_FG_P")], f_minus_one(), control);
     } else {
         endpoint_sparse_sub(circ, control, value, chunk);
     }
@@ -4525,8 +4563,8 @@ fn exact_walk_chunk_width(width: usize, room: usize) -> usize {
 pub(crate) fn endpoint_sparse_sub(circ: &mut Builder, control: QubitId, value: &[QubitId], chunk: usize) {
     let constant = f_minus_one();
     if env_flag("PP_DIRECT_ENDPOINT") {
-        let target=&value[4..f_slice()];
-        let source:Vec<Vec<QubitId>>=(4..f_slice()).map(|i|if constant.bit(i){vec![control]}else{vec![]}).collect();
+        let target=&value[4..super::modular::go_fs("GO_FG_P")];
+        let source:Vec<Vec<QubitId>>=(4..super::modular::go_fs("GO_FG_P")).map(|i|if constant.bit(i){vec![control]}else{vec![]}).collect();
         let zero=circ.alloc_qubit();
         let room=walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
         let p=(room..=source.len().max(room)).find_map(|r|super::width_composition::direct_plan(source.len(),r)).unwrap();
@@ -4534,9 +4572,9 @@ pub(crate) fn endpoint_sparse_sub(circ: &mut Builder, control: QubitId, value: &
         circ.x_all(target);super::width_composition::direct_add(circ,&source,target,zero,&p);circ.x_all(target);
         circ.release_clean(zero);return;
     }
-    let map: Vec<super::compact_mapped_add::SourceBit> = (4..f_slice())
+    let map: Vec<super::compact_mapped_add::SourceBit> = (4..super::modular::go_fs("GO_FG_P"))
         .map(|i| (if constant.bit(i) {Some(control)} else {None}, false)).collect();
-    super::compact_mapped_add::add(circ, &map, &value[4..f_slice()], true, chunk);
+    super::compact_mapped_add::add(circ, &map, &value[4..super::modular::go_fs("GO_FG_P")], true, chunk);
 }
 
 #[path="joint_lowfold.rs"] mod joint_lowfold;
@@ -4559,6 +4597,109 @@ fn walk_extra(round: usize) -> isize {
     edits.iter().filter(|e| round>=e.0 && round<e.0+e.1).map(|e| e.2).sum()
 }
 
+
+// --- HEO hooks (B3a research seam; the default build never calls these) ---
+
+thread_local! { static HEO_TIE: std::cell::Cell<Option<QubitId>> = const { std::cell::Cell::new(None) }; }
+/// B3a tie-safe predictor. `None` (always, in the default build) leaves every
+/// site exactly as the head emits it. `Some(sign)` makes the cell's measured
+/// erasures tie-exact: when the compared windows of sum and addend agree, the
+/// true carry is the cell's own add/subtract bit, which is what a target of
+/// exactly 0 (HEO's first post-swap cell) produces. Prebias / low-fold /
+/// width-composition routes are bypassed while it is set.
+fn heo_tie() -> Option<QubitId> { HEO_TIE.with(|c| c.get()) }
+thread_local! { static HEO_CMP_SHIFT: std::cell::Cell<(isize, isize)> = const { std::cell::Cell::new((0, 0)) }; }
+/// B6 (R5-A `HEO_CELL_WINDOWS`): per-cell shifts of the chunk-boundary and flag COMPARE widths. `(0, 0)`
+/// (always, in the default build) leaves [`chunk_compare`] / [`flag_compare`] exactly as the head emits them;
+/// [`chunk_layout`] reads `replay_chunk_compare()` directly, so the chunk boundaries never move.
+fn heo_cmp_shift() -> (isize, isize) { HEO_CMP_SHIFT.with(|c| c.get()) }
+//
+// Thin `pub(crate)` wrappers so `super::heo` can drive the head's replay cell
+// and helpers without widening any existing item's visibility. Emission of the
+// default build is unchanged: nothing here runs unless `heo::enabled()`.
+pub(crate) mod heo_hooks {
+    use super::*;
+
+    /// H7 round whose POLICY width is the first at or below `width`, clamped to
+    /// the general-cell range `2..rounds_div()`. Every replay-cell table that is
+    /// width-keyed (fold / flag / chunk bands, retained late widen, A5 seeds)
+    /// then reads exactly the band HEO's rail width asks for. Round-INDEXED
+    /// tables (`PP_FOLD_WIDEN` level, `I35_PROFILE` bridges) follow the proxy
+    /// too; see HEO-INTEGRATION-DESIGN.md section 4 for which of those transfer.
+    pub(crate) fn proxy_round(width: usize) -> usize {
+        let s = width_schedule();
+        (2..s.len()).find(|&r| s[r] <= width).unwrap_or(s.len() - 1)
+    }
+
+    /// The head's per-round fold window at a proxy round, by direction.
+    pub(crate) fn fold_window(proxy: usize, multiply: bool) -> usize {
+        let base = if multiply { replay_fold_window_mul() } else { replay_fold_window() };
+        base.checked_add_signed(fold_offset(proxy)).expect("fold window positive")
+    }
+
+    /// `target <- (target + (-1)^sign * source) / 2 (mod p)`: the head's
+    /// division replay cell, every lever included.
+    pub(crate) fn add_halve(circ: &mut Builder, sign: QubitId, source: &[QubitId],
+                            target: &[QubitId], fold_window: usize, proxy: usize) {
+        replay_add_halve(circ, sign, source, target, fold_window, proxy);
+    }
+
+    /// `target <- 2*target + (-1)^sign * source (mod p)`: the head's multiply
+    /// replay cell.
+    pub(crate) fn double_add(circ: &mut Builder, sign: QubitId, source: &[QubitId],
+                             target: &[QubitId], fold_window: usize, proxy: usize) {
+        replay_double_add(circ, sign, source, target, fold_window, proxy);
+    }
+
+    pub(crate) fn mod_halve(circ: &mut Builder, target: &[QubitId]) { mod_halve_pm(circ, target); }
+    pub(crate) fn mod_double(circ: &mut Builder, target: &[QubitId]) { mod_double_pm(circ, target); }
+    pub(crate) fn cswap(circ: &mut Builder, ctrl: QubitId, a: QubitId, b: QubitId) { super::cswap(circ, ctrl, a, b); }
+    pub(crate) fn cap() -> usize { walk_max_qubits() }
+    /// `value <- p - value` when `control` (the head's endpoint negate, ~2^-25/call).
+    pub(crate) fn cond_negate(circ: &mut Builder, control: QubitId, value: &[QubitId]) { conditional_mod_negate(circ, control, value); }
+
+    // --- B3b additions (research-only wrappers; the default build never calls them) ---
+
+    /// The head's replay chunked adder (servoed on cap - live): `acc += addend`,
+    /// returns the vented carry-out wire.
+    pub(crate) fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], proxy: usize, multiply: bool) -> QubitId {
+        super::chunked_add(circ, addend, acc, proxy, multiply)
+    }
+    pub(crate) fn and_clean(circ: &mut Builder, a: QubitId, c: QubitId) -> QubitId { super::and_clean(circ, a, c) }
+    pub(crate) fn and_uncompute(circ: &mut Builder, out: QubitId, a: QubitId, c: QubitId) { super::and_uncompute(circ, out, a, c) }
+    pub(crate) fn twos_complement_bits(value: U256, width: usize) -> Vec<bool> { super::twos_complement_bits(value, width) }
+    pub(crate) fn start_doubling(circ: &mut Builder, target: &[QubitId]) -> QubitId { super::start_doubling(circ, target) }
+    pub(crate) const FOLD_SPLIT_BIT: usize = super::FOLD_SPLIT_BIT;
+    /// The head multiply cell's flag-compare window and whether it is source-seeded
+    /// (`replay_double_add_impl`'s rule at `round`, without the HEO tie).
+    pub(crate) fn mul_flag_spec(round: usize, fold_window: usize) -> (usize, bool) {
+        let wide = policy_width(round) >= 38;
+        let k = flag_compare(round) + usize::from(a5_policy() == "mul-f-plus1-early200" && (2..202).contains(&round));
+        let seeded = wide && matches!(a5_policy(), "mul-f-seed" | "mul-fb-seed");
+        (refined_flag_window(k, fold_window, seeded), seeded)
+    }
+
+    /// B6: run `body` with the compare-width shifts `(dB, dF)` set (see `heo_cmp_shift`).
+    pub(crate) fn with_cmp_shift<R>(shift: (isize, isize), body: impl FnOnce() -> R) -> R {
+        let old = HEO_CMP_SHIFT.with(|c| c.replace(shift));
+        let out = body();
+        HEO_CMP_SHIFT.with(|c| c.set(old));
+        out
+    }
+
+    /// K2 prototype: the head's replay sign-copy loan (`with_sign_copy_loans`), for HEO cells.
+    pub(crate) fn with_copy_loans(circ: &mut Builder, loans: &[(QubitId, QubitId)], body: impl FnOnce(&mut Builder)) {
+        super::with_sign_copy_loans(circ, loans, body);
+    }
+
+    /// Run `body` with the tie-safe predictor set to `pred` (see `heo_tie`).
+    pub(crate) fn with_tie<R>(pred: Option<QubitId>, body: impl FnOnce() -> R) -> R {
+        let old = HEO_TIE.with(|c| c.replace(pred));
+        let out = body();
+        HEO_TIE.with(|c| c.set(old));
+        out
+    }
+}
 
 
 // ---- PP_J_SEED1 (agent J): replay round 1's seed fused with its halving /
@@ -4637,7 +4778,7 @@ fn j_seed_halve(circ: &mut Builder, sign: QubitId, source: &[QubitId], target: &
     circ.cx(target[0], par);
     let pab = circ.alloc_qubit();
     circ.ccx(sign, par, pab);
-    let width = f_slice() + 1;
+    let width = super::modular::go_fs("GO_FG_P") + 1;
     let fm1 = f_minus_one();
     let two_f_m1 = f().wrapping_add(f_minus_one());
     let (controls, wires) = j_seed1_controls(circ, sign, par, pab, fm1, f(), two_f_m1, width);
@@ -4667,7 +4808,7 @@ fn j_double_unseed(circ: &mut Builder, sign: QubitId, source: &[QubitId], target
     // target = 2z mod 2^256 with bit 0 clear; add M = o*f + sign*(f-1).
     let pab = circ.alloc_qubit();
     circ.ccx(o, sign, pab);
-    let width = f_slice() + 1;
+    let width = super::modular::go_fs("GO_FG_P") + 1;
     let two_f_m1 = f().wrapping_add(f_minus_one());
     let (controls, wires) = j_seed1_controls(circ, o, sign, pab, f(), f_minus_one(), two_f_m1, width);
     // Position 0: 0 + M_0 = o, no carry.
@@ -4711,4 +4852,66 @@ pub(super) fn j_pre_round0(circ: &mut Builder, x: &[QubitId], c: QubitId, value_
     assert!(!ext.contains(&a0) && !loans.contains(&a0) && !ext.iter().any(|q| loans.contains(q)));
     let prev = PRE_R0.lock().unwrap().replace((ext, a0));
     assert!(prev.is_none());
+}
+
+// Public ecdsa.fail reversible resource research; no real-world key target.
+// Input duplicate (z,q)=(q,q). Output is the native folded conditional triple.
+fn terminal_g(c:&mut Builder,z:&[QubitId],q:&[QubitId],t:QubitId,i:usize,out:QubitId,erase:bool){
+    let m=if erase{let m=c.alloc_bit();c.hmr(out,m);Some(m)}else{None};
+    if i==1 {
+        c.x(t);if let Some(m)=m{c.cz_if(q[0],t,m);}else{c.ccx(q[0],t,out);}c.x(t);
+    }else{
+        let a=q[i-2];let b=z[i-1];
+        c.cx(q[i-1],a);c.cx(t,a);c.x(b);c.cx(t,b);
+        if let Some(m)=m{c.cz_if(a,b,m);}else{c.ccx(a,b,out);}
+        c.cx(t,b);c.x(b);c.cx(t,a);c.cx(q[i-1],a);
+    }
+    if let Some(m)=m{c.free_bit(m);}
+}
+pub(crate) fn terminal_pair(c:&mut Builder,t:QubitId,z:&[QubitId],q:&[QubitId],fw:usize,inverse:bool){
+    let n=z.len();assert_eq!(n,q.len());assert!(n>=3 && fw<=n);
+    let o=c.alloc_qubit();let d=q[n-1];
+    if !inverse {
+        c.cx_pairs(q,z);
+        for i in 1..n{terminal_g(c,z,q,t,i,z[i],false);}
+        terminal_g(c,z,q,t,n,o,false);c.cx(d,o);
+        c.cx_pairs(q,z);c.cx_all(t,z);
+        terminal_fold_early(c,&z[..fw],t,q[0],d,o,false);
+        c.cx_all(t,z);
+        for a in [z[0],q[0],d]{c.cx(a,o);}c.release_clean(o);
+    }else{
+        for a in [z[0],q[0],d]{c.cx(a,o);}
+        c.cx_all(t,z);c.x_all(&z[..fw]);
+        terminal_fold_early(c,&z[..fw],t,q[0],d,o,true);
+        c.x_all(&z[..fw]);c.cx_all(t,z);
+        c.cx_pairs(q,z);c.cx(d,o);
+        terminal_g(c,z,q,t,n,o,true);c.release_clean(o);
+        for i in (1..n).rev(){terminal_g(c,z,q,t,i,z[i],true);}
+        c.cx_pairs(q,z);
+    }
+}
+
+
+// Same finite-word map; release overflow while the upper sparse fold runs.
+fn terminal_fold_early(c:&mut Builder,z:&[QubitId],t:QubitId,q0:QubitId,d:QubitId,o:QubitId,inverse:bool){
+    c.cx(t,o);let a=and_clean(c,d,o);c.cx(t,o);
+    let m=and_clean(c,a,t);c.cx(m,a);
+    c.cx(d,o);let h=and_clean(c,z[0],o);
+    if !inverse{c.cx(o,z[0]);}c.cx(d,o);
+    for v in [z[0],t,q0,d]{c.cx(v,o);}if inverse{c.x(o);}c.release_clean(o);
+    // plusF = z0 XOR t XOR q0 XOR m [XOR1 in the delayed-low inverse].
+    if inverse{c.x(q0);}
+    let f=f();let neg=twos_complement_bits(f,z.len());
+    let map:Vec<Vec<QubitId>>=(1..z.len()).map(|i|{
+        let mut row=vec![];if f.bit(i){row.extend([z[0],t,q0,m]);}if f.bit(i-1){row.push(a);}if neg[i]{row.push(m);}
+        let mut unique=vec![];for v in row{if let Some(j)=unique.iter().position(|&w|w==v){unique.remove(j);}else{unique.push(v);}}unique
+    }).collect();
+    let room=walk_max_qubits().saturating_sub(c.active_qubits()as usize);
+    let plan=super::width_composition::direct_plan(z.len()-1,room).expect("terminal early-overflow fold room");
+    super::width_composition::direct_add(c,&map,&z[1..],h,&plan);
+    if inverse{c.x(q0);}
+    c.reacquire(o);for v in [z[0],t,q0,d]{c.cx(v,o);}if inverse{c.x(o);}
+    c.cx(d,o);if inverse{c.cx(o,z[0]);}
+    c.cx(o,z[0]);and_uncompute(c,h,z[0],o);c.cx(o,z[0]);c.cx(d,o);
+    c.cx(m,a);and_uncompute(c,m,a,t);c.cx(t,o);and_uncompute(c,a,d,o);c.cx(t,o);
 }

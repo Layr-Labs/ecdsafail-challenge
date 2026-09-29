@@ -139,6 +139,12 @@ fn carry_ladder(
     let n = acc.len();
     assert!(dead <= last && last < n);
     assert!(host.is_none_or(|h| !acc[dead..].contains(&h)));
+    let room=super::pingpong::heo_hooks::cap().saturating_sub(circ.active_qubits()as usize);
+    if std::env::var_os("CONST_BINDER_MODE").is_some() && last+1-dead-usize::from(host.is_some())>room {
+        let mut source=None;let mut valid=true;let mut bits=Vec::new();
+        for i in 0..n {match kctrl(i){Addend::Zero=>bits.push(false),Addend::One=>{valid=false;bits.push(true);},Addend::Wire(q)=>{if source.is_some_and(|s|s!=q){valid=false;}source=Some(q);bits.push(true);}}}
+        if valid && source.is_some() && super::constant_templates::try_ladder(circ,acc,source.unwrap(),&bits,dead,host,room){return;}
+    }
     let owned = circ.alloc_qubits(last + 1 - dead - usize::from(host.is_some()));
     let mut carries = owned.clone();
     carries.extend(host);

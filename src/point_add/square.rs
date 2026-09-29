@@ -424,9 +424,10 @@ fn fold_rotated_wcin(circ: &mut Builder, negate: bool, rotated: &[QubitId], high
 
 fn wcin_ripple(circ: &mut Builder, negate: bool, rotated: &[QubitId], out: &[QubitId]) -> QubitId {
     assert_eq!(rotated.len(), N);
-    let c = circ.alloc_qubit();
     if negate { circ.x_all(out); }
-    super::modular::peak_fitted_add(circ, rotated, out, c);
+    // CLASSIFIER adapt (HEO builds only): route the vented ripple through HEO's room-fitted path.
+    let c = if super::heo::fit_adds() { super::modular::heo_vented_ripple(circ, rotated, out) } else {
+        let c = circ.alloc_qubit(); super::modular::peak_fitted_add(circ, rotated, out, c); c };
     if negate { circ.x_all(out); }
     // out now holds D (mod 2^256); the value is D + s*c*f, s = -1 when negate.
     c
@@ -442,7 +443,8 @@ fn wcin_windows(circ: &mut Builder, negate: bool, high: &[QubitId], out: &[Qubit
         if inv { circ.x_all(win); }
         let owned = win.len() - 2;
         let room = super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
-        if room >= owned {
+        // CLASSIFIER adapt: under HEO, ripple_add_proved's HEO block chunks the window to the room.
+        if room >= owned || super::heo::fit_adds() {
             super::modular::ripple_add(circ, high, win, Some(c), None);
         } else {
             // One wire short: the carry-in hosts position 0's carry in place
@@ -501,20 +503,46 @@ fn b_merged_folds(circ: &mut Builder, b2: &[QubitId], out: &[QubitId]) {
     assert!(s32 == 32 && !n32);
     let rot32 = rotate_by(b2, 32);
     let c = wcin_ripple(circ, true, &rot32, out);
+    let skywalk_mode=std::env::var("SKYWALK_MERGED_HIGH_STREAM").ok().and_then(|v|v.parse::<usize>().ok()).unwrap_or(0);
+    if skywalk_mode==1 || skywalk_mode==3 {
+        skywalk_merged_high_stream(circ,&b2[N-32..],|circ,r|{if skywalk_mode==3 {super::modular::shared_exact_split_scope(circ,|circ|wcin_windows(circ,true,r,out,c));}else{wcin_windows(circ,true,r,out,c);}});
+        wcin_finish(circ,true,&rot32,out,c);
+        return;
+    }
     let hi = |s: usize| &b2[N - s..];
-    let small = circ.alloc_qubits(11);
+    let small = circ.alloc_qubits(if skywalk_mode==2 {10}else{11});
     for i in 0..10 { circ.cx(hi(10)[i], small[i]); }
-    addsub_wide(circ, hi(6), &small, true);
-    addsub_wide(circ, hi(4), &small, false);
+    let keep:usize=std::env::var("SHARED_BMERGE_CARRIES").ok().map(|v|v.parse().unwrap()).unwrap_or(0);
+    let census=std::env::var_os("SHARED_CARRY_TRACE").is_some();
+    let before=circ.report_totals().map(|x|x.1).unwrap_or(0.0);
+    if census{eprintln!("SHARED_BMERGE entry mask={} live={} peak={}",keep,circ.active_qubits(),circ.peak_total());}
+    let c6=if keep&1!=0{Some(super::modular::shared_carry_forward(circ,hi(6),&small,true))}else{addsub_wide(circ,hi(6),&small,true);None};
+    if census{eprintln!("SHARED_BMERGE after6 live={} peak={} T={}",circ.active_qubits(),circ.peak_total(),circ.report_totals().unwrap().1-before);}
+    let c4=if keep&2!=0{Some(super::modular::shared_carry_forward(circ,hi(4),&small,false))}else{addsub_wide(circ,hi(4),&small,false);None};
     let r = circ.alloc_qubits(33);
     for i in 0..32 { circ.cx(hi(32)[i], r[i]); }
-    addsub_wide(circ, &small, &r, false);
-    wcin_windows(circ, true, &r, out, c);
-    addsub_wide(circ, &small, &r, true);
+    let loan=keep==7 && super::env_flag("SHARED_BMERGE_SOURCE_LOAN");
+    if loan {
+        for i in 0..32 {circ.cx(r[i],hi(32)[i]);}
+        circ.free_vec(hi(32));
+        if census{eprintln!("SHARED_BMERGE source_loan live={} peak={}",circ.active_qubits(),circ.peak_total());}
+    }
+    let cr=if keep&4!=0{Some(super::modular::shared_carry_forward(circ,&small,&r,false))}else{addsub_wide(circ,&small,&r,false);None};
+    if census{eprintln!("SHARED_BMERGE callback_entry live={} peak={} T={}",circ.active_qubits(),circ.peak_total(),circ.report_totals().unwrap().1-before);}
+    if loan{super::modular::shared_exact_split_scope(circ,|circ|wcin_windows(circ,true,&r,out,c));}
+    else{wcin_windows(circ,true,&r,out,c);}
+    if census{eprintln!("SHARED_BMERGE callback_exit live={} peak={} T={}",circ.active_qubits(),circ.peak_total(),circ.report_totals().unwrap().1-before);}
+    if let Some(cs)=cr{super::modular::shared_carry_inverse(circ,&small,&r,false,cs);}else{addsub_wide(circ,&small,&r,true);}
+    if loan {
+        for &q in hi(32) {circ.reacquire(q);}
+        for i in 0..32 {circ.cx(r[i],hi(32)[i]);}
+        if census{eprintln!("SHARED_BMERGE source_restore live={} peak={}",circ.active_qubits(),circ.peak_total());}
+    }
     for i in 0..32 { circ.cx(hi(32)[i], r[i]); }
     circ.free_vec(&r);
-    addsub_wide(circ, hi(4), &small, true);
-    addsub_wide(circ, hi(6), &small, false);
+    if let Some(cs)=c4{super::modular::shared_carry_inverse(circ,hi(4),&small,false,cs);}else{addsub_wide(circ,hi(4),&small,true);}
+    if let Some(cs)=c6{super::modular::shared_carry_inverse(circ,hi(6),&small,true,cs);}else{addsub_wide(circ,hi(6),&small,false);}
+    if census{eprintln!("SHARED_BMERGE restore live={} peak={} T={}",circ.active_qubits(),circ.peak_total(),circ.report_totals().unwrap().1-before);}
     for i in 0..10 { circ.cx(hi(10)[i], small[i]); }
     circ.free_vec(&small);
     wcin_finish(circ, true, &rot32, out, c);
@@ -576,6 +604,8 @@ fn fold_times_f(circ: &mut Builder, negate: bool, product: &[QubitId], out: &[Qu
 /// half was itself split rather than squared directly.
 struct K2Retained {
     carry: QubitId,
+    flat_sum_carries: Vec<QubitId>,
+    xkept: Vec<QubitId>,
     cross: Vec<QubitId>,
     low: Option<Box<K2Retained>>,
     sum: Option<Box<K2Retained>>,
@@ -641,11 +671,14 @@ fn square_b(circ: &mut Builder, bs: &[QubitId], b2: &[QubitId]) -> Option<Box<K2
         tri_square(circ, bs, b2, false);
         return None;
     }
-    let r = tri_square_k2r_flat(circ, bs, b2);
+    let mut r = tri_square_k2r_flat(circ, bs, b2);
+    high_early_trace(circ,bs,&r,"producer_end");
+    high_early_pair(circ,bs,&r,false);
     let (a, inner) = bs.split_at(bs.len() / 2);
     let mut t = inner.to_vec();
     t.push(r.carry);
-    restore_square_sum(circ,a,&t);
+    if r.flat_sum_carries.is_empty(){restore_square_sum(circ,a,&t);}else{sum_bank_inverse(circ,a,&t,std::mem::take(&mut r.flat_sum_carries));}
+    high_early_trace(circ,bs,&r,"source_restored");
     // SQ_HIGH_CARRY_LOAN: t - a = b < 2^|b| left r.carry at exactly |0>, and
     // nothing reads it until square_b_inv re-forms the in-place sum.
     if super::env_flag("SQ_HIGH_CARRY_LOAN") {circ.release_clean(r.carry);}
@@ -658,12 +691,21 @@ fn square_b(circ: &mut Builder, bs: &[QubitId], b2: &[QubitId]) -> Option<Box<K2
 fn square_b_inv(circ: &mut Builder, bs: &[QubitId], b2: &[QubitId], retained: Option<Box<K2Retained>>) {
     match retained {
         None => tri_square(circ, bs, b2, true),
-        Some(r) => {
+        Some(mut r) => {
             if super::env_flag("SQ_HIGH_CARRY_LOAN") {circ.reacquire(r.carry);}
             let (a, inner) = bs.split_at(bs.len() / 2);
             let mut t = inner.to_vec();
             t.push(r.carry);
-            add_wide(circ, a, &t);
+            let keep=go_keep_sum()||super::env_flag("SQ_FLAT_SHARED_CARRIES");
+            if keep{
+                high_early_reserve(circ,&r);
+                // Shift the already-paid cross[1] reconstruction into pristine a,b frame.
+                if go_keep_sum()&&go_b2(){if high_early_mode()&1!=0{circ.ccx(a[0],inner[0],r.cross[1]);}super::modular::go_given_c0(r.cross[1]);}
+                r.flat_sum_carries=sum_bank_forward(circ,a,&t);
+            }else{add_wide(circ,a,&t);}
+            high_early_trace(circ,bs,&r,"inverse_sum_ready");
+            high_early_pair_reserved_skip(circ,bs,&r,true,keep,go_keep_sum()&&go_b2());
+            high_early_trace(circ,bs,&r,"inverse_cross_ready");
             tri_square_k2r_inv(circ, bs, b2, *r);
         }
     }
@@ -706,7 +748,7 @@ fn tri_square_k2r_flat(circ: &mut Builder, x: &[QubitId], product: &[QubitId]) -
 /// Retain all internal boundary carries and pay their full phase cleanup.
 /// No fold/comparison truncation window is changed by this helper.
 fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
-    recover:Option<(super::width_composition::Plan,Vec<(usize,BitId)>)>,held:&mut Vec<QubitId>)
+    recover:Option<(super::width_composition::Plan,Vec<(usize,BitId)>)>,held:&mut Vec<QubitId>,keep:usize,xkept:&mut Vec<QubitId>)
     ->Option<(super::width_composition::Plan,Vec<(usize,BitId)>)> {
     // SQ_ASM_TAIL=E: ripple the carry only E bits past the cross word. The
     // bits above hold b^2 and are random, so a carry reaches E bits in with
@@ -714,6 +756,9 @@ fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
     let full=acc;
     let acc=match super::optional_env::<usize>("SQ_ASM_TAIL"){Some(e)=>&full[..full.len().min(cross.len()+e)],None=>full};
     let mut room=super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
+    if inverse&&!xkept.is_empty()&&recover.is_none(){
+        assert!(held.is_empty());super::modular::sub_low_kept(circ,cross,acc,std::mem::take(xkept));return None;
+    }
     if recover.is_some() || (super::env_flag("SQ_FIT_CROSS") && acc.len().saturating_sub(2)>room) {
         // SQ_OWN_TOP_ZEROS: this node's own top cross bits are zero for every
         // input (2ab < 2^(lo+hi+1)); add them as zero addend bits and lend them.
@@ -722,11 +767,21 @@ fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
         room+=tops.len();
         if inverse {circ.x_all(acc);}
         let n=acc.len()-1;
-        let(plan,fixes)=recover.unwrap_or_else(||((room..=room.max(n)).find_map(|r|super::width_composition::direct_plan(n,r)).unwrap(),Vec::new()));
+        let proom=if keep>0{room.saturating_sub(keep)}else{room};
+        let(plan,fixes)=recover.unwrap_or_else(||((proom..=proom.max(n)).find_map(|r|super::width_composition::direct_plan(n,r)).unwrap(),Vec::new()));
+        if keep>0 || !xkept.is_empty(){eprintln!("BM2_CROSS inverse={} n={} live={} room={} kept={} plan={:?} held={:?} low={:?}",inverse,acc.len(),circ.active_qubits(),room,keep,plan.sizes,held.iter().map(|q|q.0).collect::<Vec<_>>(),xkept.iter().map(|q|q.0).collect::<Vec<_>>());}
         let map:Vec<Vec<QubitId>>=(1..acc.len()).map(|i|cross.get(i).copied().filter(|q|!tops.contains(q)).into_iter().collect()).collect();
         // SQ_HOLD_BOUNDARY: keep the chunk carry-outs live instead of measuring
         // them. The inverse (forced onto this plan) recreates the same carries
         // and XORs each back to zero, so no boundary phase ever needs repair.
+        if !inverse&&super::env_flag("SQ_HOLD_BOUNDARY")&&keep>0&&plan.sizes.len()>=2&&plan.sizes[0]>=2{
+            let (h,kk)=super::width_composition::direct_add_hold_keep(circ,&map,&acc[1..],cross[0],&plan,keep.min(plan.sizes[0]-1));
+            *held=h;*xkept=kk;let hn=held.len();held.extend(std::mem::take(xkept));rehome_held(circ,held,&tops);*xkept=held.split_off(hn);return Some((plan,Vec::new()));
+        }
+        if inverse&&!xkept.is_empty(){
+            super::width_composition::direct_add_unhold_keep(circ,&map,&acc[1..],cross[0],&plan,std::mem::take(held),std::mem::take(xkept));
+            circ.x_all(acc);for &q in &tops{circ.reacquire(q);}return None;
+        }
         if !inverse && super::env_flag("SQ_HOLD_BOUNDARY") {
             *held=super::width_composition::direct_add_hold(circ,&map,&acc[1..],cross[0],&plan);
             rehome_held(circ,held,&tops);
@@ -746,7 +801,8 @@ fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
         if super::env_flag("SQ_FIT_CROSS_TRACE") {eprintln!("FIT_CROSS {} {} {} {} {}",acc.len(),room,plan.peak,plan.extra2,inverse as u8);}
         if defer{return Some((plan,pending));}
     } else if cut_sqident() {
-        addsub_wide_low(circ,cross,acc,inverse,Carry0::Zero,Carry1::Full);
+        if !inverse&&keep>0{*xkept=super::modular::add_low_keep(circ,cross,acc,keep);}
+        else{addsub_wide_low(circ,cross,acc,inverse,Carry0::Zero,Carry1::Full);}
     } else {addsub_wide(circ,cross,acc,inverse);}
     None
 }
@@ -825,7 +881,9 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
     let carry = circ.alloc_qubit();
     let mut t = bs.to_vec();
     t.push(carry);
-    add_wide(circ, a, &t);
+    let k0=if !flat&&go_b1(){let q=circ.alloc_qubit();super::modular::go_copy_c0(q);Some(q)}else{None};
+    let flat_sum_carries=if flat && (go_keep_sum()||super::env_flag("SQ_FLAT_SHARED_CARRIES")){sum_bank_forward(circ,a,&t)}else{add_wide(circ,a,&t);Vec::new()};
+    assert!(super::modular::go_c0_clear());
     // a^2 into the low half; a may now be split since nothing reads it again
     // before the inverse.
     let low = if flat { tri_square(circ, a, a2, false); None }
@@ -838,14 +896,15 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
               else { square_half(circ, &t, &cross, policy_min(1, sq_split_sum_min())) };
     // SQ_ODD_NODE_TOPS: with lo = hi-1, t^2 - a^2 = b(2a+b) < 2^(2hi+1), so the
     // top of the 2(hi+1)-bit cross word is zero after this subtraction.
+    let first=if !flat_sum_carries.is_empty() && (go_b2()||super::env_flag("SQ_FLAT_SHARE_C0")){assert!(row0_copy());Carry0::Known(flat_sum_carries[0])}else if let Some(q)=k0{assert!(row0_copy());Carry0::Known(q)}else{Carry0::Full};
     let odd_tops = lo < m - lo && super::env_flag("SQ_ODD_NODE_TOPS");
     if odd_tops {
         let c1=if cut_sqident(){Carry1::CopiesCarry0}else{Carry1::Full};
-        super::modular::addsub_wide_known_top(circ,a2,&cross,true,Carry0::Full,c1,false);
+        super::modular::addsub_wide_known_top(circ,a2,&cross,true,first,c1,false);
     } else if cut_sqident() {
-        addsub_wide_low(circ, a2, &cross, true, Carry0::Full, Carry1::CopiesCarry0);
+        addsub_wide_low(circ, a2, &cross, true, first, Carry1::CopiesCarry0);
     } else {
-        sub_wide(circ, a2, &cross);
+        addsub_wide_low(circ,a2,&cross,true,first,Carry1::Full);
     }
     // SQ_ROW0_COPY: b2 holds b^2 + Nb with Nb = 2 (mod 4), so its bit 1 is
     // always set. Clearing it subtracts b2 - 2, which keeps the bit-1 carry
@@ -858,13 +917,15 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
     } else if cut_sqident() {addsub_wide_low(circ,b2,&cross,true,Carry0::Zero,Carry1::CopiesCarry0);}
     else {sub_wide(circ,b2,&cross);}
     if row0_copy() {circ.x(b2[1]);}
+    if let Some(q)=k0{circ.cx(cross[1],q);circ.release_clean(q);}
     // product += 2ab << lo, exact full ripple to the top (x^2 < 2^(2m), so the
     // top never overflows).
     let loans=assembly_loans(circ,x,product,low.as_deref(),sum.as_deref(),high.as_deref());
     let mut held=Vec::new();
-    let cross_phase=add_cross(circ,&cross,&product[lo..],false,None,&mut held);
-    assembly_repay_held(circ,x,product,loans,&mut held);
-    K2Retained { carry, cross, low, sum, high, cross_phase, held }
+    let b3=GO_B3.with(|g|g.get());let keep=if b3.0==m{b3.1}else{0};let mut xkept=Vec::new();
+    let cross_phase=add_cross(circ,&cross,&product[lo..],false,None,&mut held,keep,&mut xkept);
+    let hn=held.len();held.extend(xkept);assembly_repay_held(circ,x,product,loans,&mut held);let xkept=held.split_off(hn);
+    K2Retained { carry, flat_sum_carries, xkept, cross, low, sum, high, cross_phase, held }
 }
 
 /// Inverse of `tri_square_k2r`, consuming its retained scratch. Requires
@@ -877,7 +938,8 @@ fn tri_square_k2r_inv(
 ) {
     let m = x.len();
     assert_eq!(product.len(), 2 * m);
-    let K2Retained { carry, cross, low, sum, high, cross_phase, mut held } = retained;
+    let K2Retained { carry, flat_sum_carries, mut xkept, cross, low, sum, high, cross_phase, mut held } = retained;
+    let first=if go_b2(){assert!(row0_copy());Carry0::Known(cross[1])}else if !flat_sum_carries.is_empty() && super::env_flag("SQ_FLAT_SHARE_C0"){assert!(row0_copy());Carry0::Known(flat_sum_carries[0])}else{Carry0::Full};
     let lo = m / 2;
     let (a, bs) = x.split_at(lo);
     let (a2, b2) = product.split_at(2 * lo);
@@ -885,9 +947,10 @@ fn tri_square_k2r_inv(
     t.push(carry);
     // product -= 2ab << lo: the halves are pure a^2 / b^2 again.
     let loans=assembly_loans(circ,x,product,low.as_deref(),sum.as_deref(),high.as_deref());
-    assert!(add_cross(circ,&cross,&product[lo..],true,cross_phase,&mut held).is_none());
+    assert!(add_cross(circ,&cross,&product[lo..],true,cross_phase,&mut held,0,&mut xkept).is_none());
     assert!(held.is_empty(),"SQ_HOLD_BOUNDARY: held carries not cleared");
     assembly_repay(circ,x,product,loans);
+    let k1=if flat_sum_carries.is_empty()&&go_b1(){let q=circ.alloc_qubit();circ.cx(cross[1],q);Some(q)}else{None};
     // cross: 2ab -> t^2, then clear it with the inverse square (which also
     // restores t if its own split modified it).
     if lo < m - lo && super::env_flag("SQ_ODD_NODE_TOPS") {
@@ -896,25 +959,29 @@ fn tri_square_k2r_inv(
         if row0_copy() {circ.x(b2[1]);}
         super::modular::addsub_wide_known_top(circ,b2,&cross,false,c0,c1,false);
         if row0_copy() {circ.x(b2[1]);}
-        if cut_sqident() { addsub_wide_low(circ, a2, &cross, false, Carry0::Full, Carry1::CopiesCarry0); }
-        else { add_wide(circ, a2, &cross); }
+        if cut_sqident() { addsub_wide_low(circ, a2, &cross, false, first, Carry1::CopiesCarry0); }
+        else { addsub_wide_low(circ,a2,&cross,false,first,Carry1::Full); }
     } else if cut_sqident() {
         if row0_copy() {circ.x(b2[1]);}
         addsub_wide_low(circ, b2, &cross, false, Carry0::Zero, Carry1::CopiesCarry0);
         if row0_copy() {circ.x(b2[1]);}
-        addsub_wide_low(circ, a2, &cross, false, Carry0::Full, Carry1::CopiesCarry0);
+        addsub_wide_low(circ, a2, &cross, false, first, Carry1::CopiesCarry0);
     } else {
         if row0_copy() {circ.x(b2[1]);}
         add_wide(circ, b2, &cross);
         if row0_copy() {circ.x(b2[1]);}
-        add_wide(circ, a2, &cross);
+        addsub_wide_low(circ,a2,&cross,false,first,Carry1::Full);
     }
     square_half_inv(circ, &t, &cross, sum);
     circ.free_vec(&cross);
     // Clear a^2, restoring a first if it was split, then uncompute t = a + b:
     // t - a = b < 2^|b|, so the carry wire returns to |0>.
     square_half_inv(circ, a, a2, low);
-    restore_square_sum(circ,a,&t);
+    if flat_sum_carries.is_empty(){
+        if let Some(q)=k1{super::modular::go_given_c0(q);super::modular::go_copy_c0(q);}
+        restore_square_sum(circ,a,&t);
+        if let Some(q)=k1{assert!(super::modular::go_c0_clear());circ.release_clean(q);}
+    }else{sum_bank_inverse(circ,a,&t,flat_sum_carries);}
     circ.free(carry);
     square_b_inv(circ, bs, b2, high);
 }
@@ -983,7 +1050,10 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
     if price_branches {circ.set_phase(match policy_name{"SQ_A_POLICY"=>"square_a","SQ_B_POLICY"=>"square_b","SQ_C_POLICY"=>"square_c",_=>"square_test"});}
     let old_policy = OUTER_SQUARE_POLICY.with(|p| p.replace(super::optional_env::<usize>(policy_name)));
     let product = circ.alloc_qubits(2 * x.len());
+    let k=super::optional_env::<usize>(match policy_name{"SQ_A_POLICY"=>"GO_B3_A","SQ_B_POLICY"=>"GO_B3_B","SQ_C_POLICY"=>"GO_B3_C",_=>"GO_B3_X"}).unwrap_or(0);
+    let old=GO_B3.with(|g|g.replace((x.len(),k)));
     let retained = tri_square_k2r(circ, x, &product);
+    GO_B3.with(|g|g.set(old));
     let mut loans=Vec::new();
     if super::env_flag("SQ_LEND_RETAINED_ZEROS"){retained_zero_bits(&retained,x.len(),&mut loans);}
     let branch=match policy_name{"SQ_A_POLICY"=>1,"SQ_B_POLICY"=>2,"SQ_C_POLICY"=>4,_=>7};
@@ -1011,9 +1081,9 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
         }
     }
     for &q in &loans{circ.release_clean(q);}
-    if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() {SQ_LOANS.with(|l|*l.borrow_mut()=loans.clone());}
+    if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() || super::native_sfuse_b::mode()>0 {SQ_LOANS.with(|l|*l.borrow_mut()=loans.clone());}
     folds(circ, &consumer_product);
-    if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() {SQ_LOANS.with(|l|l.borrow_mut().clear());}
+    if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() || super::native_sfuse_b::mode()>0 {SQ_LOANS.with(|l|l.borrow_mut().clear());}
     // Every consumer restores its temporary work and source. Reclaim the same
     // physical wire identities before the retained inverse consumes them.
     for &q in &loans{circ.reacquire(q);}
@@ -1091,7 +1161,7 @@ pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
         fold_shifted(circ, false, a2, out, h);
     });
 
-    if super::j_fuse::j_sfuse_b() {
+    if super::j_fuse::j_sfuse_b() || super::native_sfuse_b::mode()>0 {
         // PP_J_SFUSE_B: C before B, and B's last fold (the 2^32 NAF term, a
         // subtract) fused into the multiply's round-0 lift. B's inverse has
         // room for the four wires the early round 0 leaves standing.
@@ -1107,13 +1177,18 @@ pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
         circ.free(sum_carry);
         with_square(circ, y_hi, "SQ_B_POLICY", |circ, b2| {
             fold_shifted(circ, false, b2, out, h);
-            if super::j_fuse::j_wcin_b0last() {
-                if super::j_fuse::j_bmerge() {
+            if super::j_fuse::j_wcin_b0last() || super::native_sfuse_b::mode()>0 {
+                if super::j_fuse::j_bmerge() || super::native_sfuse_b::mode()>0 {
                     b_merged_folds(circ, b2, out);
                 } else {
                     for (shift, neg) in F_NAF.into_iter().skip(1) {
                         fold_shifted(circ, true ^ neg, b2, out, shift);
                     }
+                }
+                if super::native_sfuse_b::mode()>0 {
+                    if super::native_sfuse_b::mode()==1 {mod_addsub(circ,true,b2,out);}
+                    else {super::native_sfuse_b::prepare_native(circ,out,b2);}
+                    return;
                 }
                 let c = super::j_fuse::sub_keep_borrow_q(circ, b2, out);
                 let k = super::j_fuse::x_erase_width();
@@ -1133,7 +1208,14 @@ pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
 
     with_square(circ, y_hi, "SQ_B_POLICY", |circ, b2| {
         fold_shifted(circ, false, b2, out, h);
-        fold_times_f(circ, true, b2, out);
+        if super::heo::research_on() && std::env::var("CLS_BMERGE_LITE").is_ok_and(|v| v == "1") {
+            // CLASSIFIER adapt: PP_J_BMERGE's merged NAF windows without the round-0 fusion; the shift-0
+            // subtract stays a plain modular subtract (F_NAF[0] = (0, false), negate = true).
+            b_merged_folds(circ, b2, out);
+            mod_addsub(circ, true, b2, out);
+        } else {
+            fold_times_f(circ, true, b2, out);
+        }
     });
 
     // a+b lives in the caller's own high half plus one borrowed carry wire, and
@@ -1174,4 +1256,44 @@ pub(super) fn i48_row_fixture(c:&mut Builder,x:&[QubitId],product:&[QubitId]) {
 }
 pub(super) fn i48_leaf_fixture(c:&mut Builder,x:&[QubitId],product:&[QubitId],inverse:bool) {
     tri_square_cin(c,x,product,inverse);
+}
+
+include!("square_high_probe.rs");
+
+fn go_keep_sum()->bool{super::env_flag("GO_KEEP_SUM")}
+fn go_b1()->bool{super::env_flag("GO_B1")}
+fn go_b2()->bool{super::env_flag("GO_B2")}
+thread_local!{static GO_B3:std::cell::Cell<(usize,usize)>=const{std::cell::Cell::new((0,0))};}
+fn sum_bank_forward(c:&mut Builder,a:&[QubitId],t:&[QubitId])->Vec<QubitId>{
+ if go_keep_sum(){super::modular::add_wide_keep(c,a,t)}else{super::modular::shared_carry_forward(c,a,t,false)}
+}
+fn sum_bank_inverse(c:&mut Builder,a:&[QubitId],t:&[QubitId],bank:Vec<QubitId>){
+ if go_keep_sum(){super::modular::sub_wide_kept(c,a,t,bank)}else{super::modular::shared_carry_inverse(c,a,t,false,bank)}
+}
+
+
+// Native port of upstream454ff5a. high10=16u+v implies correction<=975.
+fn skywalk_merged_high_stream(circ:&mut Builder, high:&[QubitId], consume:impl FnOnce(&mut Builder,&[QubitId])) {
+    assert_eq!(high.len(),32);
+    let hi=|n:usize| &high[32-n..];
+    let small=circ.alloc_qubits(10);
+    for i in 0..10 {circ.cx(hi(10)[i],small[i]);}
+    addsub_wide(circ,hi(6),&small,true);
+    let c4=if std::env::var_os("SKYWALK_MERGED_HIGH_RETAIN4").is_some(){Some(super::modular::shared_carry_forward(circ,hi(4),&small,false))}else{addsub_wide(circ,hi(4),&small,false);None};
+    let r=circ.alloc_qubits(33);
+    for i in 0..32 {circ.cx(high[i],r[i]);}
+    addsub_wide(circ,&small,&r,false);
+    consume(circ,&r);
+    let mut restored:Vec<_>=high.iter().map(|&q|(true,vec![q])).collect();
+    restored.push((true,Vec::new()));
+    circ.x_all(&r);
+    super::stream_wide::add(circ,&small,&r,None,&restored);
+    circ.x_all(&r);
+    for i in 0..32 {circ.cx(high[i],r[i]);}
+    circ.free_vec(&r);
+    if let Some(cs)=c4{super::modular::shared_carry_inverse(circ,hi(4),&small,false,cs);}else{addsub_wide(circ,hi(4),&small,true);}
+    let restored_small:Vec<_>=hi(10).iter().map(|&q|(false,vec![q])).collect();
+    super::stream_wide::add(circ,hi(6),&small,None,&restored_small);
+    for i in 0..10 {circ.cx(hi(10)[i],small[i]);}
+    circ.free_vec(&small);
 }

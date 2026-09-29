@@ -18,7 +18,7 @@ fn peak_cmp_bits() -> Option<usize> {
 // one of the two and you have to re-derive the other.
 // (Plain `//`: a `///` here would document nothing -- the doc comment does not
 // reach the `fn` the macro expands to.)
-pinned_env!(erase_compare, "ERASE_COMPARE");
+pinned_env!(pub(crate) erase_compare, "ERASE_COMPARE");
 
 /// `2^256 - p == 2^32 + 977`: what a wrapped `2^256` reduces to mod p, and the
 /// only constant any modular fold in this tree folds by. Derived from the
@@ -41,6 +41,8 @@ pub fn f() -> U256 {
 pub fn f_slice() -> usize {
     33 + fold_guard()
 }
+pub fn go_g(k: &str) -> usize { (fold_guard() as isize + super::env_raw(k).and_then(|v| v.parse::<isize>().ok()).unwrap_or(0)) as usize }
+pub fn go_fs(k: &str) -> usize { 33 + go_g(k) }
 
 /// `acc += addend`, rippling once through both registers and leaving `addend`
 /// exactly as it found it.
@@ -152,6 +154,8 @@ pub(crate) fn ripple_add_proved(
     if width == 0 {
         return;
     }
+    // Consume supplied carry before exact splitting so the first subchunk inherits it.
+    let c0=if let Some(q)=GO_C0.with(|g|g.take()){assert!(c0==Carry0::Full && carry_in.is_none());Carry0::Known(q)}else{c0};
     // One owned carry per position that needs one: below the top when the top's
     // carry is the caller's `carry_out`, below the position under it when there
     // is no carry-out and that position's carry is fused into the top sum bit.
@@ -161,6 +165,23 @@ pub(crate) fn ripple_add_proved(
     } else {
         width.saturating_sub(2)
     };
+    // B3b (HEO builds only): a ladder that cannot fit under the cap is split into exact
+    // chunks whose boundary carries are erased top-down by exact whole-chunk compares.
+    if super::heo::fit_adds() && borrowed.is_none() && known_output.is_none() && !HEO_SPLIT_GUARD.with(|g| g.get()) {
+        let room = walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
+        if owned > room && width >= 8
+            && heo_split_ripple(circ, addend, acc, carry_in, carry_out, c0, c1, deferred, known_terminal, room) {
+            return;
+        }
+    }
+    if super::heo::research_on() && owned > 100 && std::env::var("HEO_BIG_RIPPLE_TRACE").is_ok() {
+        eprintln!("HEO_BIG_RIPPLE owned={owned} active={} op={}
+{}", circ.active_qubits(), circ.op_count(),
+            std::backtrace::Backtrace::force_capture());
+    }
+    // Copy request is consumed only by the actual first ladder, after fitting.
+    let go_copy0=GO_COPY0.with(|g|g.take());
+    if go_copy0.is_some(){assert!(carry_in.is_none() && known_output.is_none() && owned>0);}
     let mut carries = if let Some(qs)=borrowed {
         assert!(carry_out.is_none() && k+1==width);
         assert_eq!(qs.len(),owned);
@@ -214,6 +235,7 @@ pub(crate) fn ripple_add_proved(
         } else if i == 0 && c0 != Carry0::Full {
             assert!(carry_in.is_none() && k >= 2 && width >= 4);
             if c0 == Carry0::IsAddend0 { circ.cx(addend[0], carries[0]); }
+            if let Carry0::Known(q)=c0 {assert!(!carries.contains(&q));circ.cx(q,carries[0]);}
         } else if i == 1 && c1 == Carry1::CopiesCarry0 {
             assert!(carry_in.is_none() && k >= 2 && width >= 4);
             let prev = previous(i).unwrap();
@@ -227,6 +249,7 @@ pub(crate) fn ripple_add_proved(
         }
     }
 
+    if let Some(q)=go_copy0{circ.cx(carries[0],q);}
     if vented || width == 1 {
         // The top sum bit. With a carry-out the loop above already folded the
         // incoming carry into both operands and only `addend` needs restoring;
@@ -266,6 +289,114 @@ pub(crate) fn ripple_add_proved(
         }
     }
     assert!(deferred.is_none(), "deferred phase did not name an owned ripple carry");
+}
+
+thread_local! { static HEO_SPLIT_GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+/// B3b: the chunked form of [`ripple_add_proved`] (see its HEO block). Returns false
+/// (nothing emitted) when no layout with every chunk inside the addend exists.
+#[allow(clippy::too_many_arguments)]
+fn heo_split_ripple(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], carry_in: Option<QubitId>,
+                    carry_out: Option<QubitId>, c0: Carry0, c1: Carry1, deferred: Option<(usize, BitId)>,
+                    known_terminal: Option<bool>, room: usize) -> bool {
+    let width = acc.len();
+    let k = addend.len();
+    let vented = carry_out.is_some();
+    let min0 = if c0 != Carry0::Full || c1 != Carry1::Full { 4 } else { 2 };
+    let win = if SHARED_SPLIT_EXACT.with(|x|x.get()) {0} else {super::heo::fit_window()};
+    let mut sizes: Option<Vec<usize>> = None;
+    for nk in 2..64usize {
+        let mut caps: Vec<isize> = if win > 0 {
+            // immediate windowed erasure: chunk j holds its carry-in and carry-out only
+            let mut v = vec![room as isize];
+            v.extend(std::iter::repeat_n(room as isize - 1, nk - 2));
+            v
+        } else {
+            (0..nk - 1).map(|j| room as isize - j as isize).collect()
+        };
+        caps.push(if win > 0 { room as isize + if vented { 0 } else { 1 } }
+                  else { room as isize - (nk as isize - 1) + if vented { 1 } else { 2 } });
+        if caps[0] < min0 as isize || caps.iter().skip(1).any(|&c| c < 2) {
+            return false;
+        }
+        let sum: isize = caps.iter().sum();
+        if sum < width as isize {
+            continue;
+        }
+        let mut sz: Vec<usize> = caps.iter().map(|&c| c as usize).collect();
+        let mut excess = sum as usize - width;
+        for (j, w) in sz.iter_mut().enumerate().take(nk - 1) {
+            let floor = if j == 0 { min0 } else { 2 };
+            let cut = excess.min(*w - floor);
+            *w -= cut;
+            excess -= cut;
+        }
+        if excess > 0 {
+            continue;
+        }
+        sizes = Some(sz);
+        break;
+    }
+    let Some(sizes) = sizes else { return false };
+    let nk = sizes.len();
+    // every chunk must start inside the addend, and every compared chunk lie inside it
+    let mut bounds = Vec::with_capacity(nk);
+    let mut lo = 0;
+    for &w in &sizes {
+        bounds.push((lo, lo + w));
+        lo += w;
+    }
+    if bounds[nk - 1].0 >= k || bounds[nk - 2].1 > k {
+        return false;
+    }
+    HEO_SPLIT_GUARD.with(|g| g.set(true));
+    let mut deferred = deferred;
+    let mut cin = carry_in;
+    let mut kept: Vec<(QubitId, usize, usize, Option<QubitId>)> = Vec::new();
+    for (j, &(lo, hi)) in bounds.iter().enumerate() {
+        let last = j + 1 == nk;
+        let out = if last { carry_out } else { Some(circ.alloc_qubit()) };
+        let (cc0, cc1) = if j == 0 { (c0, c1) } else { (Carry0::Full, Carry1::Full) };
+        let owned_hi = if last { if vented { hi - 1 } else { hi.saturating_sub(2).max(lo) } } else { hi - 1 };
+        let def_j = match deferred {
+            Some((i, m)) if i >= lo && i < owned_hi => { deferred = None; Some((i - lo, m)) }
+            _ => None,
+        };
+        ripple_add_proved(circ, &addend[lo..hi.min(k)], &acc[lo..hi], cin, out, cc0, cc1, def_j, None,
+                          if last { known_terminal } else { None }, None);
+        if win > 0 {
+            // erase the boundary this chunk just consumed (the previous chunk's carry-out)
+            if let Some((b, plo, phi, pcin)) = kept.pop() {
+                if plo == 0 && phi - plo <= win {
+                    erase_with_compare(circ, b, &acc[plo..phi], &addend[plo..phi], pcin);
+                } else {
+                    let kw = win.min(phi - plo);
+                    erase_with_compare(circ, b, &acc[phi - kw..phi], &addend[phi - kw..phi], None);
+                }
+                circ.free(b);
+            }
+        }
+        if !last {
+            let b = out.unwrap();
+            if let Some((i, m)) = deferred {
+                if i == hi - 1 {
+                    circ.z_if(b, m);
+                    circ.free_bit(m);
+                    deferred = None;
+                }
+            }
+            kept.push((b, lo, hi, cin));
+        }
+        cin = out;
+    }
+    assert!(deferred.is_none(), "split ripple: deferred phase not placed");
+    assert!(win == 0 || kept.is_empty());
+    for (b, lo, hi, cin_j) in kept.into_iter().rev() {
+        erase_with_compare(circ, b, &acc[lo..hi], &addend[lo..hi], cin_j);
+        circ.free(b);
+    }
+    HEO_SPLIT_GUARD.with(|g| g.set(false));
+    true
 }
 
 /// Undo a zero-addend stage: erase `carry = acc AND previous` in the X basis,
@@ -553,6 +684,10 @@ pub(crate) fn ripple_add_source_sign_loan(
 }
 
 pub fn addsub_full(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], inverse: bool) {
+    // B3b (HEO builds only): fit a wide exact add under the cap instead of overshooting it.
+    if super::heo::fit_adds() && heo_fitted_addsub(circ, addend, acc, inverse) {
+        return;
+    }
     if inverse {
         circ.x_all(acc);
     }
@@ -560,6 +695,34 @@ pub fn addsub_full(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], inve
     if inverse {
         circ.x_all(acc);
     }
+}
+
+/// B3b: HEO-only room-fitted exact add (the square's wide window adds ignore the cap
+/// otherwise). Exact chunked ripple with top-down exact boundary compares
+/// (`width_composition::direct_add`); returns false (caller emits the plain ripple)
+/// when the plain ladder already fits.
+fn heo_fitted_addsub(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], inverse: bool) -> bool {
+    let n = acc.len();
+    if n < 4 || !super::heo::fit_adds() || result_top_loan_enabled(acc) || super::heo::fit_mode_split() {
+        return false;
+    }
+    let room = walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
+    if n - 2 <= room {
+        return false;
+    }
+    let zero = circ.alloc_qubit();
+    let room = walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
+    let plan = (room..=n.max(room)).find_map(|r| super::width_composition::direct_plan(n, r)).unwrap();
+    let map: Vec<Vec<QubitId>> = (0..n).map(|i| addend.get(i).copied().into_iter().collect()).collect();
+    if inverse {
+        circ.x_all(acc);
+    }
+    super::width_composition::direct_add(circ, &map, acc, zero, &plan);
+    if inverse {
+        circ.x_all(acc);
+    }
+    circ.release_clean(zero);
+    true
 }
 
 /// Same, for a `value` narrower than `acc`: the positions above the value are
@@ -621,6 +784,37 @@ pub(super) fn peak_fitted_add(circ: &mut Builder, value: &[QubitId], acc: &[Qubi
     circ.free(mid);
 }
 
+/// B3b (HEO builds only): `acc += value` with the carry-out on a fresh wire, laid out by
+/// `width_composition::plan` whenever the head's two-chunk `peak_fitted_add` cannot fit
+/// (both of its chunks must be under the room). Exact; None = use the head path.
+pub(super) fn heo_vented_ripple(circ: &mut Builder, value: &[QubitId], acc: &[QubitId]) -> QubitId {
+    heo_fitted_vented_add(circ, value, acc).unwrap_or_else(|| {
+        let overflow = circ.alloc_qubit();
+        peak_fitted_add(circ, value, acc, overflow);
+        overflow
+    })
+}
+
+pub(crate) fn heo_fitted_vented_add(circ: &mut Builder, value: &[QubitId], acc: &[QubitId]) -> Option<QubitId> {
+    if !super::heo::fit_adds() || value.len() != acc.len() || value.len() < 3 {
+        return None;
+    }
+    if super::heo::fit_mode_split() {
+        // plain ripple; `ripple_add_proved`'s HEO block chunks it to the room
+        let overflow = circ.alloc_qubit();
+        ripple_add(circ, value, acc, None, Some(overflow));
+        return Some(overflow);
+    }
+    let width = value.len();
+    let room = walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
+    // head path fits: plain (width <= room), or two chunks each within the room left after `mid`
+    if room >= width || width + 1 <= 2 * room.saturating_sub(1) {
+        return None;
+    }
+    let plan = (room..=width.max(room)).find_map(|r| super::width_composition::plan(width, r))?;
+    Some(super::width_composition::add(circ, value, acc, &plan))
+}
+
 /// `acc += value (mod p)`, or `acc -= value` when `negate`.
 ///
 /// The carry out of the top bit is caught on a scratch wire, folded back in as
@@ -629,14 +823,37 @@ pub(super) fn peak_fitted_add(circ: &mut Builder, value: &[QubitId], acc: &[Qubi
 /// the whole approximation. Both are the tree-wide knobs rather than arguments:
 /// the balance rule wants one value per shape, not one per caller.
 pub fn mod_addsub(circ: &mut Builder, negate: bool, value: &[QubitId], acc: &[QubitId]) {
+    mod_addsub_with(circ, negate, value, acc, go_fs("GO_FG_M"), erase_compare(), f(), None)
+}
+
+/// [`mod_addsub`] with the fold window `fs`, erasure width `k` and fold constant `fconst` as
+/// arguments, and an optional `mid` hook run between the fold and the carry erasure with the
+/// vented carry wire (the I-2 back seam unloads its selected operand bits there).
+pub fn mod_addsub_with(
+    circ: &mut Builder,
+    negate: bool,
+    value: &[QubitId],
+    acc: &[QubitId],
+    fs: usize,
+    k: usize,
+    fconst: U256,
+    mid: Option<&mut dyn FnMut(&mut Builder, QubitId)>,
+) {
     assert_eq!(value.len(), acc.len(), "mod_addsub: width mismatch");
     if negate {
         circ.x_all(acc);
     }
-    let overflow = circ.alloc_qubit();
-    peak_fitted_add(circ, value, acc, overflow);
-    add_f_window(circ, overflow, acc, f_slice(), false);
-    let cmp_bits = erase_compare();
+    let overflow = heo_fitted_vented_add(circ, value, acc).unwrap_or_else(|| {
+        let overflow = circ.alloc_qubit();
+        peak_fitted_add(circ, value, acc, overflow);
+        overflow
+    });
+    assert!(fs <= acc.len(), "register too short for +f window");
+    cadd_const_trunc(circ, &acc[..fs], fconst, overflow, false);
+    if let Some(mid) = mid {
+        mid(circ, overflow);
+    }
+    let cmp_bits = k;
     let (top_acc, top_value) = (
         &acc[acc.len() - cmp_bits..],
         &value[value.len() - cmp_bits..],
@@ -650,9 +867,14 @@ pub fn mod_addsub(circ: &mut Builder, negate: bool, value: &[QubitId], acc: &[Qu
 
 /// Fold the wrapped `2^256` back in as `+f`, inside a complemented frame.
 fn fold_f_complemented(circ: &mut Builder, anc: QubitId, y: &[QubitId]) {
-    circ.x_all(&y[..f_slice()]);
-    add_f_window(circ, anc, y, f_slice(), false);
-    circ.x_all(&y[..f_slice()]);
+    fold_f_complemented_at(circ, anc, y, go_fs("GO_FG_M"), f())
+}
+
+fn fold_f_complemented_at(circ: &mut Builder, anc: QubitId, y: &[QubitId], fs: usize, fconst: U256) {
+    circ.x_all(&y[..fs]);
+    assert!(fs <= y.len(), "register too short for +f window");
+    cadd_const_trunc(circ, &y[..fs], fconst, anc, false);
+    circ.x_all(&y[..fs]);
 }
 
 /// `y <- t1 - y - 1 (mod p)`. The caller loads `t1` already carrying the `+1`.
@@ -669,13 +891,31 @@ pub fn mod_rsub_vented_loaded(circ: &mut Builder, t1: &[QubitId], y: &[QubitId])
         256,
         "secp256k1 mod_rsub_vented_loaded expects n=256"
     );
+    mod_rsub_vented_loaded_with(circ, t1, y, go_fs("GO_FG_M"), erase_compare(), f(), None)
+}
+
+/// [`mod_rsub_vented_loaded`] with the fold window, erasure width and fold constant as arguments
+/// and the same optional `mid` hook as [`mod_addsub_with`] (run with the vented carry restored to
+/// its true polarity, before its erasure).
+pub fn mod_rsub_vented_loaded_with(
+    circ: &mut Builder,
+    t1: &[QubitId],
+    y: &[QubitId],
+    fs: usize,
+    k: usize,
+    fconst: U256,
+    mid: Option<&mut dyn FnMut(&mut Builder, QubitId)>,
+) {
+    assert_eq!(y.len(), t1.len(), "mod_rsub_vented_loaded: equal widths");
     let anc = circ.alloc_qubit();
     circ.x_all(y);
     ripple_add(circ, t1, y, None, Some(anc));
     circ.x(anc);
-    fold_f_complemented(circ, anc, y);
+    fold_f_complemented_at(circ, anc, y, fs, fconst);
     circ.x(anc);
-    let k = erase_compare();
+    if let Some(mid) = mid {
+        mid(circ, anc);
+    }
     erase_with_compare(circ, anc, &y[y.len() - k..], &t1[t1.len() - k..], None);
     circ.free(anc);
 }
@@ -705,7 +945,7 @@ pub fn mod_sub_vented(circ: &mut Builder, x: &[QubitId], y: &[QubitId]) {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Carry0 { Full, IsAddend0, Zero }
+pub enum Carry0 { Full, IsAddend0, Zero, Known(QubitId) }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Carry1 { Full, CopiesCarry0 }
 /// Wrapped wide add on a subspace with a proved affine output word. This is
@@ -754,3 +994,166 @@ fn terminal_top_copy(c:&mut Builder,a:&[QubitId],b:&[QubitId],previous:Option<Qu
 }
 
 include!("top_result_loan.rs");
+
+/// Exact wrapped add/subtract retaining all n-1 arithmetic carries. The source
+/// is restored on return; carries belong to the later matching inverse.
+pub(crate) fn shared_carry_forward(c:&mut Builder,a:&[QubitId],b:&[QubitId],negative:bool)->Vec<QubitId>{
+    let n=b.len();let k=a.len();assert!(n>=2&&k>=1&&k<=n);
+    assert!(a.iter().all(|q|!b.contains(q)));
+    if negative{c.x_all(b);}
+    let cs=c.alloc_qubits(n-1);
+    for i in 0..n-1{
+        let prev=if i==0{None}else{Some(cs[i-1])};
+        if i<k{carry_step(c,a[i],b[i],prev,cs[i]);}
+        else{c.ccx(prev.unwrap(),b[i],cs[i]);}
+    }
+    c.cx(cs[n-2],b[n-1]);if n-1<k{c.cx(a[n-1],b[n-1]);}
+    for i in(0..n-1).rev(){
+        if i<k{if i>0{c.cx(cs[i-1],a[i]);}c.cx(a[i],b[i]);}
+        else{c.cx(cs[i-1],b[i]);}
+    }
+    if negative{c.x_all(b);}
+    cs
+}
+
+/// Separately emitted inverse: restore b with sum XORs, then erase carries
+/// from the original operand frame. No inverse CCX, no outcome reversal.
+pub(crate) fn shared_carry_inverse(c:&mut Builder,a:&[QubitId],b:&[QubitId],negative:bool,cs:Vec<QubitId>){
+    let n=b.len();let k=a.len();assert_eq!(cs.len(),n-1);
+    for i in 0..n{if i<k{c.cx(a[i],b[i]);}if i>0{c.cx(cs[i-1],b[i]);}}
+    for i in(0..n-1).rev(){
+        let m=c.alloc_bit();c.hmr(cs[i],m);
+        if i<k{
+            c.cz_if(a[i],b[i],m);
+            if i>0{c.cz_if(a[i],cs[i-1],m);c.cz_if(b[i],cs[i-1],m);}
+            if negative{c.z_if(a[i],m);if i>0{c.z_if(cs[i-1],m);}}
+        }else{
+            c.cz_if(b[i],cs[i-1],m);if negative{c.z_if(cs[i-1],m);}
+        }
+        c.free_bit(m);c.free(cs[i]);
+    }
+}
+
+// Exact supplied b_m2 carry hooks; source/target ownership is explicit at call sites.
+thread_local! {
+ static GO_C0: std::cell::Cell<Option<QubitId>> = const { std::cell::Cell::new(None) };
+ static GO_COPY0: std::cell::Cell<Option<QubitId>> = const { std::cell::Cell::new(None) };
+}
+pub(crate) fn go_given_c0(q:QubitId){GO_C0.with(|g|assert!(g.replace(Some(q)).is_none()));}
+pub(crate) fn go_copy_c0(q:QubitId){GO_COPY0.with(|g|assert!(g.replace(Some(q)).is_none()));}
+pub(crate) fn go_c0_clear()->bool{GO_C0.with(|g|g.get().is_none())&&GO_COPY0.with(|g|g.get().is_none())}
+
+pub(crate) fn add_low_keep(circ:&mut Builder,value:&[QubitId],acc:&[QubitId],keep:usize)->Vec<QubitId>{
+    assert!(keep>=1 && value.len()>keep+1 && acc.len()>=value.len());
+    let kept=circ.alloc_qubits(keep);
+    let prev=|i:usize|if i==1{None}else{Some(kept[i-2])};
+    for i in 1..=keep{carry_step(circ,value[i],acc[i],prev(i),kept[i-1]);}
+    ripple_add_proved(circ,&value[keep+1..],&acc[keep+1..],Some(kept[keep-1]),None,Carry0::Full,Carry1::Full,None,None,None,None);
+    for i in (1..=keep).rev(){
+        if let Some(p)=prev(i){circ.cx(p,value[i]);}
+        circ.cx(value[i],acc[i]);
+    }
+    kept
+}
+
+/// GO-B3: `acc -= value` for [`add_low_keep`], in the complement frame. The
+/// complemented add has the same carries, so the kept wires replace the low
+/// Toffoli and are then erased by the ordinary measured unwind.
+pub(crate) fn sub_low_kept(circ:&mut Builder,value:&[QubitId],acc:&[QubitId],kept:Vec<QubitId>){
+    let keep=kept.len();
+    assert!(keep>=1 && value.len()>keep+1 && acc.len()>=value.len());
+    circ.x_all(acc);
+    let prev=|i:usize|if i==1{None}else{Some(kept[i-2])};
+    for i in 1..=keep{if let Some(p)=prev(i){circ.cx(p,value[i]);circ.cx(p,acc[i]);}}
+    ripple_add_proved(circ,&value[keep+1..],&acc[keep+1..],Some(kept[keep-1]),None,Carry0::Full,Carry1::Full,None,None,None,None);
+    for i in (1..=keep).rev(){unwind_carry_step(circ,value[i],acc[i],prev(i),kept[i-1]);}
+    circ.x_all(acc);
+}
+
+/// GO_KEEP_SUM: `acc += value` for a wrapped add with `acc` wider than `value`
+/// (the in-place Karatsuba sum `t = a + b`), leaving the ripple carries
+/// c_1..c_{n-2} LIVE instead of erasing them. Same Toffoli count as `add_wide`;
+/// the returned wires let [`sub_wide_kept`] undo the add with zero Toffoli,
+/// provided `value` and `acc` hold the same values when it runs.
+pub(crate) fn add_wide_keep(circ: &mut Builder, value: &[QubitId], acc: &[QubitId]) -> Vec<QubitId> {
+    let n = acc.len();
+    let k = value.len();
+    assert!(k >= 1 && k + 1 <= n && n >= 3, "add_wide_keep: acc must be wider than value");
+    assert!(!has_top_copy(acc));
+    let carries = circ.alloc_qubits(n - 2);
+    let prev = |i: usize| if i == 0 { None } else { Some(carries[i - 1]) };
+    let go_c0 = GO_C0.with(|g| g.take());
+    for i in 0..n - 2 {
+        if i < k {
+            if let (0, Some(src)) = (i, go_c0) {circ.cx(src, carries[0]);}
+            else {carry_step(circ, value[i], acc[i], prev(i), carries[i]);}
+        } else {
+            circ.ccx(prev(i).unwrap(), acc[i], carries[i]);
+        }
+    }
+    terminal_step(circ, value, acc, prev(n - 2));
+    for i in (0..n - 2).rev() {
+        if i < k {
+            if let Some(p) = prev(i) {
+                circ.cx(p, value[i]);
+            }
+            circ.cx(value[i], acc[i]);
+        } else {
+            circ.cx(prev(i).unwrap(), acc[i]);
+        }
+    }
+    carries
+}
+
+/// GO_KEEP_SUM: undo [`add_wide_keep`] (`acc -= value`, the top bit returning to
+/// |0>) from its live carries. Every sum bit is restored with CX, and each carry
+/// (the top bit included) is erased in the X basis with the same CZ phase repair
+/// `unwind_carry_step` / `unwind_zero_step` use. Zero Toffoli.
+pub(crate) fn sub_wide_kept(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], carries: Vec<QubitId>) {
+    let n = acc.len();
+    let k = value.len();
+    assert!(k >= 1 && k + 1 <= n && carries.len() == n - 2);
+    let prev = |i: usize| if i == 0 { None } else { Some(carries[i - 1]) };
+    for i in 0..n - 1 {
+        if i < k {
+            circ.cx(value[i], acc[i]);
+        }
+        if let Some(p) = prev(i) {
+            circ.cx(p, acc[i]);
+        }
+    }
+    for i in (0..n - 1).rev() {
+        let out = if i == n - 2 { acc[n - 1] } else { carries[i] };
+        let m = circ.alloc_bit();
+        if i < k {
+            if let Some(p) = prev(i) {
+                circ.cx(p, value[i]);
+                circ.cx(p, acc[i]);
+                circ.cx(p, out);
+            }
+            circ.hmr(out, m);
+            circ.cz_if(value[i], acc[i], m);
+            if let Some(p) = prev(i) {
+                circ.cx(p, value[i]);
+                circ.cx(p, acc[i]);
+            }
+        } else {
+            circ.hmr(out, m);
+            circ.cz_if(prev(i).unwrap(), acc[i], m);
+        }
+        circ.free_bit(m);
+        if i < n - 2 {
+            circ.free(out);
+        }
+    }
+}
+
+
+// Local source-loan callback: retain boundary carry-ins until their exact
+// reverse-order repairs. Do not alter any other caller's finite window.
+thread_local!{static SHARED_SPLIT_EXACT:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
+pub(crate) fn shared_exact_split_scope(c:&mut Builder,f:impl FnOnce(&mut Builder)){
+    let old=SHARED_SPLIT_EXACT.with(|x|x.replace(true));
+    f(c);
+    SHARED_SPLIT_EXACT.with(|x|x.set(old));
+}
