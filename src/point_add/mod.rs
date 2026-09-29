@@ -65,7 +65,7 @@ fn env_raw(name: &str) -> Option<String> {
         "PP_DIRECT_ENDPOINT" => "1",
         "PP_DIRECT_FOLD" => "1",
         "PP_FLAG_SHAPE" => "38:0,25:-1,0:-3",
-        "PP_FLAG_WIDEN_DIV" => "38",
+        "PP_FLAG_WIDEN_DIV" => "696",
         "PP_HEAD_DIV" => "192",
         "PP_JOINT_GUARD" => "0",
         "PP_JOINT_LOW_BITS" => "32",
@@ -128,7 +128,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "280927574775975",
+        "TAIL_NONCE" => "91400000113896",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
