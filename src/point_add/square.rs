@@ -501,23 +501,46 @@ fn b_merged_folds(circ: &mut Builder, b2: &[QubitId], out: &[QubitId]) {
     assert!(s32 == 32 && !n32);
     let rot32 = rotate_by(b2, 32);
     let c = wcin_ripple(circ, true, &rot32, out);
-    let hi = |s: usize| &b2[N - s..];
-    let small = circ.alloc_qubits(11);
+    with_merged_high(circ, &b2[N - 32..], |circ, r| {
+        wcin_windows(circ, true, r, out, c);
+    });
+    wcin_finish(circ, true, &rot32, out, c);
+}
+
+/// Compute `high32 + high10 - high6 + high4`, consume it without changing
+/// either source, then clear it. For `high10 = 16u + v`, the small correction
+/// is `15u + v + floor(u/4) <= 975`, so ten bits suffice at every step.
+/// The final inverse additions have affine outputs and use the existing
+/// measured carry stream instead of recomputing their Toffoli ladders.
+fn with_merged_high(
+    circ: &mut Builder,
+    high: &[QubitId],
+    consume: impl FnOnce(&mut Builder, &[QubitId]),
+) {
+    assert_eq!(high.len(), 32);
+    let hi = |s: usize| &high[32 - s..];
+    let small = circ.alloc_qubits(10);
     for i in 0..10 { circ.cx(hi(10)[i], small[i]); }
     addsub_wide(circ, hi(6), &small, true);
     addsub_wide(circ, hi(4), &small, false);
     let r = circ.alloc_qubits(33);
     for i in 0..32 { circ.cx(hi(32)[i], r[i]); }
     addsub_wide(circ, &small, &r, false);
-    wcin_windows(circ, true, &r, out, c);
-    addsub_wide(circ, &small, &r, true);
+    consume(circ, &r);
+    // In the subtraction frame, ~r + small = ~high (including its zero
+    // extension). The stream reconstructs each carry from this known sum.
+    let mut restored_high: Vec<_> = high.iter().map(|&q| (true, vec![q])).collect();
+    restored_high.push((true, Vec::new()));
+    circ.x_all(&r);
+    super::stream_wide::add(circ, &small, &r, None, &restored_high);
+    circ.x_all(&r);
     for i in 0..32 { circ.cx(hi(32)[i], r[i]); }
     circ.free_vec(&r);
     addsub_wide(circ, hi(4), &small, true);
-    addsub_wide(circ, hi(6), &small, false);
+    let restored_small: Vec<_> = hi(10).iter().map(|&q| (false, vec![q])).collect();
+    super::stream_wide::add(circ, hi(6), &small, None, &restored_small);
     for i in 0..10 { circ.cx(hi(10)[i], small[i]); }
     circ.free_vec(&small);
-    wcin_finish(circ, true, &rot32, out, c);
 }
 
 /// PP_J_SFUSE: `fold_rotated(true, ..)` whose modular subtract keeps its

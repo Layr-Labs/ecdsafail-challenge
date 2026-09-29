@@ -54,7 +54,7 @@ fn env_raw(name: &str) -> Option<String> {
         "I33_DISABLE" => "0",
         "I12_B_GUARD" => "4",
         "CMP_SEED_ALL" => "1",
-        "ERASE_COMPARE" => "25",
+        "ERASE_COMPARE" => "28",
         "FOLD_GUARD" => "21",
         "PP_CF_DEFER_WALK_PHASE" => "1",
         "PP_CF_END_CHUNK" => "8",
@@ -128,7 +128,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "280927512368737",
+        "TAIL_NONCE" => "280927574775975",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
