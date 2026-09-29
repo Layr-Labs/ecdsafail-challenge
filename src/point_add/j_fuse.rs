@@ -59,7 +59,7 @@ pub fn mod_sub_halve(circ: &mut Builder, value: &[QubitId], acc: &[QubitId]) {
     circ.cx(b2, g); // k != 0
     // Position 0: acc0 = ~a, addend a: sum 1, carry 0.
     circ.cx(a, acc[0]);
-    let width = f_slice() + 1;
+    let width = super::modular::go_fs("GO_FG_J") + 1;
     let fc = f();
     let controls: Vec<Option<QubitId>> = (1..width)
         .map(|i| match (fc.bit(i), fc.bit(i - 1)) {
@@ -114,7 +114,7 @@ pub fn mod_double_sub(circ: &mut Builder, value: &[QubitId], acc: &[QubitId]) {
     ripple_add(circ, value, acc, None, Some(c));
     // acc = w = ~D, D = A - oy + c*2^256; 2y - oy == D + (o - c)*f (mod p).
     // In the complemented frame that is w += (c - o)*f.
-    let width = f_slice();
+    let width = super::modular::go_fs("GO_FG_J");
     circ.cx(o, c); // c = o ^ c: a correction is due
     for &q in &acc[..width] {
         circ.cx(o, q);
@@ -255,7 +255,7 @@ fn selected_f_or_2f(circ: &mut Builder, acc: &[QubitId], alpha: QubitId, gamma: 
     let o = circ.alloc_qubit();
     circ.cx(g, o);
     circ.cx(b, o); // nonzero
-    let width = f_slice() + 1;
+    let width = super::modular::go_fs("GO_FG_J") + 1;
     let fc = f();
     let controls: Vec<Option<QubitId>> = (0..width)
         .map(|i| match (fc.bit(i), i > 0 && fc.bit(i - 1)) {

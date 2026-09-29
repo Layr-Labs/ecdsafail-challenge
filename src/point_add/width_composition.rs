@@ -72,6 +72,8 @@ pub(crate) fn add(c:&mut Builder,a:&[QubitId],b:&[QubitId],p:&Plan)->QubitId{
 /// Same exact adder with a live, preserved incoming carry. Its wire is part
 /// of the caller's base, so the existing workspace plan is unchanged.
 pub(crate) fn add_with_carry(c:&mut Builder,a:&[QubitId],b:&[QubitId],initial:Option<QubitId>,p:&Plan)->QubitId{
+    let _dirty_trace=super::dirty_boundary_probe::Trace::new(c,"wc_add",b.len());
+    eprintln!("DIRTY_PLAN\t{}\t{}\t{}\t{}\t{}\t{}\t{:?}",c.op_count(),b.len(),c.active_qubits(),p.slow as u8,p.extra2,p.peak,p.sizes);
     assert_eq!(a.len(),b.len());assert_eq!(p.sizes.iter().sum::<usize>(),a.len());
     let base=c.active_qubits();let mut at=0;let mut incoming=initial;let mut flags=Vec::new();
     for (j,&w) in p.sizes.iter().enumerate(){
@@ -136,6 +138,8 @@ pub(crate) fn direct_plan(n:usize,room:usize)->Option<Plan>{
 }
 
 fn mapped_compare(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId){
+    let _dirty_trace=super::dirty_boundary_probe::Trace::new(c,"mapped_compare",b.len());
+
     use super::pingpong::{fold_step,with_selector_xor};
     let n=b.len();let carries=c.alloc_qubits(n-1);c.x_all(b);
     for i in 0..n-1{let prev=if i==0{incoming}else{carries[i-1]};fold_step(c,b[i],prev,carries[i],&map[i],false);}
@@ -162,6 +166,14 @@ pub(crate) fn direct_add(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incomin
 /// repair boundary phases. A matching inverse recreates the SAME carries and
 /// applies these deferred Z corrections before normal exact cleanup.
 pub(crate) fn direct_add_phase_transport(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId,p:&Plan,defer:bool,recover:&[(usize,BitId)])->Vec<(usize,BitId)>{
+    if std::env::var_os("FOLD_MAP_TRACE").is_some(){let mut syms=map.iter().flatten().copied().collect::<Vec<_>>();syms.push(incoming);syms.sort_by_key(|q|q.0);syms.dedup();let rows=map.iter().map(|r|r.iter().map(|q|syms.iter().position(|x|x==q).unwrap()).collect::<Vec<_>>()).collect::<Vec<_>>();eprintln!("FOLD_MAP\t{}\t{}\t{}\t{}\t{:?}",c.op_count(),super::pingpong::heo_hooks::cap().saturating_sub(c.active_qubits()as usize),syms.len(),syms.iter().position(|q|*q==incoming).unwrap(),rows);}
+    eprintln!("DIRTY_DIRECT_PLAN\t{}\t{}\t{}\t{}\t{}\t{}\t{:?}",c.op_count(),b.len(),c.active_qubits(),p.slow as u8,p.extra2,p.peak,p.sizes);
+    let _dirty_trace=super::dirty_boundary_probe::Trace::new(c,"direct_add_phase_transport",b.len());
+    let room=super::pingpong::heo_hooks::cap().saturating_sub(c.active_qubits()as usize);
+    if !defer && recover.is_empty() && p.peak>room && std::env::var_os("FOLD_PACKED_BOUNDARIES").is_some() {
+        if super::fold_template::try_fold(c,map,b,incoming,room){return Vec::new();}
+    }
+
     use super::pingpong::{fold_step,unwind_fold_step};
     assert_eq!(p.sizes.iter().sum::<usize>(),b.len());let base=c.active_qubits();
     let mut at=0;let mut prev=incoming;let mut stages=Vec::new();
@@ -240,4 +252,50 @@ pub(crate) fn direct_add_unhold(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],
         if let Some(q)=out{c.release_clean(q);}
     }
     assert_eq!(c.active_qubits()+held.len() as u32,base);
+}
+
+pub(crate) fn direct_add_hold_keep(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId,p:&Plan,keep:usize)->(Vec<QubitId>,Vec<QubitId>){
+    use super::pingpong::{fold_step,unwind_fold_step};
+    assert_eq!(p.sizes.iter().sum::<usize>(),b.len());let base=c.active_qubits();
+    let k=p.sizes.len();assert!(k>=2&&keep>=1&&keep<p.sizes[0],"GO-B3: keep must fit chunk 0 carries");
+    let w=p.sizes[0];let out=c.alloc_qubit();
+    let work=c.alloc_qubits(w-1);
+    for i in 0..w-1{let carry=if i==0{incoming}else{work[i-1]};fold_step(c,b[i],carry,work[i],&map[i],false);}
+    fold_step(c,b[w-1],work[w-2],out,&map[w-1],true);
+    for i in(keep..w-1).rev(){unwind_fold_step(c,b[i],work[i-1],work[i],&map[i]);}
+    for i in 0..keep{for &s in &map[i]{c.cx(s,b[i]);}}
+    for &q in &work[keep..]{c.free(q);}
+    let kept=work[..keep].to_vec();
+    let mut held=vec![out];let mut prev=out;let mut at=w;
+    for(j,&w)in p.sizes.iter().enumerate().skip(1){
+        let o=if j+1<k{Some(c.alloc_qubit())}else{None};
+        direct_chunk(c,map,b,at,w,prev,o);
+        if let Some(q)=o{held.push(q);prev=q;}at+=w;
+    }
+    assert_eq!(c.active_qubits(),base+(held.len()+kept.len()) as u32);
+    (held,kept)
+}
+
+/// GO-B3 inverse of [`direct_add_hold_keep`], on the complemented accumulator.
+/// Chunk 0 takes its low carries from `kept` (each bit only gets the carry-in
+/// XOR a fold step would apply), then unwinds every carry as usual.
+pub(crate) fn direct_add_unhold_keep(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId,p:&Plan,held:Vec<QubitId>,kept:Vec<QubitId>){
+    use super::pingpong::{fold_step,unwind_fold_step};
+    assert_eq!(p.sizes.iter().sum::<usize>(),b.len());let base=c.active_qubits();
+    let k=p.sizes.len();assert_eq!(held.len(),k-1);let keep=kept.len();
+    let starts:Vec<usize>=p.sizes.iter().scan(0,|s,&w|{let a=*s;*s+=w;Some(a)}).collect();
+    for j in(1..k).rev(){
+        let prev=held[j-1];
+        let out=if j+1<k{Some(held[j])}else{None};
+        direct_chunk(c,map,b,starts[j],p.sizes[j],prev,out);
+        if let Some(q)=out{c.release_clean(q);}
+    }
+    let w=p.sizes[0];let out=held[0];
+    let mut work=kept.clone();work.extend(c.alloc_qubits(w-1-keep));
+    for i in 0..w-1{let carry=if i==0{incoming}else{work[i-1]};
+        if i<keep{c.cx(carry,b[i]);}else{fold_step(c,b[i],carry,work[i],&map[i],false);}}
+    fold_step(c,b[w-1],work[w-2],out,&map[w-1],true);
+    for i in(0..w-1).rev(){let carry=if i==0{incoming}else{work[i-1]};unwind_fold_step(c,b[i],carry,work[i],&map[i]);}
+    c.free_vec(&work);c.release_clean(out);
+    assert_eq!(c.active_qubits()+(held.len()+keep) as u32,base);
 }
