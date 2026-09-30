@@ -52,6 +52,26 @@ fn against_coord(
 pub fn coord_sub(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
     assert_eq!(dst.len(), N);
     assert_eq!(coord.len(), N);
+    if super::modular::r5_cbits(16) {
+        // R5_CBITS bit 16: mod_sub_vented with the classical operand folded into the carry wires.
+        let (fs, k) = (super::modular::go_fs("GO_FG_M"), super::modular::erase_compare());
+        circ.x_all(dst);
+        let ov = circ.alloc_qubit();
+        super::modular::r5_ripple_add_cbits(circ, coord, dst, ov);
+        super::const_arith::cadd_const_trunc(circ, &dst[..fs], super::modular::f(), ov, false);
+        let tv = circ.alloc_qubits(k);
+        for i in 0..k { circ.x_if_bit(tv[i], coord[N - k + i]); }
+        if super::modular::r5_ccmp(8) {
+            super::compare::erase_with_compare_v0(circ, ov, &dst[N - k..], &tv, coord[N - k]);
+        } else {
+            super::compare::erase_with_compare(circ, ov, &dst[N - k..], &tv, None);
+        }
+        for i in 0..k { circ.x_if_bit(tv[i], coord[N - k + i]); }
+        circ.free_vec(&tv);
+        circ.free(ov);
+        circ.x_all(dst);
+        return;
+    }
     against_coord(circ, coord, false, |circ, temp| {
         mod_sub_vented(circ, temp, dst);
     });

@@ -191,7 +191,9 @@ pub fn erase_x_carry(circ: &mut Builder, c: QubitId, d_top: &[QubitId], coord: &
         circ.x_if_bit(q, b);
     }
     circ.x_all(d_top);
+    if super::modular::r5_ccmp(1) { super::compare::erase_with_compare_v0(circ, c, d_top, &temp, ox_top[0]); } else {
     erase_with_compare(circ, c, d_top, &temp, None);
+    }
     circ.x_all(d_top);
     for (&q, &b) in temp.iter().zip(ox_top) {
         circ.x_if_bit(q, b);

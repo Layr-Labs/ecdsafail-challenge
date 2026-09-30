@@ -193,7 +193,8 @@ pub fn config() -> &'static HeoConfig {
     static CFG: OnceLock<HeoConfig> = OnceLock::new();
     CFG.get_or_init(|| {
         let path = std::env::var("HEO_ENVELOPE").expect("HEO_WALK needs HEO_ENVELOPE=<path to `esw ead` lines>");
-        let text = include_str!("skywalk_data/extended-middle-0.txt").to_owned();
+        // sky5 submission: the division envelope is the package's gN.d.35 (compiled in).
+        let text = include_str!("skywalk_data/sky5_env_div_gN.d.35.txt").to_owned();
         let (mut esw, mut ead) = parse_envelope(&text);
         if let Some(r) = std::env::var("HEO_R").ok().and_then(|s| s.parse::<usize>().ok()) {
             assert!(r <= esw.len(), "HEO_R {r} exceeds the envelope's {} ticks", esw.len());
@@ -227,7 +228,8 @@ pub fn config_mul() -> &'static HeoConfig {
         let base = config();
         let (mut esw, mut ead) = match std::env::var("HEO_ENVELOPE_MUL") {
             Ok(path) => {
-                let text = include_str!("skywalk_data/extended-middle-1.txt").to_owned();
+                // sky5 submission: the multiply envelope is the package's gN.m.35 (compiled in).
+                let text = include_str!("skywalk_data/sky5_env_mul_gN.m.35.txt").to_owned();
                 parse_envelope(&text)
             }
             Err(_) => (base.esw.clone(), base.ead.clone()),

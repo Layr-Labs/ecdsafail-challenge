@@ -105,6 +105,61 @@ pub(crate) fn coord_op_at(
     assert_eq!(a0.len(), n);
     assert_eq!(take_fused_unseed(), fused, "back seam: unseed / coordinate op fusion mismatch");
     let fp1 = f + U256::from(1u64);
+    let r5 = match leg { Leg::Div => super::modular::r5_cbits(4), Leg::Mul => super::modular::r5_cbits(8) };
+    if r5 {
+        // R5_CBITS: the classical operand A0 ^ (b & D) is folded straight into the carry wires
+        // (no temp register); the erasure compares against A0's top window, as the control does.
+        let d: Option<Vec<BitId>> = fused.then(|| {
+            let a1 = match leg {
+                Leg::Div => classical_add_const_mod_at(c, a0, modulus(n, f) - fp1, n, f.to::<u128>()),
+                Leg::Mul => classical_add_const_mod2n_at(c, a0, fp1.to::<u128>()),
+            };
+            let d = c.alloc_bits(n);
+            for i in 0..n {
+                c.bit_copy(d[i], a0[i]);
+                c.bit_xor_into(d[i], a1[i]);
+            }
+            zero(c, &a1);
+            c.free_bit_vec(&a1);
+            d
+        });
+        let ov = c.alloc_qubit();
+        match leg {
+            Leg::Div => {
+                let sel = d.as_deref().map(|d| (dst[0], false, d));
+                super::modular::r5_ripple_add_cbits_sel(c, a0, sel, dst, ov);
+                super::const_arith::cadd_const_trunc(c, &dst[..fs], f, ov, false);
+            }
+            Leg::Mul => {
+                c.x_all(dst);
+                let sel = d.as_deref().map(|d| (dst[0], true, d));
+                super::modular::r5_ripple_add_cbits_sel(c, a0, sel, dst, ov);
+                c.x(ov);
+                super::modular::fold_f_complemented_at(c, ov, dst, fs, f);
+                c.x(ov);
+            }
+        }
+        let tv = c.alloc_qubits(k);
+        for i in 0..k { c.x_if_bit(tv[i], a0[n - k + i]); }
+        if super::modular::r5_ccmp(4) { super::compare::erase_with_compare_v0(c, ov, &dst[n - k..], &tv, a0[n - k]); } else {
+        super::compare::erase_with_compare(c, ov, &dst[n - k..], &tv, None);
+        }
+        for i in 0..k { c.x_if_bit(tv[i], a0[n - k + i]); }
+        c.free_vec(&tv);
+        c.free(ov);
+        if let Some(d) = d {
+            zero(c, &d);
+            c.free_bit_vec(&d);
+        }
+        zero(c, a0);
+        c.free_bit_vec(a0);
+        if std::env::var_os("R5_CBITS_PAD").is_some() {
+            // reset the free-list top the control's temp register used to cover (static zero set)
+            let pad = c.alloc_qubits(if std::env::var_os("R5_CBITS_PAD_ALL").is_some() { super::pingpong::heo_hooks::cap().saturating_sub(c.active_qubits() as usize) } else { n });
+            c.free_vec(&pad);
+        }
+        return;
+    }
     let temp = c.alloc_qubits(n);
     for i in 0..n { c.x_if_bit(temp[i], a0[i]); }
     let d: Option<Vec<BitId>> = fused.then(|| {

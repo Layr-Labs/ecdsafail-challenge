@@ -64,6 +64,8 @@ pub struct PhaseReport {
 
 impl Builder {
     pub(crate) fn current_phase(&self)->&'static str {self.phase}
+    /// R3: run `body` and return its peak live count.
+    pub(crate) fn r3_peak<R>(&mut self,body:impl FnOnce(&mut Self)->R)->(R,u32){let saved=self.win_peak;self.win_peak=self.active_qubits();let r=body(self);let peak=self.win_peak.max(self.active_qubits);self.win_peak=saved.max(peak);(r,peak)}
     pub(crate) fn fold_trace(&mut self,label:&str,body:impl FnOnce(&mut Self)) {
         if std::env::var_os("FOLD_FD_TRANSPORT").is_none(){body(self);return;}
         let saved=self.win_peak;let base=self.active_qubits();let before=self.report_totals().map_or(0.,|x|x.1);self.win_peak=base;body(self);let peak=self.win_peak;self.win_peak=saved.max(peak);

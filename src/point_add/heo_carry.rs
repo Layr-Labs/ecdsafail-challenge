@@ -1226,22 +1226,311 @@ pub(crate) fn fd_unseed_at(c: &mut Builder, rails: Rails, typ0: QubitId, s0: Opt
     x
 }
 
+// R4_FDP_FUSE (sky-PM Round 4): the FD payload with the Del doubling and the Del negation fused into one
+// window ladder. Both negations are moved in front of the route (the swap only relabels which register a
+// negation lands on), so Del's negation control becomes cS ^ cD = NOT o_0 and Sig's is cS = ys ^ (A & NOT o_0).
+// Del <- c ? p - 2 Del : 2 Del as XOR_c(rot_up(Del) + t f + c (f - 1)) with t the doubling overflow; above
+// bit 0 the constant is (t + c) (f - 1)/2, one selector per position from {t^c, t&c, t|c}.
+fn r4_fdp_fuse() -> bool { env_bool("R4_FDP_FUSE", false) }
+
+fn r4_fdp_ladder(c: &mut Builder, del: &[QubitId], t: QubitId, ctl: QubitId, a: QubitId, negative: bool) {
+    let w = super::super::modular::go_fs("GO_FG_P");
+    let fp: U256 = (f() - U256::from(1u64)) >> 1usize;
+    let sel = |p: usize| -> (bool, bool) { let j = p - 1; (fp.bit(j), j >= 1 && fp.bit(j - 1)) };
+    for p in 1..4 { assert_eq!(sel(p), (false, false), "R4_FDP_FUSE: constant must start at bit 4"); }
+    for p in w..N { assert_eq!(sel(p), (false, false), "R4_FDP_FUSE: constant must fit the window"); }
+    let map: Vec<Vec<QubitId>> = (4..w).map(|p| match sel(p) {
+        (false, false) => vec![],
+        (true, false) => vec![t, ctl],
+        (false, true) => vec![a],
+        (true, true) => vec![t, ctl, a],
+    }).collect();
+    let target = &del[4..w];
+    let zero = c.alloc_qubit();
+    let room = h7::cap().saturating_sub(c.active_qubits() as usize);
+    let plan = (room..=map.len().max(room)).find_map(|r| super::super::width_composition::direct_plan(map.len(), r)).unwrap();
+    if negative { c.x_all(target); }
+    super::super::width_composition::direct_add(c, &map, target, zero, &plan);
+    if negative { c.x_all(target); }
+    c.release_clean(zero);
+}
+
+/// `del <- ctl ? p - 2 del : 2 del (mod p)`, or its exact inverse.
+fn r4_fdp_double_neg(c: &mut Builder, del: &[QubitId], ctl: QubitId, inverse: bool) {
+    if !inverse {
+        let out = h7::start_doubling(c, del);
+        c.cx(out, del[0]);
+        let a = h7::and_clean(c, out, ctl);
+        r4_fdp_ladder(c, del, out, ctl, a, false);
+        h7::and_uncompute(c, a, out, ctl);
+        c.cx(del[0], out);
+        c.free(out);
+        c.cx_all(ctl, del);
+    } else {
+        c.cx_all(ctl, del);
+        let out = c.alloc_qubit();
+        c.cx(del[0], out);
+        let a = h7::and_clean(c, out, ctl);
+        r4_fdp_ladder(c, del, out, ctl, a, true);
+        h7::and_uncompute(c, a, out, ctl);
+        c.cx(out, del[0]);
+        for i in 0..del.len() - 1 { c.swap(del[i], del[i + 1]); }
+        c.swap(del[N - 1], out);
+        c.free(out);
+    }
+}
+
+/// `m = A & o0n` with `A = NOT(xs ^ ys)`; `o0n` holds NOT o_0.
+fn r4_fdp_m(c: &mut Builder, xs: QubitId, ys: QubitId, o0n: QubitId) -> QubitId {
+    c.cx(xs, ys); c.x(ys);
+    let m = h7::and_clean(c, ys, o0n);
+    c.x(ys); c.cx(xs, ys);
+    m
+}
+fn r4_fdp_m_undo(c: &mut Builder, m: QubitId, xs: QubitId, ys: QubitId, o0n: QubitId) {
+    c.cx(xs, ys); c.x(ys);
+    h7::and_uncompute(c, m, ys, o0n);
+    c.x(ys); c.cx(xs, ys);
+}
+/// Sig <- neg_{cS}(Sig), cS = ys ^ (A & NOT o_0); `o0n` holds NOT o_0.
+fn r4_fdp_neg_sig(c: &mut Builder, sig: &[QubitId], xs: QubitId, ys: QubitId, o0n: QubitId) {
+    let m = r4_fdp_m(c, xs, ys, o0n);
+    c.cx(ys, m);
+    book(c, "g1b", "fdp negsig", 0, |c| h7::cond_negate(c, m, sig));
+    c.cx(ys, m);
+    r4_fdp_m_undo(c, m, xs, ys, o0n);
+}
+
+fn fd_payload_div_r4(c: &mut Builder, sig: &[QubitId], xs: QubitId, ys: QubitId, o0: QubitId) -> Vec<QubitId> {
+    c.x(o0);
+    if !r4_ysub_fuse() { r4_fdp_neg_sig(c, sig, xs, ys, o0); }
+    let del = c.alloc_qubits(N);
+    c.cx_pairs(sig, &del);
+    book(c, "g1b", "fdp dblneg", 0, |c| r4_fdp_double_neg(c, &del, o0, false));
+    c.x(o0);
+    c.cx(xs, ys);
+    c.x(ys);
+    book(c, "g1b", "fdp route", 0, |c| route(c, ys, sig, &del));
+    c.x(ys);
+    c.cx(xs, ys);
+    del
+}
+
+fn fd_payload_div_inv_r4(c: &mut Builder, sig: &[QubitId], del: &[QubitId], xs: QubitId, ys: QubitId, o0: QubitId) {
+    c.cx(xs, ys);
+    c.x(ys);
+    route(c, ys, sig, del);
+    c.x(ys);
+    c.cx(xs, ys);
+    c.x(o0);
+    r4_fdp_double_neg(c, del, o0, true);
+    c.cx_pairs(sig, del);
+    if r4_yfin_fuse() { r4_yfin_tail(c, sig, del, xs, ys, o0); } else { r4_fdp_neg_sig(c, sig, xs, ys, o0); }
+    c.x(o0);
+}
+
+// R4_YFIN_FUSE (sky-PM Round 4): the multiply's closing coord_y_sub_final absorbs the FD payload inverse's Sig
+// negation. After the payload inverse clears Del, Sig holds neg_cS(M) and nothing else touches it before
+// y -= oy, so the subtraction runs right there while cS (from xs, ys, o_0) still exists:
+// y <- neg_cS(Sig) - oy. Entry frame XOR_{NOT cS} (cS = 1 keeps Sig, cS = 0 complements it), add oy with the
+// vented overflow ov, one window ladder adds K = ov f + cS (f - 1) (mod 2^fs), erase ov as coord_sub does, and
+// complement on exit: cS = 0 gives ~(~Sig + oy + ov f) = Sig - oy; cS = 1 gives ~(z + f - 1) = p - z with
+// z = Sig + oy + ov f, i.e. -Sig - oy.
+thread_local! {
+    static R4_YFIN: std::cell::RefCell<Option<Vec<BitId>>> = const { std::cell::RefCell::new(None) };
+}
+pub fn r4_yfin_fuse() -> bool { env_bool("R4_YFIN_FUSE", false) }
+pub fn r4_yfin_stash(oy: &[BitId]) {
+    assert!(r4_fdp_fuse(), "R4_YFIN_FUSE needs R4_FDP_FUSE");
+    assert_eq!(oy.len(), N);
+    R4_YFIN.with(|s| { assert!(s.borrow().is_none()); *s.borrow_mut() = Some(oy.to_vec()); });
+}
+pub fn r4_yfin_consumed() -> bool { R4_YFIN.with(|s| s.borrow().is_none()) }
+
+// R5_YFIN2 (sky-PM Round 5): R4_YFIN_FUSE without the chunked add. Del is zero here (after cx_pairs), so it
+// is released first, and oy is added as a classical operand (no temp register): the plain vented ladder's
+// 255 carries fit in the room Del leaves (68 + 256). The caller then skips its own free of Del.
+pub fn r5_yfin2() -> bool { env_bool("R5_YFIN2", false) }
+thread_local! { static R5_DEL_FREED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+pub fn r5_take_del_freed() -> bool { R5_DEL_FREED.with(|f| f.replace(false)) }
+
+/// Body inside the XOR_{NOT cS} frame: `sig += oy`, one ladder K = ov f + cS (f - 1), erase ov.
+fn r5_yfin2_body(c: &mut Builder, sig: &[QubitId], del: &[QubitId], oy: &[BitId], m: QubitId, fs: usize, k: usize) {
+    c.free_vec(del);
+    R5_DEL_FREED.with(|f| assert!(!f.replace(true)));
+    let ov = c.alloc_qubit();
+    book(c, "g1b", "yfin add", 0, |c| super::super::modular::r5_ripple_add_cbits(c, oy, sig, ov));
+    let a = h7::and_clean(c, ov, m);
+    let one = U256::from(1u64);
+    let mask = (one << fs) - one;
+    let (k10, k01, k11) = (f() & mask, (f() - one) & mask, (f() + f() - one) & mask);
+    let map: Vec<Vec<QubitId>> = (0..fs).map(|j| {
+        let (g10, g01, g11) = (k10.bit(j), k01.bit(j), k11.bit(j));
+        let mut v = Vec::new();
+        if g10 { v.push(ov); }
+        if g01 { v.push(m); }
+        if g11 ^ g10 ^ g01 { v.push(a); }
+        v
+    }).collect();
+    let target = &sig[..fs];
+    let zero = c.alloc_qubit();
+    let room = h7::cap().saturating_sub(c.active_qubits() as usize);
+    let plan = (room..=map.len().max(room)).find_map(|r| super::super::width_composition::direct_plan(map.len(), r)).unwrap();
+    book(c, "g1b", "yfin ladder", 0, |c| super::super::width_composition::direct_add(c, &map, target, zero, &plan));
+    c.release_clean(zero);
+    h7::and_uncompute(c, a, ov, m);
+    let tv = c.alloc_qubits(k);
+    for (&q, &b) in tv.iter().zip(&oy[N - k..]) { c.x_if_bit(q, b); }
+    if super::super::modular::r5_ccmp(16) {
+        book(c, "g1b", "yfin erase", 0, |c| super::super::compare::erase_with_compare_v0(c, ov, &sig[N - k..], &tv, oy[N - k]));
+    } else {
+    book(c, "g1b", "yfin erase", 0, |c| erase_with_compare(c, ov, &sig[N - k..], &tv, None));
+    }
+    for (&q, &b) in tv.iter().zip(&oy[N - k..]) { c.x_if_bit(q, b); }
+    c.free_vec(&tv);
+    c.free(ov);
+}
+
+/// `sig <- neg_{cS}(sig) - oy (mod p)`, cS = ys ^ (A & NOT o_0); `o0n` holds NOT o_0.
+fn r4_yfin_tail(c: &mut Builder, sig: &[QubitId], del: &[QubitId], xs: QubitId, ys: QubitId, o0n: QubitId) {
+    let oy = R4_YFIN.with(|s| s.borrow_mut().take()).expect("R4_YFIN_FUSE: oy not stashed");
+    let (fs, k) = (super::super::modular::go_fs("GO_FG_M"), super::super::modular::erase_compare());
+    let m = r4_fdp_m(c, xs, ys, o0n);
+    c.cx(ys, m);
+    c.x_all(sig);
+    c.cx_all(m, sig);
+    if r5_yfin2() { r5_yfin2_body(c, sig, del, &oy, m, fs, k); c.x_all(sig); c.cx(ys, m); r4_fdp_m_undo(c, m, xs, ys, o0n); return; }
+    let temp = del;
+    for (&q, &b) in temp.iter().zip(&oy) { c.x_if_bit(q, b); }
+    let ov = book(c, "g1b", "yfin add", 0, |c| {
+        super::super::modular::heo_fitted_vented_add(c, &temp, sig).unwrap_or_else(|| {
+            let o = c.alloc_qubit();
+            super::super::modular::peak_fitted_add(c, &temp, sig, o);
+            o
+        })
+    });
+    for (&q, &b) in temp.iter().zip(&oy) { c.x_if_bit(q, b); }
+    let a = h7::and_clean(c, ov, m);
+    let one = U256::from(1u64);
+    let mask = (one << fs) - one;
+    let (k10, k01, k11) = (f() & mask, (f() - one) & mask, (f() + f() - one) & mask);
+    let map: Vec<Vec<QubitId>> = (0..fs).map(|j| {
+        let (g10, g01, g11) = (k10.bit(j), k01.bit(j), k11.bit(j));
+        let mut v = Vec::new();
+        if g10 { v.push(ov); }
+        if g01 { v.push(m); }
+        if g11 ^ g10 ^ g01 { v.push(a); }
+        v
+    }).collect();
+    let target = &sig[..fs];
+    let zero = c.alloc_qubit();
+    let room = h7::cap().saturating_sub(c.active_qubits() as usize);
+    let plan = (room..=map.len().max(room)).find_map(|r| super::super::width_composition::direct_plan(map.len(), r)).unwrap();
+    book(c, "g1b", "yfin ladder", 0, |c| super::super::width_composition::direct_add(c, &map, target, zero, &plan));
+    c.release_clean(zero);
+    h7::and_uncompute(c, a, ov, m);
+    let tv = &del[..k];
+    for (&q, &b) in tv.iter().zip(&oy[N - k..]) { c.x_if_bit(q, b); }
+    book(c, "g1b", "yfin erase", 0, |c| erase_with_compare(c, ov, &sig[N - k..], tv, None));
+    for (&q, &b) in tv.iter().zip(&oy[N - k..]) { c.x_if_bit(q, b); }
+    c.free(ov);
+    c.x_all(sig);
+    c.cx(ys, m);
+    r4_fdp_m_undo(c, m, xs, ys, o0n);
+}
+
+// R4_YSUB_FUSE (sky-PM Round 4): coord_y_sub's fold ladder absorbs the FD payload's Sig negation.
+// coord_y_sub leaves y - oy = ~u with u = ~y + oy + ov f (ov = the vented overflow, folded in as +f over the
+// window [0, fs)). The payload then negates Sig iff cS, and p - ~u = u - (f - 1). So a single window ladder adds
+// K = ov f - cS (f - 1) (mod 2^fs) to u, and the closing complement becomes XOR_{NOT cS}. The head (the add, with
+// the overflow kept live) runs in the coord_y_sub phase; the tail runs in the divide at t = 0, once xs, ys and
+// o_0 exist. The seed at t = 0 touches only the denominator, so y waits there untouched.
+thread_local! {
+    static R4_YSUB: std::cell::RefCell<Option<(Vec<BitId>, QubitId, usize, usize)>> = const { std::cell::RefCell::new(None) };
+}
+pub fn r4_ysub_fuse() -> bool { env_bool("R4_YSUB_FUSE", false) }
+
+/// coord_y_sub head under R4_YSUB_FUSE: `y <- ~y + oy` (wrapped); the overflow stays live for [`r4_ysub_tail`].
+pub fn r4_ysub_head(c: &mut Builder, y: &[QubitId], oy: &[BitId]) {
+    assert!(r4_fdp_fuse(), "R4_YSUB_FUSE needs R4_FDP_FUSE");
+    assert_eq!(y.len(), N);
+    assert_eq!(oy.len(), N);
+    let ov = if super::super::modular::r5_cbits(2) {
+        c.x_all(y);
+        let ov = c.alloc_qubit();
+        book(c, "g1b", "ysub add", 0, |c| super::super::modular::r5_ripple_add_cbits(c, oy, y, ov));
+        ov
+    } else {
+        let temp = c.alloc_qubits(N);
+        for (&q, &b) in temp.iter().zip(oy) { c.x_if_bit(q, b); }
+        let ov = super::super::modular::r4_addsub_head(c, &temp, y);
+        for (&q, &b) in temp.iter().zip(oy) { c.x_if_bit(q, b); }
+        for q in temp { c.free(q); }
+        ov
+    };
+    let (fs, k) = (super::super::modular::go_fs("GO_FG_M"), super::super::modular::erase_compare());
+    R4_YSUB.with(|s| { assert!(s.borrow().is_none()); *s.borrow_mut() = Some((oy.to_vec(), ov, fs, k)); });
+}
+
+/// coord_y_sub tail fused with the payload's Sig negation: `sig <- cS ? oy - y : y - oy (mod p)`.
+fn r4_ysub_tail(c: &mut Builder, sig: &[QubitId], xs: QubitId, ys: QubitId, o0: QubitId) {
+    let (oy, ov, fs, k) = R4_YSUB.with(|s| s.borrow_mut().take()).expect("R4_YSUB_FUSE: head not run");
+    c.x(o0);
+    let m = r4_fdp_m(c, xs, ys, o0);
+    c.cx(ys, m);
+    let a = h7::and_clean(c, ov, m);
+    let one = U256::from(1u64);
+    let mask = (one << fs) - one;
+    let (k10, k01, k11) = (f() & mask, U256::ZERO.wrapping_sub(f() - one) & mask, one);
+    let map: Vec<Vec<QubitId>> = (0..fs).map(|j| {
+        let (g10, g01, g11) = (k10.bit(j), k01.bit(j), k11.bit(j));
+        let mut v = Vec::new();
+        if g10 { v.push(ov); }
+        if g01 { v.push(m); }
+        if g11 ^ g10 ^ g01 { v.push(a); }
+        v
+    }).collect();
+    let target = &sig[..fs];
+    let zero = c.alloc_qubit();
+    let room = h7::cap().saturating_sub(c.active_qubits() as usize);
+    let plan = (room..=map.len().max(room)).find_map(|r| super::super::width_composition::direct_plan(map.len(), r)).unwrap();
+    book(c, "g1b", "ysub ladder", 0, |c| super::super::width_composition::direct_add(c, &map, target, zero, &plan));
+    c.release_clean(zero);
+    h7::and_uncompute(c, a, ov, m);
+    let tv = c.alloc_qubits(k);
+    for (&q, &b) in tv.iter().zip(&oy[N - k..]) { c.x_if_bit(q, b); }
+    if super::super::modular::r5_ccmp(2) {
+        book(c, "g1b", "ysub erase", 0, |c| super::super::compare::erase_with_compare_v0(c, ov, &sig[N - k..], &tv, oy[N - k]));
+    } else {
+    book(c, "g1b", "ysub erase", 0, |c| erase_with_compare(c, ov, &sig[N - k..], &tv, None));
+    }
+    for (&q, &b) in tv.iter().zip(&oy[N - k..]) { c.x_if_bit(q, b); }
+    for q in tv { c.free(q); }
+    c.free(ov);
+    c.x_all(sig);
+    c.cx_all(m, sig);
+    c.cx(ys, m);
+    r4_fdp_m_undo(c, m, xs, ys, o0);
+    c.x(o0);
+}
+
 /// FD payload seed (division), rails at the post-seed state. On entry `Sig = N`; allocates `Del`.
 /// Classes (`B4/fd_scalar.py`, CHECK c11): from (N, 2N), swap iff A = NOT(xs ^ ys), negate Sig iff ys,
 /// negate Del iff NOT(ys ^ o_0).
 fn fd_payload_div(c: &mut Builder, sig: &[QubitId], xs: QubitId, ys: QubitId, o0: QubitId) -> Vec<QubitId> {
+    if r4_fdp_fuse() { return fd_payload_div_r4(c, sig, xs, ys, o0); }
     let del = c.alloc_qubits(N);
     c.cx_pairs(sig, &del);
-    h7::mod_double(c, &del);
+    book(c, "g1b", "fdp dbl", 0, |c| h7::mod_double(c, &del));
     c.cx(xs, ys);
     c.x(ys);
-    route(c, ys, sig, &del);
+    book(c, "g1b", "fdp route", 0, |c| route(c, ys, sig, &del));
     c.x(ys);
     c.cx(xs, ys);
-    h7::cond_negate(c, ys, sig);
+    book(c, "g1b", "fdp negsig", 0, |c| h7::cond_negate(c, ys, sig));
     c.cx(o0, ys);
     c.x(ys);
-    h7::cond_negate(c, ys, &del);
+    book(c, "g1b", "fdp negdel", 0, |c| h7::cond_negate(c, ys, &del));
     c.x(ys);
     c.cx(o0, ys);
     del
@@ -1249,6 +1538,7 @@ fn fd_payload_div(c: &mut Builder, sig: &[QubitId], xs: QubitId, ys: QubitId, o0
 
 /// RB-1: exact inverse of [`fd_payload_div`] given the class wires (X_sign, Y_sign, o_0); clears `del` to 0.
 fn fd_payload_div_inv(c: &mut Builder, sig: &[QubitId], del: &[QubitId], xs: QubitId, ys: QubitId, o0: QubitId) {
+    if r4_fdp_fuse() { return fd_payload_div_inv_r4(c, sig, del, xs, ys, o0); }
     c.cx(o0, ys);
     c.x(ys);
     c.fold_trace("fd-neg-del", |c| h7::cond_negate(c, ys, del));
@@ -1267,6 +1557,7 @@ fn fd_payload_div_inv(c: &mut Builder, sig: &[QubitId], del: &[QubitId], xs: Qub
 /// Inverse of [`fd_payload_div`] at the end of the multiply head batch; the class is decoded from the tape
 /// pseudo-letter `(o_0, s_0)` and the carried sign wire `bw` = X_sign: `ys = o_0 ? NOT bw : s_0`.
 fn fd_payload_mul_inv(c: &mut Builder, sig: &[QubitId], del: &[QubitId], o0: QubitId, s0: QubitId, bw: QubitId) {
+    assert!(!r4_fdp_fuse(), "R4_FDP_FUSE: fd_payload_mul_inv path not ported");
     // s_0 = 0 whenever o_0 = 1, so ys = s_0 ^ (o_0 & NOT bw): one Toffoli each way.
     let ys = c.alloc_qubit();
     let dec = |c: &mut Builder| {
@@ -1505,13 +1796,72 @@ fn k2_cell_loan(c: &mut Builder, r1: &[QubitId], esw_t: usize, body: impl FnOnce
     }
 }
 
+/// R3: div ticks whose S1 half-empty ANDs are deferred past the mid-tick cell (HEO_CELL_HELPER_S1).
+/// `R3_S1_TICKS=a,b,c` replaces the recipe's list; unset keeps the original [5, 7, 8, 260, 272].
+fn r3_s1_ticks() -> &'static Vec<usize> {
+    static V: OnceLock<Vec<usize>> = OnceLock::new();
+    V.get_or_init(|| match std::env::var("R3_S1_TICKS") {
+        Ok(s) => s.split(',').filter(|x| !x.trim().is_empty()).map(|x| x.trim().parse().unwrap()).collect(),
+        Err(_) => vec![5, 7, 8, 260, 272],
+    })
+}
+
+/// R3: global payload-cell counter (the K3b cell index of the next cell).
+static R3_CELL_IDX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// R3 sign loan selection: `R3_SGN_FILE` lines `idx [delta]` (cells that take the loan, plus an optional room pin
+/// delta for that cell). `R3_SGN=all` lends at every mid-tick cell.
+fn r3_sgn_map() -> &'static Option<std::collections::HashMap<usize, isize>> {
+    static M: OnceLock<Option<std::collections::HashMap<usize, isize>>> = OnceLock::new();
+    M.get_or_init(|| {
+        std::env::var("R3_SGN_FILE").ok().map(|p| {
+            std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("R3_SGN_FILE {p}: {e}")).lines()
+                .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+                .map(|l| {
+                    let mut it = l.split_whitespace();
+                    let i: usize = it.next().unwrap().parse().unwrap();
+                    let d: isize = it.next().map_or(0, |v| v.parse().unwrap());
+                    (i, d)
+                }).collect()
+        })
+    })
+}
+
+fn r3_sgn_hit() -> bool {
+    let idx = R3_CELL_IDX.load(std::sync::atomic::Ordering::Relaxed);
+    let hit = std::env::var("R3_SGN").is_ok_and(|v| v == "all")
+        || r3_sgn_map().as_ref().is_some_and(|m| m.contains_key(&idx));
+    if hit && std::env::var_os("R3_SGN_TRACE").is_some() {
+        eprintln!("R3_SGN idx={idx}");
+    }
+    hit
+}
+
+/// R3 sign loan. At a mid-tick cell the walk invariant "rail R_{1+typ} is non-negative" means the family-A sign
+/// wires satisfy p1 = sR1' = typ AND m, x2[0] = NOT sR2', m = sR1' XOR sR2'. Fold x2[0] into m and MBU-erase p1
+/// (0 T); the cell sees one more free wire.
+fn r3_sgn_lend(c: &mut Builder, p1: QubitId, x20: QubitId, typ: QubitId) -> QubitId {
+    c.cx(p1, x20);
+    c.x(x20);
+    a_mbu(c, p1, typ, x20);
+    p1
+}
+
+/// Inverse of [`r3_sgn_lend`] after the cell: p1 = typ AND m (1 CCX), x2[0] restored. Returns p1's new wire.
+fn r3_sgn_restore(c: &mut Builder, x20: QubitId, typ: QubitId) -> QubitId {
+    let q = c.alloc_qubit();
+    c.ccx(typ, x20, q);
+    c.x(x20);
+    c.cx(q, x20);
+    q
+}
+
 /// K3b per-cell oracle harness. `K3B_CELL_PINS_ALL="N=V;N=V"` pins every payload cell; `K3B_CELL_OVR=path` holds
 /// lines `idx N=V N=V ...` for single cells (cell index = order of cell calls in the build); `K3B_CELL_TRACE=1`
 /// prints `K3B_CELL idx dir t proxy live room cost nB lB nF lF` (cost = expected T of the cell, from the phase report).
 fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl FnOnce(&mut Builder) -> R) -> R {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    static IDX: AtomicUsize = AtomicUsize::new(0);
     static ALL: OnceLock<Vec<(String, String)>> = OnceLock::new();
     static OVR: OnceLock<HashMap<usize, Vec<(String, String)>>> = OnceLock::new();
     static TRACE: OnceLock<bool> = OnceLock::new();
@@ -1528,10 +1878,30 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
             (i.parse::<usize>().unwrap(), kv(rest))
         }).collect()
     }).unwrap_or_default());
-    let idx = IDX.fetch_add(1, Ordering::Relaxed);
+    let idx = R3_CELL_IDX.fetch_add(1, Ordering::Relaxed);
     let mut pins: HashMap<String, String> = all.iter().cloned().collect();
     if let Some(v) = ovr.get(&idx) {
         pins.extend(v.iter().cloned());
+    }
+    // R3 sign loan: per-cell room pin delta from R3_SGN_FILE (`idx delta` lines).
+    if let Some(d) = r3_sgn_map().as_ref().and_then(|m| m.get(&idx)).copied() {
+        if d != 0 {
+            let cur: isize = pins.get("K3B_EXTRA_ROOM").map_or(0, |v| v.parse().unwrap());
+            pins.insert("K3B_EXTRA_ROOM".into(), (cur + d).to_string());
+        }
+    }
+    // R3 instrument: R3_ROOM_ALL="k" or "k:lo-hi,k:lo-hi" (cell idx ranges) adds k to this cell's K3B_EXTRA_ROOM.
+    if let Ok(spec) = std::env::var("R3_ROOM_ALL") {
+        for it in spec.split(',') {
+            let (k, rng) = it.split_once(':').map_or((it, None), |(a, b)| (a, Some(b)));
+            let hit = rng.map_or(true, |r| { let (lo, hi) = r.split_once('-').unwrap(); idx >= lo.parse::<usize>().unwrap() && idx <= hi.parse::<usize>().unwrap() });
+            if hit {
+                let k: isize = k.parse().unwrap();
+                let cur: isize = pins.get("K3B_EXTRA_ROOM").map_or(0, |v| v.parse().unwrap());
+                pins.insert("K3B_EXTRA_ROOM".into(), (cur + k).to_string());
+                break;
+            }
+        }
     }
     let set = !pins.is_empty();
     if set {
@@ -1541,7 +1911,8 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
     let room = h7::cap().saturating_sub(live as usize);
     let before = c.report_totals();
     let s0 = c.k3b_sites;
-    let out = body(c);
+    let (out, cpeak) = c.r3_peak(body);
+    if std::env::var_os("R3_PEAK").is_some() { eprintln!("R3_PEAK {idx} {cpeak}"); }
     let after = c.report_totals();
     let s1 = c.k3b_sites;
     if set {
@@ -1648,6 +2019,14 @@ struct Tape {
 /// A packed record from a different group is idle for the entire field cell.
 /// Its arbitrary quantum value and any deferred codec phase remain untouched.
 fn dirty_cell(c:&mut Builder,tape:&Tape,t:usize,body:impl FnOnce(&mut Builder)){
+    if std::env::var_os("R3_CENSUS").is_some() {
+        let raw = tape.raw.iter().filter(|x| x.is_some()).count();
+        let p3 = tape.groups.iter().filter(|g| g.as_ref().is_some_and(|g| g.state == GState::P3)).count();
+        let p5 = tape.groups.iter().filter(|g| g.as_ref().is_some_and(|g| g.state == GState::P5)).count();
+        let sh = tape.shared.iter().filter(|x| x.is_some()).count();
+        let tw = 2 * raw + 5 * p3 + 8 * p5 + sh;
+        eprintln!("R3_CENSUS t={t} live={} raw={raw} p3={p3} p5={p5} shared={sh} tape_wires={tw} rest={}", c.active_qubits(), c.active_qubits() as usize - tw - 512);
+    }
     let current=t.checked_sub(tape.off).map(|x|x/5);
     let loan=tape.groups.iter().enumerate().find_map(|(g,p)|{
         if Some(g)==current{return None;}p.as_ref().map(|p|(g,p.a1))
@@ -2191,7 +2570,7 @@ fn split_sizes_a(w: usize, room: usize, exact: bool) -> Result<Option<Vec<usize>
 fn fama_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, cout: QubitId, top: ATop, mode: SplitMode,
             tick_def: &mut Vec<(usize, BitId)>, label: &'static str, top_release: bool) {
     let w = b.len();
-    let room = h7::cap().saturating_sub(c.active_qubits() as usize);
+    let room = h7::cap().saturating_sub(c.active_qubits() as usize).saturating_sub(usize::from(env_bool("GO_SHARE_ROOMFIX", false) && SHARED_LOW.with(|x| x.borrow().is_some())));
     if env_bool("K3B_RAIL_TRACE", false) {
         eprintln!("K3B_RAIL {label} w={w} room={room} mode={mode:?} def={} fama={top:?}", tick_def.len());
     }
@@ -2352,7 +2731,7 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
     // crossing an ead shrink would instead keep the original source alive.
     let defer_s1 = mid.is_some() && !o0_erase && (env_usize("HEO_CELL_INSIDE", 0) >= 2
         || (env_bool("HEO_CELL_HELPER_S1", false) && label=="divfwd" && mpost <= mad
-            && [5usize,7,8,260,272].contains(&t)
+            && r3_s1_ticks().contains(&t)
             // The mid callback packs old letters at u%5=0 or3. It may change
             // typ_prev's physical wire there, so it must not be reread afterward.
             && t>=usize::from(k.lt0) && ![0usize,3].contains(&((t-usize::from(k.lt0))%5))));
@@ -2440,7 +2819,7 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
         }
         if let Some(tp) = typ_prev { c.cx(tp, cw); }
     }
-    let p1 = x1[0];
+    let mut p1 = x1[0];
     let mut hs: Vec<QubitId> = x1[1..].to_vec();
     while hs.len() > mad {
         let q = hs.pop().unwrap();
@@ -2452,9 +2831,13 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
     }
     if !defer_s1 {
         if let Some(m) = mid.as_mut() {
+            let loan = !o0_erase && r3_sgn_hit();
+            if loan { p1 = r3_sgn_lend(c, p1, x2[0], cw); }
             m(c, cw);
+            if loan { p1 = r3_sgn_restore(c, x2[0], cw); }
         }
     }
+    if env_bool("R4_RAIL_TRACE", false) { eprintln!("R4F {label} {t} w1={w1} mpost={mpost} mad={mad} x2r={} hsr={} msw={msw} wp={}", x2.len(), hs.len(), wpost(cfg, t)); }
     while x2.len() < mad {
         x2.push(c.alloc_qubit());
     }
@@ -2513,7 +2896,7 @@ fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: Qub
     let hs_fwd = (mpost - 1).min(mad);
     let pads = (mad - 1).saturating_sub(hs_fwd);
     let hs_len = hs_fwd + pads;
-    let AState { c: p1, x1: mut hs, mut x2 } = a_from_heo(c, rails);
+    let AState { c: mut p1, x1: mut hs, mut x2 } = a_from_heo(c, rails);
     while hs.len() > hs_len {
         let q = hs.pop().unwrap();
         c.free(q);
@@ -2523,6 +2906,7 @@ fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: Qub
     }
     assert!(x2.len() <= mad, "fama_rev t={t}: slot 2 wider than the add");
     let top_alias = env_bool("HEO_RAIL_TOP_ALIAS", false) && mad > wpost(cfg, t) - 1;
+    if env_bool("R4_RAIL_TRACE", false) { eprintln!("R4R {label} {t} w1={w1} mpost={mpost} mad={mad} x2r={} hsr={} hs_fwd={hs_fwd} pads={pads} msw={msw}", x2.len(), hs.len()); }
     while x2.len() < mad - usize::from(top_alias) { x2.push(c.alloc_qubit()); }
     if top_alias { x2.push(s); }
     if let Some(&h0) = hs.first() {
@@ -2535,7 +2919,7 @@ fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: Qub
     c.x_all(&x2);
     let top_release = env_bool("HEO_RAIL_TOP_RELEASE", false) && mad > wpost(cfg, t) - 1;
     if top_release { eprintln!("RAIL_TOP_RELEASE {label} direction=reverse tick={t} w={mad} wp={} short={}", wpost(cfg,t), hs.len()+1==x2.len()); }
-    if let Some(q)=incoming {assert!(mode==SplitMode::Apply && mid.is_none());REVERSE_LOW.with(|v|{assert!(v.borrow().is_none());*v.borrow_mut()=Some((hs[0],x2[0],p1,q));});}
+    if let Some(q)=incoming {assert!((mode==SplitMode::Apply || mode==SplitMode::Exact) && mid.is_none());REVERSE_LOW.with(|v|{assert!(v.borrow().is_none());*v.borrow_mut()=Some((hs[0],x2[0],p1,q));});}
     fama_add(c, &hs, &x2, p1, s, if top_alias {ATop::Sum} else {ATop::Erase}, mode, def, label, top_release); // S5: the tape letter is MBU-erased at the top
     assert!(REVERSE_LOW.with(|v|v.borrow().is_none()),"shared reverse carry was not consumed");
     c.x_all(&x2);
@@ -2572,7 +2956,10 @@ fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: Qub
         c.free(q);
     }
     if let Some(m) = mid.as_mut() {
+        let loan = !o0_rebuild && r3_sgn_hit();
+        if loan { p1 = r3_sgn_lend(c, p1, x2[0], typ); }
         m(c, typ);
+        if loan { p1 = r3_sgn_restore(c, x2[0], typ); }
     }
     while hs.len() < mpost - 1 {
         hs.push(c.alloc_qubit());
@@ -2703,7 +3090,7 @@ fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x:
             // v025 A-2: shared sign/carry/codec product, multiply forward pass only (rails-only pass,
             // room ~287: the retained carry wire crosses no field cell). Retain at letter u%5==1,
             // consume at u%5==2, erase at that group's pack3.
-            let mul_leg = label == "mulfwd";
+            let mul_leg = label == "mulfwd" || (label == "divfwd" && env_bool("GO_DIVFWD_SHARE", false) && std::env::var("GO_DIVFWD_SHARE_T").map_or(true, |v| v.split(',').any(|x| x.trim().parse::<usize>().ok() == Some(t))));
             let shared_on = mul_leg && env_bool("HEO_CARRY_CODEC", false) && truthy("HEO_CODEC_SYNTH");
             let u = t.checked_sub(w.tape.off);
             let keep_low = shared_on && u.is_some_and(|u| u % 5 == 1) && t + 2 < cfg.rounds();
@@ -2761,7 +3148,7 @@ fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x:
 fn reverse_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, t: usize, mode: SplitMode,
                 label: &'static str, mid: Option<&mut dyn FnMut(&mut Builder, &Tape, QubitId)>) -> Option<Vec<QubitId>> {
     assert!(mid.is_none() || t > 0, "HEO_CELL_INSIDE: no mid-tick cell at the unseed tick");
-    let share=label=="divrev" && env_bool("HEO_REVERSE_CARRY_CODEC",false) && truthy("HEO_CODEC_SYNTH");
+    let share=(label=="divrev" || (label=="mulrev2" && env_bool("GO_MULREV2_SHARE",false)) || (label=="mulrev" && env_bool("GO_MULREV_SHARE",false))) && env_bool("HEO_REVERSE_CARRY_CODEC",false) && truthy("HEO_CODEC_SYNTH");
     REVERSE_CODEC_CAPTURE.with(|v|v.set(share));
     book(c, "codec", "rev codec", t, |c| {
         w.tape.ensure_raw(c, t);
@@ -2901,6 +3288,7 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
             if t == 0 && k.fd {
                 let rails = w.rails.as_ref().unwrap();
                 let (xs, ys) = (*rails.r1.last().unwrap(), *rails.r2.last().unwrap());
+                if r4_ysub_fuse() { r4_ysub_tail(c, sig, xs, ys, typ); }
                 del = Some(book(c, "g1b", "div fd payload", t, |c| fd_payload_div(c, sig, xs, ys, typ)));
             } else if t == 0 {
                 assert!(k.g1b || k.h0, "carry schedule: G1b or H0 required (cell 0 skipped)");
@@ -3141,7 +3529,7 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
             fredkin(c, o0, a, b); // (a, b) = (X_sign, Y_sign)
             if std::env::var_os("FOLD_FD_TRANSPORT").is_some(){super::super::dirty_boundary_probe::with_tape(c,Some(o0),|c| fd_payload_div_inv(c,sig,&del,a,b,o0));}else{fd_payload_div_inv(c, sig, &del, a, b, o0);}
         });
-        c.free_vec(&del);
+        if !r5_take_del_freed() { c.free_vec(&del); }
         w.bwire = Some(a);
         w.ywire = Some(b);
         c.set_phase("heo_mul_railsrev2");

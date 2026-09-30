@@ -71,5 +71,6 @@ pub(crate) fn native_seed(c:&mut Builder,x:&[QubitId],wout:usize)->Option<(Vec<Q
  let mut a=a;while a.len()<wout{let q=c.alloc_qubit();c.cx(a[N],q);a.push(q);}while y.len()<wout{let q=c.alloc_qubit();c.cx(y[N],q);y.push(q);}Some((a,y))
 }
 pub(crate) fn retained_coord_sub(c:&mut Builder,x:&[QubitId],coord:&[BitId]){
+ if md::r5_cbits(1){c.x_all(x);let borrow=c.alloc_qubit();md::r5_ripple_add_cbits(c,coord,x,borrow);c.x_all(x);assert!(BORROW.lock().unwrap().replace((borrow,coord.to_vec())).is_none());return;}
  let value=c.alloc_qubits(coord.len());for(&q,&b)in value.iter().zip(coord){c.x_if_bit(q,b);}let borrow=raw_sub(c,x,&value);for(&q,&b)in value.iter().zip(coord){c.x_if_bit(q,b);}c.free_vec(&value);assert!(BORROW.lock().unwrap().replace((borrow,coord.to_vec())).is_none());
 }

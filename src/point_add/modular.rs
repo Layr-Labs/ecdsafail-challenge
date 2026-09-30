@@ -187,7 +187,7 @@ pub(crate) fn ripple_add_proved(
         assert_eq!(qs.len(),owned);
         assert!(qs.iter().all(|q|!acc.contains(q) && !addend.contains(q)));
         qs.to_vec()
-    } else {circ.alloc_qubits(owned)};
+    } else {if std::env::var_os("SKY_OVERSHOOT").is_some() && circ.active_qubits() as usize+owned>walk_max_qubits(){eprintln!("SKY_OVER owned={owned} active={} width={width} op={} k={k} fit={} ko={} guard={} cin={} cout={}",circ.active_qubits(),circ.op_count(),super::heo::fit_adds(),known_output.is_some(),HEO_SPLIT_GUARD.with(|g| g.get()),carry_in.is_some(),carry_out.is_some());} circ.alloc_qubits(owned)};
     carries.extend(carry_out);
     let previous = |i: usize| {
         if i == 0 {
@@ -296,6 +296,8 @@ thread_local! { static HEO_SPLIT_GUARD: std::cell::Cell<bool> = const { std::cel
 /// B3b: the chunked form of [`ripple_add_proved`] (see its HEO block). Returns false
 /// (nothing emitted) when no layout with every chunk inside the addend exists.
 #[allow(clippy::too_many_arguments)]
+fn sky_trim_last() -> bool { std::env::var("SKY_SPLIT_TRIM_LAST").is_ok_and(|v| v == "1") }
+
 fn heo_split_ripple(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], carry_in: Option<QubitId>,
                     carry_out: Option<QubitId>, c0: Carry0, c1: Carry1, deferred: Option<(usize, BitId)>,
                     known_terminal: Option<bool>, room: usize) -> bool {
@@ -332,6 +334,9 @@ fn heo_split_ripple(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], car
             excess -= cut;
         }
         if excess > 0 {
+            // SKY_SPLIT_TRIM_LAST (fallback only): the last chunk may shrink too, so a
+            // ladder whose addend fills the last cap still splits under the cap.
+            if sky_trim_last() && sz[nk - 1] >= excess + 2 { sz[nk - 1] -= excess; sizes = Some(sz); break; }
             continue;
         }
         sizes = Some(sz);
@@ -826,6 +831,107 @@ pub fn mod_addsub(circ: &mut Builder, negate: bool, value: &[QubitId], acc: &[Qu
     mod_addsub_with(circ, negate, value, acc, go_fs("GO_FG_M"), erase_compare(), f(), None)
 }
 
+/// R4_YSUB_FUSE head of [`mod_addsub`] with `negate`: complement `acc`, add, return the live vented overflow.
+pub(crate) fn r4_addsub_head(circ: &mut Builder, value: &[QubitId], acc: &[QubitId]) -> QubitId {
+    assert_eq!(value.len(), acc.len(), "r4_addsub_head: width mismatch");
+    circ.x_all(acc);
+    heo_fitted_vented_add(circ, value, acc).unwrap_or_else(|| {
+        let overflow = circ.alloc_qubit();
+        peak_fitted_add(circ, value, acc, overflow);
+        overflow
+    })
+}
+
+/// R5_CBITS bitmask (sky-PM Round 5): 1 coord_x_sub, 2 ysub head, 4 back seam Div leg, 8 back seam
+/// Mul leg run their classical-operand adds with [`r5_ripple_add_cbits`] (bit 0 carry is a CX).
+pub(crate) fn r5_ccmp(bit: u32) -> bool {
+    std::env::var("R5_CCMP").ok().and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0) & bit != 0
+}
+
+pub(crate) fn r5_cbits(bit: u32) -> bool {
+    std::env::var("R5_CBITS").ok().and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0) & bit != 0
+}
+
+/// R5 (sky-PM Round 5): `acc += a` for a classical operand `a` (runtime bits), vented carry into
+/// `carry_out`. The same Gidney ladder as [`ripple_add`] without addend wires: the folded addend
+/// `a_i ^ c_i` is the previous carry wire under a classically conditioned X, so it needs only the
+/// `width - 1` owned carries (no temp register). Bit 0's carry is `a_0 AND acc_0`: a conditioned CX.
+pub(crate) fn r5_ripple_add_cbits(circ: &mut Builder, a: &[BitId], acc: &[QubitId], carry_out: QubitId) {
+    r5_ripple_add_cbits_sel(circ, a, None, acc, carry_out);
+}
+
+/// Flips `q` by addend bit `i >= 1`: `a[i] ^ (D[i] & (s ^ inv))` where `sel = (s, inv, D)`.
+fn r5_cbits_flip(circ: &mut Builder, q: QubitId, a: &[BitId], sel: Option<(QubitId, bool, &[BitId])>, i: usize) {
+    circ.x_if_bit(q, a[i]);
+    if let Some((s, inv, d)) = sel {
+        circ.push_condition(d[i]);
+        circ.cx(s, q);
+        if inv {
+            circ.x(q);
+        }
+        circ.pop_condition();
+    }
+}
+
+/// [`r5_ripple_add_cbits`] with an optional selected addend: bits `i >= 1` add
+/// `a[i] ^ (D[i] & (s ^ inv))`, where `s` must be `acc[0]` (it is read before the sum touches it:
+/// bit 0's addend is `a[0]` only, and `acc[0]` is restored to its value only at the very end).
+pub(crate) fn r5_ripple_add_cbits_sel(
+    circ: &mut Builder,
+    a: &[BitId],
+    sel: Option<(QubitId, bool, &[BitId])>,
+    acc: &[QubitId],
+    carry_out: QubitId,
+) {
+    let n = acc.len();
+    assert_eq!(a.len(), n, "r5_ripple_add_cbits: width mismatch");
+    assert!(n >= 2);
+    if let Some((s, _, d)) = sel {
+        assert_eq!(s, acc[0], "r5_ripple_add_cbits_sel: selector must be acc[0]");
+        assert!(d.len() >= n);
+    }
+    let mut carries = circ.alloc_qubits(n - 1);
+    carries.push(carry_out);
+    circ.push_condition(a[0]);
+    circ.cx(acc[0], carries[0]);
+    circ.pop_condition();
+    for i in 1..n {
+        let p = carries[i - 1];
+        circ.cx(p, acc[i]);
+        r5_cbits_flip(circ, p, a, sel, i);
+        circ.ccx(p, acc[i], carries[i]);
+        r5_cbits_flip(circ, p, a, sel, i);
+        circ.cx(p, carries[i]);
+    }
+    // top sum bit: acc[top] holds b ^ c.
+    r5_cbits_flip(circ, acc[n - 1], a, sel, n - 1);
+    for i in (1..n - 1).rev() {
+        let p = carries[i - 1];
+        let q = carries[i];
+        circ.cx(p, q);
+        let m = circ.alloc_bit();
+        circ.hmr(q, m);
+        r5_cbits_flip(circ, p, a, sel, i);
+        circ.cz_if(p, acc[i], m);
+        r5_cbits_flip(circ, p, a, sel, i);
+        circ.free_bit(m);
+        circ.free(q);
+        r5_cbits_flip(circ, acc[i], a, sel, i);
+    }
+    let q = carries[0];
+    let m = circ.alloc_bit();
+    circ.hmr(q, m);
+    let t = circ.alloc_bit();
+    circ.bit_store0(t);
+    circ.bit_and_xor_into(t, a[0], m);
+    circ.z_if(acc[0], t);
+    circ.bit_store0(t);
+    circ.free_bit(t);
+    circ.free_bit(m);
+    circ.free(q);
+    circ.x_if_bit(acc[0], a[0]);
+}
+
 /// [`mod_addsub`] with the fold window `fs`, erasure width `k` and fold constant `fconst` as
 /// arguments, and an optional `mid` hook run between the fold and the carry erasure with the
 /// vented carry wire (the I-2 back seam unloads its selected operand bits there).
@@ -870,7 +976,7 @@ fn fold_f_complemented(circ: &mut Builder, anc: QubitId, y: &[QubitId]) {
     fold_f_complemented_at(circ, anc, y, go_fs("GO_FG_M"), f())
 }
 
-fn fold_f_complemented_at(circ: &mut Builder, anc: QubitId, y: &[QubitId], fs: usize, fconst: U256) {
+pub(crate) fn fold_f_complemented_at(circ: &mut Builder, anc: QubitId, y: &[QubitId], fs: usize, fconst: U256) {
     circ.x_all(&y[..fs]);
     assert!(fs <= y.len(), "register too short for +f window");
     cadd_const_trunc(circ, &y[..fs], fconst, anc, false);
