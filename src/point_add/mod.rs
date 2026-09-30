@@ -151,7 +151,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "5000500937876",
+        "TAIL_NONCE" => "6000441753949",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -398,7 +398,7 @@ fn install_skywalk_submission_recipe() {
     std::env::set_var("K3B_CELL_OVR", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/ovr_v025_lamneutral.txt"));
 }
 
-/// sky5 submission: every setting of the circuit is pinned in code (the recipe above, the compiled-in
+/// sky6 submission: every setting of the circuit is pinned in code (the recipe above, the compiled-in
 /// envelopes and rewrite rows, `TAIL_NONCE` in `env_raw`). Clear the inherited process environment first
 /// so that no variable set on the host (`HEO_PIN_*`, `GO_*`, `R*_*`, `SKY_*`, ...) can change the circuit.
 fn clear_process_env() {
@@ -454,10 +454,10 @@ pub fn build() -> Vec<Op> {
         // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
         ops = mabsorb::absorb(ops);
     }
-    // SKY_REWRITE (sky5 package rows, compiled in): replace SAT-proved linear-span CCX by CX chains.
+    // SKY_REWRITE (sky6 package rows: sky5 rows + 11 Round 6 rows, compiled in): replace SAT-proved linear-span CCX by CX chains.
     // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted).
     {
-        let text = include_str!("skywalk_data/sky5_ycd_rewrite.txt");
+        let text = include_str!("skywalk_data/sky6_z11_rewrite.txt");
         let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
             let ws = if f[5] == "-" { vec![] } else { f[5].split(',').map(|x| x.parse().unwrap()).collect() };
