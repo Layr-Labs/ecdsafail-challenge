@@ -166,9 +166,24 @@ fn parse_cell_windows(text: &str) -> std::collections::HashMap<(bool, usize), (i
 
 /// B6: the (dB, dF, dX) shift of cell (leg, t) under `HEO_CELL_WINDOWS` ((0, 0, 0) when absent).
 fn cell_shift(mul: bool, t: usize) -> (isize, isize, isize) {
-    carry_cfg().cell_windows.as_ref().and_then(|m| m.get(&(mul, t)).copied()).unwrap_or((0, 0, 0))
+    let (b, f, x) = carry_cfg().cell_windows.as_ref().and_then(|m| m.get(&(mul, t)).copied()).unwrap_or((0, 0, 0));
+    // GO r6: per-cell compare re-balance. GO_CELLB / GO_CELLF = "leg:lo-hi:delta,..." (leg div|mul|a) add to dB / dF.
+    (b + go_cell_delta("GO_CELLB", mul, t), f + go_cell_delta("GO_CELLF", mul, t), x)
 }
 
+fn go_cell_delta(key: &str, mul: bool, t: usize) -> isize {
+    let Ok(v) = std::env::var(key) else { return 0 };
+    let mut d = 0isize;
+    for it in v.split(',').filter(|s| !s.is_empty()) {
+        let f: Vec<&str> = it.split(':').collect();
+        assert_eq!(f.len(), 3, "bad {key} {it}");
+        if (f[0] == "div" && mul) || (f[0] == "mul" && !mul) { continue; }
+        let (lo, hi) = f[1].split_once('-').expect("lo-hi");
+        let (lo, hi): (usize, usize) = (lo.parse().unwrap(), hi.parse().unwrap());
+        if t >= lo && t <= hi { d += f[2].parse::<isize>().unwrap(); }
+    }
+    d
+}
 fn env_usize(name: &str, default: usize) -> usize {
     std::env::var(name).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(default)
 }

@@ -151,7 +151,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "6000441753949",
+        "TAIL_NONCE" => "8000042289598",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -324,7 +324,7 @@ fn install_skywalk_submission_recipe() {
         ("FD_COORD_FUSE", "1"),
         ("FD_COORD_LOW_ONE", "1"),
         ("HEO_PIN_FOLD_GUARD", "21"),
-        ("HEO_PIN_PP_FOLD_WIDEN", "64"),
+        ("HEO_PIN_PP_FOLD_WIDEN", "68"),
         ("HEO_PIN_PP_FOLD_PROFILE", "38:0,32:-1,25:-2,19:-4,0:-4"),
         ("PP_DROP_EXACT_LEAD", "1"),
         ("PP_DROP_EXACT_LEAD_DIR", "mul"),
@@ -390,6 +390,11 @@ fn install_skywalk_submission_recipe() {
         ("R5_CCMP", "23"),
         ("R5_CBITS_PAD", "1"),
         ("R5_CBITS_PAD_ALL", "1"),
+        // sky8 package (frozen-sky8, GO p7f): split carry window K=21, FOLD_WIDEN 68 (above), GO r6 per-cell
+        // compare re-balance (div ticks 150-155 dB -1, mul ticks 225-344 dF +1), iA.100 envelopes (heo.rs).
+        ("HEO_SPLIT_K", "21"),
+        ("GO_CELLB", "div:150-155:-1"),
+        ("GO_CELLF", "mul:225-344:1"),
     ] { std::env::set_var(name, value); }
     std::env::set_var("HEO_ENVELOPE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-0.txt"));
     std::env::set_var("HEO_ENVELOPE_MUL", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-1.txt"));
@@ -398,7 +403,7 @@ fn install_skywalk_submission_recipe() {
     std::env::set_var("K3B_CELL_OVR", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/ovr_v025_lamneutral.txt"));
 }
 
-/// sky6 submission: every setting of the circuit is pinned in code (the recipe above, the compiled-in
+/// sky8 submission: every setting of the circuit is pinned in code (the recipe above, the compiled-in
 /// envelopes and rewrite rows, `TAIL_NONCE` in `env_raw`). Clear the inherited process environment first
 /// so that no variable set on the host (`HEO_PIN_*`, `GO_*`, `R*_*`, `SKY_*`, ...) can change the circuit.
 fn clear_process_env() {
@@ -454,10 +459,10 @@ pub fn build() -> Vec<Op> {
         // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
         ops = mabsorb::absorb(ops);
     }
-    // SKY_REWRITE (sky6 package rows: sky5 rows + 11 Round 6 rows, compiled in): replace SAT-proved linear-span CCX by CX chains.
+    // SKY_REWRITE (sky8 package rows: GO p7f rwf, 67 rows, compiled in): replace SAT-proved linear-span CCX by CX chains.
     // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted).
     {
-        let text = include_str!("skywalk_data/sky6_z11_rewrite.txt");
+        let text = include_str!("skywalk_data/sky8_p7f_rewrite.txt");
         let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
             let ws = if f[5] == "-" { vec![] } else { f[5].split(',').map(|x| x.parse().unwrap()).collect() };
