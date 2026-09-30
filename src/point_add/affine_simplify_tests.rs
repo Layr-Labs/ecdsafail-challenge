@@ -1,0 +1,437 @@
+use super::simplify;
+use crate::circuit::{BitId, Op, OperationType, QubitId, RegisterId};
+use crate::sim::Simulator;
+use sha3::digest::XofReader;
+use std::collections::BTreeSet;
+
+fn op(
+    k: OperationType,
+    qt: Option<u64>,
+    q1: Option<u64>,
+    q2: Option<u64>,
+    bt: Option<u64>,
+    bc: Option<u64>,
+) -> Op {
+    let mut o = Op::empty();
+    o.kind = k;
+    if let Some(v) = qt {
+        o.q_target = QubitId(v)
+    }
+    if let Some(v) = q1 {
+        o.q_control1 = QubitId(v)
+    }
+    if let Some(v) = q2 {
+        o.q_control2 = QubitId(v)
+    }
+    if let Some(v) = bt {
+        o.c_target = BitId(v)
+    }
+    if let Some(v) = bc {
+        o.c_condition = BitId(v)
+    }
+    o.validate();
+    o
+}
+fn x(t: u64) -> Op {
+    op(OperationType::X, Some(t), None, None, None, None)
+}
+fn cx(a: u64, t: u64) -> Op {
+    op(OperationType::CX, Some(t), Some(a), None, None, None)
+}
+fn cc(a: u64, b: u64, t: u64) -> Op {
+    op(OperationType::CCX, Some(t), Some(a), Some(b), None, None)
+}
+fn h(t: u64, c: u64, guard: Option<u64>) -> Op {
+    op(OperationType::Hmr, Some(t), None, None, Some(c), guard)
+}
+fn reset(t: u64, g: Option<u64>) -> Op {
+    op(OperationType::R, Some(t), None, None, None, g)
+}
+fn push(c: u64) -> Op {
+    op(
+        OperationType::PushCondition,
+        None,
+        None,
+        None,
+        None,
+        Some(c),
+    )
+}
+fn pop() -> Op {
+    op(OperationType::PopCondition, None, None, None, None, None)
+}
+struct Fixture {
+    name: &'static str,
+    ops: Vec<Op>,
+    qi: Vec<usize>,
+    bi: Vec<usize>,
+    required: Vec<&'static str>,
+}
+struct Words {
+    words: Vec<u64>,
+    pos: usize,
+}
+impl XofReader for Words {
+    fn read(&mut self, out: &mut [u8]) {
+        assert_eq!(out.len(), 8);
+        out.copy_from_slice(&self.words[self.pos].to_le_bytes());
+        self.pos += 1;
+    }
+}
+fn run(
+    ops: &[Op],
+    qi: &[usize],
+    bi: &[usize],
+    input: usize,
+    random: usize,
+    nrandom: usize,
+) -> (Vec<u64>, Vec<u64>, u64, usize) {
+    let mut rng = Words {
+        words: (0..nrandom)
+            .map(|i| if random >> i & 1 != 0 { u64::MAX } else { 0 })
+            .collect(),
+        pos: 0,
+    };
+    let state = {
+        let mut s = Simulator::new(40, 4, &mut rng);
+        for (k, &q) in qi.iter().enumerate() {
+            s.qubits[q] = if input >> k & 1 != 0 { u64::MAX } else { 0 };
+        }
+        for (k, &b) in bi.iter().enumerate() {
+            s.bits[b] = if input >> (k + qi.len()) & 1 != 0 {
+                u64::MAX
+            } else {
+                0
+            };
+        }
+        s.apply_iter(ops.iter());
+        (s.qubits, s.bits, s.phase)
+    };
+    (state.0, state.1, state.2, rng.pos)
+}
+
+fn with_abi(f: &Fixture) -> Vec<Op> {
+    let mut ops = Vec::new();
+    let mut register = Op::empty();
+    register.kind = OperationType::Register;
+    register.r_target = RegisterId(0);
+    ops.push(register);
+    for &q in &f.qi {
+        let mut o = Op::empty();
+        o.kind = OperationType::AppendToRegister;
+        o.r_target = RegisterId(0);
+        o.q_target = QubitId(q as u64);
+        ops.push(o);
+    }
+    for &b in &f.bi {
+        let mut o = Op::empty();
+        o.kind = OperationType::AppendToRegister;
+        o.r_target = RegisterId(0);
+        o.c_target = BitId(b as u64);
+        ops.push(o);
+    }
+    ops.extend(f.ops.iter().copied());
+    ops
+}
+
+// Recognize only an ordered sequence of CCX keep/drop/CX/X edits. Every
+// non-CCX must match verbatim; branching handles identical adjacent gates.
+fn legal_ccx_edits(original: &[Op], rewritten: &[Op]) -> bool {
+    fn visit(a: &[Op], b: &[Op], i: usize, j: usize, seen: &mut BTreeSet<(usize, usize)>) -> bool {
+        if !seen.insert((i, j)) {
+            return false;
+        }
+        if i == a.len() {
+            return j == b.len();
+        }
+        if j < b.len() && a[i] == b[j] && visit(a, b, i + 1, j + 1, seen) {
+            return true;
+        }
+        if a[i].kind != OperationType::CCX {
+            return false;
+        }
+        if visit(a, b, i + 1, j, seen) {
+            return true;
+        }
+        if j == b.len() {
+            return false;
+        }
+        let mut replacement = Op::empty();
+        replacement.q_target = a[i].q_target;
+        replacement.c_condition = a[i].c_condition;
+        replacement.kind = OperationType::X;
+        if b[j] == replacement && visit(a, b, i + 1, j + 1, seen) {
+            return true;
+        }
+        replacement.kind = OperationType::CX;
+        for control in [a[i].q_control1, a[i].q_control2] {
+            replacement.q_control1 = control;
+            if b[j] == replacement && visit(a, b, i + 1, j + 1, seen) {
+                return true;
+            }
+        }
+        false
+    }
+    visit(original, rewritten, 0, 0, &mut BTreeSet::new())
+}
+
+fn compare(
+    f: &Fixture,
+    original: &[Op],
+    rewritten: &[Op],
+    inputs: impl Iterator<Item = usize>,
+) -> (usize, usize) {
+    let nr = original
+        .iter()
+        .filter(|o| matches!(o.kind, OperationType::R | OperationType::Hmr))
+        .count();
+    let (mut cases, mut failed) = (0, 0);
+    for input in inputs {
+        for random in 0..1usize << nr {
+            cases += 1;
+            if run(original, &f.qi, &f.bi, input, random, nr)
+                != run(rewritten, &f.qi, &f.bi, input, random, nr)
+            {
+                failed += 1;
+            }
+        }
+    }
+    (cases, failed)
+}
+
+fn fixtures() -> Vec<Fixture> {
+    use OperationType::*;
+    let common = |name, ops, required| Fixture {
+        name,
+        ops,
+        qi: vec![0, 1],
+        bi: vec![0, 1],
+        required,
+    };
+    let fs = vec![
+        common(
+            "constant-controls",
+            vec![
+                x(2),
+                cc(2, 3, 4),
+                cc(2, 0, 4),
+                cc(0, 2, 4),
+                x(3),
+                cc(2, 3, 4),
+                op(CZ, Some(4), Some(0), None, None, None),
+                reset(4, None),
+            ],
+            vec!["ZeroControl", "Control1One", "Control2One", "BothOne"],
+        ),
+        common(
+            "equal-complement-phase",
+            vec![
+                cx(0, 2),
+                cc(0, 2, 3),
+                x(2),
+                cc(0, 2, 3),
+                h(3, 2, None),
+                op(Z, Some(0), None, None, None, Some(2)),
+                reset(2, None),
+            ],
+            vec!["EqualControls", "ComplementControls"],
+        ),
+        common(
+            "opaque-nonlinear",
+            vec![
+                cc(0, 1, 2),
+                cx(2, 3),
+                cc(2, 3, 4),
+                cc(0, 1, 5),
+                cc(2, 5, 4),
+                x(2),
+                cx(3, 2),
+                cc(2, 0, 4),
+            ],
+            vec!["EqualControls", "Control1One"],
+        ),
+        common(
+            "classical-ABI",
+            vec![
+                x(2),
+                op(X, Some(3), None, None, None, Some(0)),
+                cc(2, 3, 4),
+                h(4, 2, None),
+            ],
+            vec!["Control1One"],
+        ),
+        common(
+            "unknown-guards-reset",
+            vec![
+                x(2),
+                op(X, Some(3), None, None, None, Some(0)),
+                cc(2, 3, 4),
+                h(0, 0, Some(1)),
+                op(BitInvert, None, None, None, Some(0), Some(1)),
+                op(X, Some(5), None, None, None, Some(0)),
+                cc(2, 5, 4),
+                reset(0, Some(1)),
+                cc(0, 2, 4),
+            ],
+            vec!["Control1One", "Control2One"],
+        ),
+        common(
+            "false-guards",
+            vec![
+                x(2),
+                op(BitStore0, None, None, None, Some(2), None),
+                op(CCX, Some(3), Some(0), Some(1), None, Some(2)),
+                push(2),
+                h(0, 0, None),
+                reset(1, None),
+                x(4),
+                cc(0, 1, 3),
+                pop(),
+                cc(1, 2, 3),
+            ],
+            vec!["FalseGuard", "Control2One"],
+        ),
+        common(
+            "nested-snapshots",
+            vec![
+                push(0),
+                op(BitInvert, None, None, None, Some(0), None),
+                x(2),
+                push(1),
+                op(BitStore0, None, None, None, Some(1), None),
+                x(3),
+                pop(),
+                x(4),
+                pop(),
+                cc(2, 4, 6),
+                h(6, 3, None),
+                cc(2, 3, 6),
+            ],
+            vec!["EqualControls"],
+        ),
+        common(
+            "Hmr-classical-reuse",
+            vec![
+                h(0, 0, None),
+                push(0),
+                h(1, 0, None),
+                x(2),
+                pop(),
+                op(X, Some(3), None, None, None, Some(0)),
+                cc(2, 3, 4),
+                h(4, 2, None),
+                op(BitStore1, None, None, None, Some(0), None),
+                op(CCX, Some(5), Some(2), Some(3), None, Some(0)),
+            ],
+            vec![],
+        ),
+        common(
+            "conditional-swap",
+            vec![
+                cx(0, 2),
+                op(Swap, Some(2), Some(1), None, None, Some(0)),
+                cx(2, 3),
+                cc(2, 3, 4),
+                op(CCZ, Some(4), Some(0), Some(1), None, Some(1)),
+                reset(4, None),
+            ],
+            vec!["EqualControls"],
+        ),
+    ];
+    fs
+}
+
+#[test]
+fn simplifies_zero_control() {
+    let input = vec![cc(0, 1, 2)];
+    assert!(
+        simplify(input).is_empty(),
+        "missing simplifier: both non-ABI controls are initially zero"
+    );
+}
+
+#[test]
+fn exhaustive_dynamic_circuits_preserve_complete_state_and_phase() {
+    let mut total = 0;
+    for f in fixtures() {
+        let original = with_abi(&f);
+        let rewritten = simplify(original.clone());
+        assert!(
+            legal_ccx_edits(&original, &rewritten),
+            "{} changed a non-CCX operation",
+            f.name
+        );
+        let count = |ops: &[Op]| ops.iter().filter(|o| o.kind == OperationType::CCX).count();
+        assert!(
+            count(&original) - count(&rewritten) >= f.required.len(),
+            "{} missing expected simplifications",
+            f.name
+        );
+        let (cases, failures) = compare(
+            &f,
+            &original,
+            &rewritten,
+            0..1usize << (f.qi.len() + f.bi.len()),
+        );
+        assert_eq!(failures, 0, "{} semantic mismatch", f.name);
+        total += cases;
+        eprintln!("{}: {cases} exhaustive input/outcome cases", f.name);
+    }
+    assert_eq!(total, 464);
+}
+
+#[test]
+fn conditional_reset_and_classical_unknown_mutants_are_detected() {
+    // These deliberately wrong rewrites live only in tests. Their claimed
+    // premises are: classical ABI=0, reset despite a false guard, or Hmr=0.
+    for (name, expected_failures) in [
+        ("classical-ABI", 8),
+        ("false-guards", 32),
+        ("Hmr-classical-reuse", 32),
+    ] {
+        let f = fixtures().into_iter().find(|f| f.name == name).unwrap();
+        let original = with_abi(&f);
+        let mutant: Vec<_> = original
+            .iter()
+            .copied()
+            .filter(|o| o.kind != OperationType::CCX)
+            .collect();
+        let (_, failures) = compare(
+            &f,
+            &original,
+            &mutant,
+            0..1usize << (f.qi.len() + f.bi.len()),
+        );
+        assert_eq!(
+            failures, expected_failures,
+            "{name}: unsound assumption was not detected"
+        );
+    }
+}
+
+#[test]
+fn cap32_overflow_does_not_invent_zero_or_lose_copied_equality() {
+    let mut gates: Vec<_> = (0..33).map(|q| cx(q, 33)).collect();
+    gates.extend([cx(33, 34), cc(33, 34, 35), reset(33, None), cc(33, 34, 36)]);
+    let f = Fixture {
+        name: "cap32-overflow",
+        ops: gates,
+        qi: (0..33).collect(),
+        bi: vec![],
+        required: vec![],
+    };
+    let original = with_abi(&f);
+    let rewritten = simplify(original.clone());
+    assert!(legal_ccx_edits(&original, &rewritten));
+    assert!(!rewritten.iter().any(|o| o.kind == OperationType::CCX));
+    assert!(
+        rewritten.contains(&cx(33, 35)),
+        "unknown overflow value must retain copied equality, not become zero"
+    );
+    // Boundary regression, not an exhaustive claim over all 2^33 inputs.
+    let inputs = std::iter::once(0)
+        .chain((0..33).map(|i| 1usize << i))
+        .chain(std::iter::once((1usize << 33) - 1));
+    let (cases, failed) = compare(&f, &original, &rewritten, inputs);
+    assert_eq!((cases, failed), (70, 0));
+}
