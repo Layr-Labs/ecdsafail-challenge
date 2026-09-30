@@ -219,7 +219,7 @@ pub fn carry_cfg() -> &'static CarryCfg {
             loan_both: env_bool("HEO_LOAN_BOTH", false),
             rail_max: env_usize("HEO_RAIL_MAX", usize::MAX),
             proxy_esw: std::env::var("HEO_PROXY_ENVELOPE").ok().filter(|p| !p.trim().is_empty()).map(|p| {
-                let text = include_str!("skywalk_data/env_front07_R393_clamp.txt").to_owned();
+                let text = include_str!("skywalk_data/env_front07_R396_clamp.txt").to_owned();
                 super::parse_envelope(&text).0
             }),
             db_skip: env_bool("HEO_DB_SKIP", false),
