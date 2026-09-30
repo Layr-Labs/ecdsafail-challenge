@@ -1,0 +1,28 @@
+{
+  "scope": "Scalar algebra only; native inverse tests remain pending",
+  "fixture_sha256": "3b1184c6e253cf591c3763cf71a4c66060734733ec5dba528295e2f06456daaa",
+  "cases": 512,
+  "local_subtract_carry_cases": {
+    "0,0": 150,
+    "0,1": 134,
+    "1,0": 120,
+    "1,1": 108
+  },
+  "minimum_doubled_margin": "0x14ed8846458eb8261452c8960c9fef64a59824cf1210629ed",
+  "minimum_doubled_margin_bits": 193,
+  "minimum_folded_gap": "0x21006b884b6bceb2e33d749a0fa6dcd7827f2b35284c75ba5",
+  "minimum_folded_gap_bits": 194,
+  "drop_low_bits": 136,
+  "retained_bits": 120,
+  "all_full_and_top_inverse_predicates_equal_carry": true,
+  "off_support_witness": {
+    "current_coefficient": "0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffff7ffffe17",
+    "source": "0x100000000000000000000000000000000000000000000000008",
+    "original_sign": 1,
+    "doubled": "0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2e",
+    "result": "0x100000000000000000000000000000000000000000000000007",
+    "full_less": true,
+    "top120_less": false,
+    "margin": 1
+  }
+}

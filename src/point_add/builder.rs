@@ -15,13 +15,6 @@ const OP_KINDS: usize = OperationType::DebugPrint as usize + 1;
 
 pub struct Builder {
     ops: Vec<Op>,
-    model: bool,
-    model_depth: usize,
-    model_total: usize,
-    model_weighted: f64,
-    model_phase_native: usize,
-    model_phase_weighted: f64,
-    model_max: u32,
     /// Ops of each kind emitted since the last [`Builder::set_phase`]; only the
     /// two Toffoli kinds are reported, but indexing by `kind` is cheaper than
     /// branching on it.
@@ -37,45 +30,12 @@ pub struct Builder {
     peak_census: PeakCensus,
     ccx_census: CcxCensus,
     replay_sites: ReplaySites,
-    /// PP_J_SFUSE: parked wire ids a fresh allocation must not take.
-    avoid_ids: Vec<u32>,
-    /// K3b: running (B count, B sum 2^-w, F count, F sum 2^-w) over replay repair sites (lambda proxy).
-    pub k3b_sites: (usize, f64, usize, f64),
-    /// B3a phase report (`HEO_PHASE_REPORT=1` under the research overlay).
-    /// Observes the op stream only; off in the default build.
-    report: Option<Box<PhaseReport>>,
-    /// B3b: running peak since the last `take_win_peak` (book-keeping only).
-    win_peak: u32,
-}
-
-/// Per-phase native / expected Toffoli and peak, plus the global peak's op and
-/// phase. Expected weight is 2^-(condition depth), the same rule as model mode.
-#[derive(Default)]
-pub struct PhaseReport {
-    depth: u32,
-    phase_native: usize,
-    phase_expected: f64,
-    total_native: usize,
-    total_expected: f64,
-    peak: u32,
-    peak_op: usize,
-    peak_phase: &'static str,
 }
 
 impl Builder {
-    pub(crate) fn current_phase(&self)->&'static str {self.phase}
-    pub(crate) fn fold_trace(&mut self,label:&str,body:impl FnOnce(&mut Self)) {
-        if std::env::var_os("FOLD_FD_TRANSPORT").is_none(){body(self);return;}
-        let saved=self.win_peak;let base=self.active_qubits();let before=self.report_totals().map_or(0.,|x|x.1);self.win_peak=base;body(self);let peak=self.win_peak;self.win_peak=saved.max(peak);
-        eprintln!("FOLD_FD_PART\t{label}\t{base}\t{peak}\t{}",self.report_totals().map_or(0.,|x|x.1)-before);
-    }
     pub fn new() -> Self {
         Self {
             ops: Vec::new(),
-            // Count-only model mode is disabled in this submission.
-            model: false,
-            model_depth: 0, model_total: 0, model_weighted: 0.0,
-            model_phase_native: 0, model_phase_weighted: 0.0, model_max: 0,
             phase_kind_ops: [0; OP_KINDS],
             next_qubit: 0,
             next_bit: 0,
@@ -88,29 +48,9 @@ impl Builder {
             peak_census: PeakCensus::new(),
             ccx_census: CcxCensus::new(),
             replay_sites: ReplaySites::new(),
-            k3b_sites: (0, 0.0, 0, 0.0),
-            report: super::heo::phase_report_enabled().then(Box::default),
-            win_peak: 0,
-            avoid_ids: Vec::new(),
         }
     }
-    /// Highest live-qubit count seen so far over the whole build (tracked in
-    /// every mode by `note_peak`).
-    pub fn peak_total(&self) -> u32 { self.model_max }
-    /// Ops emitted so far (diagnostic cursor for the B3a probes).
-    pub fn op_count(&self) -> usize { self.ops.len() }
-    /// B3b: peak live count since the previous call (book-keeping only).
-    pub fn take_win_peak(&mut self) -> u32 { let p = self.win_peak.max(self.active_qubits); self.win_peak = self.active_qubits; p }
-    /// B3b: (native, expected) Toffoli so far, when the phase report is on.
-    pub fn report_totals(&self) -> Option<(usize, f64)> { self.report.as_deref().map(|r| (r.total_native, r.total_expected)) }
-    pub(crate) fn i35_cost(&self)->f64{self.model_weighted}
-    pub fn i13_dims(&self)->(usize,usize){(self.next_qubit as usize,self.next_bit as usize)}
     pub fn take_ops(&mut self) -> Vec<Op> {
-        if self.model {
-            eprintln!("MODEL_PHASE {} {} {} {}", self.phase, self.peak_qubits,
-                self.model_phase_native, self.model_phase_weighted);
-            eprintln!("MODEL_TOTAL {} {} {}", self.model_max, self.model_total, self.model_weighted);
-        }
         std::mem::take(&mut self.ops)
     }
     fn push_op(&mut self, op: Op) {
@@ -126,41 +66,12 @@ impl Builder {
             );
         }
         self.phase_kind_ops[op.kind as usize] += 1;
-        if let Some(r) = self.report.as_deref_mut() {
-            match op.kind {
-                OperationType::PushCondition => r.depth += 1,
-                OperationType::PopCondition => r.depth -= 1,
-                OperationType::CCX | OperationType::CCZ => {
-                    let w = 2.0_f64.powi(-(r.depth as i32));
-                    r.phase_native += 1; r.phase_expected += w;
-                    r.total_native += 1; r.total_expected += w;
-                }
-                _ => {}
-            }
-        }
-        if self.model {
-            match op.kind {
-                OperationType::PushCondition => self.model_depth += 1,
-                OperationType::PopCondition => self.model_depth -= 1,
-                OperationType::CCX | OperationType::CCZ => {
-                    let weight = 2.0_f64.powi(-(self.model_depth as i32));
-                    self.model_total += 1; self.model_weighted += weight;
-                    self.model_phase_native += 1; self.model_phase_weighted += weight;
-                }, _ => {}
-            }
-        } else { self.ops.push(op); }
+        self.ops.push(op);
     }
     /// Close the current phase: report its Toffoli count and peak width on
     /// stdout -- which is what `build_circuit` prints -- and start a new one.
-    pub(crate) fn phase_name(&self) -> &'static str { self.phase }
     pub fn set_phase(&mut self, p: &'static str) {
-        self.report_phase();
-        if self.model {
-            eprintln!("MODEL_PHASE {} {} {} {}", self.phase, self.peak_qubits,
-                self.model_phase_native, self.model_phase_weighted);
-        }
-        self.model_phase_native = 0; self.model_phase_weighted = 0.0;
-        self.peak_qubits = self.active_qubits;
+        self.peak_qubits = 0;
         self.phase_kind_ops = [0; OP_KINDS];
         self.phase = p;
     }
@@ -183,38 +94,13 @@ impl Builder {
     /// `active_qubits`: a fresh `alloc_qubit` and a `reacquire` of a parked one.
     fn note_peak(&mut self) {
         self.peak_qubits = self.peak_qubits.max(self.active_qubits);
-        self.model_max = self.model_max.max(self.active_qubits);
-        self.win_peak = self.win_peak.max(self.active_qubits);
-        if let Some(r) = self.report.as_deref_mut() {
-            if self.active_qubits > r.peak {
-                r.peak = self.active_qubits;
-                r.peak_op = self.ops.len();
-                r.peak_phase = self.phase;
-            }
-        }
-    }
-
-    /// Print the closing phase's line of the B3a report (no-op when off).
-    fn report_phase(&mut self) {
-        if let Some(r) = self.report.as_deref_mut() {
-            eprintln!("HEO_PHASE {} native={} expected={:.1} peak={} ops={}", self.phase,
-                r.phase_native, r.phase_expected, self.peak_qubits, self.ops.len());
-            r.phase_native = 0; r.phase_expected = 0.0;
-        }
     }
 
     #[track_caller]
     pub fn alloc_qubit(&mut self) -> QubitId {
         self.active_qubits += 1;
-        if std::env::var_os("DIRTY_ALLOC_TRACE").is_some() && self.active_qubits as usize > super::pingpong::heo_hooks::cap() {eprintln!("DIRTY_OVER_ALLOC\t{}\t{}\t{}",self.ops.len(),self.active_qubits,std::panic::Location::caller());}
         self.note_peak();
-        let pick = if self.avoid_ids.is_empty() {
-            self.free_qubits.pop()
-        } else {
-            let avoid = &self.avoid_ids;
-            self.free_qubits.iter().rposition(|f| !avoid.contains(f)).map(|pos| self.free_qubits.remove(pos))
-        };
-        let qid = if let Some(q) = pick {
+        let qid = if let Some(q) = self.free_qubits.pop() {
             QubitId(q.into())
         } else {
             let q = self.next_qubit;
@@ -239,10 +125,6 @@ impl Builder {
         } else {
             (0..n).map(|_| self.alloc_qubit()).collect()
         }
-    }
-    /// PP_J_SFUSE: set the parked wires fresh allocations must skip.
-    pub fn set_avoid(&mut self, qs: &[QubitId]) {
-        self.avoid_ids = qs.iter().map(|q| q.0.try_into().expect("qubit id fits in u32")).collect();
     }
     pub fn alloc_bit(&mut self) -> BitId {
         if let Some(b) = self.free_bits.pop() {
@@ -531,19 +413,12 @@ impl Builder {
     /// Record one replay repair site; see [`ReplaySites::record`].
     pub fn record_replay_site(&mut self, kind: char, round: usize, pos: usize, width: usize) {
         let at = self.at();
-        let p = 2.0_f64.powi(-(width as i32));
-        if kind == 'B' { if pos != width { self.k3b_sites.0 += 1; self.k3b_sites.1 += p; } } else { self.k3b_sites.2 += 1; self.k3b_sites.3 += p; }
         self.replay_sites.record(at, kind, round, pos, width);
     }
 
     /// Emit all three recorders' output. Called once, at the end of
     /// `build_point_add`.
     pub fn finalize_records(&mut self) {
-        self.report_phase();
-        if let Some(r) = self.report.as_deref() {
-            eprintln!("HEO_TOTAL native={} expected={:.1} peak={} peak_op={} peak_phase={} qubits_touched={}",
-                r.total_native, r.total_expected, r.peak, r.peak_op, r.peak_phase, self.next_qubit);
-        }
         self.peak_census.finalize();
         self.ccx_census.finalize();
         self.replay_sites.finalize();
