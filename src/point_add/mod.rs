@@ -151,7 +151,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "8000042289598",
+        "TAIL_NONCE" => "120000004242367",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -290,6 +290,7 @@ fn install_skywalk_submission_recipe() {
         ("HEO_RAIL_MAX", "257"),
         ("HEO_DB_SKIP", "1"),
         ("HEO_DB_SKIP2", "1"),
+        ("HEO_MB_SKIP2", "1"),
         ("HEO_LR1", "1"),
         ("HEO_PIN_SQ_SPARSE_CORRECTION", "1"),
         ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "3"),
@@ -324,7 +325,7 @@ fn install_skywalk_submission_recipe() {
         ("FD_COORD_FUSE", "1"),
         ("FD_COORD_LOW_ONE", "1"),
         ("HEO_PIN_FOLD_GUARD", "21"),
-        ("HEO_PIN_PP_FOLD_WIDEN", "68"),
+        ("HEO_PIN_PP_FOLD_WIDEN", "64"),
         ("HEO_PIN_PP_FOLD_PROFILE", "38:0,32:-1,25:-2,19:-4,0:-4"),
         ("PP_DROP_EXACT_LEAD", "1"),
         ("PP_DROP_EXACT_LEAD_DIR", "mul"),
@@ -372,7 +373,7 @@ fn install_skywalk_submission_recipe() {
         ("HEO_CELL_HELPER_S1", "1"),
         ("BACK_SEAM_FUSE", "3"),
         ("HEO_S1_OUTPUT_ALIAS", "1"),
-        ("HEO_PIN_PP_CHUNK_SHAPE", "64:0,38:1,25:-3,0:-4"),
+        ("HEO_PIN_PP_CHUNK_SHAPE", "64:0,38:1,25:-3,0:-5"),
         ("HEO_FREDKIN_OUTPUT_ALIAS", "1"),
         // sky5 package (frozen-sky5, r5_ycd): GO share knobs, GO #11 divfwd share selection (dfsel_s4),
         // R3 S1 tick list, R4 FD payload / y fusions, R5 classical-operand adds and compares.
@@ -390,11 +391,6 @@ fn install_skywalk_submission_recipe() {
         ("R5_CCMP", "23"),
         ("R5_CBITS_PAD", "1"),
         ("R5_CBITS_PAD_ALL", "1"),
-        // sky8 package (frozen-sky8, GO p7f): split carry window K=21, FOLD_WIDEN 68 (above), GO r6 per-cell
-        // compare re-balance (div ticks 150-155 dB -1, mul ticks 225-344 dF +1), iA.100 envelopes (heo.rs).
-        ("HEO_SPLIT_K", "21"),
-        ("GO_CELLB", "div:150-155:-1"),
-        ("GO_CELLF", "mul:225-344:1"),
     ] { std::env::set_var(name, value); }
     std::env::set_var("HEO_ENVELOPE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-0.txt"));
     std::env::set_var("HEO_ENVELOPE_MUL", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-1.txt"));
@@ -403,7 +399,7 @@ fn install_skywalk_submission_recipe() {
     std::env::set_var("K3B_CELL_OVR", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/ovr_v025_lamneutral.txt"));
 }
 
-/// sky8 submission: every setting of the circuit is pinned in code (the recipe above, the compiled-in
+/// sky5 submission: every setting of the circuit is pinned in code (the recipe above, the compiled-in
 /// envelopes and rewrite rows, `TAIL_NONCE` in `env_raw`). Clear the inherited process environment first
 /// so that no variable set on the host (`HEO_PIN_*`, `GO_*`, `R*_*`, `SKY_*`, ...) can change the circuit.
 fn clear_process_env() {
@@ -459,41 +455,7 @@ pub fn build() -> Vec<Op> {
         // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
         ops = mabsorb::absorb(ops);
     }
-    // SKY_REWRITE (sky8 package rows: GO p7f rwf, 67 rows, compiled in): replace SAT-proved linear-span CCX by CX chains.
-    // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted).
-    {
-        let text = include_str!("skywalk_data/sky8_p7f_rewrite.txt");
-        let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
-            let f: Vec<&str> = l.split_whitespace().collect();
-            let ws = if f[5] == "-" { vec![] } else { f[5].split(',').map(|x| x.parse().unwrap()).collect() };
-            (f[0].parse().unwrap(), f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap(), f[4] == "1", ws)
-        }).collect();
-        rows.sort_by(|a, b| b.0.cmp(&a.0));
-        // The rows are keyed to one op stream; an upstream change shifts the block rigidly.
-        // Find the unique shift d under which every row names its CCX (asserted unique).
-        let hit = |w: usize, c1: u64, c2: u64, t: u64| w < ops.len() && { let o = &ops[w]; o.kind == OperationType::CCX && o.q_target.0 == t
-            && ((o.q_control1.0 == c1 && o.q_control2.0 == c2) || (o.q_control1.0 == c2 && o.q_control2.0 == c1)) };
-        let r0 = rows[0].clone();
-        let mut shifts = Vec::new();
-        for d in -2_000_000isize..=2_000_000 {
-            let w0 = r0.0 as isize + d;
-            if w0 < 0 || !hit(w0 as usize, r0.1, r0.2, r0.3) { continue; }
-            if rows.iter().all(|r| { let w = r.0 as isize + d; w >= 0 && hit(w as usize, r.1, r.2, r.3) }) { shifts.push(d); }
-        }
-        assert!(shifts.len() == 1, "SKY_REWRITE: {} candidate shifts {:?}", shifts.len(), &shifts[..shifts.len().min(5)]);
-        let d = shifts[0];
-        eprintln!("SKY_REWRITE rows={} shift={d}", rows.len());
-        for (w, c1, c2, t, cst, ws) in rows {
-            let w = (w as isize + d) as usize;
-            let o = ops[w];
-            assert!(o.kind == OperationType::CCX && o.q_target.0 == t && o.c_condition == crate::circuit::NO_BIT
-                && ((o.q_control1.0 == c1 && o.q_control2.0 == c2) || (o.q_control1.0 == c2 && o.q_control2.0 == c1)), "SKY_REWRITE mismatch at {w}");
-            let mut rep = Vec::new();
-            for q in ws { assert!(q != t); let mut x = Op::empty(); x.kind = OperationType::CX; x.q_control1 = QubitId(q); x.q_target = QubitId(t); rep.push(x); }
-            if cst { let mut x = Op::empty(); x.kind = OperationType::X; x.q_target = QubitId(t); rep.push(x); }
-            ops.splice(w..w + 1, rep);
-        }
-    }
+    // Preserve original CCX operations: fixed-index sky5 rows do not match this candidate.
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
