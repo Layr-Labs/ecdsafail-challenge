@@ -1,7 +1,6 @@
 use super::modular::{mod_add, mod_rsub_vented_loaded, mod_sub_vented};
 use super::{Builder, N};
 use crate::circuit::{BitId, QubitId};
-use alloy_primitives::U256;
 
 /// secp256k1 uses `p = 2^256 - C`, so `2^256 == C (mod p)`. The same constant
 /// [`super::modular::f`] derives from the modulus, in the width this file's
@@ -57,82 +56,22 @@ pub fn coord_sub(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
     });
 }
 
-/// PP_J_YFUSE: `dst <- (dst - coord)/2 (mod p)`.
-pub fn coord_sub_halve(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
-    against_coord(circ, coord, false, |circ, temp| {
-        super::j_fuse::mod_sub_halve(circ, temp, dst);
-    });
-}
-
-/// PP_J_YFUSE: `dst <- 2*dst - coord (mod p)`.
-pub fn coord_double_sub(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
-    against_coord(circ, coord, false, |circ, temp| {
-        super::j_fuse::mod_double_sub(circ, temp, dst);
-    });
-}
-
-/// PP_J_XFUSE: `dst <- dst - coord (mod 2^256)`, borrow kept for the walk.
-pub fn coord_sub_keep(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
-    against_coord(circ, coord, false, |circ, temp| {
-        super::j_fuse::mod_sub_keep_borrow(circ, temp, dst, coord);
-    });
-}
-
 pub fn coord_rsub(circ: &mut Builder, x: &[QubitId], coord: &[BitId]) {
     assert_eq!(x.len(), N);
     assert_eq!(coord.len(), N);
     let coord_p1 = classical_plus1_mod_2n(circ, coord);
-    let stash = super::j_fuse::take_r0();
-    if super::back_seam::mul_fused() {
-        // I-2 back seam: `x` arrives uncorrected from the multiply's FD unseed (see `back_seam`).
-        assert!(stash.is_none(), "back seam: r0-fused reverse subtraction is not the seam's consumer");
-        super::back_seam::coord_op_at(circ, x, &coord_p1, super::back_seam::Leg::Mul, N,
-            super::modular::f(), super::modular::go_fs("GO_FG_M"), super::modular::erase_compare(), true);
-        return;
-    }
     against_coord(circ, &coord_p1, true, |circ, temp| {
-        match stash {
-            Some((a0, n)) => super::j_fuse::mod_rsub_r0fused(circ, temp, x, a0, n),
-            None => mod_rsub_vented_loaded(circ, temp, x),
-        }
+        mod_rsub_vented_loaded(circ, temp, x);
     });
 }
 
 pub fn coord_add3x(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
     assert_eq!(dst.len(), N);
     assert_eq!(coord.len(), N);
-    let mut three_coord = classical_times3_mod_q(circ, coord);
-    // SQ_ROW0_COPY: the square that follows leaves x2 short by a constant;
-    // add it here with the classical coordinate, where it costs no Toffoli.
-    let offset = super::square::sub_square_offset();
-    if !offset.is_zero() {
-        let shifted = classical_add_const_mod_q(circ, &three_coord, offset);
-        zero(circ, &three_coord);
-        circ.free_bit_vec(&three_coord);
-        three_coord = shifted;
-    }
-    let stash = super::j_fuse::take_r0();
-    if super::back_seam::div_fused() {
-        // I-2 back seam: `dst` arrives uncorrected from the divide's FD unseed (see `back_seam`).
-        assert!(stash.is_none(), "back seam: r0-fused coordinate add is not the seam's consumer");
-        super::back_seam::coord_op_at(circ, dst, &three_coord, super::back_seam::Leg::Div, N,
-            super::modular::f(), super::modular::go_fs("GO_FG_M"), super::modular::erase_compare(), true);
-        return;
-    }
+    let three_coord = classical_times3_mod_q(circ, coord);
     against_coord(circ, &three_coord, true, |circ, temp| {
-        match stash {
-            Some((a0, n)) => super::j_fuse::mod_add_r0fused(circ, temp, dst, a0, n),
-            None => mod_add(circ, temp, dst),
-        }
+        mod_add(circ, temp, dst);
     });
-}
-
-/// `(v + k) mod 2^len` in freshly allocated classical bits, `k < 2^128`.
-pub(crate) fn classical_add_const_mod2n_at(circ: &mut Builder, v: &[BitId], k: u128) -> Vec<BitId> {
-    let s = circ.alloc_bits(v.len());
-    copy_into(circ, &s, v);
-    classical_add_const(circ, &s, k);
-    s
 }
 
 /// `3 * coord mod p`, in freshly allocated classical bits.
@@ -177,43 +116,6 @@ fn classical_times3_mod_q(circ: &mut Builder, coord: &[BitId]) -> Vec<BitId> {
     }
 
     for reg in [&tmp, &av, &r, &s] {
-        zero(circ, reg);
-        circ.free_bit_vec(reg);
-    }
-    result
-}
-
-/// `(v + k) mod p` for `v < p` and a constant `k < p`, in freshly allocated
-/// classical bits. Same conditional subtraction as [`classical_times3_mod_q`].
-fn classical_add_const_mod_q(circ: &mut Builder, v: &[BitId], k: U256) -> Vec<BitId> {
-    classical_add_const_mod_at(circ, v, k, N, C)
-}
-
-/// [`classical_add_const_mod_q`] at width `n` with `p = 2^n - cc`.
-pub(crate) fn classical_add_const_mod_at(circ: &mut Builder, v: &[BitId], k: U256, n: usize, cc: u128) -> Vec<BitId> {
-    assert_eq!(v.len(), n);
-    let r = circ.alloc_bits(n + 1);
-    copy_into(circ, &r, v);
-    circ.bit_store0(r[n]);
-    let addend = circ.alloc_bits(n);
-    for (i, &b) in addend.iter().enumerate() {
-        if k.bit(i) { circ.bit_store1(b); } else { circ.bit_store0(b); }
-    }
-    classical_add_into(circ, &r, &addend);
-    zero(circ, &addend);
-    circ.free_bit_vec(&addend);
-
-    // r < 2p, so r + C < 2^(n+1) and its top bit is exactly "r >= p".
-    let tmp = circ.alloc_bits(n + 1);
-    copy_into(circ, &tmp, &r);
-    classical_add_const(circ, &tmp, cc);
-    let result = circ.alloc_bits(n);
-    for i in 0..n {
-        circ.bit_xor_into(tmp[i], r[i]);
-        circ.bit_copy(result[i], r[i]);
-        circ.bit_and_xor_into(result[i], tmp[n], tmp[i]);
-    }
-    for reg in [&tmp, &r] {
         zero(circ, reg);
         circ.free_bit_vec(reg);
     }
