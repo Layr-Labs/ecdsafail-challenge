@@ -1,0 +1,23 @@
+{
+  "scope": "Scalar algebra on existing certified fixtures only; native circuit tests not run locally",
+  "fixture_sha256": "3b1184c6e253cf591c3763cf71a4c66060734733ec5dba528295e2f06456daaa",
+  "cases": 512,
+  "sign_carry_cases": {
+    "0,0": 120,
+    "0,1": 108,
+    "1,0": 150,
+    "1,1": 134
+  },
+  "minimum_rotation_gap": "0x48f1ed771c7e12150b82b2448c6c79cfbf526f48ad1a5e",
+  "minimum_gap_bit_length": 183,
+  "required_drop_bits": 136,
+  "retained_compare_bits": 120,
+  "all_full_and_top_predicates_equal_carry": true,
+  "off_support_witness": {
+    "lhs": "0x100000000000000000000000000000000000000000000000006",
+    "rhs": "0x100000000000000000000000000000000000000000000000007",
+    "full_less": true,
+    "top120_less": false,
+    "gap": 1
+  }
+}
