@@ -2,6 +2,7 @@ mod fd_coordinate;
 mod back_seam;
 pub mod cross_chunk_probe;
 pub mod dirty_boundary_probe;
+pub mod lowroom;
 pub mod fold_template;
 mod width_composition;
 mod compact_mapped_add;
@@ -151,7 +152,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "9000851329353",
+        "TAIL_NONCE" => "3100018136",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -273,16 +274,22 @@ fn build_point_add() -> Vec<Op> {
 // Accepted r007 build recipe. Installed before any OnceLock reads configuration.
 fn install_skywalk_submission_recipe() {
     for (name, value) in [
+        // cap-1145 recipe, part 1 (values changed in place from the 1174 recipe): cap 1174 -> 1145
+        // (HEO_PIN_PP_WALK_MAX_QUBITS); the sky8/sky9 error-for-score settings reverted (HEO_FIT_K 24,
+        // HEO_PIN_SQ_ASM_TAIL 20, HEO_SPLIT_K 24, GO_CELLB empty, GO_CHUNK no-op, HEO_MB_SKIP2 0); LIFO parking,
+        // cross-chunk and the multiply reverse-codec shares off at this cap (GO_MULREV*_SHARE 0, HEO_R2D 375).
+        // Envelopes (compiled in, heo.rs / heo_carry.rs): skywalk_data/hyb_{div,mul}_R395_m10_t0.txt and the proxy
+        // skywalk_data/env_front07_R396_clamp.txt.
         ("HEO_WALK", "1"),
         ("HEO_SCHEDULE", "carry"),
         ("HEO_SEED", "base"),
         ("HEO_FIT_MODE", "win"),
-        ("HEO_FIT_K", "23"),
+        ("HEO_FIT_K", "24"),
         ("HEO_ZONE", "1"),
-        ("HEO_R2D", "382"),
+        ("HEO_R2D", "375"),
         ("HEO_R2M", "370"),
         ("HEO_CARRY_SEED", "fd"),
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1174"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1145"),
         ("HEO_LT0", "1"),
         ("HEO_BW", "inv"),
         ("HEO_LT0_MUL", "1"),
@@ -294,9 +301,9 @@ fn install_skywalk_submission_recipe() {
         ("HEO_PIN_SQ_SPARSE_CORRECTION", "1"),
         ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "3"),
         ("HEO_PIN_I35_PROFILE", "600:0:1,602:0:1,640:0:1,642:0:1,644:0:1,646:0:1,672:0:1,673:0:1,674:0:1,675:0:1,676:0:1,677:0:1,678:0:1,679:0:1,680:0:1,681:0:1,682:0:1,683:0:1,684:0:1,685:0:1,686:0:1,687:0:1,688:0:1,689:0:1,690:0:1,691:0:1,692:0:1,693:0:1,694:0:1,695:0:1,696:0:1,697:0:1,698:0:1,620:1:1,591:1:1"),
-        ("HEO_HEAD_LIFO_N", "2"),
-        ("HEO_DIV_LIFO_N", "2"),
-        ("HEO_MULB_LIFO_N", "2"),
+        ("HEO_HEAD_LIFO_N", "0"),
+        ("HEO_DIV_LIFO_N", "0"),
+        ("HEO_MULB_LIFO_N", "0"),
         ("HEO_DIV_PARTIAL", "1"),
         ("HEO_MULB_PARTIAL", "1"),
         ("HEO_DIV_EARLY_P3", "1"),
@@ -320,7 +327,7 @@ fn install_skywalk_submission_recipe() {
         ("FOLD_PACKED_BOUNDARIES", "1"),
         ("CONST_BINDER_MODE", "packed"),
         ("CONST_SQUARE_TRANSPORT", "1"),
-        ("HEO_CROSS_CHUNK", "1"),
+        ("HEO_CROSS_CHUNK", "0"),
         ("FD_COORD_FUSE", "1"),
         ("FD_COORD_LOW_ONE", "1"),
         ("HEO_PIN_FOLD_GUARD", "21"),
@@ -346,7 +353,7 @@ fn install_skywalk_submission_recipe() {
         ("GO_KEEP_FOLD", "1"),
         ("HEO_PIN_PP_RETAIN_LATE_WIDEN", "0"),
         ("HEO_PIN_PP_N_CAPR", "621-648:18,649-665:16,350-399:20,450-499:20,150-199:20,50-99:20,200-349:20,500-549:20"),
-        ("HEO_PIN_SQ_ASM_TAIL", "19"),
+        ("HEO_PIN_SQ_ASM_TAIL", "20"),
         ("HEO_PIN_ERASE_COMPARE", "25"),
         ("HEO_PIN_PP_DROP_EXACT_LEAD_WIDEN", "0"),
         ("HEO_PIN_PP_FLAG_WIDEN_DIV", "30"),
@@ -376,8 +383,8 @@ fn install_skywalk_submission_recipe() {
         ("HEO_FREDKIN_OUTPUT_ALIAS", "1"),
         // sky5 package (frozen-sky5, r5_ycd): GO share knobs, GO #11 divfwd share selection (dfsel_s4),
         // R3 S1 tick list, R4 FD payload / y fusions, R5 classical-operand adds and compares.
-        ("GO_MULREV2_SHARE", "1"),
-        ("GO_MULREV_SHARE", "1"),
+        ("GO_MULREV2_SHARE", "0"),
+        ("GO_MULREV_SHARE", "0"),
         ("GO_DIVFWD_SHARE", "1"),
         ("GO_SHARE_ROOMFIX", "1"),
         ("GO_DIVFWD_SHARE_T", "2,12,17,22,27,32,37,42,47,52,57,62,67,72,77,82,87,92,97,102,132,137,142,147,152,157,162,167,172,177,182,187,222,227,382,387,107,232,242,272,277,307,332,337"),
@@ -392,13 +399,25 @@ fn install_skywalk_submission_recipe() {
         ("R5_CBITS_PAD_ALL", "1"),
         // sky8 package (frozen-sky8, GO p7f): split carry window K=21, FOLD_WIDEN 68 (above), GO r6 per-cell
         // compare re-balance (div ticks 150-155 dB -1, mul ticks 225-344 dF +1), iA.100 envelopes (heo.rs).
-        ("HEO_SPLIT_K", "21"),
-        ("GO_CELLB", "div:150-155:-1"),
+        ("HEO_SPLIT_K", "24"),
+        ("GO_CELLB", ""),
         ("GO_CELLF", "mul:225-344:1"),
         // sky9 package (frozen-sky9, 19.5 Lambda limit): multiply batch route skipped at t = R-2 (B6), one
         // chunk compare bit fewer on rounds 0-399 (go_slice GO_CHUNK), 65 rewrite rows re-keyed to this op stream.
-        ("HEO_MB_SKIP2", "1"),
-        ("GO_CHUNK", "0-399:-1"),
+        ("HEO_MB_SKIP2", "0"),
+        ("GO_CHUNK", "0-0:0"),
+        // cap-1145 recipe, part 2: the exact width-squeeze constructions (low-room adds, rail bridge, fold setup,
+        // exact split multiply, SQ_A2_CHAINS = 5 exact tape-codec chains) and the sky9 rewrite rows off (SKY_NORW:
+        // those rows are keyed to the 1174 op stream).
+        ("HEO_SPLIT_MUL", "exact"),
+        ("HEO_PIN_SQ_A_POLICY", "0"),
+        ("HEO_PIN_SQ_B_POLICY", "0"),
+        ("HEO_PIN_SQ_C_POLICY", "0"),
+        ("SQ_LOWROOM", "1"),
+        ("SQ_RAILBRIDGE", "1"),
+        ("SQ_FOLDSETUP", "1"),
+        ("SQ_A2_CHAINS", "5"),
+        ("SKY_NORW", "1"),
     ] { std::env::set_var(name, value); }
     std::env::set_var("HEO_ENVELOPE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-0.txt"));
     std::env::set_var("HEO_ENVELOPE_MUL", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-1.txt"));
@@ -407,9 +426,10 @@ fn install_skywalk_submission_recipe() {
     std::env::set_var("K3B_CELL_OVR", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/ovr_v025_lamneutral.txt"));
 }
 
-/// sky8 submission: every setting of the circuit is pinned in code (the recipe above, the compiled-in
-/// envelopes and rewrite rows, `TAIL_NONCE` in `env_raw`). Clear the inherited process environment first
-/// so that no variable set on the host (`HEO_PIN_*`, `GO_*`, `R*_*`, `SKY_*`, ...) can change the circuit.
+/// Every setting of the circuit is pinned in code (the recipe above, the compiled-in envelopes, `TAIL_NONCE` in
+/// `env_raw`). Clear the inherited process environment first so that no variable set on the host (`HEO_PIN_*`,
+/// `GO_*`, `R*_*`, `SKY_*`, ...) can change the circuit. The one exception is `HEO_PIN_TAIL_NONCE`, kept by
+/// `build()`: it only rewrites the 96-op identity tail (`apply_tail_nonce`), never the circuit itself.
 fn clear_process_env() {
     let keys: Vec<std::ffi::OsString> = std::env::vars_os().map(|(k, _)| k).collect();
     for k in keys {
@@ -420,7 +440,9 @@ fn clear_process_env() {
 }
 
 pub fn build() -> Vec<Op> {
+    let tail_pin = std::env::var_os("HEO_PIN_TAIL_NONCE");
     clear_process_env();
+    if let Some(n) = tail_pin { std::env::set_var("HEO_PIN_TAIL_NONCE", n); }
     install_skywalk_submission_recipe();
     if std::env::var_os("SKYWALK_SQUARE_HIGH_PROBE").is_some(){square::high_probe();std::process::exit(0);}
     if std::env::var_os("SKYWALK_MODDIV_ADAPTER_PROBE").is_some(){moddiv_adapter::probe();std::process::exit(0);}
@@ -465,7 +487,7 @@ pub fn build() -> Vec<Op> {
     }
     // SKY_REWRITE (sky9 package rows: sky8 rows c1 + c2 transferred to the sky9 op stream, 65 rows, compiled in): replace SAT-proved linear-span CCX by CX chains.
     // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted).
-    {
+    if std::env::var_os("SKY_NORW").is_none() {
         let text = include_str!("skywalk_data/sky9_rewrite.txt");
         let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();

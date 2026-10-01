@@ -3472,6 +3472,20 @@ fn fold_double_joint(c:&mut Builder,z:&[QubitId],s:QubitId,v0:QubitId,d:QubitId,
     assert!(!z.contains(&v0) && ![s,d,o].contains(&v0));
     c.cx(s,o);let a=and_clean(c,d,o);c.cx(s,o);
     let m=and_clean(c,a,s);c.cx(m,a); // a=plus2, m=minus
+    // SQ_FOLDSETUP (non-pre): finish bit 0 and release d BEFORE the first carry. With y = s^v0 = z0
+    // at entry and x = d^o, first = y & x, and after the finish z0' = y ^ x, so first = y & ~z0'. One wire less.
+    // pre: first = MAJ(s, v0, x) = MAJ(s, v0, ~z0').
+    let lowset=std::env::var_os("SQ_FOLDSETUP").is_some();
+    let first=if lowset {
+        c.cx(d,z[0]);c.cx(o,z[0]); // finish bit0: z0 ^= d ^ o
+        for q in [z[0],s,v0,o] {c.cx(q,d);}
+        c.release_clean(d);
+        if pre {
+            c.x(z[0]);c.cx(z[0],s);c.cx(z[0],v0);let h=and_clean(c,s,v0);c.cx(z[0],h);c.cx(z[0],s);c.cx(z[0],v0);c.x(z[0]);h
+        } else {
+            c.cx(s,v0);c.x(z[0]);let f1=and_clean(c,z[0],v0);c.x(z[0]);c.cx(s,v0);f1
+        }
+    } else {
     c.cx(d,o);
     // pre: the main add skipped bit 0, so its carry s&v0 is still owed. It is
     // exclusive with z0&(d^o) (z0=s^v0), and their sum is MAJ(s,v0,d^o).
@@ -3482,6 +3496,8 @@ fn fold_double_joint(c:&mut Builder,z:&[QubitId],s:QubitId,v0:QubitId,d:QubitId,
 
     for q in [z[0],s,v0,o] {c.cx(q,d);}
     c.release_clean(d);
+    first
+    };
     if let Some(bits)=joint_lowfold::GUARD.with(|g|g.get()) {
         assert!((12..=32).contains(&bits)&&bits<=w);
         let small=U256::from(977);let neg=twos_complement_bits(small,bits);
@@ -3514,16 +3530,27 @@ fn fold_double_joint(c:&mut Builder,z:&[QubitId],s:QubitId,v0:QubitId,d:QubitId,
         map.push(unique);
     }
     let n=w-1;let room=walk_max_qubits().saturating_sub(c.active_qubits() as usize);
+    if !super::lowroom::try_fold(c,&z[1..],f,&[z[0],s,v0,m],&[a],m,first) {
     let plan=(room..=n.max(room)).find_map(|r|super::width_composition::direct_plan(n,r)).unwrap();
     if env_flag("PP_JOINT_FOLD_TRACE") {eprintln!("JOINT_FOLD {} {} {} {} {}",w,base,room,plan.peak,plan.extra2);}
     super::width_composition::direct_add(c,&map,&z[1..],first,&plan);
+    }
 
     }
+    if lowset {
+        if pre {
+            c.x(z[0]);c.cx(z[0],s);c.cx(z[0],v0);c.cx(z[0],first);and_uncompute(c,first,s,v0);c.cx(z[0],s);c.cx(z[0],v0);c.x(z[0]);
+        } else {
+            c.cx(s,v0);c.x(z[0]);and_uncompute(c,first,z[0],v0);c.x(z[0]);c.cx(s,v0);
+        }
+        c.reacquire(d);for q in [z[0],s,v0,o] {c.cx(q,d);}
+    } else {
     c.reacquire(d);for q in [z[0],s,v0,o] {c.cx(q,d);}
     if pre {
         c.cx(d,o);c.cx(o,s);c.cx(o,v0);c.cx(o,first);and_uncompute(c,first,s,v0);c.cx(o,s);c.cx(o,v0);c.cx(d,o);
     }else{
     c.cx(d,o);c.cx(o,z[0]);and_uncompute(c,first,z[0],o);c.cx(o,z[0]);c.cx(d,o);
+    }
     }
     c.cx(m,a);and_uncompute(c,m,a,s);
     c.cx(s,o);and_uncompute(c,a,d,o);c.cx(s,o);
@@ -3569,6 +3596,9 @@ fn with_reverse_replay_sign_loans(circ:&mut Builder,u:&[QubitId],v:&[QubitId],va
 /// output bits equal the ordinary fold; bit0 returns p XOR overflow, ready
 /// for the outer sign complement and final rotation.
 fn fold_halve_reused(circ: &mut Builder, target: &[QubitId], sign: QubitId, overflow: QubitId) {
+    if std::env::var_os("SQ_FOLDSETUP").is_some() {
+        return fold_halve_reused_lowroom(circ, target, sign, overflow);
+    }
     circ.swap(sign, target[0]); // sign hosts p; target0 hosts original s
     circ.x(target[0]);
     let not_sign_and_parity = and_clean(circ, target[0], sign);
@@ -3602,6 +3632,40 @@ fn fold_halve_reused(circ: &mut Builder, target: &[QubitId], sign: QubitId, over
     circ.cx(sign, sign_and_parity);
     circ.cx(not_sign_and_parity, sign_and_parity);
     circ.free(sign_and_parity);
+    circ.x(target[0]);
+    and_uncompute(circ, not_sign_and_parity, target[0], sign);
+    circ.x(target[0]);
+    circ.swap(sign, target[0]); // restore sign and move p into its outgoing slot
+    circ.cx(overflow, target[0]);
+}
+
+/// SQ_FOLDSETUP: [`fold_halve_reused`] without the `sign_and_parity` wire. s&p = p XOR (~s&p) is hosted in
+/// the sign wire (which holds p) for the two gates that read it, so the setup peaks at the fold's three selector
+/// wires instead of four. Same selectors, same fold, same uncompute order; Clifford changes only.
+fn fold_halve_reused_lowroom(circ: &mut Builder, target: &[QubitId], sign: QubitId, overflow: QubitId) {
+    circ.swap(sign, target[0]); // sign hosts p; target0 hosts original s
+    circ.x(target[0]);
+    let not_sign_and_parity = and_clean(circ, target[0], sign);
+    circ.x(target[0]);
+    circ.x(overflow);
+    let minus_f = and_clean(circ, overflow, not_sign_and_parity);
+    circ.x(overflow);
+    circ.cx(not_sign_and_parity, sign); // sign = s & p
+    let plus_2f = and_clean(circ, overflow, sign);
+    circ.cx(not_sign_and_parity, sign); // sign = p
+    circ.cx(target[0], sign);
+    circ.cx(minus_f, sign); // sign hosts plus_f
+    circ.cx(sign, target[0]);
+    circ.cx(minus_f, target[0]);
+    fold_selected(circ, target, f(), sign, Some(plus_2f), minus_f, not_sign_and_parity);
+    circ.cx(minus_f, sign);
+    circ.cx(target[0], sign); // original p
+    circ.cx(not_sign_and_parity, sign); // sign = s & p
+    and_uncompute(circ, plus_2f, overflow, sign);
+    circ.cx(not_sign_and_parity, sign); // sign = p
+    circ.x(overflow);
+    and_uncompute(circ, minus_f, overflow, not_sign_and_parity);
+    circ.x(overflow);
     circ.x(target[0]);
     and_uncompute(circ, not_sign_and_parity, target[0], sign);
     circ.x(target[0]);
@@ -4008,6 +4072,12 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
     if pinned.is_none() && env_flag("PP_Q1208_HELPERS") && (layout.is_none() || old_ladder < replay_chunk_compare()+2) {
         return small_ladder_add(circ, addend, acc);
     }
+    let layout = if layout.is_none() && std::env::var_os("SQ_SOFT").is_some() {
+        // SQ_SOFT: smallest ladder with a layout; log the shortfall.
+        let (l2, b) = (old_ladder + 1..old_ladder + 600).find_map(|l| chunk_layout(addend.len(), l + super::bridge::budget()).map(|b| (l, b))).expect("SQ_SOFT layout");
+        eprintln!("SQ_SOFT site=pingpong.rs:chunked_add kind=layout n={} r={} mul={} live={} room={} need={} short={}", addend.len(), round, multiply as u8, circ.active_qubits(), old_ladder, l2, l2 - old_ladder);
+        Some(b)
+    } else { layout };
     let bounds = layout.unwrap_or_else(|| panic!("layout r={} mul={} live={} cap={} room={}", round, multiply, circ.active_qubits(), walk_max_qubits(), ladder));
     let adjusted=if pinned.is_some(){
         if env_flag("PP_PIN_REPLAY_RELAX_EXACT") {loaned_chunk_bounds(&bounds,ladder,addend.len(),round,multiply)}else{bounds.clone()}
@@ -4167,6 +4237,12 @@ pub(crate) fn fold_selected_single(
 
     if env_flag("PP_DIRECT_FOLD") && circ.active_qubits() as usize+width.saturating_sub(3)>walk_max_qubits() {
         let n=width-1;let room=walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
+        if super::lowroom::enabled() && super::width_composition::direct_plan_inner(n,room).is_none() {
+            for control in selectors(0){circ.cx(control,acc[0]);}
+            let p2:Vec<QubitId>=plus_2f.into_iter().collect();
+            if super::lowroom::try_fold(circ,&acc[1..],f,&[plus_f],&p2,minus_f,first_carry){return;}
+            for control in selectors(0){circ.cx(control,acc[0]);}
+        }
         let p=(room..=n.max(room)).find_map(|r|super::width_composition::direct_plan(n,r)).unwrap();
         if env_flag("PP_NEW_TRACE"){eprintln!("DIRECT_FOLD {} {} {} {} {}",width,circ.active_qubits(),room,p.peak,p.extra2);}
         for control in selectors(0){circ.cx(control,acc[0]);}
@@ -4907,8 +4983,10 @@ fn terminal_fold_early(c:&mut Builder,z:&[QubitId],t:QubitId,q0:QubitId,d:QubitI
         let mut unique=vec![];for v in row{if let Some(j)=unique.iter().position(|&w|w==v){unique.remove(j);}else{unique.push(v);}}unique
     }).collect();
     let room=walk_max_qubits().saturating_sub(c.active_qubits()as usize);
+    if !super::lowroom::try_fold(c,&z[1..],f,&[z[0],t,q0,m],&[a],m,h) {
     let plan=super::width_composition::direct_plan(z.len()-1,room).expect("terminal early-overflow fold room");
     super::width_composition::direct_add(c,&map,&z[1..],h,&plan);
+    }
     if inverse{c.x(q0);}
     c.reacquire(o);for v in [z[0],t,q0,d]{c.cx(v,o);}if inverse{c.x(o);}
     c.cx(d,o);if inverse{c.cx(o,z[0]);}
