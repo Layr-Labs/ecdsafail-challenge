@@ -151,7 +151,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "15500142914726",
+        "TAIL_NONCE" => "16000761750475",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -281,6 +281,7 @@ fn install_skywalk_submission_recipe() {
         ("HEO_ZONE", "1"),
         ("HEO_R2D", "382"),
         ("HEO_R2M", "370"),
+        ("HEO_R1M", "99"),
         ("HEO_CARRY_SEED", "fd"),
         ("HEO_PIN_PP_WALK_MAX_QUBITS", "1174"),
         ("HEO_LT0", "1"),
@@ -410,6 +411,9 @@ fn install_skywalk_submission_recipe() {
         // sky15 package (frozen-sky15, 19.5 Lambda limit): HEO_PIN_PP_FOLD_PROFILE 44:0 (new top band) and 25:-5,
         // HEO_PIN_PP_FOLD_WIDEN 144, HEO_FIT_K 21, HEO_PIN_ERASE_COMPARE 21 (above); 64 SAT-proven rows (57 square rows
         // re-keyed to this op stream, 7 new rows from a whole-program span census, 3 of them outside the square).
+        // sky16 package (frozen-sky16, 19.5 Lambda limit): HEO_R1M 99 (above; fused/headbatch boundary moved from 190 to 99,
+        // headbatch cells get room 98 and run 3 chunks instead of 4); 62 of the sky15 rows, which sit in the op prefix that
+        // HEO_R1M leaves unchanged (the two headbatch rows are dropped).
     ] { std::env::set_var(name, value); }
     std::env::set_var("HEO_ENVELOPE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-0.txt"));
     std::env::set_var("HEO_ENVELOPE_MUL", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-1.txt"));
@@ -474,10 +478,10 @@ pub fn build() -> Vec<Op> {
         // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
         ops = mabsorb::absorb(ops);
     }
-    // SKY_REWRITE (sky15 package rows: 64 rows proved exact by SAT on the sky15 op stream, compiled in): replace SAT-proved linear-span CCX by CX chains.
+    // SKY_REWRITE (sky16 package rows: 62 rows proved exact by SAT, all in the op prefix shared with sky15, compiled in): replace SAT-proved linear-span CCX by CX chains.
     // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted).
     {
-        let text = include_str!("skywalk_data/sky15_rewrite.txt");
+        let text = include_str!("skywalk_data/sky16_rewrite.txt");
         let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
             let ws = if f[5] == "-" { vec![] } else { f[5].split(',').map(|x| x.parse().unwrap()).collect() };
