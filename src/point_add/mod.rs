@@ -151,7 +151,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "17001330283497",
+        "TAIL_NONCE" => "18000451506351",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -325,8 +325,8 @@ fn install_skywalk_submission_recipe() {
         ("FD_COORD_FUSE", "1"),
         ("FD_COORD_LOW_ONE", "1"),
         ("HEO_PIN_FOLD_GUARD", "20"),
-        ("HEO_PIN_PP_FOLD_WIDEN", "144"),
-        ("HEO_PIN_PP_FOLD_PROFILE", "44:0,38:-1,32:-1,25:-5,19:-4,0:-5"),
+        ("HEO_PIN_PP_FOLD_WIDEN", "128"),
+        ("HEO_PIN_PP_FOLD_PROFILE", "56:0,38:-1,32:-1,25:-5,19:-4,0:-5"),
         ("PP_DROP_EXACT_LEAD", "1"),
         ("PP_DROP_EXACT_LEAD_DIR", "mul"),
         ("HEO_RAIL_TOP_RELEASE", "1"),
@@ -348,7 +348,7 @@ fn install_skywalk_submission_recipe() {
         ("HEO_PIN_PP_RETAIN_LATE_WIDEN", "0"),
         ("HEO_PIN_PP_N_CAPR", "621-648:18,649-665:16,350-399:20,450-499:20,150-199:20,50-99:20,200-349:20,500-549:20"),
         ("HEO_PIN_SQ_ASM_TAIL", "18"),
-        ("HEO_PIN_ERASE_COMPARE", "21"),
+        ("HEO_PIN_ERASE_COMPARE", "20"),
         ("HEO_PIN_PP_DROP_EXACT_LEAD_WIDEN", "0"),
         ("HEO_PIN_PP_FLAG_WIDEN_DIV", "30"),
         ("GO_JLB", "616-698:m:-1"),
@@ -417,6 +417,8 @@ fn install_skywalk_submission_recipe() {
         // sky17 package (frozen-sky17, 19.5 Lambda limit): HEO_PIN_I35_PROFILE re-balanced on the multiplication walk only
         // (above; bridge-width sells and buys priced on paired CRN nonces); the op stream through the last square row is
         // unchanged, so the same 62 sky16 rows stay exact.
+        // sky18 package (frozen-sky18, 19.5 Lambda limit): HEO_PIN_ERASE_COMPARE 20, HEO_PIN_PP_FOLD_WIDEN 128 and a 56:0 top
+        // band on HEO_PIN_PP_FOLD_PROFILE (above); 56 SAT-proven rows re-proved on this op stream (sky18_rewrite.txt).
     ] { std::env::set_var(name, value); }
     std::env::set_var("HEO_ENVELOPE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-0.txt"));
     std::env::set_var("HEO_ENVELOPE_MUL", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-1.txt"));
@@ -481,10 +483,10 @@ pub fn build() -> Vec<Op> {
         // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
         ops = mabsorb::absorb(ops);
     }
-    // SKY_REWRITE (sky16 package rows: 62 rows proved exact by SAT, all in the op prefix shared with sky15, compiled in): replace SAT-proved linear-span CCX by CX chains.
+    // SKY_REWRITE (sky18 package rows: 56 rows proved exact by SAT on the sky18 op stream, compiled in): replace SAT-proved linear-span CCX by CX chains.
     // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted).
     {
-        let text = include_str!("skywalk_data/sky16_rewrite.txt");
+        let text = include_str!("skywalk_data/sky18_rewrite.txt");
         let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
             let ws = if f[5] == "-" { vec![] } else { f[5].split(',').map(|x| x.parse().unwrap()).collect() };
