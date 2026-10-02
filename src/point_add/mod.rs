@@ -151,7 +151,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "16000761750475",
+        "TAIL_NONCE" => "17001330283497",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -294,7 +294,7 @@ fn install_skywalk_submission_recipe() {
         ("HEO_LR1", "1"),
         ("HEO_PIN_SQ_SPARSE_CORRECTION", "1"),
         ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "3"),
-        ("HEO_PIN_I35_PROFILE", "600:0:1,602:0:1,640:0:1,642:0:1,644:0:1,646:0:1,672:0:1,673:0:1,674:0:1,675:0:1,676:0:1,677:0:1,678:0:1,679:0:1,680:0:1,681:0:1,682:0:1,683:0:1,684:0:1,685:0:1,686:0:1,687:0:1,688:0:1,689:0:1,690:0:1,691:0:1,692:0:1,693:0:1,694:0:1,695:0:1,696:0:1,697:0:1,698:0:1,620:1:1,591:1:1"),
+        ("HEO_PIN_I35_PROFILE", "501:1:2,504:1:2,509:1:1,513:1:1,518:1:1,523:1:1,528:1:1,533:1:1,577:1:1,583:1:1,589:1:1,591:1:1,594:1:1,600:0:1,602:0:1,614:1:1,620:1:1,624:1:2,629:1:2,631:1:2,633:1:2,636:1:2,638:1:3,640:0:1,642:0:1,642:1:3,644:0:1,644:1:3,646:0:1,646:1:3,663:1:3,670:1:3,672:0:1,673:0:1,673:1:3,674:0:1,675:0:1,676:0:1,677:0:1,678:0:1,679:0:1,679:1:3,680:0:1,681:0:1,682:0:1,683:0:1,684:0:1,685:0:1,686:0:1,687:0:1,687:1:3,688:0:1,689:0:1,690:0:1,691:0:1,692:0:1,693:0:1,694:0:1,695:0:1,696:0:1,697:0:1,698:0:1,698:1:3"),
         ("HEO_HEAD_LIFO_N", "2"),
         ("HEO_DIV_LIFO_N", "2"),
         ("HEO_MULB_LIFO_N", "2"),
@@ -414,6 +414,9 @@ fn install_skywalk_submission_recipe() {
         // sky16 package (frozen-sky16, 19.5 Lambda limit): HEO_R1M 99 (above; fused/headbatch boundary moved from 190 to 99,
         // headbatch cells get room 98 and run 3 chunks instead of 4); 62 of the sky15 rows, which sit in the op prefix that
         // HEO_R1M leaves unchanged (the two headbatch rows are dropped).
+        // sky17 package (frozen-sky17, 19.5 Lambda limit): HEO_PIN_I35_PROFILE re-balanced on the multiplication walk only
+        // (above; bridge-width sells and buys priced on paired CRN nonces); the op stream through the last square row is
+        // unchanged, so the same 62 sky16 rows stay exact.
     ] { std::env::set_var(name, value); }
     std::env::set_var("HEO_ENVELOPE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-0.txt"));
     std::env::set_var("HEO_ENVELOPE_MUL", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-1.txt"));
