@@ -35,7 +35,7 @@ fn raw_run(c:&mut Builder,a:&[QubitId],b:&[QubitId],cin:Option<QubitId>,cout:Opt
     let n=b.len();assert_eq!(a.len(),n);assert!(n>=3);
     assert!(a.iter().all(|q|!b.contains(q)));assert!(cin.is_none_or(|q|!a.contains(&q)&&!b.contains(&q)));
     assert!(cout.is_none_or(|q|!a.contains(&q)&&!b.contains(&q)&&Some(q)!=cin));
-    let owned=if cout.is_some(){n-1}else{n-2};assert!(bridges<owned);
+    let owned=if cout.is_some(){n-1}else{n-2};assert!(bridges<owned||(bridges==owned&&cin.is_some()&&owned>0),"bridges {bridges} owned {owned}");
     let first=owned-bridges;
     let is_bridge=|i:usize|i>=first&&i<owned;
     let mut carries:Vec<_>=(0..owned).map(|i|if is_bridge(i){a[i]}else{c.alloc_qubit()}).collect();carries.extend(cout);

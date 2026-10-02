@@ -2,6 +2,9 @@ mod fd_coordinate;
 mod back_seam;
 pub mod cross_chunk_probe;
 pub mod dirty_boundary_probe;
+pub mod lowroom;
+pub mod d2tick;
+pub mod d2_stack;
 pub mod fold_template;
 mod width_composition;
 mod compact_mapped_add;
@@ -151,7 +154,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "14000222169933",
+        "TAIL_NONCE" => "1112001427",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -273,16 +276,22 @@ fn build_point_add() -> Vec<Op> {
 // Accepted r007 build recipe. Installed before any OnceLock reads configuration.
 fn install_skywalk_submission_recipe() {
     for (name, value) in [
+        // cap-1145 recipe, part 1 (values changed in place from the 1174 recipe): cap 1174 -> 1145
+        // (HEO_PIN_PP_WALK_MAX_QUBITS); the sky8/sky9 error-for-score settings reverted (HEO_FIT_K 24,
+        // HEO_PIN_SQ_ASM_TAIL 20, HEO_SPLIT_K 24, GO_CELLB empty, GO_CHUNK no-op, HEO_MB_SKIP2 0); LIFO parking,
+        // cross-chunk and the multiply reverse-codec shares off at this cap (GO_MULREV*_SHARE 0, HEO_R2D 375).
+        // Envelopes (compiled in, heo.rs / heo_carry.rs): skywalk_data/hyb_{div,mul}_R395_m10_t0.txt and the proxy
+        // skywalk_data/env_front07_R396_clamp.txt.
         ("HEO_WALK", "1"),
         ("HEO_SCHEDULE", "carry"),
         ("HEO_SEED", "base"),
         ("HEO_FIT_MODE", "win"),
-        ("HEO_FIT_K", "22"),
+        ("HEO_FIT_K", "24"),
         ("HEO_ZONE", "1"),
-        ("HEO_R2D", "382"),
+        ("HEO_R2D", "375"),
         ("HEO_R2M", "370"),
         ("HEO_CARRY_SEED", "fd"),
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1174"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1112"),
         ("HEO_LT0", "1"),
         ("HEO_BW", "inv"),
         ("HEO_LT0_MUL", "1"),
@@ -294,9 +303,9 @@ fn install_skywalk_submission_recipe() {
         ("HEO_PIN_SQ_SPARSE_CORRECTION", "1"),
         ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "3"),
         ("HEO_PIN_I35_PROFILE", "600:0:1,602:0:1,640:0:1,642:0:1,644:0:1,646:0:1,672:0:1,673:0:1,674:0:1,675:0:1,676:0:1,677:0:1,678:0:1,679:0:1,680:0:1,681:0:1,682:0:1,683:0:1,684:0:1,685:0:1,686:0:1,687:0:1,688:0:1,689:0:1,690:0:1,691:0:1,692:0:1,693:0:1,694:0:1,695:0:1,696:0:1,697:0:1,698:0:1,620:1:1,591:1:1"),
-        ("HEO_HEAD_LIFO_N", "2"),
-        ("HEO_DIV_LIFO_N", "2"),
-        ("HEO_MULB_LIFO_N", "2"),
+        ("HEO_HEAD_LIFO_N", "0"),
+        ("HEO_DIV_LIFO_N", "0"),
+        ("HEO_MULB_LIFO_N", "0"),
         ("HEO_DIV_PARTIAL", "1"),
         ("HEO_MULB_PARTIAL", "1"),
         ("HEO_DIV_EARLY_P3", "1"),
@@ -320,19 +329,19 @@ fn install_skywalk_submission_recipe() {
         ("FOLD_PACKED_BOUNDARIES", "1"),
         ("CONST_BINDER_MODE", "packed"),
         ("CONST_SQUARE_TRANSPORT", "1"),
-        ("HEO_CROSS_CHUNK", "1"),
+        ("HEO_CROSS_CHUNK", "0"),
         ("FD_COORD_FUSE", "1"),
         ("FD_COORD_LOW_ONE", "1"),
-        ("HEO_PIN_FOLD_GUARD", "20"),
-        ("HEO_PIN_PP_FOLD_WIDEN", "112"),
-        ("HEO_PIN_PP_FOLD_PROFILE", "38:0,32:-1,25:-3,19:-4,0:-5"),
+        ("HEO_PIN_FOLD_GUARD", "21"),
+        ("HEO_PIN_PP_FOLD_WIDEN", "68"),
+        ("HEO_PIN_PP_FOLD_PROFILE", "38:0,32:-1,25:-2,19:-4,0:-4"),
         ("PP_DROP_EXACT_LEAD", "1"),
         ("PP_DROP_EXACT_LEAD_DIR", "mul"),
         ("HEO_RAIL_TOP_RELEASE", "1"),
         ("HEO_RAIL_TOP_ALIAS", "1"),
         ("HEO_PIN_PP_WIDTH_SCHEDULE", "259,258x19,257x6,256x2,255x5,254x3,253x4,252x3,251x2,250x5,249x2,248x4,247x3,246x2,245x5,244x2,243x3,242x3,241x3,240x3,239x4,238x3,237x2,236x4,235x2,234x3,233x2,232x4,231x3,230x3,229x3,228x3,227x3,226x3,225x3,224x2,223x2,222x4,221x2,220x4,219x3,218x2,217x3,216x3,215x3,214x3,213x2,212x3,211x4,210x2,209x3,208x2,207x3,206x3,205x2,204x2,203x4,202x3,201x3,200x3,199x3,198x2,197x3,196x2,195x4,194x2,193x3,192x3,191x3,190x2,189x3,188x2,187x3,186x2,185x3,184x3,183x2,182x3,181x3,180x3,179x3,178x2,177x4,176x2,175x3,174x3,173x3,172x2,171x3,170x2,169x3,168x2,167x3,166x3,165x3,164x2,163x3,162x3,161x3,160x2,159x3,158x3,157x2,156x3,155x2,154x3,153x3,152x2,151x3,150x3,149x2,148x3,147x2,146x3,145x2,144x3,143x3,142x3,141x3,140x2,139x2,138x4,137x2,136x2,135x3,134x3,133x2,132x3,131x2,130x3,129x3,128x2,127x3,126x3,125x2,124x2,123x3,122x2,121x3,120x2,119x2,118x2,117x2,116x4,115x2,114x3,113x2,112x3,111x3,110x2,109x3,108x2,107x3,106x3,105x3,104x3,103x3,102x2,101x3,100x2,99x3,98x3,97x2,96x3,95x3,94x2,93x3,92x3,91x2,90x3,89x2,88x4,87x3,86x3,85,84x2,83x3,82x2,81x3,80x2,79x2,78x3,77x2,76x3,75x2,74x2,73x3,72x3,71x2,70x3,69x2,68x4,67x3,66x2,65x3,64x4,63,62x2,61x3,60x2,59x2,58x3,57x2,56x2,55x3,54x3,53x2,52x2,51x2,50x5,49,48x2,47x3,46x3,45x2,44x3,43x3,42x2,41x2,40x2,39x3,38x2,37x2,36x3,35x3,34x3,33x2,32x2,31x2,30x3,29x2,28x4,27x2,26x2,25x3,24x2,23x2,22x2,21x3,20x3,19x2,18x3,17x2,16x2,15x3,14x2,13x2,12x2,11x2,10x2,9x4,8x12"),
         ("HEO_PIN_I41_ROUNDS", "36,45,52,61,62,68,71,74,77,80,89,95,100,101,104,110,119,129,130,135,144,150,153,158,161,167,172,175,182,183,513,518,525,528,533,538,539,542,549,550,551,552,553,571,583,586,587,591,611,618,621,633,640,641,648,655,658,683,684,685,686,687"),
-        ("HEO_PIN_PP_N_BADJ", "350-399:m:0,400-476:m:0,477-553:m:-1,554-599:m:-2,400-449:d:1,649-699:a:-1,554-615:m:-1,589-615:d:-1,616-648:m:0,350-553:d:1,250-349:d:1,350-399:m:1"),
+        ("HEO_PIN_PP_N_BADJ", "350-399:m:0,400-553:m:-1,554-599:m:-2,400-449:d:2,649-699:a:-1,554-615:m:-1,589-615:d:-1,616-648:m:1,350-553:d:1,250-349:d:1,350-399:m:1"),
         ("HEO_PIN_PP_N_HOLE2", "1"),
         ("HEO_PIN_I12_DIV_PROFILE", "192:192,193:193,194:194,195:195,196:196,197:197,198:198,199:199,200:200,201:201,202:202,203:203,204:204,205:205,206:206,207:207,208:208,209:209,210:210,211:211,212:212,213:213,214:214,215:215,216:216,217:217,218:218,219:219,220:220,221:221,222:222,223:223,224:224,225:225,226:226,227:227,228:228,229:229,230:230,231:231,232:232,233:233,234:234,235:235,236:236,237:237,238:238,239:239,240:240,241:241,242:242,243:243,244:244,245:245,246:246,247:247,248:248,249:251,252:255,256:256,257:392,393:393,394:394,395:395,396:396,397:397,398:398,399:399,400:400,401:401,402:402,403:403,404:404,405:405,406:406,407:407,408:408,409:409,410:410,411:411,412:412,413:413,414:414,415:415,416:416,417:417,418:418,419:419,420:420,421:421,422:422,423:423,424:424,425:425,426:426,427:427,428:428,429:429,430:430,431:433,434:434,435:438,439:439,440:441,442:442,443:445,446:496,497:497,498:498,499:499,500:500,501:501,502:502,503:503,504:504,505:505,506:506,507:507,508:508,509:509,510:510,511:511,512:512,513:513,514:514,515:515,516:516,517:517,518:518,519:519,520:520,521:522,523:523,524:524,525:525,526:526,527:527,528:528,529:529,530:530,531:531,532:532,533:533,534:534,535:535,536:536,537:537,538:538,539:539,540:572,573:573,574:574,575:575,576:576,577:577,578:578,579:579,580:580,581:581,582:582,583:583,584:584,585:586,587:588,589:596,597:597,598:598,599:599,600:600,601:601,602:603,604:604,605:606,607:608,609:610,611:611,612:613,614:615,616:617,618:618,619:620,621:622,623:624,625:625,626:626,627:627,628:628,629:629,630:630,631:631,632:632,633:633,634:634,635:635,636:636,637:637,638:638,639:639,640:640,641:641,642:642,643:643,644:644,645:645,646:646,647:647,648:648,649:665,666:666,667:668,669:670,671:671,672:672,673:673,674:674,675:675,676:676,677:677,678:678,679:679,680:680,681:681,682:682,683:683,684:684"),
         ("HEO_PIN_PP_HEAD_MUL", "414"),
@@ -346,8 +355,8 @@ fn install_skywalk_submission_recipe() {
         ("GO_KEEP_FOLD", "1"),
         ("HEO_PIN_PP_RETAIN_LATE_WIDEN", "0"),
         ("HEO_PIN_PP_N_CAPR", "621-648:18,649-665:16,350-399:20,450-499:20,150-199:20,50-99:20,200-349:20,500-549:20"),
-        ("HEO_PIN_SQ_ASM_TAIL", "18"),
-        ("HEO_PIN_ERASE_COMPARE", "22"),
+        ("HEO_PIN_SQ_ASM_TAIL", "20"),
+        ("HEO_PIN_ERASE_COMPARE", "25"),
         ("HEO_PIN_PP_DROP_EXACT_LEAD_WIDEN", "0"),
         ("HEO_PIN_PP_FLAG_WIDEN_DIV", "30"),
         ("GO_JLB", "616-698:m:-1"),
@@ -376,8 +385,8 @@ fn install_skywalk_submission_recipe() {
         ("HEO_FREDKIN_OUTPUT_ALIAS", "1"),
         // sky5 package (frozen-sky5, r5_ycd): GO share knobs, GO #11 divfwd share selection (dfsel_s4),
         // R3 S1 tick list, R4 FD payload / y fusions, R5 classical-operand adds and compares.
-        ("GO_MULREV2_SHARE", "1"),
-        ("GO_MULREV_SHARE", "1"),
+        ("GO_MULREV2_SHARE", "0"),
+        ("GO_MULREV_SHARE", "0"),
         ("GO_DIVFWD_SHARE", "1"),
         ("GO_SHARE_ROOMFIX", "1"),
         ("GO_DIVFWD_SHARE_T", "2,12,17,22,27,32,37,42,47,52,57,62,67,72,77,82,87,92,97,102,132,137,142,147,152,157,162,167,172,177,182,187,222,227,382,387,107,232,242,272,277,307,332,337"),
@@ -392,21 +401,38 @@ fn install_skywalk_submission_recipe() {
         ("R5_CBITS_PAD_ALL", "1"),
         // sky8 package (frozen-sky8, GO p7f): split carry window K=21, FOLD_WIDEN 68 (above), GO r6 per-cell
         // compare re-balance (div ticks 150-155 dB -1, mul ticks 225-344 dF +1), iA.100 envelopes (heo.rs).
-        ("HEO_SPLIT_K", "21"),
-        ("GO_CELLB", "div:150-155:-1,div:220-329:-1,mul:105-194:1"),
-        ("GO_CELLF", "mul:225-344:1,div:250-299:-1"),
+        ("HEO_SPLIT_K", "24"),
+        ("GO_CELLB", ""),
+        ("GO_CELLF", "mul:225-344:1"),
         // sky9 package (frozen-sky9, 19.5 Lambda limit): multiply batch route skipped at t = R-2 (B6), one
         // chunk compare bit fewer on rounds 0-399 (go_slice GO_CHUNK), 65 rewrite rows re-keyed to this op stream.
-        ("HEO_MB_SKIP2", "1"),
-        ("GO_CHUNK", "0-399:-1"),
-        // sky10 package (frozen-sky10, 19.5 Lambda limit): FIT_K 22, ERASE_COMPARE 22, SQ_ASM_TAIL 18 and FOLD_GUARD 20
-        // are set in place above; 52 SAT-proven square rows re-keyed to this op stream.
-        // sky12 package (frozen-sky12, 19.5 Lambda limit): GO_CELLB adds div ticks 220-329 dB -1 and mul ticks 105-194
-        // dB +1, GO_CELLF adds div ticks 250-299 dF -1 (above); 53 SAT-proven square rows re-keyed to this op stream.
-        // sky13 package (frozen-sky13, 19.5 Lambda limit): HEO_PIN_PP_N_BADJ re-balanced (sells 400-449 d and 616-648 m by
-        // one bit, buys 400-476 m by one bit, above); 54 SAT-proven square rows re-keyed to this op stream.
-        // sky14 package (frozen-sky14, 19.5 Lambda limit): HEO_PIN_PP_FOLD_PROFILE 25:-3 and 0:-5, HEO_PIN_PP_FOLD_WIDEN 112
-        // (above); 58 SAT-proven square rows re-keyed to this op stream.
+        ("HEO_MB_SKIP2", "0"),
+        ("GO_CHUNK", "0-0:0"),
+        // cap-1145 recipe, part 2: the exact width-squeeze constructions (low-room adds, rail bridge, fold setup,
+        // exact split multiply, SQ_A2_CHAINS = 5 exact tape-codec chains) and the sky9 rewrite rows off (SKY_NORW:
+        // those rows are keyed to the 1174 op stream).
+        ("HEO_SPLIT_MUL", "exact"),
+        ("HEO_PIN_SQ_A_POLICY", "0"),
+        ("HEO_PIN_SQ_B_POLICY", "0"),
+        ("HEO_PIN_SQ_C_POLICY", "0"),
+        ("SQ_LOWROOM", "1"),
+        ("SQ_RAILBRIDGE", "1"),
+        ("SQ_FOLDSETUP", "1"),
+        ("SQ_A2_CHAINS", "5"),
+        ("SKY_NORW", "1"),
+        // D2 joint layout (track D2 integration, `heo_carry::d2int`): both legs on two flat rail arrays of A = 288
+        // wires with downward s-bit stacks and the park skip; every payload cell fused into its tick.
+        ("D2_INT", "1"),
+        ("D2_A", "288"),
+        ("D2_TICK_WIN_K", "1"),
+        ("D2_STACK_MARGIN", "3"),
+        ("D2_PEBBLES", "6"),
+        ("D2_GIDNEY", "0"),
+        ("D2_CELL_POOL", "1"),
+        // cap 1112: the detector runs after the push with the clean s wire lent, its construction fitted per
+        // checkpoint to the room of each traversal; the payload cells see their true room (no per-cell room cuts).
+        ("D2_DETECT_AFTER_PUSH", "1"),
+        ("D2_CELL_ROOM_PINS", "0"),
     ] { std::env::set_var(name, value); }
     std::env::set_var("HEO_ENVELOPE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-0.txt"));
     std::env::set_var("HEO_ENVELOPE_MUL", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-1.txt"));
@@ -415,9 +441,10 @@ fn install_skywalk_submission_recipe() {
     std::env::set_var("K3B_CELL_OVR", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/ovr_v025_lamneutral.txt"));
 }
 
-/// sky8 submission: every setting of the circuit is pinned in code (the recipe above, the compiled-in
-/// envelopes and rewrite rows, `TAIL_NONCE` in `env_raw`). Clear the inherited process environment first
-/// so that no variable set on the host (`HEO_PIN_*`, `GO_*`, `R*_*`, `SKY_*`, ...) can change the circuit.
+/// Every setting of the circuit is pinned in code (the recipe above, the compiled-in envelopes, `TAIL_NONCE` in
+/// `env_raw`). Clear the inherited process environment first so that no variable set on the host (`HEO_PIN_*`,
+/// `GO_*`, `R*_*`, `SKY_*`, ...) can change the circuit. The one exception is `HEO_PIN_TAIL_NONCE`, kept by
+/// `build()`: it only rewrites the 96-op identity tail (`apply_tail_nonce`), never the circuit itself.
 fn clear_process_env() {
     let keys: Vec<std::ffi::OsString> = std::env::vars_os().map(|(k, _)| k).collect();
     for k in keys {
@@ -428,8 +455,36 @@ fn clear_process_env() {
 }
 
 pub fn build() -> Vec<Op> {
+    // D2 stacks / park skip gate-level selftests (component d2-stack); env-gated, read before the env is cleared.
+    if std::env::var_os("D2_STACK_SELFTEST").is_some() {
+        d2_stack::selftest::run();
+        std::process::exit(0);
+    }
+    let tail_pin = std::env::var_os("HEO_PIN_TAIL_NONCE");
+    // D2 rail tick selftest / cost table (research only; read before the environment is cleared).
+    if std::env::var_os("D2_TICK_SELFTEST").is_some() { d2tick::selftest::run(); std::process::exit(0); }
+    if let Ok(p) = std::env::var("D2_TICK_COST") {
+        let a = std::env::var("D2_TICK_COST_A").ok().and_then(|s| s.parse().ok()).unwrap_or(288);
+        // D2_TICK_COST_MODE: "port" (default) or "lowroom:<gidney positions>"
+        let mode = match std::env::var("D2_TICK_COST_MODE").ok().as_deref() {
+            None | Some("port") => d2tick::D2Mode::Port,
+            Some(m) => d2tick::D2Mode::LowRoom { gidney: m.strip_prefix("lowroom:").expect("D2_TICK_COST_MODE").parse().unwrap() },
+        };
+        d2tick::selftest::cost_table(&p, a, std::env::var("D2_TICK_COST_DUMP").ok().as_deref(), mode);
+        std::process::exit(0);
+    }
+    // D2 integration selftest (research only): read before the environment is cleared, run after the recipe.
+    let d2_selftest: Vec<(String, String)> = std::env::vars().filter(|(k, _)| k.starts_with("D2_INT_SELFTEST")).collect();
     clear_process_env();
+    if let Some(n) = tail_pin { std::env::set_var("HEO_PIN_TAIL_NONCE", n); }
     install_skywalk_submission_recipe();
+    if !d2_selftest.is_empty() {
+        for (k, v) in &d2_selftest {
+            std::env::set_var(k, v);
+        }
+        heo::carry::d2int::selftest::run();
+        std::process::exit(0);
+    }
     if std::env::var_os("SKYWALK_SQUARE_HIGH_PROBE").is_some(){square::high_probe();std::process::exit(0);}
     if std::env::var_os("SKYWALK_MODDIV_ADAPTER_PROBE").is_some(){moddiv_adapter::probe();std::process::exit(0);}
     let mut ops = build_point_add();
@@ -471,10 +526,10 @@ pub fn build() -> Vec<Op> {
         // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
         ops = mabsorb::absorb(ops);
     }
-    // SKY_REWRITE (sky14 package rows: 58 square rows re-proved by SAT on the sky14 op stream, compiled in): replace SAT-proved linear-span CCX by CX chains.
+    // SKY_REWRITE (sky9 package rows: sky8 rows c1 + c2 transferred to the sky9 op stream, 65 rows, compiled in): replace SAT-proved linear-span CCX by CX chains.
     // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted).
-    {
-        let text = include_str!("skywalk_data/sky14_rewrite.txt");
+    if std::env::var_os("SKY_NORW").is_none() {
+        let text = include_str!("skywalk_data/sky9_rewrite.txt");
         let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
             let ws = if f[5] == "-" { vec![] } else { f[5].split(',').map(|x| x.parse().unwrap()).collect() };

@@ -816,6 +816,14 @@ pub(crate) fn heo_fitted_vented_add(circ: &mut Builder, value: &[QubitId], acc: 
     if room >= width || width + 1 <= 2 * room.saturating_sub(1) {
         return None;
     }
+    if super::lowroom::enabled() && room == 1 && super::width_composition::plan(width, room).is_none() {
+        // SQ_LOWROOM: ancilla-free TTK add with the carry-out wire as its top (2w - 1 CCX, room 1),
+        // the same cost class as the slow in-place plan, which needs room 2.
+        let out = circ.alloc_qubit();
+        super::lowroom::ttk_add_cout(circ, value, acc, out);
+        eprintln!("SQ_LOWROOM_TTK w={width} room={room}");
+        return Some(out);
+    }
     let plan = (room..=width.max(room)).find_map(|r| super::width_composition::plan(width, r))?;
     Some(super::width_composition::add(circ, value, acc, &plan))
 }
