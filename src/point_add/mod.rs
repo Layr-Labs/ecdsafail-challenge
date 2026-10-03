@@ -151,7 +151,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "18000769990959",
+        "TAIL_NONCE" => "19500303292604",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -294,7 +294,7 @@ fn install_skywalk_submission_recipe() {
         ("HEO_LR1", "1"),
         ("HEO_PIN_SQ_SPARSE_CORRECTION", "1"),
         ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "3"),
-        ("HEO_PIN_I35_PROFILE", "501:1:2,504:1:2,509:1:1,513:1:1,518:1:1,523:1:1,528:1:1,533:1:1,577:1:1,583:1:1,589:1:1,591:1:1,594:1:1,600:0:1,602:0:1,614:1:1,620:1:1,624:1:2,629:1:2,631:1:2,633:1:2,636:1:2,638:1:3,640:0:1,642:0:1,642:1:3,644:0:1,644:1:3,646:0:1,646:1:3,663:1:3,670:1:3,672:0:1,673:0:1,673:1:3,674:0:1,675:0:1,676:0:1,677:0:1,678:0:1,679:0:1,679:1:3,680:0:1,681:0:1,682:0:1,683:0:1,684:0:1,685:0:1,686:0:1,687:0:1,687:1:3,688:0:1,689:0:1,690:0:1,691:0:1,692:0:1,693:0:1,694:0:1,695:0:1,696:0:1,697:0:1,698:0:1,698:1:3"),
+        ("HEO_PIN_I35_PROFILE", "501:1:2,504:1:2,509:1:1,513:1:1,516:0:2,518:0:2,518:1:1,523:1:1,528:1:1,533:1:1,554:0:2,560:0:2,564:0:2,569:0:2,574:0:2,577:1:1,583:1:1,589:1:1,591:1:1,594:1:1,597:0:2,600:0:1,602:0:1,614:1:1,620:1:1,624:1:2,629:1:2,631:1:2,633:0:4,633:1:2,636:1:2,638:1:3,640:0:1,642:0:1,642:1:3,644:0:1,644:1:3,646:0:1,646:1:3,663:1:3,670:1:3,672:0:1,673:0:1,673:1:3,674:0:1,675:0:1,676:0:1,677:0:1,678:0:1,679:0:1,679:1:3,680:0:1,681:0:1,682:0:1,683:0:1,684:0:1,685:0:1,686:0:1,687:0:1,687:1:3,688:0:1,689:0:1,690:0:1,691:0:1,692:0:1,693:0:1,694:0:1,695:0:1,696:0:1,697:0:1,698:0:1,698:1:3"),
         ("HEO_HEAD_LIFO_N", "2"),
         ("HEO_DIV_LIFO_N", "2"),
         ("HEO_MULB_LIFO_N", "2"),
@@ -369,7 +369,7 @@ fn install_skywalk_submission_recipe() {
         ("HEO_REVERSE_CARRY_CODEC", "1"),
         ("SKYWALK_MERGED_HIGH_STREAM", "3"),
         ("TERMINAL_PAIR", "1"),
-        ("TERMINAL_FW", "50"),
+        ("TERMINAL_FW", "40"),
         ("HEO_CELL_HELPER_S1", "1"),
         ("BACK_SEAM_FUSE", "3"),
         ("HEO_S1_OUTPUT_ALIAS", "1"),
@@ -419,6 +419,8 @@ fn install_skywalk_submission_recipe() {
         // unchanged, so the same 62 sky16 rows stay exact.
         // sky18 package (frozen-sky18, 19.5 Lambda limit): HEO_PIN_ERASE_COMPARE 20, HEO_PIN_PP_FOLD_WIDEN 128 and a 56:0 top
         // band on HEO_PIN_PP_FOLD_PROFILE (above); 56 SAT-proven rows re-proved on this op stream (sky18_rewrite.txt).
+        // sky19 package (frozen-sky19, 19.5 Lambda limit): HEO_PIN_I35_PROFILE adds division-walk bridges (R_D) and TERMINAL_FW
+        // goes from 50 to 40 (above); 62 SAT-proven rows re-proved on this op stream (sky19_rewrite.txt).
     ] { std::env::set_var(name, value); }
     std::env::set_var("HEO_ENVELOPE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-0.txt"));
     std::env::set_var("HEO_ENVELOPE_MUL", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-1.txt"));
@@ -483,10 +485,10 @@ pub fn build() -> Vec<Op> {
         // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
         ops = mabsorb::absorb(ops);
     }
-    // SKY_REWRITE (sky18 package rows: 56 rows proved exact by SAT on the sky18 op stream, compiled in): replace SAT-proved linear-span CCX by CX chains.
+    // SKY_REWRITE (sky19 package rows: 62 rows proved exact by SAT on the sky19 op stream, compiled in): replace SAT-proved linear-span CCX by CX chains.
     // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted).
     {
-        let text = include_str!("skywalk_data/sky18_rewrite.txt");
+        let text = include_str!("skywalk_data/sky19_rewrite.txt");
         let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
             let ws = if f[5] == "-" { vec![] } else { f[5].split(',').map(|x| x.parse().unwrap()).collect() };
