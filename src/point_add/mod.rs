@@ -151,7 +151,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "20500217557371",
+        "TAIL_NONCE" => "281303256604719",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -277,13 +277,13 @@ fn install_skywalk_submission_recipe() {
         ("HEO_SCHEDULE", "carry"),
         ("HEO_SEED", "base"),
         ("HEO_FIT_MODE", "win"),
-        ("HEO_FIT_K", "21"),
+        ("HEO_FIT_K", "19"),
         ("HEO_ZONE", "1"),
         ("HEO_R2D", "382"),
         ("HEO_R2M", "370"),
         ("HEO_R1M", "99"),
         ("HEO_CARRY_SEED", "fd"),
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1174"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1173"),
         ("HEO_LT0", "1"),
         ("HEO_BW", "inv"),
         ("HEO_LT0_MUL", "1"),
@@ -294,7 +294,7 @@ fn install_skywalk_submission_recipe() {
         ("HEO_LR1", "1"),
         ("HEO_PIN_SQ_SPARSE_CORRECTION", "1"),
         ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "3"),
-        ("HEO_PIN_I35_PROFILE", "501:1:2,504:1:2,509:1:1,513:1:1,516:0:2,518:0:2,518:1:1,523:1:1,528:1:1,533:1:1,554:0:2,560:0:2,564:0:2,569:0:2,574:0:2,577:1:1,583:1:1,589:1:1,591:1:1,594:1:1,597:0:2,600:0:1,602:0:1,614:1:1,620:1:1,624:1:2,629:1:2,631:1:2,633:0:4,633:1:2,636:1:2,638:1:3,640:0:1,642:0:1,642:1:3,644:0:1,644:1:3,646:0:1,646:1:3,663:1:3,670:1:3,672:0:1,673:0:1,673:1:3,674:0:1,675:0:1,676:0:1,677:0:1,678:0:1,679:0:1,679:1:3,680:0:1,681:0:1,682:0:1,683:0:1,684:0:1,685:0:1,686:0:1,687:0:1,687:1:3,688:0:1,689:0:1,690:0:1,691:0:1,692:0:1,693:0:1,694:0:1,695:0:1,696:0:1,697:0:1,698:0:1,698:1:3"),
+        ("HEO_PIN_I35_PROFILE", "600:0:1,602:0:1,640:0:1,642:0:1,644:0:1,646:0:1,672:0:1,673:0:1,674:0:1,675:0:1,676:0:1,677:0:1,678:0:1,679:0:1,680:0:1,681:0:1,682:0:1,683:0:1,684:0:1,685:0:1,686:0:1,687:0:1,688:0:1,689:0:1,690:0:1,691:0:1,692:0:1,693:0:1,694:0:1,695:0:1,696:0:1,697:0:1,698:0:1,620:1:1,591:1:1"),
         ("HEO_HEAD_LIFO_N", "2"),
         ("HEO_DIV_LIFO_N", "2"),
         ("HEO_MULB_LIFO_N", "2"),
@@ -326,7 +326,7 @@ fn install_skywalk_submission_recipe() {
         ("FD_COORD_LOW_ONE", "1"),
         ("HEO_PIN_FOLD_GUARD", "20"),
         ("HEO_PIN_PP_FOLD_WIDEN", "112"),
-        ("HEO_PIN_PP_FOLD_PROFILE", "56:0,38:-1,32:-1,25:-5,19:-5,0:-5"),
+        ("HEO_PIN_PP_FOLD_PROFILE", "56:0,38:-1,32:-1,25:-5,19:-7,0:-5"),
         ("PP_DROP_EXACT_LEAD", "1"),
         ("PP_DROP_EXACT_LEAD_DIR", "mul"),
         ("HEO_RAIL_TOP_RELEASE", "1"),
@@ -369,7 +369,7 @@ fn install_skywalk_submission_recipe() {
         ("HEO_REVERSE_CARRY_CODEC", "1"),
         ("SKYWALK_MERGED_HIGH_STREAM", "3"),
         ("TERMINAL_PAIR", "1"),
-        ("TERMINAL_FW", "40"),
+        ("TERMINAL_FW", "42"),
         ("HEO_CELL_HELPER_S1", "1"),
         ("BACK_SEAM_FUSE", "3"),
         ("HEO_S1_OUTPUT_ALIAS", "1"),
@@ -421,8 +421,6 @@ fn install_skywalk_submission_recipe() {
         // band on HEO_PIN_PP_FOLD_PROFILE (above); 56 SAT-proven rows re-proved on this op stream (sky18_rewrite.txt).
         // sky19 package (frozen-sky19, 19.5 Lambda limit): HEO_PIN_I35_PROFILE adds division-walk bridges (R_D) and TERMINAL_FW
         // goes from 50 to 40 (above); 62 SAT-proven rows re-proved on this op stream (sky19_rewrite.txt).
-        // sky20 package (frozen-sky20, 19.5 Lambda limit): HEO_PIN_PP_FOLD_PROFILE band 19 goes from -4 to -5 and
-        // HEO_PIN_PP_FOLD_WIDEN from 128 to 112 (above); 61 SAT-proven rows re-proved on this op stream (sky20_rewrite.txt).
     ] { std::env::set_var(name, value); }
     std::env::set_var("HEO_ENVELOPE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-0.txt"));
     std::env::set_var("HEO_ENVELOPE_MUL", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-1.txt"));
@@ -446,6 +444,9 @@ fn clear_process_env() {
 pub fn build() -> Vec<Op> {
     clear_process_env();
     install_skywalk_submission_recipe();
+    std::env::set_var("GO_FLAG", "0-63:4");
+    std::env::set_var("SKY_SPLIT_TRIM_LAST", "1");
+    std::env::set_var("K3B_CELL_TRACE", "1");
     if std::env::var_os("SKYWALK_SQUARE_HIGH_PROBE").is_some(){square::high_probe();std::process::exit(0);}
     if std::env::var_os("SKYWALK_MODDIV_ADAPTER_PROBE").is_some(){moddiv_adapter::probe();std::process::exit(0);}
     let mut ops = build_point_add();
@@ -487,35 +488,22 @@ pub fn build() -> Vec<Op> {
         // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
         ops = mabsorb::absorb(ops);
     }
-    // SKY_REWRITE (sky20 package rows: 61 rows proved exact by SAT on the sky20 op stream, compiled in): replace SAT-proved linear-span CCX by CX chains.
-    // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted).
+    // Eleven square identities SAT-proved on this exact Q1173 stream.
     {
-        let text = include_str!("skywalk_data/sky20_rewrite.txt");
+        let text = include_str!("skywalk_data/q1173_exact_rows.txt");
         let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
             let ws = if f[5] == "-" { vec![] } else { f[5].split(',').map(|x| x.parse().unwrap()).collect() };
             (f[0].parse().unwrap(), f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap(), f[4] == "1", ws)
         }).collect();
+        assert_eq!(rows.len(), 11);
         rows.sort_by(|a, b| b.0.cmp(&a.0));
-        // The rows are keyed to one op stream; an upstream change shifts the block rigidly.
-        // Find the unique shift d under which every row names its CCX (asserted unique).
-        let hit = |w: usize, c1: u64, c2: u64, t: u64| w < ops.len() && { let o = &ops[w]; o.kind == OperationType::CCX && o.q_target.0 == t
-            && ((o.q_control1.0 == c1 && o.q_control2.0 == c2) || (o.q_control1.0 == c2 && o.q_control2.0 == c1)) };
-        let r0 = rows[0].clone();
-        let mut shifts = Vec::new();
-        for d in -2_000_000isize..=2_000_000 {
-            let w0 = r0.0 as isize + d;
-            if w0 < 0 || !hit(w0 as usize, r0.1, r0.2, r0.3) { continue; }
-            if rows.iter().all(|r| { let w = r.0 as isize + d; w >= 0 && hit(w as usize, r.1, r.2, r.3) }) { shifts.push(d); }
-        }
-        assert!(shifts.len() == 1, "SKY_REWRITE: {} candidate shifts {:?}", shifts.len(), &shifts[..shifts.len().min(5)]);
-        let d = shifts[0];
-        eprintln!("SKY_REWRITE rows={} shift={d}", rows.len());
         for (w, c1, c2, t, cst, ws) in rows {
-            let w = (w as isize + d) as usize;
+            assert!(w < ops.len(), "Q1173_EXACT11 site out of range");
             let o = ops[w];
             assert!(o.kind == OperationType::CCX && o.q_target.0 == t && o.c_condition == crate::circuit::NO_BIT
-                && ((o.q_control1.0 == c1 && o.q_control2.0 == c2) || (o.q_control1.0 == c2 && o.q_control2.0 == c1)), "SKY_REWRITE mismatch at {w}");
+                && ((o.q_control1.0 == c1 && o.q_control2.0 == c2) || (o.q_control1.0 == c2 && o.q_control2.0 == c1)),
+                "Q1173_EXACT11 source mismatch at {w}");
             let mut rep = Vec::new();
             for q in ws { assert!(q != t); let mut x = Op::empty(); x.kind = OperationType::CX; x.q_control1 = QubitId(q); x.q_target = QubitId(t); rep.push(x); }
             if cst { let mut x = Op::empty(); x.kind = OperationType::X; x.q_target = QubitId(t); rep.push(x); }

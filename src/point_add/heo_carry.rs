@@ -1898,6 +1898,29 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
     if let Some(v) = ovr.get(&idx) {
         pins.extend(v.iter().cloned());
     }
+    // Frozen cap1173 bridge/room profile, measured in this source epoch.
+    static RETUNE: OnceLock<HashMap<usize,(String,isize,usize,String)>> = OnceLock::new();
+    let retune = RETUNE.get_or_init(|| {
+        let mut map = HashMap::new();
+        for line in include_str!("skywalk_data/cap1173_bridge_room_profile_v2.txt").lines() {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            assert_eq!(f.len(),5);
+            let id: usize = f[0].parse().unwrap();
+            let bridge = f[1].to_string();
+            let room: isize = f[2].parse().unwrap();
+            let tick: usize = f[3].parse().unwrap();
+            assert!(["+0","+1","+2","+3","-1","-2","0"].contains(&bridge.as_str()));
+            assert!((-8..=8).contains(&room));
+            assert!(map.insert(id,(bridge,room,tick,f[4].to_string())).is_none());
+        }
+        map
+    });
+    if let Some((bridge,room,tick,direction)) = retune.get(&idx) {
+        assert_eq!(*tick,t); assert_eq!(direction,dir);
+        pins.insert("K3B_BRIDGE".into(),bridge.clone());
+        let current: isize = pins.get("K3B_EXTRA_ROOM").map_or(0,|v|v.parse().unwrap());
+        pins.insert("K3B_EXTRA_ROOM".into(),(current+room).to_string());
+    }
     // R3 sign loan: per-cell room pin delta from R3_SGN_FILE (`idx delta` lines).
     if let Some(d) = r3_sgn_map().as_ref().and_then(|m| m.get(&idx)).copied() {
         if d != 0 {
