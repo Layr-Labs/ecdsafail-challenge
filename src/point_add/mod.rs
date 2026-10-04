@@ -151,7 +151,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "24700228103001",
+        "TAIL_NONCE" => "25000058104875",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -395,7 +395,7 @@ fn install_skywalk_submission_recipe() {
         // compare re-balance (div ticks 150-155 dB -1, mul ticks 225-344 dF +1), iA.100 envelopes (heo.rs).
         ("HEO_SPLIT_K", "21"),
         ("GO_CELLB", "div:150-155:-1,div:220-329:-1,mul:105-194:1,mul:25-49:1"),
-        ("GO_CELLF", "mul:225-344:1,div:250-299:-1"),
+        ("GO_CELLF", "mul:225-344:1,div:250-299:-1,mul:150-224:-1,mul:345-420:-1"),
         // sky9 package (frozen-sky9, 19.5 Lambda limit): multiply batch route skipped at t = R-2 (B6), one
         // chunk compare bit fewer on rounds 0-399 (go_slice GO_CHUNK), 65 rewrite rows re-keyed to this op stream.
         ("HEO_MB_SKIP2", "1"),
@@ -436,6 +436,9 @@ fn install_skywalk_submission_recipe() {
         // q73c package (Round Q73-S2 sell, 19.5 Lambda limit): q73b with HEO_PIN_PP_FOLD_WIDEN 112 instead of 128 (above;
         // -28.3 T model, confirmed Lambda 19.336 +- 0.032 on 16,384 nonces); the 105 rows re-ported to the w112 op stream
         // (q73c_rewrite.txt).
+        // q73d package (Round Q73-S7 sell, 19.5 Lambda limit): q73c with GO_CELLF mul ticks 150-224 and 345-420 dF -1
+        // (above; -16 T model, gates 19.240 and 19.276 on 4,096 nonces each); the 105 q73c rows, the 2 late outside rows
+        // re-proved by SAT at their shifted positions (q73d_rewrite.txt).
         ("GO_FLAG", "0-63:4"),
         ("SKY_SPLIT_TRIM_LAST", "1"),
     ] { std::env::set_var(name, value); }
@@ -503,10 +506,10 @@ pub fn build() -> Vec<Op> {
         // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
         ops = mabsorb::absorb(ops);
     }
-    // SKY_REWRITE (q73c package rows: 105 rows on the q73c op stream, 102 square rows spanver-checked and 3 outside rows proved by SAT, compiled in): replace SAT-proved linear-span CCX by CX chains.
+    // SKY_REWRITE (q73d package rows: 105 rows on the q73d op stream, the q73c rows with the 2 late outside rows re-proved by SAT at their shifted positions, compiled in): replace SAT-proved linear-span CCX by CX chains.
     // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted).
     {
-        let text = include_str!("skywalk_data/q73c_rewrite.txt");
+        let text = include_str!("skywalk_data/q73d_rewrite.txt");
         let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
             let ws = if f[5] == "-" { vec![] } else { f[5].split(',').map(|x| x.parse().unwrap()).collect() };
