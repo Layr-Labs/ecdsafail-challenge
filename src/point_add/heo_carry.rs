@@ -1898,20 +1898,24 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
     if let Some(v) = ovr.get(&idx) {
         pins.extend(v.iter().cloned());
     }
-    // Frozen cap1173 bridge/room profile, measured in this source epoch.
+    // SKYX_K3B_RETUNE (sky-x4 research hook): per-cell K3B_BRIDGE / K3B_EXTRA_ROOM retune file, lines
+    // `idx bridge room tick dir` (format of jackylee0424's cap1173_bridge_room_profile_v2.txt, 3161bd20). Unset = no change.
     static RETUNE: OnceLock<HashMap<usize,(String,isize,usize,String)>> = OnceLock::new();
     let retune = RETUNE.get_or_init(|| {
         let mut map = HashMap::new();
-        for line in include_str!("skywalk_data/cap1173_bridge_room_profile_v2.txt").lines() {
-            let f: Vec<&str> = line.split_whitespace().collect();
-            assert_eq!(f.len(),5);
-            let id: usize = f[0].parse().unwrap();
-            let bridge = f[1].to_string();
-            let room: isize = f[2].parse().unwrap();
-            let tick: usize = f[3].parse().unwrap();
-            assert!(["+0","+1","+2","+3","-1","-2","0"].contains(&bridge.as_str()));
-            assert!((-8..=8).contains(&room));
-            assert!(map.insert(id,(bridge,room,tick,f[4].to_string())).is_none());
+        if std::env::var("SKYX_K3B_RETUNE").is_ok() {
+            // Embedded: the official runner denies file reads at build time, so the table is compiled in like the other skywalk_data files.
+            for line in include_str!("skywalk_data/q73a_k3b_retune.txt").lines().filter(|l| !l.trim().is_empty()) {
+                let f: Vec<&str> = line.split_whitespace().collect();
+                assert_eq!(f.len(),5);
+                let id: usize = f[0].parse().unwrap();
+                let bridge = f[1].to_string();
+                let room: isize = f[2].parse().unwrap();
+                let tick: usize = f[3].parse().unwrap();
+                assert!(["+0","+1","+2","+3","-1","-2","0"].contains(&bridge.as_str()));
+                assert!((-8..=8).contains(&room));
+                assert!(map.insert(id,(bridge,room,tick,f[4].to_string())).is_none());
+            }
         }
         map
     });
@@ -1949,8 +1953,11 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
     let room = h7::cap().saturating_sub(live as usize);
     let before = c.report_totals();
     let s0 = c.k3b_sites;
+    let op0 = c.op_count();
     let (out, cpeak) = c.r3_peak(body);
     if std::env::var_os("R3_PEAK").is_some() { eprintln!("R3_PEAK {idx} {cpeak}"); }
+    // K3B_OPS=1: builder op range of this cell (pre-simplifier; maps phcen error sites to cells).
+    if std::env::var_os("K3B_OPS").is_some() { eprintln!("K3B_OPS {idx} {dir} {t} {op0} {}", c.op_count()); }
     let after = c.report_totals();
     let s1 = c.k3b_sites;
     if set {
