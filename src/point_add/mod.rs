@@ -151,7 +151,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "23500078439729",
+        "TAIL_NONCE" => "24700083572177",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -325,7 +325,7 @@ fn install_skywalk_submission_recipe() {
         ("FD_COORD_FUSE", "1"),
         ("FD_COORD_LOW_ONE", "1"),
         ("HEO_PIN_FOLD_GUARD", "20"),
-        ("HEO_PIN_PP_FOLD_WIDEN", "128"),
+        ("HEO_PIN_PP_FOLD_WIDEN", "112"),
         ("HEO_PIN_PP_FOLD_PROFILE", "56:0,38:-1,32:-1,25:-5,19:-5,0:-5"),
         ("PP_DROP_EXACT_LEAD", "1"),
         ("PP_DROP_EXACT_LEAD_DIR", "mul"),
@@ -433,6 +433,9 @@ fn install_skywalk_submission_recipe() {
         // q73b package (Round Q73-S1 sell, 19.5 Lambda limit): q73a with GO_CELLB mul ticks 25-49 instead of 0-49 (above;
         // -16.7 T for +0.0235 Lambda); the 105 q73a rows kept, the 2 late outside rows re-proved at their shifted
         // positions (q73b_rewrite.txt).
+        // q73c package (Round Q73-S2 sell, 19.5 Lambda limit): q73b with HEO_PIN_PP_FOLD_WIDEN 112 instead of 128 (above;
+        // -28.3 T model, confirmed Lambda 19.336 +- 0.032 on 16,384 nonces); the 105 rows re-ported to the w112 op stream
+        // (q73c_rewrite.txt).
         ("GO_FLAG", "0-63:4"),
         ("SKY_SPLIT_TRIM_LAST", "1"),
     ] { std::env::set_var(name, value); }
@@ -500,10 +503,10 @@ pub fn build() -> Vec<Op> {
         // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
         ops = mabsorb::absorb(ops);
     }
-    // SKY_REWRITE (q73b package rows: 105 rows proved exact by SAT on the q73b op stream, compiled in): replace SAT-proved linear-span CCX by CX chains.
+    // SKY_REWRITE (q73c package rows: 105 rows on the q73c op stream, 102 square rows spanver-checked and 3 outside rows proved by SAT, compiled in): replace SAT-proved linear-span CCX by CX chains.
     // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted).
     {
-        let text = include_str!("skywalk_data/q73b_rewrite.txt");
+        let text = include_str!("skywalk_data/q73c_rewrite.txt");
         let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
             let ws = if f[5] == "-" { vec![] } else { f[5].split(',').map(|x| x.parse().unwrap()).collect() };
