@@ -1904,8 +1904,8 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
     let retune = RETUNE.get_or_init(|| {
         let mut map = HashMap::new();
         if std::env::var("SKYX_K3B_RETUNE").is_ok() {
-            // Embedded: the official runner denies file reads at build time, so the table is compiled in like the other skywalk_data files.
-            for line in include_str!("skywalk_data/q73a_k3b_retune.txt").lines().filter(|l| !l.trim().is_empty()) {
+            let text = include_str!("skywalk_data/cap1172_bridge_room_profile_probe.txt");
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
                 let f: Vec<&str> = line.split_whitespace().collect();
                 assert_eq!(f.len(),5);
                 let id: usize = f[0].parse().unwrap();
@@ -1913,7 +1913,7 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
                 let room: isize = f[2].parse().unwrap();
                 let tick: usize = f[3].parse().unwrap();
                 assert!(["+0","+1","+2","+3","-1","-2","0"].contains(&bridge.as_str()));
-                assert!((-8..=8).contains(&room));
+                assert!((-16..=16).contains(&room)); // widened for the extended negative-room grid (cap-probe regridx)
                 assert!(map.insert(id,(bridge,room,tick,f[4].to_string())).is_none());
             }
         }
@@ -2049,11 +2049,13 @@ struct Group {
     b1: QubitId,
     b0: QubitId,
     m_g: Option<BitId>,
+    m_pair: Option<BitId>,
 }
 
 struct Tape {
     /// v025 A-2: per group, the shared product `h2 * typ3` waiting for that group's pack3.
     shared: Vec<Option<QubitId>>,
+    outer_shared: Vec<Option<QubitId>>,
     raw: Vec<Option<(QubitId, QubitId)>>,
     groups: Vec<Option<Group>>,
     /// RB-1 L-T0: the codec starts at letter `off` (group g = letters 5g+off..5g+off+4); letters below `off`
@@ -2068,7 +2070,7 @@ fn dirty_cell(c:&mut Builder,tape:&Tape,t:usize,body:impl FnOnce(&mut Builder)){
         let raw = tape.raw.iter().filter(|x| x.is_some()).count();
         let p3 = tape.groups.iter().filter(|g| g.as_ref().is_some_and(|g| g.state == GState::P3)).count();
         let p5 = tape.groups.iter().filter(|g| g.as_ref().is_some_and(|g| g.state == GState::P5)).count();
-        let sh = tape.shared.iter().filter(|x| x.is_some()).count();
+        let sh = tape.shared.iter().filter(|x| x.is_some()).count() + tape.outer_shared.iter().filter(|x|x.is_some()).count();
         let tw = 2 * raw + 5 * p3 + 8 * p5 + sh;
         eprintln!("R3_CENSUS t={t} live={} raw={raw} p3={p3} p5={p5} shared={sh} tape_wires={tw} rest={}", c.active_qubits(), c.active_qubits() as usize - tw - 512);
     }
@@ -2105,9 +2107,21 @@ fn pair_pack(c: &mut Builder, h1: QubitId, l1: QubitId, h2: QubitId, l2: QubitId
     c.free_bit(m);
     c.free(anc);
 }
-fn pair_unpack(c: &mut Builder, h1: QubitId, l1: QubitId, h2: QubitId, l2: QubitId) {
+/// Exact shared pair compressor (bdff8c8 exact-arithmetic-v2). Outputs match ordinary pair_pack on all 9.
+/// The product measurement is repaired on pair_unpack's already computed AND.
+fn pair_pack_shared(c: &mut Builder, a: QubitId, b: QubitId, cc: QubitId, d: QubitId, p: QubitId) -> (QubitId, BitId) {
+    let h=c.alloc_qubit(); c.ccx(a,cc,h);
+    c.cx(p,b); c.cx(a,b); c.cx(h,b);
+    c.cx(a,cc); c.cx(p,d);
+    let m=c.alloc_bit(); c.hmr(a,m); c.z_if(h,m); c.cz_if(cc,d,m); c.free_bit(m); c.free(a);
+    let deferred=c.alloc_bit(); c.hmr(p,deferred); c.free(p);
+    (h,deferred)
+}
+
+fn pair_unpack(c: &mut Builder, h1: QubitId, l1: QubitId, h2: QubitId, l2: QubitId, m_pair: Option<BitId>) {
     let anc = c.alloc_qubit();
     c.ccx(h2, l2, anc);
+    if let Some(m)=m_pair { c.z_if(anc,m); c.cz_if(anc,l1,m); c.free_bit(m); }
     c.cx(anc, h1);
     c.cx(anc, l2);
     fredkin(c, anc, l1, l2);
@@ -2124,7 +2138,7 @@ impl Tape {
         Self::with_offset(r, 0)
     }
     fn with_offset(r: usize, off: usize) -> Self {
-        Tape { shared: vec![None; (r - off).div_ceil(5)], raw: vec![None; r], groups: vec![None; (r - off).div_ceil(5)], off }
+        Tape { outer_shared: vec![None; (r - off).div_ceil(5)], shared: vec![None; (r - off).div_ceil(5)], raw: vec![None; r], groups: vec![None; (r - off).div_ceil(5)], off }
     }
     /// Group of letter `u` (u >= off).
     fn gid(&self, u: usize) -> usize {
@@ -2140,7 +2154,7 @@ impl Tape {
         let (h3, l3) = to_hl(c, self.raw[t0 + 2].take().unwrap());
         if truthy("HEO_CODEC_SYNTH") {
             let [a2,a1,a0,h3,l3]=codec_synth::pack_compatible_shared(c,[h1,l1,h2,l2,h3,l3],self.shared[g].take());
-            self.groups[g]=Some(Group{state:GState::P3,synth:true,a2,a1,a0,h3,l3,b2:a2,b1:a2,b0:a2,m_g:None});
+            self.groups[g]=Some(Group{state:GState::P3,synth:true,a2,a1,a0,h3,l3,b2:a2,b1:a2,b0:a2,m_g:None,m_pair:None});
             return;
         }
         assert!(self.shared[g].is_none(), "shared product needs the synthesized codec");
@@ -2155,7 +2169,7 @@ impl Tape {
         c.cz_if(h3, l3, m);
         c.free_bit(m);
         c.free(fwire);
-        self.groups[g] = Some(Group { state: GState::P3, synth: false, a2, a1, a0, h3, l3, b2: a2, b1: a2, b0: a2, m_g: None });
+        self.groups[g] = Some(Group { state: GState::P3, synth: false, a2, a1, a0, h3, l3, b2: a2, b1: a2, b0: a2, m_g: None, m_pair: None });
     }
     fn pack5(&mut self, c: &mut Builder, g: usize) {
         let t0 = 5 * g + self.off;
@@ -2163,7 +2177,12 @@ impl Tape {
         let (h5, l5) = to_hl(c, self.raw[t0 + 4].take().unwrap());
         let mut grp = self.groups[g].take().unwrap();
         assert_eq!(grp.state, GState::P3);
-        pair_pack(c, h4, l4, h5, l5);
+        let h4=if let Some(p)=self.outer_shared[g].take() {
+            assert!(grp.m_pair.is_none());
+            let (h,m)=pair_pack_shared(c,h4,l4,h5,l5,p); grp.m_pair=Some(m);
+            eprintln!("PAIR_CARRY_PACK group={g} t0={t0} op={}",c.op_count());
+            h
+        } else { pair_pack(c,h4,l4,h5,l5); h4 };
         let (gw, b2, b1, b0) = (h4, l4, h5, l5);
         for (x, y) in [(grp.a2, b2), (grp.h3, b1), (grp.l3, b0)] {
             fredkin(c, gw, x, y);
@@ -2215,7 +2234,7 @@ impl Tape {
             fredkin(c, gw, x, y);
         }
         let (h4, l4, h5, l5) = (gw, grp.b2, grp.b1, grp.b0);
-        pair_unpack(c, h4, l4, h5, l5);
+        pair_unpack(c, h4, l4, h5, l5, grp.m_pair.take());
         self.raw[t0 + 3] = Some(from_hl(c, h4, l4));
         self.raw[t0 + 4] = Some(from_hl(c, h5, l5));
         grp.state = GState::P3;
@@ -2225,6 +2244,7 @@ impl Tape {
         let t0 = 5 * g + self.off;
         let grp = self.groups[g].take().unwrap();
         assert_eq!(grp.state, GState::P3);
+        assert!(grp.m_pair.is_none());
         if grp.synth {
             let ([h1,l1,h2,l2,h3,l3],q)=codec_synth::unpack_compatible_retained(c,[grp.a2,grp.a1,grp.a0,grp.h3,grp.l3],REVERSE_CODEC_CAPTURE.with(|v|v.get()));
             assert!(self.shared[g].is_none());self.shared[g]=q;
@@ -2240,7 +2260,8 @@ impl Tape {
         c.cx(fwire, grp.l3);
         fredkin(c, fwire, grp.a1, grp.h3);
         fredkin(c, fwire, grp.a0, grp.l3);
-        pair_unpack(c, fwire, grp.a2, grp.a1, grp.a0);
+        assert!(grp.m_pair.is_none());
+        pair_unpack(c, fwire, grp.a2, grp.a1, grp.a0, None);
         self.raw[t0] = Some(from_hl(c, fwire, grp.a2));
         self.raw[t0 + 1] = Some(from_hl(c, grp.a1, grp.a0));
         self.raw[t0 + 2] = Some(from_hl(c, grp.h3, grp.l3));
@@ -2290,7 +2311,7 @@ impl Tape {
         }
     }
     fn all_consumed(&self) -> bool {
-        self.shared.iter().all(Option::is_none) && self.raw.iter().all(Option::is_none) && self.groups.iter().all(|g| g.is_none() || g.as_ref().unwrap().state == GState::Raw)
+        self.outer_shared.iter().all(Option::is_none) && self.shared.iter().all(Option::is_none) && self.raw.iter().all(Option::is_none) && self.groups.iter().all(|g| g.is_none() || g.as_ref().unwrap().state == GState::Raw)
     }
 }
 
@@ -3138,7 +3159,8 @@ fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x:
             let mul_leg = label == "mulfwd" || (label == "divfwd" && env_bool("GO_DIVFWD_SHARE", false) && std::env::var("GO_DIVFWD_SHARE_T").map_or(true, |v| v.split(',').any(|x| x.trim().parse::<usize>().ok() == Some(t))));
             let shared_on = mul_leg && env_bool("HEO_CARRY_CODEC", false) && truthy("HEO_CODEC_SYNTH");
             let u = t.checked_sub(w.tape.off);
-            let keep_low = shared_on && u.is_some_and(|u| u % 5 == 1) && t + 2 < cfg.rounds();
+            let pair_share = env_bool("EXACT_PAIR_CARRY",false) && label=="mulfwd";
+            let keep_low = shared_on && u.is_some_and(|u| u % 5 == 1 || (pair_share && u % 5 == 3)) && t + 2 < cfg.rounds();
             let pl = w.pending_low.take();
             let prior = pl.map(|q| (q, w.tape.get(t - 1).1));
             let (nr, typ, s, retained, shared) = {
@@ -3153,8 +3175,13 @@ fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x:
             w.pending_low = retained;
             if let Some(q) = shared {
                 let g = w.tape.gid(t);
-                assert!(w.tape.shared[g].is_none(), "shared product already pending for group {g}");
-                w.tape.shared[g] = Some(q);
+                if pair_share && u.is_some_and(|u|u%5==4) {
+                    assert!(w.tape.outer_shared[g].is_none(),"outer shared product already pending {g}");
+                    w.tape.outer_shared[g]=Some(q);
+                } else {
+                    assert!(w.tape.shared[g].is_none(), "shared product already pending for group {g}");
+                    w.tape.shared[g] = Some(q);
+                }
             }
             w.rails = Some(nr);
             if o0e {

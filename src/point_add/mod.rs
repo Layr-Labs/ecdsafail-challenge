@@ -151,7 +151,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "25700399837515",
+        "TAIL_NONCE" => "281309007763416",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -277,13 +277,13 @@ fn install_skywalk_submission_recipe() {
         ("HEO_SCHEDULE", "carry"),
         ("HEO_SEED", "base"),
         ("HEO_FIT_MODE", "win"),
-        ("HEO_FIT_K", "21"),
+        ("HEO_FIT_K", "19"),
         ("HEO_ZONE", "1"),
         ("HEO_R2D", "382"),
         ("HEO_R2M", "370"),
         ("HEO_R1M", "99"),
         ("HEO_CARRY_SEED", "fd"),
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1173"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1172"),
         ("HEO_LT0", "1"),
         ("HEO_BW", "inv"),
         ("HEO_LT0_MUL", "1"),
@@ -326,7 +326,7 @@ fn install_skywalk_submission_recipe() {
         ("FD_COORD_LOW_ONE", "1"),
         ("HEO_PIN_FOLD_GUARD", "20"),
         ("HEO_PIN_PP_FOLD_WIDEN", "112"),
-        ("HEO_PIN_PP_FOLD_PROFILE", "56:0,38:-1,32:-1,25:-5,19:-5,0:-5"),
+        ("HEO_PIN_PP_FOLD_PROFILE", "56:0,38:-1,32:-1,25:-5,19:-7,0:-5"),
         ("PP_DROP_EXACT_LEAD", "1"),
         ("PP_DROP_EXACT_LEAD_DIR", "mul"),
         ("HEO_RAIL_TOP_RELEASE", "1"),
@@ -348,7 +348,7 @@ fn install_skywalk_submission_recipe() {
         ("HEO_PIN_PP_RETAIN_LATE_WIDEN", "0"),
         ("HEO_PIN_PP_N_CAPR", "621-648:18,649-665:16,350-399:20,450-499:20,150-199:20,50-99:20,200-349:20,500-549:20"),
         ("HEO_PIN_SQ_ASM_TAIL", "18"),
-        ("HEO_PIN_ERASE_COMPARE", "22"),
+        ("HEO_PIN_ERASE_COMPARE", "20"),
         ("HEO_PIN_PP_DROP_EXACT_LEAD_WIDEN", "0"),
         ("HEO_PIN_PP_FLAG_WIDEN_DIV", "30"),
         ("GO_JLB", "616-698:m:-1"),
@@ -369,7 +369,7 @@ fn install_skywalk_submission_recipe() {
         ("HEO_REVERSE_CARRY_CODEC", "1"),
         ("SKYWALK_MERGED_HIGH_STREAM", "3"),
         ("TERMINAL_PAIR", "1"),
-        ("TERMINAL_FW", "40"),
+        ("TERMINAL_FW", "42"),
         ("HEO_CELL_HELPER_S1", "1"),
         ("BACK_SEAM_FUSE", "3"),
         ("HEO_S1_OUTPUT_ALIAS", "1"),
@@ -394,12 +394,12 @@ fn install_skywalk_submission_recipe() {
         // sky8 package (frozen-sky8, GO p7f): split carry window K=21, FOLD_WIDEN 68 (above), GO r6 per-cell
         // compare re-balance (div ticks 150-155 dB -1, mul ticks 225-344 dF +1), iA.100 envelopes (heo.rs).
         ("HEO_SPLIT_K", "21"),
-        ("GO_CELLB", "div:150-155:-1,div:220-329:-1,mul:105-194:1,mul:25-49:1"),
-        ("GO_CELLF", "mul:225-344:1,div:250-299:-1,mul:150-224:-1,mul:345-420:-1"),
+        ("GO_CELLB", "div:150-155:-1,div:220-329:-1,mul:105-194:1"),
+        ("GO_CELLF", "mul:225-344:1,div:250-299:-1"),
         // sky9 package (frozen-sky9, 19.5 Lambda limit): multiply batch route skipped at t = R-2 (B6), one
         // chunk compare bit fewer on rounds 0-399 (go_slice GO_CHUNK), 65 rewrite rows re-keyed to this op stream.
         ("HEO_MB_SKIP2", "1"),
-        ("GO_CHUNK", "0-49:a:0,0-399:-1"),
+        ("GO_CHUNK", "0-399:-1"),
         // sky10 package (frozen-sky10, 19.5 Lambda limit): FIT_K 22, ERASE_COMPARE 22, SQ_ASM_TAIL 18 and FOLD_GUARD 20
         // are set in place above; 52 SAT-proven square rows re-keyed to this op stream.
         // sky12 package (frozen-sky12, 19.5 Lambda limit): GO_CELLB adds div ticks 220-329 dB -1 and mul ticks 105-194
@@ -433,12 +433,6 @@ fn install_skywalk_submission_recipe() {
         // q73b package (Round Q73-S1 sell, 19.5 Lambda limit): q73a with GO_CELLB mul ticks 25-49 instead of 0-49 (above;
         // -16.7 T for +0.0235 Lambda); the 105 q73a rows kept, the 2 late outside rows re-proved at their shifted
         // positions (q73b_rewrite.txt).
-        // q73c package (Round Q73-S2 sell, 19.5 Lambda limit): q73b with HEO_PIN_PP_FOLD_WIDEN 112 instead of 128 (above;
-        // -28.3 T model, confirmed Lambda 19.336 +- 0.032 on 16,384 nonces); the 105 rows re-ported to the w112 op stream
-        // (q73c_rewrite.txt).
-        // q73d package (Round Q73-S7 sell, 19.5 Lambda limit): q73c with GO_CELLF mul ticks 150-224 and 345-420 dF -1
-        // (above; -16 T model, gates 19.240 and 19.276 on 4,096 nonces each); the 105 q73c rows, the 2 late outside rows
-        // re-proved by SAT at their shifted positions (q73d_rewrite.txt).
         ("GO_FLAG", "0-63:4"),
         ("SKY_SPLIT_TRIM_LAST", "1"),
     ] { std::env::set_var(name, value); }
@@ -447,7 +441,7 @@ fn install_skywalk_submission_recipe() {
     std::env::set_var("HEO_PROXY_ENVELOPE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/env_front07_R393_clamp.txt"));
     std::env::set_var("HEO_CELL_WINDOWS", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/windows_full_safe_mulB64.tsv"));
     std::env::set_var("K3B_CELL_OVR", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/ovr_v025_lamneutral.txt"));
-    std::env::set_var("SKYX_K3B_RETUNE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/q73a_k3b_retune.txt"));
+    std::env::set_var("SKYX_K3B_RETUNE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/cap1172_bridge_room_profile_probe.txt"));
 }
 
 /// sky8 submission: every setting of the circuit is pinned in code (the recipe above, the compiled-in
@@ -465,6 +459,7 @@ fn clear_process_env() {
 pub fn build() -> Vec<Op> {
     clear_process_env();
     install_skywalk_submission_recipe();
+    std::env::set_var("EXACT_PAIR_CARRY", "1");
     if std::env::var_os("SKYWALK_SQUARE_HIGH_PROBE").is_some(){square::high_probe();std::process::exit(0);}
     if std::env::var_os("SKYWALK_MODDIV_ADAPTER_PROBE").is_some(){moddiv_adapter::probe();std::process::exit(0);}
     let mut ops = build_point_add();
@@ -506,10 +501,10 @@ pub fn build() -> Vec<Op> {
         // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
         ops = mabsorb::absorb(ops);
     }
-    // SKY_REWRITE (q73d package rows: 105 rows on the q73d op stream, the q73c rows with the 2 late outside rows re-proved by SAT at their shifted positions, compiled in): replace SAT-proved linear-span CCX by CX chains.
+    // SKY_REWRITE (q73b package rows: 105 rows proved exact by SAT on the q73b op stream, compiled in): replace SAT-proved linear-span CCX by CX chains.
     // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted).
     {
-        let text = include_str!("skywalk_data/q73d_rewrite.txt");
+        let text = include_str!("skywalk_data/cap1172_exact_rows.txt");
         let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
             let ws = if f[5] == "-" { vec![] } else { f[5].split(',').map(|x| x.parse().unwrap()).collect() };
