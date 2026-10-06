@@ -151,7 +151,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Accepted public-validation nonce from the production grind.
-        "TAIL_NONCE" => "30000833880904",
+        "TAIL_NONCE" => "32500104792978",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -396,16 +396,16 @@ fn install_skywalk_submission_recipe() {
         ("GO_CELLB", "div:150-155:-1"),
         ("GO_CELLF", "mul:225-344:1"),
     ] { if std::env::var_os(format!("SKY_SKIP_{name}")).is_some() { continue; } std::env::set_var(name, value); }
-    // q71d package (Q1171, 19.5 Lambda limit; q71b + S5 need table q71d_need.txt in heo_carry.rs): the v/q71 b78 build settings, applied over the recipe above
-    // (knobs_h2 last-wins, p4 per-cell compare re-balance GO_CELLB, FOLD_WIDEN 128, walk cap 1171, exact shared pair
-    // carries EXACT_PAIR_CARRY / X2_REV_PAIR / X2_DIVFWD_PAIR_T); envelopes q71a_env_div/mul.txt (heo.rs), per-cell K3B
-    // retune q71a_k3b_retune.txt (heo_carry.rs) and 345 rewrite rows q71d_rewrite.txt (below; rw_s78 ported to the q71d stream), all compiled in.
+    // q70c package (Q1170, 19.5 Lambda limit; q71e2 settings + Q70-R0 head trim R0_HEAD_TRIM=1,0 (heo_carry.rs), S9 need table q70c_need.txt
+    // (need_1170x) in heo_carry.rs, cellb_pD1bM2c GO_CELLB, walk cap 1170, sells GO_PRB 631-698:-4,500-569:-1 and GO_JLB 616-698:m:-3): the
+    // v/q70 p70 f70c build settings, applied over the recipe above. Envelopes q71a_env_div/mul.txt (heo.rs, = DMX), per-cell K3B retune
+    // q70c_k3b_retune.txt (pick0_1170, heo_carry.rs) and 104 rewrite rows q70c_rewrite.txt (below; p70 census on the f70c stream), all compiled in.
     for (name, value) in [
         ("HEO_MB_SKIP2", "1"),
         ("GO_CHUNK", "0-49:a:0,0-399:-1"),
         ("HEO_FIT_K", "21"),
         ("HEO_PIN_SQ_ASM_TAIL", "18"),
-        ("GO_CELLB", "div:150-155:-1,div:220-329:-1,mul:105-194:1,mul:25-49:1,mul:369-390:-1,mul:57-104:1,div:347-347:1,div:378-378:1,div:361-361:1,div:351-351:1,div:375-375:1,div:350-350:1,div:329-329:1,div:359-359:1,mul:325-325:1,mul:329-329:1,mul:352-352:1,mul:309-309:1,mul:348-348:1,mul:350-350:1,mul:322-322:1,mul:361-361:1,mul:349-349:1,mul:360-360:1,mul:347-347:1,mul:306-306:1,mul:332-332:1,div:353-353:1,mul:315-315:1,div:360-360:1,div:61-61:1,div:57-57:1,div:67-67:1,mul:54-54:1,div:64-64:1,div:1-1:1,div:55-55:1,mul:94-94:1,mul:50-50:1,div:10-10:1,div:48-48:1,div:52-52:1,mul:291-291:1,mul:297-297:1,div:37-37:1,div:45-45:1,mul:272-272:1,mul:279-279:1,mul:293-293:1,div:269-269:1,mul:292-292:1,div:18-18:1,mul:36-36:1,div:75-75:1,mul:276-276:1,div:44-44:1,mul:296-296:1"),
+        ("GO_CELLB", "div:150-155:-1,div:220-329:-1,mul:105-194:1,mul:25-49:1,mul:369-390:-1,mul:57-104:1,div:347-347:1,div:378-378:1,div:361-361:1,div:351-351:1,div:375-375:1,div:350-350:1,div:329-329:1,div:359-359:1,mul:325-325:1,mul:329-329:1,mul:352-352:1,mul:309-309:1,mul:348-348:1,mul:350-350:1,mul:322-322:1,mul:361-361:1,mul:349-349:1,mul:360-360:1,mul:347-347:1,mul:306-306:1,mul:332-332:1,div:353-353:1,mul:315-315:1,div:360-360:1,div:61-61:1,div:57-57:1,div:67-67:1,mul:54-54:1,div:64-64:1,div:1-1:1,div:55-55:1,mul:94-94:1,mul:50-50:1,div:10-10:1,div:48-48:1,div:52-52:1,mul:291-291:1,mul:297-297:1,div:37-37:1,div:45-45:1,mul:272-272:1,mul:279-279:1,mul:293-293:1,div:269-269:1,mul:292-292:1,div:18-18:1,mul:36-36:1,div:75-75:1,mul:276-276:1,div:44-44:1,mul:296-296:1,mul:355-355:1,mul:356-356:1,mul:357-357:1,mul:358-358:1,mul:359-359:1,mul:360-360:1,mul:361-361:1,mul:362-362:1,mul:363-363:1,mul:364-364:1,mul:365-365:1,mul:366-366:1,mul:367-367:1,mul:368-368:1,mul:369-369:1,mul:370-370:1,mul:371-371:1,mul:372-372:1,mul:373-373:1,mul:374-374:1,mul:375-375:1,mul:376-376:1,mul:377-377:1,mul:378-378:1,mul:379-379:1,mul:380-380:1,mul:381-381:1,mul:382-382:1,mul:383-383:1,mul:384-384:1,mul:385-385:1,mul:386-386:1,mul:387-387:1,mul:388-388:1,mul:389-389:1,mul:390-390:1,div:83-164:1,mul:165-232:1"),
         ("GO_CELLF", "mul:225-344:1,div:250-299:-1,mul:150-224:-1,mul:345-420:-1"),
         ("HEO_PIN_PP_N_BADJ", "350-399:m:0,400-476:m:0,477-553:m:-1,554-599:m:-2,400-449:d:1,649-699:a:-1,554-615:m:-1,589-615:d:-1,616-648:m:0,350-553:d:1,250-349:d:1,350-399:m:1"),
         ("HEO_R1M", "94"),
@@ -416,12 +416,15 @@ fn install_skywalk_submission_recipe() {
         ("TERMINAL_FW", "40"),
         ("GO_FLAG", "0-63:4"),
         ("SKY_SPLIT_TRIM_LAST", "1"),
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1171"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1170"),
         ("HEO_DIV_LIFO_N", "1"),
         ("EXACT_PAIR_CARRY", "1"),
         ("X2_REV_PAIR", "1"),
         ("X2_DIVFWD_PAIR_T", "384,389"),
         ("S5_NEED_FILE", "1"),
+        ("R0_HEAD_TRIM", "1,0"),
+        ("GO_PRB", "631-698:-4,500-569:-1"),
+        ("GO_JLB", "616-698:m:-3"),
     ] { std::env::set_var(name, value); }
     std::env::set_var("SKYX_K3B_RETUNE", "1");
     std::env::set_var("HEO_ENVELOPE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-0.txt"));
@@ -487,10 +490,10 @@ pub fn build() -> Vec<Op> {
         // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
         ops = mabsorb::absorb(ops);
     }
-    // SKY_REWRITE (q71d package rows: 345 rows on the q71d op stream, SAT-proved and census rows measured at 0 fails, compiled in): replace SAT-proved linear-span CCX by CX chains.
+    // SKY_REWRITE (q70c package rows: 104 rows on the q70c op stream (p70 census, 2M-shot survivors with NEGCTL), compiled in): replace SAT-proved linear-span CCX by CX chains.
     // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted).
     {
-        let text = include_str!("skywalk_data/q71d_rewrite.txt");
+        let text = include_str!("skywalk_data/q70c_rewrite.txt");
         let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
             let ws = if f[5] == "-" { vec![] } else { f[5].split(',').map(|x| x.parse().unwrap()).collect() };

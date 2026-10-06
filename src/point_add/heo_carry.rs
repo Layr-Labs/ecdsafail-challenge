@@ -1905,7 +1905,7 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
         let mut map = HashMap::new();
         if std::env::var("SKYX_K3B_RETUNE").is_ok() {
             // Embedded: the official runner denies file reads at build time, so the table is compiled in like the other skywalk_data files.
-            for line in include_str!("skywalk_data/q71a_k3b_retune.txt").lines().filter(|l| !l.trim().is_empty()) {
+            for line in include_str!("skywalk_data/q70c_k3b_retune.txt").lines().filter(|l| !l.trim().is_empty()) {
                 let f: Vec<&str> = line.split_whitespace().collect();
                 assert_eq!(f.len(),5);
                 let id: usize = f[0].parse().unwrap();
@@ -1925,10 +1925,10 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
         let current: isize = pins.get("K3B_EXTRA_ROOM").map_or(0,|v|v.parse().unwrap());
         pins.insert("K3B_EXTRA_ROOM".into(),(current+room).to_string());
     }
-    // S5 need table (q71d: 32 div cells P->R, fold workspace shortfall taken by the exact direct_plan split instead of the
+    // S5 need table (q70c: need_1170x, fold workspace shortfall taken by the exact direct_plan split instead of the
     // carry prefix): lines `idx adj` pin S5_NEED_ADJ=adj for that cell. Embedded: the official runner denies file reads.
     static S5NEED: OnceLock<HashMap<usize,String>> = OnceLock::new();
-    let s5need = S5NEED.get_or_init(|| if std::env::var_os("S5_NEED_FILE").is_none() { HashMap::new() } else { include_str!("skywalk_data/q71d_need.txt").lines().filter(|l| !l.trim().is_empty()).map(|l| { let (i,a)=l.trim().split_once(char::is_whitespace).unwrap(); (i.parse::<usize>().unwrap(), a.trim().to_string()) }).collect() });
+    let s5need = S5NEED.get_or_init(|| if std::env::var_os("S5_NEED_FILE").is_none() { HashMap::new() } else { include_str!("skywalk_data/q70c_need.txt").lines().filter(|l| !l.trim().is_empty()).map(|l| { let (i,a)=l.trim().split_once(char::is_whitespace).unwrap(); (i.parse::<usize>().unwrap(), a.trim().to_string()) }).collect() });
     if let Some(a) = s5need.get(&idx) { pins.insert("S5_NEED_ADJ".into(), a.clone()); }
     // R3 sign loan: per-cell room pin delta from R3_SGN_FILE (`idx delta` lines).
     if let Some(d) = r3_sgn_map().as_ref().and_then(|m| m.get(&idx)).copied() {
@@ -2931,9 +2931,13 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
     if !defer_s1 {
         if let Some(m) = mid.as_mut() {
             let loan = !o0_erase && r3_sgn_hit();
+            let (rh, rx) = r0_mid_trim(c, label, t, &mut hs, &mut x2);
+            let pad = r0_mid_pad(c, label, t);
             if loan { p1 = r3_sgn_lend(c, p1, x2[0], cw); }
             m(c, cw);
+            for q in pad.into_iter().rev() { c.free(q); }
             if loan { p1 = r3_sgn_restore(c, x2[0], cw); }
+            r0_mid_regrow(c, &mut hs, &mut x2, rh, rx);
         }
     }
     if env_bool("R4_RAIL_TRACE", false) { eprintln!("R4F {label} {t} w1={w1} mpost={mpost} mad={mad} x2r={} hsr={} msw={msw} wp={}", x2.len(), hs.len(), wpost(cfg, t)); }
@@ -2982,6 +2986,49 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
 /// Family A reverse tick t >= 1: exact mirror of [`fama_fwd`]; consumes the tape pair. Returns parked rails at
 /// wbefore(t) and the rebuilt o_0 wire (div O0 at t = 1).
 #[allow(clippy::too_many_arguments)]
+/// Q70-R0 mid-cell register trim (research): `R0_MID_TRIM=LABEL:lo-hi:a:b,...` frees the top a wires of the hs
+/// magnitude slot and the top b wires of x2 for the mid-tick cell at ticks lo..=hi of LABEL (divfwd, mulfused, ...),
+/// and allocates fresh wires back to the same lengths after it. Exact only where those wires are zero.
+fn r0_mid_trim(c: &mut Builder, label: &str, t: usize, hs: &mut Vec<QubitId>, x2: &mut Vec<QubitId>) -> (usize, usize) {
+    static SPEC: OnceLock<Vec<(String, usize, usize, usize, usize)>> = OnceLock::new();
+    let spec = SPEC.get_or_init(|| std::env::var("R0_MID_TRIM").map(|v| v.split(',').filter(|x| !x.trim().is_empty()).map(|x| {
+        let f: Vec<&str> = x.trim().split(':').collect(); let (lo, hi) = f[1].split_once('-').expect("R0_MID_TRIM lo-hi");
+        (f[0].to_string(), lo.parse().unwrap(), hi.parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap())
+    }).collect()).unwrap_or_default());
+    let (lh, lx) = (hs.len(), x2.len());
+    if let Some(&(_, _, _, a, b)) = spec.iter().find(|e| e.0 == label && e.1 <= t && t <= e.2) {
+        for _ in 0..a.min(lh.saturating_sub(2)) { let q = hs.pop().unwrap(); c.free(q); }
+        for _ in 0..b.min(lx.saturating_sub(2)) { let q = x2.pop().unwrap(); c.free(q); }
+        if env_bool("R0_MID_TRACE", false) { eprintln!("R0_MID_TRIM {label} {t} hs {lh}->{} x2 {lx}->{}", hs.len(), x2.len()); }
+    }
+    (lh, lx)
+}
+fn r0_mid_regrow(c: &mut Builder, hs: &mut Vec<QubitId>, x2: &mut Vec<QubitId>, lh: usize, lx: usize) {
+    while hs.len() < lh { hs.push(c.alloc_qubit()); }
+    while x2.len() < lx { x2.push(c.alloc_qubit()); }
+}
+/// Q70-R0 room pad (research, exact): `R0_MID_PAD=LABEL:lo-hi:n,...` holds n idle zero wires across the mid-tick cell
+/// at ticks lo..=hi of LABEL, so the cell sees n less room. Returns the wires; the caller frees them after the cell.
+fn r0_mid_pad(c: &mut Builder, label: &str, t: usize) -> Vec<QubitId> {
+    static SPEC: OnceLock<Vec<(String, usize, usize, usize)>> = OnceLock::new();
+    let spec = SPEC.get_or_init(|| std::env::var("R0_MID_PAD").map(|v| v.split(',').filter(|x| !x.trim().is_empty()).map(|x| {
+        let f: Vec<&str> = x.trim().split(':').collect(); let (lo, hi) = f[1].split_once('-').expect("R0_MID_PAD lo-hi");
+        (f[0].to_string(), lo.parse().unwrap(), hi.parse().unwrap(), f[2].parse().unwrap())
+    }).collect()).unwrap_or_default());
+    spec.iter().find(|e| e.0 == label && e.1 <= t && t <= e.2).map_or_else(Vec::new, |e| c.alloc_qubits(e.3))
+}
+
+/// Q70-R0 (ii) `R0_RAW_FLUSH=lo,hi`: div batch ticks lo..hi pack3 a group right after its 3rd letter (the B7
+/// LAZY_BATCH early pack3, windowed) so the raw tape bits do not sit through the window. Exact codec. Unset = inert.
+fn r0_raw_flush(t: usize) -> bool {
+    static SPEC: OnceLock<Option<(usize, usize)>> = OnceLock::new();
+    let s = SPEC.get_or_init(|| std::env::var("R0_RAW_FLUSH").ok().map(|v| {
+        let f: Vec<usize> = v.split(',').map(|x| x.trim().parse().expect("R0_RAW_FLUSH lo,hi")).collect();
+        eprintln!("R0_RAW_FLUSH lo={} hi={}", f[0], f[1]); (f[0], f[1])
+    }));
+    s.is_some_and(|(lo, hi)| lo <= t && t <= hi)
+}
+
 fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: QubitId, typ_prev: Option<QubitId>, t: usize,
             o0_rebuild: bool, mode: SplitMode, def: &mut Vec<(usize, BitId)>, label: &'static str,
             mut mid: Option<&mut dyn FnMut(&mut Builder, QubitId)>, incoming:Option<QubitId>, codec:Option<(QubitId,QubitId)>) -> (Rails, Option<QubitId>, Option<QubitId>) {
@@ -3056,9 +3103,13 @@ fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: Qub
     }
     if let Some(m) = mid.as_mut() {
         let loan = !o0_rebuild && r3_sgn_hit();
+        let (rh, rx) = r0_mid_trim(c, label, t, &mut hs, &mut x2);
+        let pad = r0_mid_pad(c, label, t);
         if loan { p1 = r3_sgn_lend(c, p1, x2[0], typ); }
         m(c, typ);
+        for q in pad.into_iter().rev() { c.free(q); }
         if loan { p1 = r3_sgn_restore(c, x2[0], typ); }
+        r0_mid_regrow(c, &mut hs, &mut x2, rh, rx);
     }
     while hs.len() < mpost - 1 {
         hs.push(c.alloc_qubit());
@@ -3446,7 +3497,7 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
         }
         // B7 V-P6: HEO_DIV_LIFO_N = n leaves the last n+1 groups raw (base n = 0: the last group)
         let lifo_keep = k.lifo && g + k.div_lifo_n >= last_g;
-        if k.div_early_p3 && (t - off) % 5 == 2 && !lifo_keep {
+        if (k.div_early_p3 || r0_raw_flush(t)) && (t - off) % 5 == 2 && !lifo_keep {
             // B7 LAZY_BATCH (div): letters 0..2 of the group are consumed; pack them now (repack then does pack5 only)
             let t0 = 5 * g + off;
             if t0 + 2 < r && w.tape.state(g) == GState::Raw && (t0..t0 + 3).all(|u| w.tape.raw[u].is_some()) {
@@ -3568,6 +3619,15 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
     if lt0m {
         // RB-1: single head batch with the class rebuilt from the frame invariant (see CarryCfg::lt0_mul).
         c.set_phase("heo_mul_headbatch");
+        // Q70-R0 register trim (research): R0_HEAD_TRIM=a,b drops the top a (b) wires of R1 (R2) for the head batch
+        // (CX from the new top + free: correct only where they are sign copies) and sign-extends them back before railsrev2.
+        let (htr1, htr2) = std::env::var("R0_HEAD_TRIM").ok().map(|v| { let x: Vec<usize> = v.split(',').map(|y| y.trim().parse().expect("R0_HEAD_TRIM")).collect(); (x[0], x[1]) }).unwrap_or((0, 0));
+        let (hw1, hw2) = { let rails = w.rails.as_ref().unwrap(); (rails.r1.len(), rails.r2.len()) };
+        if htr1 + htr2 > 0 {
+            let rails = w.rails.as_mut().unwrap();
+            book(c, "rails", "mul head trim", k.r1m, |c| { resize(c, &mut rails.r1, hw1 - htr1); resize(c, &mut rails.r2, hw2 - htr2); });
+            eprintln!("R0_HEAD_TRIM r1 {hw1}->{} r2 {hw2}->{}", hw1 - htr1, hw2 - htr2);
+        }
         let (s1, s2) = {
             let rails = w.rails.as_ref().unwrap();
             (*rails.r1.last().unwrap(), *rails.r2.last().unwrap())
@@ -3641,6 +3701,10 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
         if !r5_take_del_freed() { c.free_vec(&del); }
         w.bwire = Some(a);
         w.ywire = Some(b);
+        if htr1 + htr2 > 0 {
+            let rails = w.rails.as_mut().unwrap();
+            book(c, "rails", "mul head untrim", 0, |c| { resize(c, &mut rails.r1, hw1); resize(c, &mut rails.r2, hw2); });
+        }
         c.set_phase("heo_mul_railsrev2");
         let mut x_out = None;
         for t in (0..k.r1m).rev() {
