@@ -1904,8 +1904,8 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
     let retune = RETUNE.get_or_init(|| {
         let mut map = HashMap::new();
         if std::env::var("SKYX_K3B_RETUNE").is_ok() {
-            let text = include_str!("skywalk_data/cap1172_bridge_room_profile_probe.txt");
-            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            // Embedded: the official runner denies file reads at build time, so the table is compiled in like the other skywalk_data files.
+            for line in include_str!("skywalk_data/q71a_k3b_retune.txt").lines().filter(|l| !l.trim().is_empty()) {
                 let f: Vec<&str> = line.split_whitespace().collect();
                 assert_eq!(f.len(),5);
                 let id: usize = f[0].parse().unwrap();
@@ -1913,7 +1913,7 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
                 let room: isize = f[2].parse().unwrap();
                 let tick: usize = f[3].parse().unwrap();
                 assert!(["+0","+1","+2","+3","-1","-2","0"].contains(&bridge.as_str()));
-                assert!((-16..=16).contains(&room)); // widened for the extended negative-room grid (cap-probe regridx)
+                assert!((-16..=16).contains(&room)); // J1: widened as in 9db31da9
                 assert!(map.insert(id,(bridge,room,tick,f[4].to_string())).is_none());
             }
         }
@@ -1983,7 +1983,7 @@ fn cell_div(c: &mut Builder, cfg: &HeoConfig, t: usize, typ: QubitId, sig: &[Qub
     }
     k3b_cell(c, "div", t, proxy, |c| {
         if std::env::var_os("TERMINAL_PAIR").is_some() && t+1==cfg.rounds() {
-            let fw=std::env::var("TERMINAL_FW").ok().map(|x|x.parse().unwrap()).unwrap_or(50);
+            let fw=std::env::var("TERMINAL_FW_DIV").or_else(|_|std::env::var("TERMINAL_FW")).ok().map(|x|x.parse().unwrap()).unwrap_or(50);
             eprintln!("TERMINAL_SITE {} {} {} {}","div",t,c.active_qubits(),fw);
             super::super::pingpong::terminal_pair(c,typ,sig,del,fw,true);return;
         }
@@ -2007,7 +2007,7 @@ fn cell_mul(c: &mut Builder, cfg: &HeoConfig, t: usize, typ: QubitId, sig: &[Qub
     }
     k3b_cell(c, "mul", t, proxy, |c| {
         if std::env::var_os("TERMINAL_PAIR").is_some() && t+1==cfg.rounds() {
-            let fw=std::env::var("TERMINAL_FW").ok().map(|x|x.parse().unwrap()).unwrap_or(50);
+            let fw=std::env::var("TERMINAL_FW_MUL").or_else(|_|std::env::var("TERMINAL_FW")).ok().map(|x|x.parse().unwrap()).unwrap_or(50);
             eprintln!("TERMINAL_SITE {} {} {} {}","mul",t,c.active_qubits(),fw);
             super::super::pingpong::terminal_pair(c,typ,sig,del,fw,false);return;
         }
@@ -2107,7 +2107,7 @@ fn pair_pack(c: &mut Builder, h1: QubitId, l1: QubitId, h2: QubitId, l2: QubitId
     c.free_bit(m);
     c.free(anc);
 }
-/// Exact shared pair compressor (bdff8c8 exact-arithmetic-v2). Outputs match ordinary pair_pack on all 9.
+/// Exact shared pair compressor (port of 9db31da9 EXACT_PAIR_CARRY). Outputs match ordinary pair_pack on all 9.
 /// The product measurement is repaired on pair_unpack's already computed AND.
 fn pair_pack_shared(c: &mut Builder, a: QubitId, b: QubitId, cc: QubitId, d: QubitId, p: QubitId) -> (QubitId, BitId) {
     let h=c.alloc_qubit(); c.ccx(a,cc,h);
@@ -2131,6 +2131,23 @@ fn pair_unpack(c: &mut Builder, h1: QubitId, l1: QubitId, h2: QubitId, l2: Qubit
     c.free_bit(m);
     c.free(anc);
     c.cx(h1, h2);
+}
+
+/// X2_REV_PAIR: exact inverse of pair_pack_shared on the packed pair (h, b, cc, d) that also returns the shared
+/// product p = anc*(1-b) = h4*typ5 (anc = cc*d). 2 CCX like pair_unpack. A pending pack measurement m_pair is
+/// repaired on the explicit p (Clifford).
+fn pair_unpack_retained(c: &mut Builder, h: QubitId, bq: QubitId, cc: QubitId, d: QubitId, m_pair: Option<BitId>) -> (QubitId, QubitId) {
+    let anc = c.alloc_qubit();
+    c.ccx(cc, d, anc);
+    let a = c.alloc_qubit();
+    c.cx(h, a); c.cx(anc, a);
+    let p = c.alloc_qubit();
+    c.x(bq); c.ccx(anc, bq, p); c.x(bq);
+    if let Some(m) = m_pair { c.z_if(p, m); c.free_bit(m); }
+    let m = c.alloc_bit(); c.hmr(anc, m); c.cz_if(cc, d, m); c.free_bit(m); c.free(anc);
+    c.cx(p, d); c.cx(a, cc); c.cx(h, bq); c.cx(a, bq); c.cx(p, bq);
+    let m = c.alloc_bit(); c.hmr(h, m); c.cz_if(a, cc, m); c.free_bit(m); c.free(h);
+    (a, p)
 }
 
 impl Tape {
@@ -2180,7 +2197,7 @@ impl Tape {
         let h4=if let Some(p)=self.outer_shared[g].take() {
             assert!(grp.m_pair.is_none());
             let (h,m)=pair_pack_shared(c,h4,l4,h5,l5,p); grp.m_pair=Some(m);
-            eprintln!("PAIR_CARRY_PACK group={g} t0={t0} op={}",c.op_count());
+            if std::env::var_os("PAIR_CARRY_TRACE").is_some() { eprintln!("PAIR_CARRY_PACK group={g} t0={t0} op={}",c.op_count()); }
             h
         } else { pair_pack(c,h4,l4,h5,l5); h4 };
         let (gw, b2, b1, b0) = (h4, l4, h5, l5);
@@ -2233,8 +2250,19 @@ impl Tape {
         for (x, y) in [(grp.a2, grp.b2), (grp.h3, grp.b1), (grp.l3, grp.b0)] {
             fredkin(c, gw, x, y);
         }
-        let (h4, l4, h5, l5) = (gw, grp.b2, grp.b1, grp.b0);
-        pair_unpack(c, h4, l4, h5, l5, grp.m_pair.take());
+        let (mut h4, l4, h5, l5) = (gw, grp.b2, grp.b1, grp.b0);
+        let t4 = t0 + 4;
+        let rp = REVERSE_CODEC_CAPTURE.with(|v| v.get()) && env_bool("X2_REV_PAIR", false)
+            && REV_PAIR_TICK.with(|v| { let (tk, lo) = v.get(); (tk == t4 || tk == t4 + 1) && t4 >= lo.max(1) });
+        if rp {
+            let (a, p) = pair_unpack_retained(c, h4, l4, h5, l5, grp.m_pair.take());
+            h4 = a;
+            assert!(self.outer_shared[g].is_none());
+            self.outer_shared[g] = Some(p);
+            if std::env::var_os("PAIR_CARRY_TRACE").is_some() { eprintln!("REV_PAIR_CAPTURE group={g} t4={t4}"); }
+        } else {
+            pair_unpack(c, h4, l4, h5, l5, grp.m_pair.take());
+        }
         self.raw[t0 + 3] = Some(from_hl(c, h4, l4));
         self.raw[t0 + 4] = Some(from_hl(c, h5, l5));
         grp.state = GState::P3;
@@ -3160,7 +3188,8 @@ fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x:
             let shared_on = mul_leg && env_bool("HEO_CARRY_CODEC", false) && truthy("HEO_CODEC_SYNTH");
             let u = t.checked_sub(w.tape.off);
             let pair_share = env_bool("EXACT_PAIR_CARRY",false) && label=="mulfwd";
-            let keep_low = shared_on && u.is_some_and(|u| u % 5 == 1 || (pair_share && u % 5 == 3)) && t + 2 < cfg.rounds();
+            let dpair = label=="divfwd" && u.is_some_and(|u| u % 5 == 3) && std::env::var("X2_DIVFWD_PAIR_T").is_ok_and(|v| v.split(',').any(|x| x.trim().parse::<usize>().ok() == Some(t)));
+            let keep_low = ((shared_on && u.is_some_and(|u| u % 5 == 1 || (pair_share && u % 5 == 3))) || dpair) && t + 2 < cfg.rounds();
             let pl = w.pending_low.take();
             let prior = pl.map(|q| (q, w.tape.get(t - 1).1));
             let (nr, typ, s, retained, shared) = {
@@ -3175,7 +3204,7 @@ fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x:
             w.pending_low = retained;
             if let Some(q) = shared {
                 let g = w.tape.gid(t);
-                if pair_share && u.is_some_and(|u|u%5==4) {
+                if (pair_share || label=="divfwd") && u.is_some_and(|u|u%5==4) {
                     assert!(w.tape.outer_shared[g].is_none(),"outer shared product already pending {g}");
                     w.tape.outer_shared[g]=Some(q);
                 } else {
@@ -3222,6 +3251,7 @@ fn reverse_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, t:
     assert!(mid.is_none() || t > 0, "HEO_CELL_INSIDE: no mid-tick cell at the unseed tick");
     let share=(label=="divrev" || (label=="mulrev2" && env_bool("GO_MULREV2_SHARE",false)) || (label=="mulrev" && env_bool("GO_MULREV_SHARE",false))) && env_bool("HEO_REVERSE_CARRY_CODEC",false) && truthy("HEO_CODEC_SYNTH");
     REVERSE_CODEC_CAPTURE.with(|v|v.set(share));
+    REV_PAIR_TICK.with(|v| v.set((t, if label == "mulrev" { k.r2m } else { 0 })));
     book(c, "codec", "rev codec", t, |c| {
         w.tape.ensure_raw(c, t);
         if t > 0 {
@@ -3274,6 +3304,8 @@ fn reverse_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, t:
         let incoming=if share{w.pending_low.take()}else{None};
         let codec=if share && t>=w.tape.off && (t-w.tape.off)%5==2 {
             let g=w.tape.gid(t);w.tape.shared[g].take().map(|q|(q,w.tape.get(t-1).1))
+        }else if share && t>=w.tape.off && (t-w.tape.off)%5==4 && env_bool("X2_REV_PAIR",false) {
+            let g=w.tape.gid(t);w.tape.outer_shared[g].take().map(|q|(q,w.tape.get(t-1).1))
         }else{None};
         let (nr, rebuilt, retained) = {
             let tape = &w.tape;
@@ -3694,6 +3726,7 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
 
 thread_local! {
  static REVERSE_CODEC_CAPTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+ static REV_PAIR_TICK: std::cell::Cell<(usize,usize)> = const { std::cell::Cell::new((0,0)) };
  static REVERSE_LOW: std::cell::RefCell<Option<(QubitId,QubitId,QubitId,QubitId)>> = const { std::cell::RefCell::new(None) };
 }
 fn reverse_carries(c:&mut Builder,n:usize,a:QubitId,b:QubitId,prev:Option<QubitId>)->Vec<QubitId>{
