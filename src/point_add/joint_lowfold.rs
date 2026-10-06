@@ -35,7 +35,7 @@ fn plan(circ:&Builder,round:usize,multiply:bool,fw:usize,drop:bool)->Option<Plan
     let (plo,phi)=bounds[bounds.len()-2];
     let (k,seeded)=boundary_repair_spec(round,multiply,plo,phi);
     if lo<fw || phi-k-usize::from(seeded)<fw {drop_trace(round,multiply,"lofw",format!("drop={} fw={} {:?}",drop,fw,bounds));return None;}
-    let need=(low-3).max(fw-34);
+    let need=((low-3).max(fw-34)).saturating_sub(super::super::optional_env::<usize>("S5_NEED_ADJ").unwrap_or(0));
     let existing=walk_max_qubits()as isize-circ.active_qubits()as isize-(hi-lo)as isize-if multiply&&env_flag("PP_JOINT_MUL_FOLD"){3}else{4}-(multiply&&DPARK.with(|p|p.get())) as isize;
     let missing=(need as isize-existing).max(0)as usize;
     let prefix=if missing==0 {0} else {missing+1};

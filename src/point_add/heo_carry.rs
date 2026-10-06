@@ -1925,6 +1925,11 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
         let current: isize = pins.get("K3B_EXTRA_ROOM").map_or(0,|v|v.parse().unwrap());
         pins.insert("K3B_EXTRA_ROOM".into(),(current+room).to_string());
     }
+    // S5 need table (q71d: 32 div cells P->R, fold workspace shortfall taken by the exact direct_plan split instead of the
+    // carry prefix): lines `idx adj` pin S5_NEED_ADJ=adj for that cell. Embedded: the official runner denies file reads.
+    static S5NEED: OnceLock<HashMap<usize,String>> = OnceLock::new();
+    let s5need = S5NEED.get_or_init(|| if std::env::var_os("S5_NEED_FILE").is_none() { HashMap::new() } else { include_str!("skywalk_data/q71d_need.txt").lines().filter(|l| !l.trim().is_empty()).map(|l| { let (i,a)=l.trim().split_once(char::is_whitespace).unwrap(); (i.parse::<usize>().unwrap(), a.trim().to_string()) }).collect() });
+    if let Some(a) = s5need.get(&idx) { pins.insert("S5_NEED_ADJ".into(), a.clone()); }
     // R3 sign loan: per-cell room pin delta from R3_SGN_FILE (`idx delta` lines).
     if let Some(d) = r3_sgn_map().as_ref().and_then(|m| m.get(&idx)).copied() {
         if d != 0 {
