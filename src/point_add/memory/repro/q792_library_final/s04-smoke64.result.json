@@ -1,0 +1,30 @@
+{
+  "finished": "2026-09-13T10:16:03.436093+00:00",
+  "status": "PASS",
+  "returncode": 0,
+  "stage": "stage-r04",
+  "mode": "fold20-whole64",
+  "clock": null,
+  "sources_unchanged": true,
+  "binary_sha256": "b28d3f6969a37a21b4eaea6cd11ea7a16551d00df244915891007a171ae89dab",
+  "archive_sha256": "6fd501d150381ffb5c38770962db0caa628b76f591d553002316acf232c7953d",
+  "log_sha256": "7e77cf1451140eae5fc8e363627710b61e978c9f8c2ae56433ab9d9aa0413777",
+  "official_validation": false,
+  "peak_qubits": 792,
+  "expanded_ops": 1577689722,
+  "structural_T": 910644642,
+  "ordinary_payload_bytes": 88350624432,
+  "max_rss_kib": 1345352,
+  "independent_smoke": {
+    "shots": "64",
+    "peak": "792",
+    "physical": "792",
+    "simulated_ops": "1577689722",
+    "structural_T": "910644642",
+    "executed_average_T": "910644642",
+    "classical_failures": "0",
+    "phase": "0x0000000000000000",
+    "dirty_ancillas": "0",
+    "elapsed": "192.7"
+  }
+}
