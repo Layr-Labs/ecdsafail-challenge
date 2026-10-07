@@ -1,0 +1,40 @@
+{
+  "at": "2026-09-12T22:07:40.655072+00:00",
+  "status": "GPU_CORRECTNESS_REJECTED",
+  "both_B50": true,
+  "results": [
+    {
+      "clock": 0,
+      "cases": 10752,
+      "errors": 130,
+      "T": 88884,
+      "ops": 172778
+    },
+    {
+      "clock": 1,
+      "cases": 10752,
+      "errors": 126,
+      "T": 75348,
+      "ops": 149524
+    },
+    {
+      "clock": 2,
+      "cases": 10752,
+      "errors": 109,
+      "T": 90912,
+      "ops": 175676
+    },
+    {
+      "clock": 3,
+      "cases": 10752,
+      "errors": 107,
+      "T": 71268,
+      "ops": 143290
+    }
+  ],
+  "total_errors": 472,
+  "four_first_errors_independently_CPU_reproduced": true,
+  "native_full_not_started": true,
+  "whole_count_not_started": true,
+  "submit_eligible": false
+}

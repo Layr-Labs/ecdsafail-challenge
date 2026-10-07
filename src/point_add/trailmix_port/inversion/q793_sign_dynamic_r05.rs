@@ -1,0 +1,250 @@
+//! R05 replaces expanded rank ANFs by exact all-32-code disjoint cube covers.
+//! The active phase bit still supplies the r04 paired-route scratch.
+//! Three-hole Sign erasure with one funded mask and no clean carry.
+//! The full boundary wrapper is native-qualified separately from whole steps.
+use crate::point_add::trailmix_port::circuit::{Circuit,QReg};
+use super::length_recompute::mixed_mcx;
+
+fn triples()->Vec<[usize;3]>{(0..4).flat_map(|a|(0..4).flat_map(move|c|(0..4).filter(move|&s|a+c+s<=4).map(move|s|[a,c,s]))).collect()}
+fn gate(circ:&mut Circuit,cs:&[(&QReg,bool)],out:&QReg,dirty:&[QReg]){
+    let mut unique:Vec<(&QReg,bool)>=Vec::new();
+    for &(q,v) in cs{assert_ne!(q.id(),out.id());if let Some(&(_,old))=unique.iter().find(|&&(p,_)|p.id()==q.id()){if old!=v{return;}}else{unique.push((q,v));}}
+    mixed_mcx(circ,&unique,out,dirty);
+}
+fn swap(circ:&mut Circuit,cs:&[(&QReg,bool)],l:&QReg,r:&QReg,dirty:&[QReg]){assert_ne!(l.id(),r.id());circ.cx(r,l);let mut c=cs.to_vec();c.push((l,true));gate(circ,&c,r,dirty);circ.cx(r,l);}
+fn rank_terms(rank:&[QReg],f:impl Fn([usize;3])->bool)->Vec<Vec<(&QReg,bool)>>{
+    let values:Vec<_>=triples().into_iter().map(f).collect();let truth=values.iter().enumerate().fold(0u32,|v,(r,&on)|v|((on as u32)<<r));
+    // Exact disjoint covers of all 32 rank codes, independently enumerated
+    // in sign-resume/rank_covers_r05.py. These need no care-domain premise.
+    let cubes:&[(usize,usize)]=match truth{
+        0xb4d22911=>&[(23,0),(15,4),(31,11),(15,13),(31,17),(30,22),(31,26),(31,28),(31,31)], // S_high0
+        0x20802001=>&[(31,0),(15,13),(31,23)], // C_high0 AND S_high0
+        0x6381e00f=>&[(28,0),(29,13),(15,14),(23,16),(31,23),(27,25)], // C_high0
+        _=>panic!("unproved Sign r05 rank predicate {truth:08x}"),
+    };
+    for(r,&expected)in values.iter().enumerate(){let hits=cubes.iter().filter(|&&(m,v)|r&m==v).count();assert!(hits<=1);assert_eq!(hits==1,expected);}
+    cubes.iter().map(|&(m,v)|(0..5).filter(|&i|m>>i&1!=0).map(|i|(&rank[i],v>>i&1!=0)).collect()).collect()
+}
+fn emit_terms_with_scratch(circ:&mut Circuit,terms:Vec<Vec<(&QReg,bool)>>,out:&QReg,dirty:&[QReg],scratch:Option<&QReg>){
+    use std::collections::BTreeMap;
+    let mut cubes:BTreeMap<Vec<(usize,bool)>,Vec<(&QReg,bool)>>=BTreeMap::new();
+    for term in terms{
+        let mut unique:BTreeMap<usize,(&QReg,bool)>=BTreeMap::new();let mut valid=true;
+        for (q,v) in term{assert_ne!(q.id(),out.id());if let Some(&(_,old))=unique.get(&(q.id()as usize)){if old!=v{valid=false;break;}}else{unique.insert(q.id()as usize,(q,v));}}
+        if !valid{continue;}let key:Vec<_>=unique.iter().map(|(&id,&(_,v))|(id,v)).collect();
+        if cubes.remove(&key).is_none(){cubes.insert(key,unique.into_values().collect());}
+    }
+    // Every term is a pure XOR into one target. Exact cube cancellation
+    // and X*y XOR X*!y = X happen before any dirty-MCX lowering.
+    let mut queue:Vec<_>=cubes.keys().cloned().collect();
+    while let Some(key)=queue.pop(){if !cubes.contains_key(&key){continue;}
+        for i in 0..key.len(){let mut partner=key.clone();partner[i].1^=true;
+            if cubes.contains_key(&partner){let mut term=cubes.remove(&key).unwrap();cubes.remove(&partner);let mut common=key.clone();common.remove(i);term.remove(i);
+                if cubes.remove(&common).is_none(){cubes.insert(common.clone(),term);queue.push(common);}break;
+            }
+        }
+    }
+    for term in cubes.into_values(){
+        if let Some(scratch)=scratch{super::paired_clean_mcx::toggle(circ,&term,out,scratch);}else{gate(circ,&term,out,dirty);}
+    }
+}
+fn emit_terms(circ:&mut Circuit,terms:Vec<Vec<(&QReg,bool)>>,out:&QReg,dirty:&[QReg]){emit_terms_with_scratch(circ,terms,out,dirty,None);}
+
+fn truth_terms<'a>(inputs:&[&'a QReg],extra:&[(&'a QReg,bool)],f:impl Fn(usize)->bool)->Vec<Vec<(&'a QReg,bool)>>{
+    use std::collections::BTreeMap;
+    let mut fixed=BTreeMap::new();for &(q,v)in extra{if let Some(old)=fixed.insert(q.id(),v){if old!=v{return Vec::new();}}}
+    let mut free:Vec<&QReg>=Vec::new();let mut codes=Vec::new();
+    for &q in inputs{if let Some(&value)=fixed.get(&q.id()){codes.push((None,value));}else{let i=free.iter().position(|x|x.id()==q.id()).unwrap_or_else(||{free.push(q);free.len()-1});codes.push((Some(i),false));}}
+    assert!(free.len()<=12);let n=1<<free.len();let mut anf:Vec<_>=(0..n).map(|z|{let code=codes.iter().enumerate().fold(0,|v,(i,(k,b))|v|((if let Some(k)=k{z>>k&1}else{*b as usize})<<i));f(code)}).collect();
+    for bit in 0..free.len(){for m in 0..n{if m>>bit&1!=0{anf[m]^=anf[m^(1<<bit)];}}}
+    anf.into_iter().enumerate().filter(|&(_,on)|on).map(|(m,_)|{let mut cs=extra.to_vec();cs.extend(free.iter().enumerate().filter(|&(i,_)|m>>i&1!=0).map(|(_,q)|(*q,true)));cs}).collect()
+}
+
+// Pure data truth tables are synthesized after physical alias substitution.
+// kind0=ordinary; kind1=small-S chart correction; kinds2/3/4=C1/C2/C3
+// v normalization corrections. Metadata is factored into a dirty selector,
+// rather than multiplied into every data monomial.
+fn low_data<'a>(w1:&'a[QReg],w2:&'a[QReg],j:usize,width:usize,a_fixed:Option<usize>,kind:usize)->Vec<Vec<(&'a QReg,bool)>>{
+    assert!((1..=3).contains(&width));let shift=(4-j)%4;
+    let tval=|z:usize|if let Some(a)=a_fixed{(z&((1<<a)-1))|(1<<a)}else{z&7};
+    let ordinary=[&w1[0],&w1[1],&w1[2],&w2[0],&w2[1],&w2[2]];
+    if kind==0{return truth_terms(&ordinary,&[],|z|tval(z)>(z>>3&((1<<width)-1)));}
+    if shift==3{return Vec::new();}
+    let inputs=[&w1[0],&w1[1],&w1[2],&w2[(259-shift)%259],&w2[(260-shift)%259],&w2[(261-shift)%259],&w2[257-shift],&w2[256-shift],&w2[0],&w2[1],&w2[2]];
+    let corrected=|z:usize,short_c:usize|{
+        let t=tval(z);let b=z>>3&7;let mut v1=z>>6&1;let mut v2=z>>7&1;
+        if short_c==1{v1=0;v2=0;}else if short_c==2{v1=1;v2=0;}else if short_c==3{v2=1;}
+        let u=if t&1!=0{b}else{1|((1^v1^((t>>1&1)&(b&1)))<<1)|((1^v2^((t>>2&1)&(b&1))^((t>>1&1)&(b>>1&1)))<<2)};
+        let raw=z>>8&7;let mut rhs=0;for i in 0..width{rhs|=if i+shift<3{(u>>(i+shift)&1)<<i}else{(raw>>i&1)<<i};}t>rhs
+    };
+    truth_terms(&inputs,&[],|z|if kind==1{corrected(z,0)^(tval(z)>(z>>8&((1<<width)-1)))}else{corrected(z,0)^corrected(z,kind-1)})
+}
+fn selected(circ:&mut Circuit,selectors:Vec<Vec<(&QReg,bool)>>,data:Vec<Vec<(&QReg,bool)>>,out:&QReg,dirty:&[QReg]){
+    if selectors.is_empty()||data.is_empty(){return;}
+    if data.len()==1&&data[0].is_empty(){emit_terms(circ,selectors,out,dirty);return;}
+    let flag=&dirty[0];let tail=&dirty[1..];let controlled:Vec<_>=data.into_iter().map(|mut term|{term.push((flag,true));term}).collect();
+    // F C F C: F toggles an arbitrary dirty flag by the metadata selector;
+    // C toggles out by flag*data. Their commutator is selector*data, and
+    // every flag/lender restores. Metadata is paid only twice per oracle.
+    for _ in 0..2{emit_terms(circ,selectors.clone(),flag,tail);emit_terms(circ,controlled.clone(),out,tail);}
+}
+// Called only inside the core's U / guarded-center / U^-1. Scratch is
+// X(P1): zero on the active phase. Off phase, every paired MCX remains a
+// pure target-XOR extension and restores scratch/controls; no exact
+// off-domain oracle is required because U^-1 is the literal inverse.
+fn selected_clean(circ:&mut Circuit,selectors:Vec<Vec<(&QReg,bool)>>,data:Vec<Vec<(&QReg,bool)>>,out:&QReg,dirty:&[QReg],scratch:&QReg){
+    if selectors.is_empty()||data.is_empty(){return;}
+    if data.len()==1&&data[0].is_empty(){emit_terms_with_scratch(circ,selectors,out,dirty,Some(scratch));return;}
+    let flag=&dirty[0];let tail=&dirty[1..];let controlled:Vec<_>=data.into_iter().map(|mut term|{term.push((flag,true));term}).collect();
+    for _ in 0..2{emit_terms_with_scratch(circ,selectors.clone(),flag,tail,Some(scratch));emit_terms_with_scratch(circ,controlled.clone(),out,tail,Some(scratch));}
+}
+fn low(circ:&mut Circuit,rank:&[QReg],c:&[QReg],sm:&[QReg],w1:&[QReg],w2:&[QReg],out:&QReg,dirty:&[QReg],j:usize,scratch:&QReg){
+    emit_terms_with_scratch(circ,low_data(w1,w2,j,3,None,0),out,dirty,Some(scratch));let shift=(4-j)%4;
+    if shift==3{return;}
+    for kind in 1..=4{
+        let selectors:Vec<_>=rank_terms(rank,|t|t[2]==0&&(kind==1||t[1]==0)).into_iter().map(|mut term|{term.extend(sm.iter().map(|q|(q,false)));if kind>1{term.extend(c.iter().enumerate().map(|(i,q)|(q,(kind-1+shift)>>i&1!=0)));}term}).collect();
+        selected_clean(circ,selectors,low_data(w1,w2,j,3,None,kind),out,dirty,scratch);
+    }
+}
+fn short_compare(circ:&mut Circuit,rank:&[QReg],a:&[QReg],c:&[QReg],sm:&[QReg],g:&QReg,cache:&QReg,sign:&QReg,w1:&[QReg],w2:&[QReg],dirty:&[QReg],j:usize){
+    // On guard, cache starts zero and becomes the C_low+S_low carry. For
+    // k<=3, A<=k forces high-A0. Seven exact rank/carry leaves per endpoint
+    // fund each data reader through one dirty selector, with no rank-ANF
+    // product expansion. Off guard, all selected commutators are identity.
+    super::metadata_phase115_phased::prepare(circ,c,sm,g,Some(cache),dirty,j,false);
+    let ts=triples();let shift=(4-j)%4;
+    for k in 0..=3{let value=257-k;for av in 0..=k{
+        let mut base=Vec::new();let mut small=Vec::new();
+        for (r,t) in ts.iter().enumerate(){if t[0]!=0{continue;}for carry in 0..=1{if t[1]+t[2]+carry!=value/64{continue;}
+            let mut term=vec![(g,true),(cache,carry!=0)];term.extend(rank.iter().enumerate().map(|(i,q)|(q,r>>i&1!=0)));term.extend(c.iter().enumerate().map(|(i,q)|(q,value>>i&1!=0)));term.extend(a.iter().enumerate().map(|(i,q)|(q,av>>i&1!=0)));
+            base.push(term.clone());if t[2]==0&&shift<3{term.extend(sm.iter().map(|q|(q,false)));small.push(term);}
+        }}
+        let ordinary=if k==0{vec![Vec::new()]}else{low_data(w1,w2,j,k,Some(av),0)};
+        selected(circ,base,ordinary,sign,dirty);
+        // Small S with C+S>=254 implies C>=252: all low-v bits are real,
+        // so no C1/C2/C3 cargo correction is present in the short reader.
+        if k>0{selected(circ,small,low_data(w1,w2,j,k,Some(av),1),sign,dirty);}
+    }}
+    super::metadata_phase115_phased::prepare(circ,c,sm,g,Some(cache),dirty,j,true);
+}
+
+fn short_flag(circ:&mut Circuit,rank:&[QReg],c:&[QReg],sm:&[QReg],g:&QReg,out:&QReg,dirty:&[QReg],j:usize){
+    // F C F C pays for an initially dirty high-group flag. Also bypass
+    // C1/S0 (sum1): u=p, t<p/2, so its Sign is already zero.
+    let scratch=&dirty[0];let tail=&dirty[1..];
+    super::metadata_phase115_phased::prepare(circ,c,sm,g,None,tail,j,false);
+    for (h,values) in [(0usize,vec![1usize]),(3,vec![254usize,255]),(4,vec![256,257])]{
+        for _ in 0..2{
+            super::metadata_phase115_phased::sum_flag_raw(circ,rank,c,sm,g,scratch,tail,j,h);
+            for &value in &values{let mut cs=vec![(g,true),(scratch,true)];cs.extend(c.iter().enumerate().map(|(i,q)|(q,value>>i&1!=0)));gate(circ,&cs,out,tail);}
+        }
+    }
+    super::metadata_phase115_phased::prepare(circ,c,sm,g,None,tail,j,true);
+}
+
+// Exact high-address Fredkin on g=1. Every use belongs to a complete
+// route / g-guarded center / literal-unroute region. X(g) supplies zero
+// scratch on that domain and is restored before any center observes g.
+fn route_swap(circ:&mut Circuit,controls:&[&QReg],truth:Vec<bool>,left:&QReg,right:&QReg,g:&QReg){
+    let(polarity,terms)=super::metadata_muxlease::swap_terms(truth,controls.len());
+    for(i,q)in controls.iter().enumerate(){if polarity>>i&1!=0{circ.x(q);}}
+    circ.cx(right,left);circ.x(g);
+    for m in terms{let mut cs=vec![(left,true)];cs.extend((0..controls.len()).filter(|&i|m>>i&1!=0).map(|i|(controls[i],true)));super::paired_clean_mcx::toggle(circ,&cs,right,g);}
+    circ.x(g);circ.cx(right,left);
+    for(i,q)in controls.iter().enumerate().rev(){if polarity>>i&1!=0{circ.x(q);}}
+}
+fn route_predicate(circ:&mut Circuit,rank:&[QReg],axis:usize,bit:usize,left:&QReg,right:&QReg,g:&QReg){
+    let truth=triples().into_iter().map(|t|t[axis]>>bit&1!=0).collect();route_swap(circ,&rank.iter().collect::<Vec<_>>(),truth,left,right,g);
+}
+fn gather_a<'a>(circ:&mut Circuit,rank:&[QReg],a:&[QReg],w1:&'a[QReg],offset:usize,max:usize,dirty:&[QReg],g:&QReg)->(&'a QReg,Vec<crate::circuit::Op>){
+    let start=circ.b.ops.len();let mut nodes:Vec<_>=(0..256).map(|v|if v<=max{Some(&w1[v+offset])}else{None}).collect();
+    for level in 0..8{let mut next=Vec::new();for pair in nodes.chunks_exact(2){next.push(match(pair[0],pair[1]){(Some(l),Some(r))=>{if level<6{circ.cswap(&a[level],l,r);}else{route_predicate(circ,rank,0,level-6,l,r,g);}Some(l)},(Some(q),None)|(None,Some(q))=>Some(q),(None,None)=>None});}nodes=next;}
+    (nodes[0].unwrap(),circ.b.ops[start..].to_vec())
+}
+fn gather_span<'a>(circ:&mut Circuit,rank:&[QReg],c:&[QReg],cache:&QReg,word:&'a[QReg],base:usize,min:usize,max:usize,dirty:&[QReg],g:&QReg)->(&'a QReg,Vec<crate::circuit::Op>){
+    let start=circ.b.ops.len();let mut nodes=vec![None;512];for value in min..=max{nodes[value]=Some(&word[base-value]);}let ts=triples();
+    for level in 0..9{let mut next=Vec::new();for pair in nodes.chunks_exact(2){next.push(match(pair[0],pair[1]){(Some(l),Some(r))=>{if level<6{circ.cswap(&c[level],l,r);}else{let controls:Vec<_>=rank.iter().chain(std::iter::once(cache)).collect();let truth:Vec<_>=(0..64).map(|z|((ts[z&31][1]+ts[z&31][2]+(z>>5))>>(level-6))&1!=0).collect();route_swap(circ,&controls,truth,l,r,g);}Some(l)},(Some(q),None)|(None,Some(q))=>Some(q),(None,None)=>None});}nodes=next;}
+    (nodes[0].unwrap(),circ.b.ops[start..].to_vec())
+}
+fn gather_sum<'a>(circ:&mut Circuit,rank:&[QReg],c:&[QReg],cache:&QReg,word:&'a[QReg],base:usize,min:usize,dirty:&[QReg],g:&QReg)->(&'a QReg,Vec<crate::circuit::Op>){gather_span(circ,rank,c,cache,word,base,min,257,dirty,g)}
+
+fn cargo(circ:&mut Circuit,rank:&[QReg],a:&[QReg],c:&[QReg],sm:&[QReg],g:&QReg,cache:&QReg,w1:&[QReg],w2:&[QReg],dirty:&[QReg],j:usize){
+    // Move the SECOND passenger first. At A254 and C+S3 its relocated
+    // W2[255] host is precisely the destination of the first handoff.
+    super::metadata_phase115_phased::prepare(circ,c,sm,g,Some(cache),dirty,j,false);
+    let(l,lop)=gather_a(circ,rank,a,w1,2,253,dirty,g);let(r,rop)=gather_sum(circ,rank,c,cache,w2,257,1,dirty,g);
+    swap(circ,&[(g,true)],l,r,dirty);
+    let mut a254=vec![(g,true)];a254.extend(rank.iter().enumerate().map(|(i,q)|(q,29>>i&1!=0)));a254.extend(a.iter().enumerate().map(|(i,q)|(q,254>>i&1!=0)));swap(circ,&a254,l,r,dirty);
+    circ.b.ops.extend(rop.into_iter().rev());circ.b.ops.extend(lop.into_iter().rev());
+    for sum in [1usize,3]{let mut cs=a254.clone();cs.extend(c.iter().enumerate().map(|(i,q)|(q,sum>>i&1!=0)));cs.extend(sm.iter().map(|q|(q,false)));swap(circ,&cs,&w2[255],&w2[257-sum],dirty);}
+    let(l,lop)=gather_a(circ,rank,a,w1,1,254,dirty,g);let(r,rop)=gather_sum(circ,rank,c,cache,w2,258,1,dirty,g);circ.cswap(g,l,r);circ.b.ops.extend(rop.into_iter().rev());circ.b.ops.extend(lop.into_iter().rev());
+    super::metadata_phase115_phased::prepare(circ,c,sm,g,Some(cache),dirty,j,true);
+}
+fn c12_flag(circ:&mut Circuit,rank:&[QReg],c:&[QReg],g:&QReg,out:&QReg,dirty:&[QReg]){for cv in 1usize..=2{for mut cs in rank_terms(rank,|t|t[1]==0){cs.push((g,true));cs.extend(c.iter().enumerate().map(|(i,q)|(q,cv>>i&1!=0)));gate(circ,&cs,out,dirty);}}}
+fn mask_loan(circ:&mut Circuit,rank:&[QReg],c:&[QReg],g:&QReg,cache:&QReg,mask:&QReg,w1:&[QReg],dirty:&[QReg]){
+    c12_flag(circ,rank,c,g,cache,dirty);let start=circ.b.ops.len();let mut nodes:Vec<_>=(0..256).map(|v|if v>=3{Some(&w1[258-v])}else{None}).collect();
+    for level in 0..8{let mut next=Vec::new();for pair in nodes.chunks_exact(2){next.push(match(pair[0],pair[1]){(Some(l),Some(r))=>{if level<6{circ.cswap(&c[level],l,r);}else{route_predicate(circ,rank,1,level-6,l,r,g);}Some(l)},(Some(q),None)|(None,Some(q))=>Some(q),(None,None)=>None});}nodes=next;}
+    let route=circ.b.ops[start..].to_vec();swap(circ,&[(g,true),(cache,false)],nodes[0].unwrap(),mask,dirty);circ.b.ops.extend(route.into_iter().rev());swap(circ,&[(g,true),(cache,true)],&w1[255],mask,dirty);c12_flag(circ,rank,c,g,cache,dirty);
+}
+fn top_flag(circ:&mut Circuit,rank:&[QReg],c:&[QReg],sm:&[QReg],g:&QReg,cache:&QReg,mask:&QReg,w1:&[QReg],dirty:&[QReg],j:usize){
+    // C+S1/2 imply k256/255. Both true top bits are zero because A<=254.
+    super::metadata_phase115_phased::prepare(circ,c,sm,g,Some(cache),dirty,j,false);let(q,route)=gather_sum(circ,rank,c,cache,w1,257,3,dirty,g);
+    // Pruned leaves are arbitrary off their supported sum. Explicitly
+    // cancel sum1/2 so the fallback cannot read a data or passenger bit.
+    circ.ccx(g,q,mask);
+    for sum in 1usize..=2{for mut cs in rank_terms(rank,|t|t[1]+t[2]==0){cs.extend([(g,true),(cache,false),(q,true)]);cs.extend(c.iter().enumerate().map(|(i,x)|(x,sum>>i&1!=0)));gate(circ,&cs,mask,dirty);}}
+    circ.b.ops.extend(route.into_iter().rev());super::metadata_phase115_phased::prepare(circ,c,sm,g,Some(cache),dirty,j,true);
+}
+
+fn core(circ:&mut Circuit,rank:&[QReg],c:&[QReg],sm:&[QReg],g:&QReg,cache:&QReg,top:&QReg,sign:&QReg,w1:&[QReg],w2:&[QReg],dirty:&[QReg],j:usize){
+    super::metadata_phase115_phased::prepare(circ,c,sm,g,Some(cache),dirty,j,false);let start=circ.b.ops.len();
+    for i in 3..256{circ.cx(&w1[i],&w2[i]);}
+    for i in (4..256).rev(){circ.cx(&w1[i-1],&w1[i]);}
+    // At the small-S v1/v2 readers, undo D=target XOR original_source.
+    // The neighboring-XOR source frame reconstructs original t_i by the
+    // prefix XOR source[3..=i]. These v positions are always >=k, outside
+    // the comparison's causal prefix, so they can stay normalized until
+    // the exact inverse. No additional output or clean rail is needed.
+    let shift=(4-j)%4;
+    if shift<3{for pos in [257-shift,256-shift]{if pos<256{for i in 3..=pos{circ.cx(&w1[i],&w2[pos]);}}}}
+    circ.x(g);low(circ,rank,c,sm,w1,w2,&w1[3],dirty,j,g);circ.x(g);
+    // x_i=t_i XOR B_i; D_i=t_i XOR u_i. Adjacent-XOR preparation gives
+    // x_(i+1)=t_(i+1) XOR B_i XOR x_i*D_i with one negative-control CCX.
+    for i in 3..255{circ.x(&w2[i]);circ.ccx(&w1[i],&w2[i],&w1[i+1]);circ.x(&w2[i]);}
+    let compute=circ.b.ops[start..].to_vec();
+    // The active general domain has 2<=C+S<=253 (k>=4); all other
+    // reachable branches were parked. Cache is the prepared addition carry.
+    let(s,sop)=gather_span(circ,rank,c,cache,w1,256,2,253,dirty,g);
+    let(d,dop)=gather_span(circ,rank,c,cache,w2,256,2,253,dirty,g);
+    gate(circ,&[(g,true),(top,false),(s,true),(d,false)],sign,dirty);
+    circ.b.ops.extend(dop.into_iter().rev());circ.b.ops.extend(sop.into_iter().rev());
+    circ.b.ops.extend(compute.into_iter().rev());
+    let(s,sop)=gather_span(circ,rank,c,cache,w1,256,2,253,dirty,g);
+    gate(circ,&[(g,true),(top,false),(s,true)],sign,dirty);circ.b.ops.extend(sop.into_iter().rev());
+    super::metadata_phase115_phased::prepare(circ,c,sm,g,Some(cache),dirty,j,true);
+}
+
+pub(super) fn emit(circ:&mut Circuit,rank:&[QReg],a:&[QReg],c:&[QReg],sm:&[QReg],p1:&QReg,p2:&QReg,sign:&QReg,w1:&[QReg],w2:&[QReg],helpers:&[QReg],j:usize,_n:usize){
+    assert!(helpers.len()>=22);let owned=circ.b.next_qubit;let start=circ.b.ops.len();
+    let mut last=start;let mut stage=|circ:&Circuit,name:&str|{if std::env::var_os("Q793_SIGN_CENSUS").is_some(){let ops=&circ.b.ops[last..];eprintln!("Q793_SIGN_R05_STAGE j={j} stage={name} ops={} T={}",ops.len(),ops.iter().filter(|o|o.kind==crate::circuit::OperationType::CCX).count());last=circ.b.ops.len();}};
+    super::q798_sign_erase::code(circ,p1,p2,sign,helpers,false);
+    short_compare(circ,rank,a,c,sm,p1,p2,sign,w1,w2,helpers,j);stage(circ,"short");
+    short_flag(circ,rank,c,sm,p1,p2,helpers,j);super::q795_t11::park_c1(circ,p1,p2,sign,helpers);stage(circ,"bypass");
+    let movestart=circ.b.ops.len();
+    // Internal S0 is just before the exit's final right rotation: A254's
+    // second passenger is still W2[256]. S>0 boundary callers use W2[255].
+    if j==0{let mut cs=vec![(p1,true)];cs.extend(rank.iter().enumerate().map(|(i,q)|(q,29>>i&1!=0)));cs.extend(a.iter().enumerate().map(|(i,q)|(q,254>>i&1!=0)));cs.extend(sm.iter().map(|q|(q,false)));swap(circ,&cs,&w2[255],&w2[256],helpers);}
+    cargo(circ,rank,a,c,sm,p1,p2,w1,w2,helpers,j);let moves=circ.b.ops[movestart..].to_vec();stage(circ,"cargo");
+    let mask=&helpers[0];let dirty=&helpers[1..];let ls=circ.b.ops.len();mask_loan(circ,rank,c,p1,p2,mask,w1,dirty);let loan=circ.b.ops[ls..].to_vec();stage(circ,"mask");
+    let ts=circ.b.ops.len();top_flag(circ,rank,c,sm,p1,p2,mask,w1,dirty,j);let top=circ.b.ops[ts..].to_vec();stage(circ,"top");
+    circ.cswap(p1,p2,mask);circ.ccx(p1,p2,sign);
+    // Mask is now a funded zero cache; P2 retains the fixed top branch.
+    // Keeping that branch explicit avoids sharing the short-domain park.
+    core(circ,rank,c,sm,p1,mask,p2,sign,w1,w2,dirty,j);stage(circ,"core");
+    circ.cswap(p1,p2,mask);circ.b.ops.extend(top.into_iter().rev());circ.b.ops.extend(loan.into_iter().rev());circ.b.ops.extend(moves.into_iter().rev());
+    super::q795_t11::park_c1(circ,p1,p2,sign,helpers);short_flag(circ,rank,c,sm,p1,p2,helpers,j);super::q798_sign_erase::code(circ,p1,p2,sign,helpers,true);stage(circ,"return");
+    assert_eq!(circ.b.next_qubit,owned);for op in &circ.b.ops[start..]{for h in [256,257,258]{let q=w1[h].id()as u64;assert!(op.q_target.0!=q&&op.q_control1.0!=q&&op.q_control2.0!=q,"Sign touched omitted source{h}");}}
+}
+
+#[path="q793_sign_dynamic_r05_check.rs"]
+pub mod verification;
