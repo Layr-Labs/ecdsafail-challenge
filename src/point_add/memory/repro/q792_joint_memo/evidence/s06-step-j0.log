@@ -1,0 +1,2249 @@
+=== quantum_ecc: build_circuit (untrusted stage) ===
+
+-- building circuit --
+RANK4_LOWER class=4 original_ops=365 new_ops=299 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=365 ops=299
+RANK4_LOWER class=3 original_ops=34393 new_ops=30979 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=34393 ops=30979
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=0 j=0 touches=0
+Q796_HOLE block=0 j=0 touches=0
+Q796_HOLE block=0 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=0 j=0 ops=248862 T=160351 physical=564 PASS
+RANK4_LOWER class=4 original_ops=467 new_ops=385 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=467 ops=385
+RANK4_LOWER class=3 original_ops=34569 new_ops=31133 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=34569 ops=31133
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=1 j=0 touches=0
+Q796_HOLE block=1 j=0 touches=0
+Q796_HOLE block=1 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=1 j=0 ops=249642 T=160725 physical=564 PASS
+RANK4_LOWER class=4 original_ops=587 new_ops=477 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=587 ops=477
+RANK4_LOWER class=3 original_ops=34825 new_ops=31351 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=34825 ops=31351
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=2 j=0 touches=0
+Q796_HOLE block=2 j=0 touches=0
+Q796_HOLE block=2 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=2 j=0 ops=251064 T=161665 physical=564 PASS
+RANK4_LOWER class=4 original_ops=705 new_ops=571 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=705 ops=571
+RANK4_LOWER class=3 original_ops=35021 new_ops=31525 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=35021 ops=31525
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=3 j=0 touches=0
+Q796_HOLE block=3 j=0 touches=0
+Q796_HOLE block=3 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=3 j=0 ops=251892 T=162063 physical=564 PASS
+RANK4_LOWER class=4 original_ops=803 new_ops=653 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=803 ops=653
+RANK4_LOWER class=3 original_ops=35217 new_ops=31691 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=35217 ops=31691
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=4 j=0 touches=0
+Q796_HOLE block=4 j=0 touches=0
+Q796_HOLE block=4 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=4 j=0 ops=252772 T=162547 physical=564 PASS
+RANK4_LOWER class=4 original_ops=917 new_ops=743 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=917 ops=743
+RANK4_LOWER class=3 original_ops=35409 new_ops=31861 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=35409 ops=31861
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=5 j=0 touches=0
+Q796_HOLE block=5 j=0 touches=0
+Q796_HOLE block=5 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=5 j=0 ops=253580 T=162945 physical=564 PASS
+RANK4_LOWER class=4 original_ops=1035 new_ops=833 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=1035 ops=833
+RANK4_LOWER class=3 original_ops=35777 new_ops=32161 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=35777 ops=32161
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=6 j=0 touches=0
+Q796_HOLE block=6 j=0 touches=0
+Q796_HOLE block=6 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=6 j=0 ops=255188 T=163929 physical=564 PASS
+RANK4_LOWER class=4 original_ops=1161 new_ops=935 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=1161 ops=935
+RANK4_LOWER class=3 original_ops=35993 new_ops=32355 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=35993 ops=32355
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=7 j=0 touches=0
+Q796_HOLE block=7 j=0 touches=0
+Q796_HOLE block=7 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=7 j=0 ops=256052 T=164339 physical=564 PASS
+RANK4_LOWER class=4 original_ops=1259 new_ops=1017 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=1259 ops=1017
+RANK4_LOWER class=3 original_ops=36213 new_ops=32605 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=36213 ops=32605
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=8 j=0 touches=0
+Q796_HOLE block=8 j=0 touches=0
+Q796_HOLE block=8 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=8 j=0 ops=256964 T=164839 physical=564 PASS
+RANK4_LOWER class=4 original_ops=1377 new_ops=1107 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=1377 ops=1107
+RANK4_LOWER class=3 original_ops=36429 new_ops=32861 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=36429 ops=32861
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=9 j=0 touches=0
+Q796_HOLE block=9 j=0 touches=0
+Q796_HOLE block=9 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=9 j=0 ops=257788 T=165249 physical=564 PASS
+RANK4_LOWER class=4 original_ops=1475 new_ops=1189 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=1475 ops=1189
+RANK4_LOWER class=3 original_ops=36641 new_ops=33113 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=36641 ops=33113
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=10 j=0 touches=0
+Q796_HOLE block=10 j=0 touches=0
+Q796_HOLE block=10 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=10 j=0 ops=258682 T=165735 physical=564 PASS
+RANK4_LOWER class=4 original_ops=1593 new_ops=1283 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=1593 ops=1283
+RANK4_LOWER class=3 original_ops=36853 new_ops=33321 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=36853 ops=33321
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=11 j=0 touches=0
+Q796_HOLE block=11 j=0 touches=0
+Q796_HOLE block=11 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=11 j=0 ops=259526 T=166145 physical=564 PASS
+RANK4_LOWER class=4 original_ops=1691 new_ops=1365 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=1691 ops=1365
+RANK4_LOWER class=3 original_ops=37065 new_ops=33505 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=37065 ops=33505
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=12 j=0 touches=0
+Q796_HOLE block=12 j=0 touches=0
+Q796_HOLE block=12 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=12 j=0 ops=260430 T=166645 physical=564 PASS
+RANK4_LOWER class=4 original_ops=1805 new_ops=1455 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=1805 ops=1455
+RANK4_LOWER class=3 original_ops=37273 new_ops=33689 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=37273 ops=33689
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=13 j=0 touches=0
+Q796_HOLE block=13 j=0 touches=0
+Q796_HOLE block=13 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=13 j=0 ops=261254 T=167055 physical=564 PASS
+RANK4_LOWER class=4 original_ops=1959 new_ops=1629 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=1959 ops=1629
+RANK4_LOWER class=3 original_ops=37849 new_ops=34125 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=37849 ops=34125
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=14 j=0 touches=0
+Q796_HOLE block=14 j=0 touches=0
+Q796_HOLE block=14 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=14 j=0 ops=263076 T=168249 physical=564 PASS
+RANK4_LOWER class=4 original_ops=2097 new_ops=1743 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=2097 ops=1743
+RANK4_LOWER class=3 original_ops=38085 new_ops=34337 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=38085 ops=34337
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=15 j=0 touches=0
+Q796_HOLE block=15 j=0 touches=0
+Q796_HOLE block=15 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=15 j=0 ops=263984 T=168679 physical=564 PASS
+RANK4_LOWER class=4 original_ops=2201 new_ops=1831 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=2201 ops=1831
+RANK4_LOWER class=3 original_ops=38329 new_ops=34533 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=38329 ops=34533
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=16 j=0 touches=0
+Q796_HOLE block=16 j=0 touches=0
+Q796_HOLE block=16 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=16 j=0 ops=264942 T=169203 physical=564 PASS
+RANK4_LOWER class=4 original_ops=2311 new_ops=1925 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=2311 ops=1925
+RANK4_LOWER class=3 original_ops=38569 new_ops=34733 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=38569 ops=34733
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=17 j=0 touches=0
+Q796_HOLE block=17 j=0 touches=0
+Q796_HOLE block=17 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=17 j=0 ops=265790 T=169627 physical=564 PASS
+RANK4_LOWER class=4 original_ops=2415 new_ops=2013 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=2415 ops=2013
+RANK4_LOWER class=3 original_ops=38805 new_ops=34929 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=38805 ops=34929
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=18 j=0 touches=0
+Q796_HOLE block=18 j=0 touches=0
+Q796_HOLE block=18 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=18 j=0 ops=266738 T=170137 physical=564 PASS
+RANK4_LOWER class=4 original_ops=2545 new_ops=2115 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=2545 ops=2115
+RANK4_LOWER class=3 original_ops=39041 new_ops=35133 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=39041 ops=35133
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=19 j=0 touches=0
+Q796_HOLE block=19 j=0 touches=0
+Q796_HOLE block=19 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=19 j=0 ops=267610 T=170567 physical=564 PASS
+RANK4_LOWER class=4 original_ops=2649 new_ops=2203 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=2649 ops=2203
+RANK4_LOWER class=3 original_ops=39277 new_ops=35329 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=39277 ops=35329
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=20 j=0 touches=0
+Q796_HOLE block=20 j=0 touches=0
+Q796_HOLE block=20 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=20 j=0 ops=268552 T=171091 physical=564 PASS
+RANK4_LOWER class=4 original_ops=2759 new_ops=2297 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=2759 ops=2297
+RANK4_LOWER class=3 original_ops=39509 new_ops=35529 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=39509 ops=35529
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=21 j=0 touches=0
+Q796_HOLE block=21 j=0 touches=0
+Q796_HOLE block=21 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=21 j=0 ops=269400 T=171515 physical=564 PASS
+RANK4_LOWER class=4 original_ops=2863 new_ops=2385 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=2863 ops=2385
+RANK4_LOWER class=3 original_ops=39737 new_ops=35725 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=39737 ops=35725
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=22 j=0 touches=0
+Q796_HOLE block=22 j=0 touches=0
+Q796_HOLE block=22 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=22 j=0 ops=270282 T=172011 physical=564 PASS
+RANK4_LOWER class=4 original_ops=2993 new_ops=2491 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=2993 ops=2491
+RANK4_LOWER class=3 original_ops=39969 new_ops=35933 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=39969 ops=35933
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=23 j=0 touches=0
+Q796_HOLE block=23 j=0 touches=0
+Q796_HOLE block=23 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=23 j=0 ops=271170 T=172441 physical=564 PASS
+RANK4_LOWER class=4 original_ops=3097 new_ops=2579 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=3097 ops=2579
+RANK4_LOWER class=3 original_ops=40205 new_ops=36133 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=40205 ops=36133
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=24 j=0 touches=0
+Q796_HOLE block=24 j=0 touches=0
+Q796_HOLE block=24 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=24 j=0 ops=272120 T=172965 physical=564 PASS
+RANK4_LOWER class=4 original_ops=3207 new_ops=2673 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=3207 ops=2673
+RANK4_LOWER class=3 original_ops=40437 new_ops=36333 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=40437 ops=36333
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=25 j=0 touches=0
+Q796_HOLE block=25 j=0 touches=0
+Q796_HOLE block=25 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=25 j=0 ops=272968 T=173389 physical=564 PASS
+RANK4_LOWER class=4 original_ops=3311 new_ops=2761 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=3311 ops=2761
+RANK4_LOWER class=3 original_ops=40665 new_ops=36529 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=40665 ops=36529
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=26 j=0 touches=0
+Q796_HOLE block=26 j=0 touches=0
+Q796_HOLE block=26 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=26 j=0 ops=273900 T=173899 physical=564 PASS
+RANK4_LOWER class=4 original_ops=3437 new_ops=2863 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=3437 ops=2863
+RANK4_LOWER class=3 original_ops=40893 new_ops=36733 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=40893 ops=36733
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=27 j=0 touches=0
+Q796_HOLE block=27 j=0 touches=0
+Q796_HOLE block=27 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=27 j=0 ops=274772 T=174329 physical=564 PASS
+RANK4_LOWER class=4 original_ops=3541 new_ops=2951 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=3541 ops=2951
+RANK4_LOWER class=3 original_ops=41121 new_ops=36929 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=41121 ops=36929
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=28 j=0 touches=0
+Q796_HOLE block=28 j=0 touches=0
+Q796_HOLE block=28 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=28 j=0 ops=275714 T=174853 physical=564 PASS
+RANK4_LOWER class=4 original_ops=3651 new_ops=3045 symbolic_rank_gates=12 paired_macros=12 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=3651 ops=3045
+RANK4_LOWER class=3 original_ops=41345 new_ops=37129 symbolic_rank_gates=512 paired_macros=576 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=41345 ops=37129
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=29 j=0 touches=0
+Q796_HOLE block=29 j=0 touches=0
+Q796_HOLE block=29 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=29 j=0 ops=276562 T=175277 physical=564 PASS
+RANK4_LOWER class=4 original_ops=4113 new_ops=3271 symbolic_rank_gates=48 paired_macros=48 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=4113 ops=3271
+RANK4_LOWER class=3 original_ops=42811 new_ops=38021 symbolic_rank_gates=608 paired_macros=662 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=42811 ops=38021
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=30 j=0 touches=0
+Q796_HOLE block=30 j=0 touches=0
+Q796_HOLE block=30 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=30 j=0 ops=282422 T=178751 physical=564 PASS
+RANK4_LOWER class=4 original_ops=4435 new_ops=3427 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=4435 ops=3427
+RANK4_LOWER class=3 original_ops=43197 new_ops=38249 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=43197 ops=38249
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=31 j=0 touches=0
+Q796_HOLE block=31 j=0 touches=0
+Q796_HOLE block=31 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=31 j=0 ops=283610 T=179447 physical=564 PASS
+RANK4_LOWER class=4 original_ops=4543 new_ops=3519 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=4543 ops=3519
+RANK4_LOWER class=3 original_ops=43405 new_ops=38425 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=43405 ops=38425
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=32 j=0 touches=0
+Q796_HOLE block=32 j=0 touches=0
+Q796_HOLE block=32 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=32 j=0 ops=284608 T=179977 physical=564 PASS
+RANK4_LOWER class=4 original_ops=4653 new_ops=3613 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=4653 ops=3613
+RANK4_LOWER class=3 original_ops=43597 new_ops=38593 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=43597 ops=38593
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=33 j=0 touches=0
+Q796_HOLE block=33 j=0 touches=0
+Q796_HOLE block=33 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=33 j=0 ops=285458 T=180399 physical=564 PASS
+RANK4_LOWER class=4 original_ops=4761 new_ops=3705 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=4761 ops=3705
+RANK4_LOWER class=3 original_ops=43869 new_ops=38817 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=43869 ops=38817
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=34 j=0 touches=0
+Q796_HOLE block=34 j=0 touches=0
+Q796_HOLE block=34 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=34 j=0 ops=286340 T=180853 physical=564 PASS
+RANK4_LOWER class=4 original_ops=4887 new_ops=3807 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=4887 ops=3807
+RANK4_LOWER class=3 original_ops=44081 new_ops=39005 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=44081 ops=39005
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=35 j=0 touches=0
+Q796_HOLE block=35 j=0 touches=0
+Q796_HOLE block=35 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=35 j=0 ops=287076 T=181189 physical=564 PASS
+RANK4_LOWER class=4 original_ops=4991 new_ops=3895 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=4991 ops=3895
+RANK4_LOWER class=3 original_ops=44293 new_ops=39185 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=44293 ops=39185
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=36 j=0 touches=0
+Q796_HOLE block=36 j=0 touches=0
+Q796_HOLE block=36 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=36 j=0 ops=287754 T=181545 physical=564 PASS
+RANK4_LOWER class=4 original_ops=5101 new_ops=3989 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=5101 ops=3989
+RANK4_LOWER class=3 original_ops=44501 new_ops=39369 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=44501 ops=39369
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=37 j=0 touches=0
+Q796_HOLE block=37 j=0 touches=0
+Q796_HOLE block=37 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=37 j=0 ops=288538 T=181927 physical=564 PASS
+RANK4_LOWER class=4 original_ops=5217 new_ops=4085 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=5217 ops=4085
+RANK4_LOWER class=3 original_ops=44885 new_ops=39673 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=44885 ops=39673
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=38 j=0 touches=0
+Q796_HOLE block=38 j=0 touches=0
+Q796_HOLE block=38 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=38 j=0 ops=289438 T=182395 physical=564 PASS
+RANK4_LOWER class=4 original_ops=5347 new_ops=4191 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=5347 ops=4191
+RANK4_LOWER class=3 original_ops=45117 new_ops=39881 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=45117 ops=39881
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=39 j=0 touches=0
+Q796_HOLE block=39 j=0 touches=0
+Q796_HOLE block=39 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=39 j=0 ops=290208 T=182743 physical=564 PASS
+RANK4_LOWER class=4 original_ops=5451 new_ops=4279 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=5451 ops=4279
+RANK4_LOWER class=3 original_ops=45353 new_ops=40077 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=45353 ops=40077
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=40 j=0 touches=0
+Q796_HOLE block=40 j=0 touches=0
+Q796_HOLE block=40 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=40 j=0 ops=290938 T=183121 physical=564 PASS
+RANK4_LOWER class=4 original_ops=5561 new_ops=4373 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=5561 ops=4373
+RANK4_LOWER class=3 original_ops=45585 new_ops=40277 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=45585 ops=40277
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=41 j=0 touches=0
+Q796_HOLE block=41 j=0 touches=0
+Q796_HOLE block=41 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=41 j=0 ops=291752 T=183519 physical=564 PASS
+RANK4_LOWER class=4 original_ops=5665 new_ops=4461 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=5665 ops=4461
+RANK4_LOWER class=3 original_ops=45813 new_ops=40473 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=45813 ops=40473
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=42 j=0 touches=0
+Q796_HOLE block=42 j=0 touches=0
+Q796_HOLE block=42 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=42 j=0 ops=292480 T=183895 physical=564 PASS
+RANK4_LOWER class=4 original_ops=5791 new_ops=4563 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=5791 ops=4563
+RANK4_LOWER class=3 original_ops=46041 new_ops=40677 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=46041 ops=40677
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=43 j=0 touches=0
+Q796_HOLE block=43 j=0 touches=0
+Q796_HOLE block=43 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=43 j=0 ops=293096 T=184165 physical=564 PASS
+RANK4_LOWER class=4 original_ops=5895 new_ops=4651 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=5895 ops=4651
+RANK4_LOWER class=3 original_ops=46269 new_ops=40873 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=46269 ops=40873
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=44 j=0 touches=0
+Q796_HOLE block=44 j=0 touches=0
+Q796_HOLE block=44 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=44 j=0 ops=293904 T=184593 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6005 new_ops=4745 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6005 ops=4745
+RANK4_LOWER class=3 original_ops=46493 new_ops=41073 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=46493 ops=41073
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=45 j=0 touches=0
+Q796_HOLE block=45 j=0 touches=0
+Q796_HOLE block=45 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=45 j=0 ops=294558 T=184885 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6145 new_ops=4857 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6145 ops=4857
+RANK4_LOWER class=3 original_ops=47085 new_ops=41521 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=47085 ops=41521
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=46 j=0 touches=0
+Q796_HOLE block=46 j=0 touches=0
+Q796_HOLE block=46 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=46 j=0 ops=295986 T=185651 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6287 new_ops=4975 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6287 ops=4975
+RANK4_LOWER class=3 original_ops=47337 new_ops=41749 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=47337 ops=41749
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=47 j=0 touches=0
+Q796_HOLE block=47 j=0 touches=0
+Q796_HOLE block=47 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=47 j=0 ops=296710 T=185963 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6391 new_ops=5063 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6391 ops=5063
+RANK4_LOWER class=3 original_ops=47597 new_ops=41961 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=47597 ops=41961
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=48 j=0 touches=0
+Q796_HOLE block=48 j=0 touches=0
+Q796_HOLE block=48 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=48 j=0 ops=297532 T=186385 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6501 new_ops=5157 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6501 ops=5157
+RANK4_LOWER class=3 original_ops=47853 new_ops=42177 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=47853 ops=42177
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=49 j=0 touches=0
+Q796_HOLE block=49 j=0 touches=0
+Q796_HOLE block=49 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=49 j=0 ops=298204 T=186687 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6605 new_ops=5245 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6605 ops=5245
+RANK4_LOWER class=3 original_ops=48105 new_ops=42389 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=48105 ops=42389
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=50 j=0 touches=0
+Q796_HOLE block=50 j=0 touches=0
+Q796_HOLE block=50 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=50 j=0 ops=299170 T=187201 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6739 new_ops=5351 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6739 ops=5351
+RANK4_LOWER class=3 original_ops=48357 new_ops=42609 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=48357 ops=42609
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=51 j=0 touches=0
+Q796_HOLE block=51 j=0 touches=0
+Q796_HOLE block=51 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=51 j=0 ops=299874 T=187519 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6843 new_ops=5439 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6843 ops=5439
+RANK4_LOWER class=3 original_ops=48609 new_ops=42821 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=48609 ops=42821
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=52 j=0 touches=0
+Q796_HOLE block=52 j=0 touches=0
+Q796_HOLE block=52 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=52 j=0 ops=300698 T=187951 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6953 new_ops=5533 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6953 ops=5533
+RANK4_LOWER class=3 original_ops=48857 new_ops=43039 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=48857 ops=43039
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=53 j=0 touches=0
+Q796_HOLE block=53 j=0 touches=0
+Q796_HOLE block=53 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=53 j=0 ops=301334 T=188231 physical=564 PASS
+RANK4_LOWER class=4 original_ops=7057 new_ops=5621 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=7057 ops=5621
+RANK4_LOWER class=3 original_ops=49101 new_ops=43251 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=49101 ops=43251
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=54 j=0 touches=0
+Q796_HOLE block=54 j=0 touches=0
+Q796_HOLE block=54 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=54 j=0 ops=302226 T=188731 physical=564 PASS
+RANK4_LOWER class=4 original_ops=7191 new_ops=5731 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=7191 ops=5731
+RANK4_LOWER class=3 original_ops=49349 new_ops=43475 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=49349 ops=43475
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=55 j=0 touches=0
+Q796_HOLE block=55 j=0 touches=0
+Q796_HOLE block=55 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=55 j=0 ops=302930 T=189043 physical=564 PASS
+RANK4_LOWER class=4 original_ops=7295 new_ops=5819 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=7295 ops=5819
+RANK4_LOWER class=3 original_ops=49601 new_ops=43687 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=49601 ops=43687
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=56 j=0 touches=0
+Q796_HOLE block=56 j=0 touches=0
+Q796_HOLE block=56 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=56 j=0 ops=303790 T=189493 physical=564 PASS
+RANK4_LOWER class=4 original_ops=7405 new_ops=5913 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=7405 ops=5913
+RANK4_LOWER class=3 original_ops=49849 new_ops=43903 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=49849 ops=43903
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=57 j=0 touches=0
+Q796_HOLE block=57 j=0 touches=0
+Q796_HOLE block=57 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=57 j=0 ops=304464 T=189795 physical=564 PASS
+RANK4_LOWER class=4 original_ops=7509 new_ops=6001 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=7509 ops=6001
+RANK4_LOWER class=3 original_ops=50093 new_ops=44115 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=50093 ops=44115
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=58 j=0 touches=0
+Q796_HOLE block=58 j=0 touches=0
+Q796_HOLE block=58 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=58 j=0 ops=305414 T=190309 physical=564 PASS
+RANK4_LOWER class=4 original_ops=7639 new_ops=6107 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=7639 ops=6107
+RANK4_LOWER class=3 original_ops=50337 new_ops=44335 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=50337 ops=44335
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=59 j=0 touches=0
+Q796_HOLE block=59 j=0 touches=0
+Q796_HOLE block=59 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=59 j=0 ops=306070 T=190599 physical=564 PASS
+RANK4_LOWER class=4 original_ops=7743 new_ops=6195 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=7743 ops=6195
+RANK4_LOWER class=3 original_ops=50581 new_ops=44551 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=50581 ops=44551
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=60 j=0 touches=0
+Q796_HOLE block=60 j=0 touches=0
+Q796_HOLE block=60 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=60 j=0 ops=306912 T=191043 physical=564 PASS
+RANK4_LOWER class=4 original_ops=7853 new_ops=6289 symbolic_rank_gates=48 paired_macros=62 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=7853 ops=6289
+RANK4_LOWER class=3 original_ops=50821 new_ops=44791 symbolic_rank_gates=608 paired_macros=676 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=50821 ops=44791
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=61 j=0 touches=0
+Q796_HOLE block=61 j=0 touches=0
+Q796_HOLE block=61 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=61 j=0 ops=307598 T=191351 physical=564 PASS
+RANK4_LOWER class=4 original_ops=8209 new_ops=6425 symbolic_rank_gates=84 paired_macros=92 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=8209 ops=6425
+RANK4_LOWER class=3 original_ops=51729 new_ops=45183 symbolic_rank_gates=704 paired_macros=756 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=51729 ops=45183
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=62 j=0 touches=0
+Q796_HOLE block=62 j=0 touches=0
+Q796_HOLE block=62 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=62 j=0 ops=309208 T=192517 physical=564 PASS
+RANK4_LOWER class=4 original_ops=8557 new_ops=6575 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=8557 ops=6575
+RANK4_LOWER class=3 original_ops=52141 new_ops=45427 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=52141 ops=45427
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=63 j=0 touches=0
+Q796_HOLE block=63 j=0 touches=0
+Q796_HOLE block=63 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=63 j=0 ops=310144 T=193035 physical=564 PASS
+RANK4_LOWER class=4 original_ops=8665 new_ops=6667 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=8665 ops=6667
+RANK4_LOWER class=3 original_ops=52349 new_ops=45623 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=52349 ops=45623
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=64 j=0 touches=0
+Q796_HOLE block=64 j=0 touches=0
+Q796_HOLE block=64 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=64 j=0 ops=310956 T=193439 physical=564 PASS
+RANK4_LOWER class=4 original_ops=8775 new_ops=6761 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=8775 ops=6761
+RANK4_LOWER class=3 original_ops=52541 new_ops=45815 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=52541 ops=45815
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=65 j=0 touches=0
+Q796_HOLE block=65 j=0 touches=0
+Q796_HOLE block=65 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=65 j=0 ops=311544 T=193701 physical=564 PASS
+RANK4_LOWER class=4 original_ops=8883 new_ops=6853 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=8883 ops=6853
+RANK4_LOWER class=3 original_ops=52813 new_ops=46059 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=52813 ops=46059
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=66 j=0 touches=0
+Q796_HOLE block=66 j=0 touches=0
+Q796_HOLE block=66 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=66 j=0 ops=312566 T=194225 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9009 new_ops=6955 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9009 ops=6955
+RANK4_LOWER class=3 original_ops=53025 new_ops=46271 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=53025 ops=46271
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=67 j=0 touches=0
+Q796_HOLE block=67 j=0 touches=0
+Q796_HOLE block=67 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=67 j=0 ops=313218 T=194513 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9113 new_ops=7043 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9113 ops=7043
+RANK4_LOWER class=3 original_ops=53237 new_ops=46471 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=53237 ops=46471
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=68 j=0 touches=0
+Q796_HOLE block=68 j=0 touches=0
+Q796_HOLE block=68 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=68 j=0 ops=314012 T=194933 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9223 new_ops=7137 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9223 ops=7137
+RANK4_LOWER class=3 original_ops=53445 new_ops=46663 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=53445 ops=46663
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=69 j=0 touches=0
+Q796_HOLE block=69 j=0 touches=0
+Q796_HOLE block=69 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=69 j=0 ops=314604 T=195189 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9339 new_ops=7233 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9339 ops=7233
+RANK4_LOWER class=3 original_ops=53829 new_ops=46963 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=53829 ops=46963
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=70 j=0 touches=0
+Q796_HOLE block=70 j=0 touches=0
+Q796_HOLE block=70 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=70 j=0 ops=315728 T=195799 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9469 new_ops=7339 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9469 ops=7339
+RANK4_LOWER class=3 original_ops=54061 new_ops=47167 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=54061 ops=47167
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=71 j=0 touches=0
+Q796_HOLE block=71 j=0 touches=0
+Q796_HOLE block=71 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=71 j=0 ops=316416 T=196099 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9573 new_ops=7427 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9573 ops=7427
+RANK4_LOWER class=3 original_ops=54297 new_ops=47359 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=54297 ops=47359
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=72 j=0 touches=0
+Q796_HOLE block=72 j=0 touches=0
+Q796_HOLE block=72 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=72 j=0 ops=317260 T=196541 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9683 new_ops=7521 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9683 ops=7521
+RANK4_LOWER class=3 original_ops=54529 new_ops=47555 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=54529 ops=47555
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=73 j=0 touches=0
+Q796_HOLE block=73 j=0 touches=0
+Q796_HOLE block=73 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=73 j=0 ops=317902 T=196825 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9787 new_ops=7609 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9787 ops=7609
+RANK4_LOWER class=3 original_ops=54757 new_ops=47747 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=54757 ops=47747
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=74 j=0 touches=0
+Q796_HOLE block=74 j=0 touches=0
+Q796_HOLE block=74 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=74 j=0 ops=318820 T=197323 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9913 new_ops=7711 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9913 ops=7711
+RANK4_LOWER class=3 original_ops=54985 new_ops=47947 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=54985 ops=47947
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=75 j=0 touches=0
+Q796_HOLE block=75 j=0 touches=0
+Q796_HOLE block=75 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=75 j=0 ops=319436 T=197595 physical=564 PASS
+RANK4_LOWER class=4 original_ops=10017 new_ops=7799 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=10017 ops=7799
+RANK4_LOWER class=3 original_ops=55213 new_ops=48139 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=55213 ops=48139
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=76 j=0 touches=0
+Q796_HOLE block=76 j=0 touches=0
+Q796_HOLE block=76 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=76 j=0 ops=320254 T=198029 physical=564 PASS
+RANK4_LOWER class=4 original_ops=10127 new_ops=7893 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=10127 ops=7893
+RANK4_LOWER class=3 original_ops=55437 new_ops=48335 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=55437 ops=48335
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=77 j=0 touches=0
+Q796_HOLE block=77 j=0 touches=0
+Q796_HOLE block=77 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=77 j=0 ops=320898 T=198311 physical=564 PASS
+RANK4_LOWER class=4 original_ops=10267 new_ops=8005 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=10267 ops=8005
+RANK4_LOWER class=3 original_ops=56029 new_ops=48779 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=56029 ops=48779
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=78 j=0 touches=0
+Q796_HOLE block=78 j=0 touches=0
+Q796_HOLE block=78 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=78 j=0 ops=322342 T=199085 physical=564 PASS
+RANK4_LOWER class=4 original_ops=10409 new_ops=8123 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=10409 ops=8123
+RANK4_LOWER class=3 original_ops=56281 new_ops=49003 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=56281 ops=49003
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=79 j=0 touches=0
+Q796_HOLE block=79 j=0 touches=0
+Q796_HOLE block=79 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=79 j=0 ops=323056 T=199387 physical=564 PASS
+RANK4_LOWER class=4 original_ops=10513 new_ops=8211 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=10513 ops=8211
+RANK4_LOWER class=3 original_ops=56541 new_ops=49211 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=56541 ops=49211
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=80 j=0 touches=0
+Q796_HOLE block=80 j=0 touches=0
+Q796_HOLE block=80 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=80 j=0 ops=323868 T=199799 physical=564 PASS
+RANK4_LOWER class=4 original_ops=10623 new_ops=8305 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=10623 ops=8305
+RANK4_LOWER class=3 original_ops=56797 new_ops=49423 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=56797 ops=49423
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=81 j=0 touches=0
+Q796_HOLE block=81 j=0 touches=0
+Q796_HOLE block=81 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=81 j=0 ops=324530 T=200091 physical=564 PASS
+RANK4_LOWER class=4 original_ops=10727 new_ops=8393 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=10727 ops=8393
+RANK4_LOWER class=3 original_ops=57049 new_ops=49631 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=57049 ops=49631
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=82 j=0 touches=0
+Q796_HOLE block=82 j=0 touches=0
+Q796_HOLE block=82 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=82 j=0 ops=325512 T=200613 physical=564 PASS
+RANK4_LOWER class=4 original_ops=10861 new_ops=8499 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=10861 ops=8499
+RANK4_LOWER class=3 original_ops=57301 new_ops=49847 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=57301 ops=49847
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=83 j=0 touches=0
+Q796_HOLE block=83 j=0 touches=0
+Q796_HOLE block=83 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=83 j=0 ops=326206 T=200921 physical=564 PASS
+RANK4_LOWER class=4 original_ops=10965 new_ops=8587 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=10965 ops=8587
+RANK4_LOWER class=3 original_ops=57553 new_ops=50067 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=57553 ops=50067
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=84 j=0 touches=0
+Q796_HOLE block=84 j=0 touches=0
+Q796_HOLE block=84 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=84 j=0 ops=327036 T=201353 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11075 new_ops=8681 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11075 ops=8681
+RANK4_LOWER class=3 original_ops=57801 new_ops=50295 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=57801 ops=50295
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=85 j=0 touches=0
+Q796_HOLE block=85 j=0 touches=0
+Q796_HOLE block=85 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=85 j=0 ops=327664 T=201623 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11179 new_ops=8769 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11179 ops=8769
+RANK4_LOWER class=3 original_ops=58045 new_ops=50503 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=58045 ops=50503
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=86 j=0 touches=0
+Q796_HOLE block=86 j=0 touches=0
+Q796_HOLE block=86 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=86 j=0 ops=328574 T=202131 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11313 new_ops=8879 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11313 ops=8879
+RANK4_LOWER class=3 original_ops=58293 new_ops=50723 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=58293 ops=50723
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=87 j=0 touches=0
+Q796_HOLE block=87 j=0 touches=0
+Q796_HOLE block=87 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=87 j=0 ops=329270 T=202433 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11417 new_ops=8967 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11417 ops=8967
+RANK4_LOWER class=3 original_ops=58545 new_ops=50931 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=58545 ops=50931
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=88 j=0 touches=0
+Q796_HOLE block=88 j=0 touches=0
+Q796_HOLE block=88 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=88 j=0 ops=330120 T=202873 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11527 new_ops=9061 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11527 ops=9061
+RANK4_LOWER class=3 original_ops=58793 new_ops=51143 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=58793 ops=51143
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=89 j=0 touches=0
+Q796_HOLE block=89 j=0 touches=0
+Q796_HOLE block=89 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=89 j=0 ops=330784 T=203165 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11631 new_ops=9149 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11631 ops=9149
+RANK4_LOWER class=3 original_ops=59037 new_ops=51351 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=59037 ops=51351
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=90 j=0 touches=0
+Q796_HOLE block=90 j=0 touches=0
+Q796_HOLE block=90 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=90 j=0 ops=331750 T=203687 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11761 new_ops=9255 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11761 ops=9255
+RANK4_LOWER class=3 original_ops=59281 new_ops=51567 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=59281 ops=51567
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=91 j=0 touches=0
+Q796_HOLE block=91 j=0 touches=0
+Q796_HOLE block=91 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=91 j=0 ops=332396 T=203967 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11865 new_ops=9343 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11865 ops=9343
+RANK4_LOWER class=3 original_ops=59525 new_ops=51775 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=59525 ops=51775
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=92 j=0 touches=0
+Q796_HOLE block=92 j=0 touches=0
+Q796_HOLE block=92 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=92 j=0 ops=333228 T=204401 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11975 new_ops=9437 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11975 ops=9437
+RANK4_LOWER class=3 original_ops=59765 new_ops=51987 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=59765 ops=51987
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=93 j=0 touches=0
+Q796_HOLE block=93 j=0 touches=0
+Q796_HOLE block=93 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=93 j=0 ops=333904 T=204699 physical=564 PASS
+RANK4_LOWER class=4 original_ops=12079 new_ops=9525 symbolic_rank_gates=84 paired_macros=106 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=12079 ops=9525
+RANK4_LOWER class=3 original_ops=60001 new_ops=52195 symbolic_rank_gates=704 paired_macros=770 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=60001 ops=52195
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=94 j=0 touches=0
+Q796_HOLE block=94 j=0 touches=0
+Q796_HOLE block=94 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=94 j=0 ops=335302 T=205657 physical=564 PASS
+RANK4_LOWER class=4 original_ops=12371 new_ops=9679 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=12371 ops=9679
+RANK4_LOWER class=3 original_ops=60357 new_ops=52417 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=60357 ops=52417
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=95 j=0 touches=0
+Q796_HOLE block=95 j=0 touches=0
+Q796_HOLE block=95 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=95 j=0 ops=336092 T=206079 physical=564 PASS
+RANK4_LOWER class=4 original_ops=12479 new_ops=9771 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=12479 ops=9771
+RANK4_LOWER class=3 original_ops=60565 new_ops=52589 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=60565 ops=52589
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=96 j=0 touches=0
+Q796_HOLE block=96 j=0 touches=0
+Q796_HOLE block=96 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=96 j=0 ops=336868 T=206465 physical=564 PASS
+RANK4_LOWER class=4 original_ops=12589 new_ops=9865 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=12589 ops=9865
+RANK4_LOWER class=3 original_ops=60757 new_ops=52753 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=60757 ops=52753
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=97 j=0 touches=0
+Q796_HOLE block=97 j=0 touches=0
+Q796_HOLE block=97 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=97 j=0 ops=337426 T=206709 physical=564 PASS
+RANK4_LOWER class=4 original_ops=12697 new_ops=9957 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=12697 ops=9957
+RANK4_LOWER class=3 original_ops=61029 new_ops=52973 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=61029 ops=52973
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=98 j=0 touches=0
+Q796_HOLE block=98 j=0 touches=0
+Q796_HOLE block=98 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=98 j=0 ops=338432 T=207233 physical=564 PASS
+RANK4_LOWER class=4 original_ops=12823 new_ops=10059 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=12823 ops=10059
+RANK4_LOWER class=3 original_ops=61241 new_ops=53157 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=61241 ops=53157
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=99 j=0 touches=0
+Q796_HOLE block=99 j=0 touches=0
+Q796_HOLE block=99 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=99 j=0 ops=339058 T=207503 physical=564 PASS
+RANK4_LOWER class=4 original_ops=12927 new_ops=10147 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=12927 ops=10147
+RANK4_LOWER class=3 original_ops=61453 new_ops=53333 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=61453 ops=53333
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=100 j=0 touches=0
+Q796_HOLE block=100 j=0 touches=0
+Q796_HOLE block=100 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=100 j=0 ops=339826 T=207905 physical=564 PASS
+RANK4_LOWER class=4 original_ops=13037 new_ops=10241 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=13037 ops=10241
+RANK4_LOWER class=3 original_ops=61661 new_ops=53513 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=61661 ops=53513
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=101 j=0 touches=0
+Q796_HOLE block=101 j=0 touches=0
+Q796_HOLE block=101 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=101 j=0 ops=340392 T=208143 physical=564 PASS
+RANK4_LOWER class=4 original_ops=13153 new_ops=10337 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=13153 ops=10337
+RANK4_LOWER class=3 original_ops=62045 new_ops=53813 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=62045 ops=53813
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=102 j=0 touches=0
+Q796_HOLE block=102 j=0 touches=0
+Q796_HOLE block=102 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=102 j=0 ops=341516 T=208753 physical=564 PASS
+RANK4_LOWER class=4 original_ops=13283 new_ops=10443 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=13283 ops=10443
+RANK4_LOWER class=3 original_ops=62277 new_ops=54017 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=62277 ops=54017
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=103 j=0 touches=0
+Q796_HOLE block=103 j=0 touches=0
+Q796_HOLE block=103 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=103 j=0 ops=342178 T=209035 physical=564 PASS
+RANK4_LOWER class=4 original_ops=13387 new_ops=10531 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=13387 ops=10531
+RANK4_LOWER class=3 original_ops=62513 new_ops=54209 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=62513 ops=54209
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=104 j=0 touches=0
+Q796_HOLE block=104 j=0 touches=0
+Q796_HOLE block=104 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=104 j=0 ops=342996 T=209459 physical=564 PASS
+RANK4_LOWER class=4 original_ops=13497 new_ops=10625 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=13497 ops=10625
+RANK4_LOWER class=3 original_ops=62745 new_ops=54405 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=62745 ops=54405
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=105 j=0 touches=0
+Q796_HOLE block=105 j=0 touches=0
+Q796_HOLE block=105 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=105 j=0 ops=343626 T=209733 physical=564 PASS
+RANK4_LOWER class=4 original_ops=13601 new_ops=10713 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=13601 ops=10713
+RANK4_LOWER class=3 original_ops=62973 new_ops=54597 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=62973 ops=54597
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=106 j=0 touches=0
+Q796_HOLE block=106 j=0 touches=0
+Q796_HOLE block=106 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=106 j=0 ops=344544 T=210231 physical=564 PASS
+RANK4_LOWER class=4 original_ops=13727 new_ops=10815 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=13727 ops=10815
+RANK4_LOWER class=3 original_ops=63201 new_ops=54797 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=63201 ops=54797
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=107 j=0 touches=0
+Q796_HOLE block=107 j=0 touches=0
+Q796_HOLE block=107 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=107 j=0 ops=345150 T=210491 physical=564 PASS
+RANK4_LOWER class=4 original_ops=13831 new_ops=10903 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=13831 ops=10903
+RANK4_LOWER class=3 original_ops=63429 new_ops=54989 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=63429 ops=54989
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=108 j=0 touches=0
+Q796_HOLE block=108 j=0 touches=0
+Q796_HOLE block=108 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=108 j=0 ops=345948 T=210909 physical=564 PASS
+RANK4_LOWER class=4 original_ops=13941 new_ops=10997 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=13941 ops=10997
+RANK4_LOWER class=3 original_ops=63653 new_ops=55185 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=63653 ops=55185
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=109 j=0 touches=0
+Q796_HOLE block=109 j=0 touches=0
+Q796_HOLE block=109 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=109 j=0 ops=346592 T=211191 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14081 new_ops=11109 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14081 ops=11109
+RANK4_LOWER class=3 original_ops=64245 new_ops=55629 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=64245 ops=55629
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=110 j=0 touches=0
+Q796_HOLE block=110 j=0 touches=0
+Q796_HOLE block=110 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=110 j=0 ops=348024 T=211965 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14223 new_ops=11227 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14223 ops=11227
+RANK4_LOWER class=3 original_ops=64497 new_ops=55853 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=64497 ops=55853
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=111 j=0 touches=0
+Q796_HOLE block=111 j=0 touches=0
+Q796_HOLE block=111 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=111 j=0 ops=348750 T=212267 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14327 new_ops=11315 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14327 ops=11315
+RANK4_LOWER class=3 original_ops=64757 new_ops=56061 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=64757 ops=56061
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=112 j=0 touches=0
+Q796_HOLE block=112 j=0 touches=0
+Q796_HOLE block=112 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=112 j=0 ops=349562 T=212679 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14437 new_ops=11409 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14437 ops=11409
+RANK4_LOWER class=3 original_ops=65013 new_ops=56275 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=65013 ops=56275
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=113 j=0 touches=0
+Q796_HOLE block=113 j=0 touches=0
+Q796_HOLE block=113 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=113 j=0 ops=350224 T=212971 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14541 new_ops=11497 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14541 ops=11497
+RANK4_LOWER class=3 original_ops=65265 new_ops=56483 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=65265 ops=56483
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=114 j=0 touches=0
+Q796_HOLE block=114 j=0 touches=0
+Q796_HOLE block=114 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=114 j=0 ops=351206 T=213493 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14675 new_ops=11603 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14675 ops=11603
+RANK4_LOWER class=3 original_ops=65517 new_ops=56699 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=65517 ops=56699
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=115 j=0 touches=0
+Q796_HOLE block=115 j=0 touches=0
+Q796_HOLE block=115 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=115 j=0 ops=351864 T=213769 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14779 new_ops=11691 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14779 ops=11691
+RANK4_LOWER class=3 original_ops=65769 new_ops=56907 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=65769 ops=56907
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=116 j=0 touches=0
+Q796_HOLE block=116 j=0 touches=0
+Q796_HOLE block=116 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=116 j=0 ops=352644 T=214161 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14889 new_ops=11785 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14889 ops=11785
+RANK4_LOWER class=3 original_ops=66017 new_ops=57119 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=66017 ops=57119
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=117 j=0 touches=0
+Q796_HOLE block=117 j=0 touches=0
+Q796_HOLE block=117 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=117 j=0 ops=353226 T=214399 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14993 new_ops=11873 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14993 ops=11873
+RANK4_LOWER class=3 original_ops=66261 new_ops=57327 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=66261 ops=57327
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=118 j=0 touches=0
+Q796_HOLE block=118 j=0 touches=0
+Q796_HOLE block=118 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=118 j=0 ops=354110 T=214901 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15127 new_ops=11983 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15127 ops=11983
+RANK4_LOWER class=3 original_ops=66509 new_ops=57547 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=66509 ops=57547
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=119 j=0 touches=0
+Q796_HOLE block=119 j=0 touches=0
+Q796_HOLE block=119 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=119 j=0 ops=354780 T=215171 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15231 new_ops=12071 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15231 ops=12071
+RANK4_LOWER class=3 original_ops=66761 new_ops=57757 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=66761 ops=57757
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=120 j=0 touches=0
+Q796_HOLE block=120 j=0 touches=0
+Q796_HOLE block=120 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=120 j=0 ops=355608 T=215581 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15341 new_ops=12165 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15341 ops=12165
+RANK4_LOWER class=3 original_ops=67009 new_ops=57969 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=67009 ops=57969
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=121 j=0 touches=0
+Q796_HOLE block=121 j=0 touches=0
+Q796_HOLE block=121 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=121 j=0 ops=356250 T=215843 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15445 new_ops=12253 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15445 ops=12253
+RANK4_LOWER class=3 original_ops=67253 new_ops=58177 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=67253 ops=58177
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=122 j=0 touches=0
+Q796_HOLE block=122 j=0 touches=0
+Q796_HOLE block=122 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=122 j=0 ops=357204 T=216365 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15575 new_ops=12359 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15575 ops=12359
+RANK4_LOWER class=3 original_ops=67497 new_ops=58393 symbolic_rank_gates=704 paired_macros=780 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=67497 ops=58393
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=123 j=0 touches=0
+Q796_HOLE block=123 j=0 touches=0
+Q796_HOLE block=123 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=123 j=0 ops=357840 T=216615 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15679 new_ops=12447 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15679 ops=12447
+RANK4_LOWER class=3 original_ops=69129 new_ops=59665 symbolic_rank_gates=704 paired_macros=794 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=69129 ops=59665
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=124 j=0 touches=0
+Q796_HOLE block=124 j=0 touches=0
+Q796_HOLE block=124 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=124 j=0 ops=359888 T=217791 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15789 new_ops=12541 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15789 ops=12541
+RANK4_LOWER class=3 original_ops=73737 new_ops=63195 symbolic_rank_gates=704 paired_macros=828 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=73737 ops=63195
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=125 j=0 touches=0
+Q796_HOLE block=125 j=0 touches=0
+Q796_HOLE block=125 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=125 j=0 ops=363888 T=220185 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15857 new_ops=12593 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15857 ops=12593
+RANK4_LOWER class=3 original_ops=73877 new_ops=63319 symbolic_rank_gates=704 paired_macros=828 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=73877 ops=63319
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=126 j=0 touches=0
+Q796_HOLE block=126 j=0 touches=0
+Q796_HOLE block=126 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=126 j=0 ops=364066 T=220307 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15857 new_ops=12593 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15857 ops=12593
+RANK4_LOWER class=3 original_ops=73877 new_ops=63319 symbolic_rank_gates=704 paired_macros=828 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=73877 ops=63319
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=127 j=0 touches=0
+Q796_HOLE block=127 j=0 touches=0
+Q796_HOLE block=127 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=127 j=0 ops=363746 T=220089 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15857 new_ops=12593 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15857 ops=12593
+RANK4_LOWER class=3 original_ops=73877 new_ops=63319 symbolic_rank_gates=704 paired_macros=828 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=73877 ops=63319
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=128 j=0 touches=0
+Q796_HOLE block=128 j=0 touches=0
+Q796_HOLE block=128 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=128 j=0 ops=363488 T=219907 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15857 new_ops=12593 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15857 ops=12593
+RANK4_LOWER class=3 original_ops=73877 new_ops=63319 symbolic_rank_gates=704 paired_macros=828 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=73877 ops=63319
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=129 j=0 touches=0
+Q796_HOLE block=129 j=0 touches=0
+Q796_HOLE block=129 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=129 j=0 ops=363162 T=219691 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15719 new_ops=12479 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15719 ops=12479
+RANK4_LOWER class=3 original_ops=67389 new_ops=55755 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=67389 ops=55755
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=130 j=0 touches=0
+Q796_HOLE block=130 j=0 touches=0
+Q796_HOLE block=130 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=130 j=0 ops=338052 T=200683 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15619 new_ops=12395 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15619 ops=12395
+RANK4_LOWER class=3 original_ops=67067 new_ops=55509 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=67067 ops=55509
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=131 j=0 touches=0
+Q796_HOLE block=131 j=0 touches=0
+Q796_HOLE block=131 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=131 j=0 ops=336442 T=199801 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15457 new_ops=12273 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15457 ops=12273
+RANK4_LOWER class=3 original_ops=66643 new_ops=55171 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=66643 ops=55171
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=132 j=0 touches=0
+Q796_HOLE block=132 j=0 touches=0
+Q796_HOLE block=132 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=132 j=0 ops=334280 T=198707 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15351 new_ops=12187 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15351 ops=12187
+RANK4_LOWER class=3 original_ops=66333 new_ops=54913 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=66333 ops=54913
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=133 j=0 touches=0
+Q796_HOLE block=133 j=0 touches=0
+Q796_HOLE block=133 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=133 j=0 ops=332444 T=197813 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15193 new_ops=12065 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15193 ops=12065
+RANK4_LOWER class=3 original_ops=65917 new_ops=54577 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=65917 ops=54577
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=134 j=0 touches=0
+Q796_HOLE block=134 j=0 touches=0
+Q796_HOLE block=134 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=134 j=0 ops=330434 T=196827 physical=564 PASS
+RANK4_LOWER class=4 original_ops=15087 new_ops=11979 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=15087 ops=11979
+RANK4_LOWER class=3 original_ops=65603 new_ops=54331 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=65603 ops=54331
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=135 j=0 touches=0
+Q796_HOLE block=135 j=0 touches=0
+Q796_HOLE block=135 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=135 j=0 ops=328720 T=195923 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14929 new_ops=11857 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14929 ops=11857
+RANK4_LOWER class=3 original_ops=65195 new_ops=53995 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=65195 ops=53995
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=136 j=0 touches=0
+Q796_HOLE block=136 j=0 touches=0
+Q796_HOLE block=136 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=136 j=0 ops=326594 T=194835 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14827 new_ops=11771 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14827 ops=11771
+RANK4_LOWER class=3 original_ops=64893 new_ops=53737 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=64893 ops=53737
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=137 j=0 touches=0
+Q796_HOLE block=137 j=0 touches=0
+Q796_HOLE block=137 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=137 j=0 ops=324626 T=193847 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14727 new_ops=11687 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14727 ops=11687
+RANK4_LOWER class=3 original_ops=64595 new_ops=53491 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=64595 ops=53491
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=138 j=0 touches=0
+Q796_HOLE block=138 j=0 touches=0
+Q796_HOLE block=138 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=138 j=0 ops=323134 T=193091 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14541 new_ops=11533 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14541 ops=11533
+RANK4_LOWER class=3 original_ops=63947 new_ops=52923 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=63947 ops=52923
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=139 j=0 touches=0
+Q796_HOLE block=139 j=0 touches=0
+Q796_HOLE block=139 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=139 j=0 ops=320370 T=191695 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14435 new_ops=11447 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14435 ops=11447
+RANK4_LOWER class=3 original_ops=63661 new_ops=52689 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=63661 ops=52689
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=140 j=0 touches=0
+Q796_HOLE block=140 j=0 touches=0
+Q796_HOLE block=140 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=140 j=0 ops=318712 T=190903 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14281 new_ops=11329 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14281 ops=11329
+RANK4_LOWER class=3 original_ops=63285 new_ops=52385 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=63285 ops=52385
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=141 j=0 touches=0
+Q796_HOLE block=141 j=0 touches=0
+Q796_HOLE block=141 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=141 j=0 ops=316556 T=189795 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14175 new_ops=11243 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14175 ops=11243
+RANK4_LOWER class=3 original_ops=63007 new_ops=52163 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=63007 ops=52163
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=142 j=0 touches=0
+Q796_HOLE block=142 j=0 touches=0
+Q796_HOLE block=142 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=142 j=0 ops=315100 T=189065 physical=564 PASS
+RANK4_LOWER class=4 original_ops=14017 new_ops=11117 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=14017 ops=11117
+RANK4_LOWER class=3 original_ops=62523 new_ops=51739 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=62523 ops=51739
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=143 j=0 touches=0
+Q796_HOLE block=143 j=0 touches=0
+Q796_HOLE block=143 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=143 j=0 ops=312724 T=187835 physical=564 PASS
+RANK4_LOWER class=4 original_ops=13915 new_ops=11031 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=13915 ops=11031
+RANK4_LOWER class=3 original_ops=62269 new_ops=51529 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=62269 ops=51529
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=144 j=0 touches=0
+Q796_HOLE block=144 j=0 touches=0
+Q796_HOLE block=144 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=144 j=0 ops=310810 T=186885 physical=564 PASS
+RANK4_LOWER class=4 original_ops=13765 new_ops=10913 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=13765 ops=10913
+RANK4_LOWER class=3 original_ops=61877 new_ops=51193 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=61877 ops=51193
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=145 j=0 touches=0
+Q796_HOLE block=145 j=0 touches=0
+Q796_HOLE block=145 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=145 j=0 ops=308678 T=185793 physical=564 PASS
+RANK4_LOWER class=4 original_ops=13665 new_ops=10829 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=13665 ops=10829
+RANK4_LOWER class=3 original_ops=61651 new_ops=51019 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=61651 ops=51019
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=146 j=0 touches=0
+Q796_HOLE block=146 j=0 touches=0
+Q796_HOLE block=146 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=146 j=0 ops=307102 T=184955 physical=564 PASS
+RANK4_LOWER class=4 original_ops=13523 new_ops=10709 symbolic_rank_gates=84 paired_macros=116 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=13523 ops=10709
+RANK4_LOWER class=3 original_ops=61355 new_ops=50765 symbolic_rank_gates=704 paired_macros=764 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=61355 ops=50765
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=147 j=0 touches=0
+Q796_HOLE block=147 j=0 touches=0
+Q796_HOLE block=147 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=147 j=0 ops=305006 T=183835 physical=564 PASS
+RANK4_LOWER class=4 original_ops=13015 new_ops=10499 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=13015 ops=10499
+RANK4_LOWER class=3 original_ops=60265 new_ops=50341 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=60265 ops=50341
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=148 j=0 touches=0
+Q796_HOLE block=148 j=0 touches=0
+Q796_HOLE block=148 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=148 j=0 ops=296330 T=178925 physical=564 PASS
+RANK4_LOWER class=4 original_ops=12909 new_ops=10413 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=12909 ops=10413
+RANK4_LOWER class=3 original_ops=59939 new_ops=50095 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=59939 ops=50095
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=149 j=0 touches=0
+Q796_HOLE block=149 j=0 touches=0
+Q796_HOLE block=149 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=149 j=0 ops=294720 T=178099 physical=564 PASS
+RANK4_LOWER class=4 original_ops=12747 new_ops=10291 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=12747 ops=10291
+RANK4_LOWER class=3 original_ops=59515 new_ops=49759 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=59515 ops=49759
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=150 j=0 touches=0
+Q796_HOLE block=150 j=0 touches=0
+Q796_HOLE block=150 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=150 j=0 ops=292568 T=176991 physical=564 PASS
+RANK4_LOWER class=4 original_ops=12645 new_ops=10205 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=12645 ops=10205
+RANK4_LOWER class=3 original_ops=59201 new_ops=49501 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=59201 ops=49501
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=151 j=0 touches=0
+Q796_HOLE block=151 j=0 touches=0
+Q796_HOLE block=151 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=151 j=0 ops=290896 T=176203 physical=564 PASS
+RANK4_LOWER class=4 original_ops=12487 new_ops=10083 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=12487 ops=10083
+RANK4_LOWER class=3 original_ops=58793 new_ops=49137 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=58793 ops=49137
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=152 j=0 touches=0
+Q796_HOLE block=152 j=0 touches=0
+Q796_HOLE block=152 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=152 j=0 ops=288756 T=175101 physical=564 PASS
+RANK4_LOWER class=4 original_ops=12387 new_ops=9999 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=12387 ops=9999
+RANK4_LOWER class=3 original_ops=58471 new_ops=48891 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=58471 ops=48891
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=153 j=0 touches=0
+Q796_HOLE block=153 j=0 touches=0
+Q796_HOLE block=153 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=153 j=0 ops=287232 T=174299 physical=564 PASS
+RANK4_LOWER class=4 original_ops=12249 new_ops=9885 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=12249 ops=9885
+RANK4_LOWER class=3 original_ops=58059 new_ops=48525 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=58059 ops=48525
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=154 j=0 touches=0
+Q796_HOLE block=154 j=0 touches=0
+Q796_HOLE block=154 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=154 j=0 ops=285024 T=173171 physical=564 PASS
+RANK4_LOWER class=4 original_ops=12123 new_ops=9791 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=12123 ops=9791
+RANK4_LOWER class=3 original_ops=57753 new_ops=48233 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=57753 ops=48233
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=155 j=0 touches=0
+Q796_HOLE block=155 j=0 touches=0
+Q796_HOLE block=155 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=155 j=0 ops=283554 T=172495 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11985 new_ops=9677 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11985 ops=9677
+RANK4_LOWER class=3 original_ops=57353 new_ops=47853 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=57353 ops=47853
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=156 j=0 touches=0
+Q796_HOLE block=156 j=0 touches=0
+Q796_HOLE block=156 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=156 j=0 ops=281386 T=171399 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11831 new_ops=9551 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11831 ops=9551
+RANK4_LOWER class=3 original_ops=56803 new_ops=47327 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=56803 ops=47327
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=157 j=0 touches=0
+Q796_HOLE block=157 j=0 touches=0
+Q796_HOLE block=157 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=157 j=0 ops=279618 T=170433 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11693 new_ops=9437 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11693 ops=9437
+RANK4_LOWER class=3 original_ops=56415 new_ops=46979 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=56415 ops=46979
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=158 j=0 touches=0
+Q796_HOLE block=158 j=0 touches=0
+Q796_HOLE block=158 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=158 j=0 ops=277390 T=169333 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11575 new_ops=9347 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11575 ops=9347
+RANK4_LOWER class=3 original_ops=56137 new_ops=46725 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=56137 ops=46725
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=159 j=0 touches=0
+Q796_HOLE block=159 j=0 touches=0
+Q796_HOLE block=159 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=159 j=0 ops=275804 T=168563 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11475 new_ops=9263 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11475 ops=9263
+RANK4_LOWER class=3 original_ops=55851 new_ops=46499 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=55851 ops=46499
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=160 j=0 touches=0
+Q796_HOLE block=160 j=0 touches=0
+Q796_HOLE block=160 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=160 j=0 ops=274126 T=167675 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11337 new_ops=9149 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11337 ops=9149
+RANK4_LOWER class=3 original_ops=55487 new_ops=46187 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=55487 ops=46187
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=161 j=0 touches=0
+Q796_HOLE block=161 j=0 touches=0
+Q796_HOLE block=161 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=161 j=0 ops=272068 T=166639 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11211 new_ops=9051 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11211 ops=9051
+RANK4_LOWER class=3 original_ops=55097 new_ops=45833 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=55097 ops=45833
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=162 j=0 touches=0
+Q796_HOLE block=162 j=0 touches=0
+Q796_HOLE block=162 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=162 j=0 ops=270334 T=165767 physical=564 PASS
+RANK4_LOWER class=4 original_ops=11073 new_ops=8937 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=11073 ops=8937
+RANK4_LOWER class=3 original_ops=54761 new_ops=45553 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=54761 ops=45553
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=163 j=0 touches=0
+Q796_HOLE block=163 j=0 touches=0
+Q796_HOLE block=163 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=163 j=0 ops=268426 T=164863 physical=564 PASS
+RANK4_LOWER class=4 original_ops=10955 new_ops=8847 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=10955 ops=8847
+RANK4_LOWER class=3 original_ops=54459 new_ops=45295 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=54459 ops=45295
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=164 j=0 touches=0
+Q796_HOLE block=164 j=0 touches=0
+Q796_HOLE block=164 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=164 j=0 ops=266782 T=163971 physical=564 PASS
+RANK4_LOWER class=4 original_ops=10817 new_ops=8733 symbolic_rank_gates=48 paired_macros=74 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=10817 ops=8733
+RANK4_LOWER class=3 original_ops=54143 new_ops=45021 symbolic_rank_gates=608 paired_macros=672 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=54143 ops=45021
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=165 j=0 touches=0
+Q796_HOLE block=165 j=0 touches=0
+Q796_HOLE block=165 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=165 j=0 ops=264690 T=162919 physical=564 PASS
+RANK4_LOWER class=4 original_ops=10351 new_ops=8529 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=10351 ops=8529
+RANK4_LOWER class=3 original_ops=53401 new_ops=44559 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=53401 ops=44559
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=166 j=0 touches=0
+Q796_HOLE block=166 j=0 touches=0
+Q796_HOLE block=166 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=166 j=0 ops=260126 T=159971 physical=564 PASS
+RANK4_LOWER class=4 original_ops=10213 new_ops=8415 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=10213 ops=8415
+RANK4_LOWER class=3 original_ops=52961 new_ops=44215 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=52961 ops=44215
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=167 j=0 touches=0
+Q796_HOLE block=167 j=0 touches=0
+Q796_HOLE block=167 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=167 j=0 ops=257946 T=158947 physical=564 PASS
+RANK4_LOWER class=4 original_ops=10113 new_ops=8331 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=10113 ops=8331
+RANK4_LOWER class=3 original_ops=52639 new_ops=43965 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=52639 ops=43965
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=168 j=0 touches=0
+Q796_HOLE block=168 j=0 touches=0
+Q796_HOLE block=168 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=168 j=0 ops=256388 T=158101 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9951 new_ops=8209 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9951 ops=8209
+RANK4_LOWER class=3 original_ops=52215 new_ops=43619 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=52215 ops=43619
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=169 j=0 touches=0
+Q796_HOLE block=169 j=0 touches=0
+Q796_HOLE block=169 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=169 j=0 ops=254310 T=157047 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9845 new_ops=8123 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9845 ops=8123
+RANK4_LOWER class=3 original_ops=51905 new_ops=43353 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=51905 ops=43353
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=170 j=0 touches=0
+Q796_HOLE block=170 j=0 touches=0
+Q796_HOLE block=170 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=170 j=0 ops=252542 T=156185 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9719 new_ops=8029 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9719 ops=8029
+RANK4_LOWER class=3 original_ops=51595 new_ops=43103 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=51595 ops=43103
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=171 j=0 touches=0
+Q796_HOLE block=171 j=0 touches=0
+Q796_HOLE block=171 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=171 j=0 ops=251196 T=155483 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9581 new_ops=7915 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9581 ops=7915
+RANK4_LOWER class=3 original_ops=51175 new_ops=42759 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=51175 ops=42759
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=172 j=0 touches=0
+Q796_HOLE block=172 j=0 touches=0
+Q796_HOLE block=172 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=172 j=0 ops=248970 T=154377 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9459 new_ops=7821 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9459 ops=7821
+RANK4_LOWER class=3 original_ops=50873 new_ops=42493 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=50873 ops=42493
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=173 j=0 touches=0
+Q796_HOLE block=173 j=0 touches=0
+Q796_HOLE block=173 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=173 j=0 ops=247224 T=153483 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9321 new_ops=7707 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9321 ops=7707
+RANK4_LOWER class=3 original_ops=50465 new_ops=42149 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=50465 ops=42149
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=174 j=0 touches=0
+Q796_HOLE block=174 j=0 touches=0
+Q796_HOLE block=174 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=174 j=0 ops=245062 T=152391 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9221 new_ops=7623 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9221 ops=7623
+RANK4_LOWER class=3 original_ops=50167 new_ops=41899 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=50167 ops=41899
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=175 j=0 touches=0
+Q796_HOLE block=175 j=0 touches=0
+Q796_HOLE block=175 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=175 j=0 ops=243628 T=151671 physical=564 PASS
+RANK4_LOWER class=4 original_ops=9035 new_ops=7469 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=9035 ops=7469
+RANK4_LOWER class=3 original_ops=49519 new_ops=41323 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=49519 ops=41323
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=176 j=0 touches=0
+Q796_HOLE block=176 j=0 touches=0
+Q796_HOLE block=176 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=176 j=0 ops=241172 T=150427 physical=564 PASS
+RANK4_LOWER class=4 original_ops=8929 new_ops=7383 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=8929 ops=7383
+RANK4_LOWER class=3 original_ops=49233 new_ops=41081 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=49233 ops=41081
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=177 j=0 touches=0
+Q796_HOLE block=177 j=0 touches=0
+Q796_HOLE block=177 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=177 j=0 ops=239564 T=149655 physical=564 PASS
+RANK4_LOWER class=4 original_ops=8775 new_ops=7265 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=8775 ops=7265
+RANK4_LOWER class=3 original_ops=48857 new_ops=40769 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=48857 ops=40769
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=178 j=0 touches=0
+Q796_HOLE block=178 j=0 touches=0
+Q796_HOLE block=178 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=178 j=0 ops=237466 T=148577 physical=564 PASS
+RANK4_LOWER class=4 original_ops=8669 new_ops=7179 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=8669 ops=7179
+RANK4_LOWER class=3 original_ops=48579 new_ops=40543 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=48579 ops=40543
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=179 j=0 touches=0
+Q796_HOLE block=179 j=0 touches=0
+Q796_HOLE block=179 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=179 j=0 ops=236056 T=147875 physical=564 PASS
+RANK4_LOWER class=4 original_ops=8511 new_ops=7053 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=8511 ops=7053
+RANK4_LOWER class=3 original_ops=48095 new_ops=40111 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=48095 ops=40111
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=180 j=0 touches=0
+Q796_HOLE block=180 j=0 touches=0
+Q796_HOLE block=180 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=180 j=0 ops=233430 T=146533 physical=564 PASS
+RANK4_LOWER class=4 original_ops=8409 new_ops=6967 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=8409 ops=6967
+RANK4_LOWER class=3 original_ops=47841 new_ops=39893 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=47841 ops=39893
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=181 j=0 touches=0
+Q796_HOLE block=181 j=0 touches=0
+Q796_HOLE block=181 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=181 j=0 ops=231670 T=145661 physical=564 PASS
+RANK4_LOWER class=4 original_ops=8309 new_ops=6883 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=8309 ops=6883
+RANK4_LOWER class=3 original_ops=47591 new_ops=39691 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=47591 ops=39691
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=182 j=0 touches=0
+Q796_HOLE block=182 j=0 touches=0
+Q796_HOLE block=182 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=182 j=0 ops=230436 T=144975 physical=564 PASS
+RANK4_LOWER class=4 original_ops=8159 new_ops=6765 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=8159 ops=6765
+RANK4_LOWER class=3 original_ops=47223 new_ops=39371 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=47223 ops=39371
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=183 j=0 touches=0
+Q796_HOLE block=183 j=0 touches=0
+Q796_HOLE block=183 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=183 j=0 ops=228518 T=144043 physical=564 PASS
+RANK4_LOWER class=4 original_ops=8045 new_ops=6669 symbolic_rank_gates=36 paired_macros=46 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=8045 ops=6669
+RANK4_LOWER class=3 original_ops=46985 new_ops=39151 symbolic_rank_gates=576 paired_macros=624 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=46985 ops=39151
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=184 j=0 touches=0
+Q796_HOLE block=184 j=0 touches=0
+Q796_HOLE block=184 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=184 j=0 ops=226864 T=143221 physical=564 PASS
+RANK4_LOWER class=4 original_ops=7365 new_ops=6397 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=7365 ops=6397
+RANK4_LOWER class=3 original_ops=45241 new_ops=38159 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=45241 ops=38159
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=185 j=0 touches=0
+Q796_HOLE block=185 j=0 touches=0
+Q796_HOLE block=185 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=185 j=0 ops=220820 T=139463 physical=564 PASS
+RANK4_LOWER class=4 original_ops=7259 new_ops=6311 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=7259 ops=6311
+RANK4_LOWER class=3 original_ops=44939 new_ops=37933 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=44939 ops=37933
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=186 j=0 touches=0
+Q796_HOLE block=186 j=0 touches=0
+Q796_HOLE block=186 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=186 j=0 ops=219172 T=138611 physical=564 PASS
+RANK4_LOWER class=4 original_ops=7101 new_ops=6193 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=7101 ops=6193
+RANK4_LOWER class=3 original_ops=44547 new_ops=37621 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=44547 ops=37621
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=187 j=0 touches=0
+Q796_HOLE block=187 j=0 touches=0
+Q796_HOLE block=187 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=187 j=0 ops=217320 T=137703 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6999 new_ops=6107 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6999 ops=6107
+RANK4_LOWER class=3 original_ops=44257 new_ops=37379 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=44257 ops=37379
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=188 j=0 touches=0
+Q796_HOLE block=188 j=0 touches=0
+Q796_HOLE block=188 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=188 j=0 ops=215506 T=136789 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6845 new_ops=5989 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6845 ops=5989
+RANK4_LOWER class=3 original_ops=43881 new_ops=37067 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=43881 ops=37067
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=189 j=0 touches=0
+Q796_HOLE block=189 j=0 touches=0
+Q796_HOLE block=189 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=189 j=0 ops=213506 T=135763 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6745 new_ops=5905 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6745 ops=5905
+RANK4_LOWER class=3 original_ops=43583 new_ops=36841 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=43583 ops=36841
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=190 j=0 touches=0
+Q796_HOLE block=190 j=0 touches=0
+Q796_HOLE block=190 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=190 j=0 ops=211916 T=134927 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6607 new_ops=5791 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6607 ops=5791
+RANK4_LOWER class=3 original_ops=43203 new_ops=36529 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=43203 ops=36529
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=191 j=0 touches=0
+Q796_HOLE block=191 j=0 touches=0
+Q796_HOLE block=191 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=191 j=0 ops=210030 T=134011 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6485 new_ops=5701 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6485 ops=5701
+RANK4_LOWER class=3 original_ops=42921 new_ops=36287 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=42921 ops=36287
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=192 j=0 touches=0
+Q796_HOLE block=192 j=0 touches=0
+Q796_HOLE block=192 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=192 j=0 ops=208392 T=133201 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6379 new_ops=5615 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6379 ops=5615
+RANK4_LOWER class=3 original_ops=42643 new_ops=36061 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=42643 ops=36061
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=193 j=0 touches=0
+Q796_HOLE block=193 j=0 touches=0
+Q796_HOLE block=193 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=193 j=0 ops=206858 T=132395 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6193 new_ops=5409 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6193 ops=5409
+RANK4_LOWER class=3 original_ops=42035 new_ops=35505 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=42035 ops=35505
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=194 j=0 touches=0
+Q796_HOLE block=194 j=0 touches=0
+Q796_HOLE block=194 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=194 j=0 ops=203930 T=130661 physical=564 PASS
+RANK4_LOWER class=4 original_ops=6077 new_ops=5329 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=6077 ops=5329
+RANK4_LOWER class=3 original_ops=41769 new_ops=35287 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=41769 ops=35287
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=195 j=0 touches=0
+Q796_HOLE block=195 j=0 touches=0
+Q796_HOLE block=195 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=195 j=0 ops=202316 T=129925 physical=564 PASS
+RANK4_LOWER class=4 original_ops=5937 new_ops=5225 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=5937 ops=5225
+RANK4_LOWER class=3 original_ops=41425 new_ops=35007 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=41425 ops=35007
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=196 j=0 touches=0
+Q796_HOLE block=196 j=0 touches=0
+Q796_HOLE block=196 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=196 j=0 ops=200302 T=128897 physical=564 PASS
+RANK4_LOWER class=4 original_ops=5847 new_ops=5151 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=5847 ops=5151
+RANK4_LOWER class=3 original_ops=41163 new_ops=34803 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=41163 ops=34803
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=197 j=0 touches=0
+Q796_HOLE block=197 j=0 touches=0
+Q796_HOLE block=197 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=197 j=0 ops=198816 T=128119 physical=564 PASS
+RANK4_LOWER class=4 original_ops=5707 new_ops=5047 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=5707 ops=5047
+RANK4_LOWER class=3 original_ops=40831 new_ops=34523 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=40831 ops=34523
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=198 j=0 touches=0
+Q796_HOLE block=198 j=0 touches=0
+Q796_HOLE block=198 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=198 j=0 ops=196746 T=127075 physical=564 PASS
+RANK4_LOWER class=4 original_ops=5591 new_ops=4959 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=5591 ops=4959
+RANK4_LOWER class=3 original_ops=40473 new_ops=34197 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=40473 ops=34197
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=199 j=0 touches=0
+Q796_HOLE block=199 j=0 touches=0
+Q796_HOLE block=199 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=199 j=0 ops=194588 T=125977 physical=564 PASS
+RANK4_LOWER class=4 original_ops=5451 new_ops=4855 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=5451 ops=4855
+RANK4_LOWER class=3 original_ops=40169 new_ops=33949 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=40169 ops=33949
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=200 j=0 touches=0
+Q796_HOLE block=200 j=0 touches=0
+Q796_HOLE block=200 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=200 j=0 ops=192546 T=124967 physical=564 PASS
+RANK4_LOWER class=4 original_ops=5335 new_ops=4771 symbolic_rank_gates=0 paired_macros=0 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=true low=true old_ops=5335 ops=4771
+RANK4_LOWER class=3 original_ops=39899 new_ops=33719 symbolic_rank_gates=480 paired_macros=528 conditional_clean=true
+FOLD20_T10_RANK4 j=3 last=false low=true old_ops=39899 ops=33719
+FOLD20_PASSIVE_LOWER old=688 new=1138 macros=8 gathers=0
+FOLD20_PASSIVE_LOWER old=260 new=664 macros=6 gathers=0
+FOLD20_PASSIVE_LOWER old=1082 new=6864 macros=22 gathers=0
+Q796_HOLE block=201 j=0 touches=0
+Q796_HOLE block=201 j=0 touches=0
+Q796_HOLE block=201 j=0 touches=0
+FOLD20_FULL_STEP_BLOCK block=201 j=0 ops=190456 T=123723 physical=564 PASS
+FOLD20_FULL_STEP_PASS lanes=387840 forward_ops=118352652 forward_T=73287464; own integrated three-hole/mod8 step; holes256/257/258 absent; NOT whole point-add Q792 or9024
+	Command being timed: "prlimit --as=3000000000 timeout 1200s /home/agentyczny-zdzich/Desktop/projekty/ecdsa/.autoresearch/q792-memo-joint-20260913.s9u6rt86/stage-r06-workspace/target/release/build_circuit"
+	User time (seconds): 70.48
+	System time (seconds): 1.65
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:12.23
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 122400
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 2658132
+	Voluntary context switches: 731
+	Involuntary context switches: 502
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 296
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
