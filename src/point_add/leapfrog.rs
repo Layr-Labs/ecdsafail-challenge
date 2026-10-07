@@ -1622,24 +1622,17 @@ fn merged_tables() -> &'static (Vec<Vec<usize>>, Vec<(usize, usize, usize)>) {
     })
 }
 
-/// u = x + ov + 15 sg (5 bits) from x (4 forms), ov, sg (8 ANDs); merged.py `u_build`.
+/// u = x + ov + 15*sg, exactly, with four temporary ANDs.
+/// Rewrite as (x + ov - sg) + 16*sg: a conditional four-bit increment/decrement.
+/// The caller erases these helpers through the existing reverse-order MBU records.
 fn m_u_build(c: &mut Builder, recs: &mut Recs, x: &[Lin; 4], ov: &Lin, sg: &Lin) -> [Lin; 5] {
-    let d1 = m_and(c, recs, x[0].clone(), ov.clone());
-    let d2 = m_and(c, recs, x[1].clone(), d1.clone());
-    let d3 = m_and(c, recs, x[2].clone(), d2.clone());
-    let d4 = m_and(c, recs, x[3].clone(), d3.clone());
-    let v = [x[0].x(ov), x[1].x(&d1), x[2].x(&d2), x[3].x(&d3), d4];
-    let e1 = m_and(c, recs, v[0].clone(), sg.clone());
-    let mut u = vec![v[0].x(sg), v[1].x(sg).x(&e1)];
-    let mut e = e1;
-    for j in 1..=3 {
-        let q = m_and(c, recs, v[j].x(&e), sg.x(&e));
-        e = q.x(&e);
-        if j < 3 {
-            u.push(v[j + 1].x(sg).x(&e));
-        }
+    let mut carry = ov.x(sg);
+    let mut u = Vec::with_capacity(5);
+    for bit in x {
+        u.push(bit.x(&carry));
+        carry = m_and(c, recs, bit.x(sg), carry);
     }
-    u.push(v[4].x(&e));
+    u.push(sg.x(&carry));
     u.try_into().unwrap()
 }
 
