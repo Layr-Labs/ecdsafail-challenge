@@ -49,21 +49,21 @@ pub(crate) fn install_recipe() {
         // merged-op fold windows: standard 56 bits; late 58, capped by the standard window
         ("LF_MERGED_WIN", "56"),
         ("LF_MERGED_LATE_WIN", "58"),
-        // ticks 0..77 of the payload-fused traversals split into a rails-only pass (one payload register live: no
+        // ticks 0..75 of the payload-fused traversals split into a rails-only pass (one payload register live: no
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
-        ("LF_REORDER", "77"),
+        ("LF_REORDER", "75"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
         // with the coordinate seams
         ("LF_TIE_SEED", "1"),
         ("LF_SIGNWIRE", "1"),
         ("LF_SEAMS", "1"),
         // peak cap, co-tuned with LF_REORDER
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1244"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1242"),
         ("NATIVE_SFUSE_B", "1"),
-        // payload cells: fold window floored at 54 bits (Skywalk's late-round profile narrows it to 49),
-        // chunk-boundary / flag compares widened by 1 / 1 bits
-        ("LF_CELL_FOLD_MIN", "54"),
-        ("LF_CMP_SHIFT", "1,1"),
+        // payload cells: fold window floored at 55 bits (Skywalk's late-round profile narrows it to 49),
+        // chunk-boundary / flag compares not widened (0 / 0 bits)
+        ("LF_CELL_FOLD_MIN", "55"),
+        ("LF_CMP_SHIFT", "0,0"),
         // tie-safe cell mode off (LF_TIE_FROM past the last tick): Leapfrog rail steps never cancel to zero, so the
         // cells see no structural ties
         ("LF_TIE_FROM", "999"),
@@ -2074,10 +2074,10 @@ fn m_fold_fwd(c: &mut Builder, acc: &[QubitId], ov: QubitId, sg: QubitId, k1: Qu
     });
 }
 
-/// Fold extra (live wires beyond the adder's overflow) of the merged ops: MW - 1 carries plus 31 (forward: k-gate,
-/// gated mu bits, u, monomials) or 27 (reverse: u, monomials; its 5 mu copies are live before the add).
+/// Fold extra (live wires beyond the adder's overflow) of the merged ops: MW - 1 carries plus 18 (forward: k-gate,
+/// gated mu bits, u, monomials) or 14 (reverse: u, monomials; its 5 mu copies are live before the add).
 fn m_fold_need(rev: bool) -> usize {
-    merged_win() - 1 + if rev { if lf_merged_rev2() { 3 + 4 + 27 } else { 27 } } else { 31 }
+    merged_win() - 1 + if rev { if lf_merged_rev2() { 3 + 4 + 14 } else { 14 } } else { 18 }
 }
 
 /// Exact-flag split (`LF_MERGED_EXACT`, default 1): the lowest split s such that the top ripple [s, N) (N - s - 1
@@ -2260,23 +2260,19 @@ fn merged_rev2(c: &mut Builder, sg: QubitId, src: &[QubitId], tgt: &[QubitId], k
 }
 
 /// Live wires of the merged fold beyond the op's starting count, excluding the upper ladder's carries: the fold's
-/// own carries into bits 1..4 and its helper ANDs (forward: k-gate, gated mu bits, u, monomials = 31), measured
-/// from the fold's start (overflow live); the reverse's u + monomials (27) with its 5 mu copies counted at the op.
-const M_FIXED_FWD: usize = 4 + 31;
-const M_FIXED_REV: usize = 4 + 27;
+/// own carries into bits 1..4 and its helper ANDs (forward: k-gate, gated mu bits, u, monomials = 18), measured
+/// from the fold's start (overflow live); the reverse's u + monomials (14) with its 5 mu copies counted at the op.
+const M_FIXED_FWD: usize = 4 + 18;
+const M_FIXED_REV: usize = 4 + 14;
 /// [`merged_rev2`]: carries into bits 1..4, 3 borrows, k-gate + 3 gated mu bits, u, monomials.
-const M_FIXED_REV2: usize = 4 + 3 + 4 + 27;
+const M_FIXED_REV2: usize = 4 + 3 + 4 + 14;
 
-/// Wires counted in M_FIXED_* that the fold no longer holds: 4 since [`m_u_build`] went from 8 ANDs to 4, and 9 more
-/// with [`addend10`]. The fit and split rules ([`merged_fits`], [`merged_split`], [`m_fold_need`]) keep the old
-/// counts, so the same ticks run the merged op with the same windows and compares; only the fold's own chunk plan
-/// uses the freed room (fewer or shorter kept chunks; a kept carry is erased with an exact compare, so the map does
-/// not change). The cap assert inside [`m_fold`] guards the count. `LF_FOLD_SLACK=0` keeps the old plan.
+/// Wires counted in M_FIXED_* that the fold no longer holds. [`m_u_build`] (8 ANDs to 4) and [`addend10`] freed
+/// 4 + 9 wires; M_FIXED_* and [`m_fold_need`] no longer count any of them, so the fit and split rules
+/// ([`merged_fits`], [`merged_split`], [`m_fold_need`]) and the fold's own chunk plan all see the same live
+/// count and nothing is left over. The cap assert inside [`m_fold`] guards the count.
 fn m_fold_slack() -> usize {
-    if std::env::var("LF_FOLD_SLACK").is_ok_and(|v| v == "0") {
-        return 0;
-    }
-    4 + if lf_addend10() { 9 } else { 0 }
+    0
 }
 
 /// `LF_FOLD_LEAN=0` keeps the merged fold's final chunk with a carry wire for its top bit.
