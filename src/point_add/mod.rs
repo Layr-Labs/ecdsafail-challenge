@@ -224,6 +224,11 @@ fn apply_tail_nonce(mut ops: Vec<Op>, nonce: u64) -> Vec<Op> {
 /// before the next one starts.
 pub(crate) fn build_point_add() -> Vec<Op> {
     let circ = &mut Builder::new();
+    // The pinned Leapfrog build emits about 9.376 million ops before post-passes.
+    // Reserving once avoids Vec growth and the transient old-plus-new buffers.
+    if leapfrog::enabled() {
+        circ.reserve_ops(9_376_000);
+    }
     let x: &[QubitId] = &circ.alloc_qubits(N);
     let y: &[QubitId] = &circ.alloc_qubits(N);
     let ox: &[BitId] = &circ.alloc_bits(N);

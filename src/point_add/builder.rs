@@ -96,6 +96,10 @@ impl Builder {
             avoid_ids: Vec::new(),
         }
     }
+    /// Reserve room for a known full-circuit build without changing its gates.
+    pub(crate) fn reserve_ops(&mut self, count: usize) {
+        self.ops.reserve_exact(count);
+    }
     /// Highest live-qubit count seen so far over the whole build (tracked in
     /// every mode by `note_peak`).
     pub fn peak_total(&self) -> u32 { self.model_max }
