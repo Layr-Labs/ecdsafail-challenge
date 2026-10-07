@@ -51,19 +51,19 @@ pub(crate) fn install_recipe() {
         ("LF_MERGED_LATE_WIN", "58"),
         // ticks 0..77 of the payload-fused traversals split into a rails-only pass (one payload register live: no
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
-        ("LF_REORDER", "77"),
+        ("LF_REORDER", "75"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
         // with the coordinate seams
         ("LF_TIE_SEED", "1"),
         ("LF_SIGNWIRE", "1"),
         ("LF_SEAMS", "1"),
         // peak cap, co-tuned with LF_REORDER
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1244"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1242"),
         ("NATIVE_SFUSE_B", "1"),
         // payload cells: fold window floored at 54 bits (Skywalk's late-round profile narrows it to 49),
         // chunk-boundary / flag compares widened by 1 / 1 bits
-        ("LF_CELL_FOLD_MIN", "54"),
-        ("LF_CMP_SHIFT", "1,1"),
+        ("LF_CELL_FOLD_MIN", "55"),
+        ("LF_CMP_SHIFT", "0,0"),
         // tie-safe cell mode off (LF_TIE_FROM past the last tick): Leapfrog rail steps never cancel to zero, so the
         // cells see no structural ties
         ("LF_TIE_FROM", "999"),
@@ -1876,7 +1876,7 @@ fn m_fold_fwd(c: &mut Builder, acc: &[QubitId], ov: QubitId, sg: QubitId, k1: Qu
 /// Fold extra (live wires beyond the adder's overflow) of the merged ops: MW - 1 carries plus 31 (forward: k-gate,
 /// gated mu bits, u, monomials) or 27 (reverse: u, monomials; its 5 mu copies are live before the add).
 fn m_fold_need(rev: bool) -> usize {
-    merged_win() - 1 + if rev { if lf_merged_rev2() { 3 + 4 + 27 } else { 27 } } else { 31 }
+    merged_win() - 1 + if rev { if lf_merged_rev2() { 3 + 4 + 23 } else { 23 } } else { 27 }
 }
 
 /// Exact-flag split (`LF_MERGED_EXACT`, default 1): the lowest split s such that the top ripple [s, N) (N - s - 1
@@ -2059,12 +2059,12 @@ fn merged_rev2(c: &mut Builder, sg: QubitId, src: &[QubitId], tgt: &[QubitId], k
 }
 
 /// Live wires of the merged fold beyond the op's starting count, excluding the upper ladder's carries: the fold's
-/// own carries into bits 1..4 and its helper ANDs (forward: k-gate, gated mu bits, u, monomials = 31), measured
-/// from the fold's start (overflow live); the reverse's u + monomials (27) with its 5 mu copies counted at the op.
-const M_FIXED_FWD: usize = 4 + 31;
-const M_FIXED_REV: usize = 4 + 27;
+/// own carries into bits 1..4 and its helper ANDs (forward: k-gate, gated mu bits, u, monomials = 27), measured
+/// from the fold's start (overflow live); the reverse's u + monomials (23) with its 5 mu copies counted at the op.
+const M_FIXED_FWD: usize = 4 + 27;
+const M_FIXED_REV: usize = 4 + 23;
 /// [`merged_rev2`]: carries into bits 1..4, 3 borrows, k-gate + 3 gated mu bits, u, monomials.
-const M_FIXED_REV2: usize = 4 + 3 + 4 + 27;
+const M_FIXED_REV2: usize = 4 + 3 + 4 + 23;
 
 /// The fold's chunk plan at the current live count (`fixed`: the fold's non-ladder wires still to be allocated).
 fn m_fold_plan(c: &Builder, fixed: usize, mw: usize) -> Vec<usize> {
