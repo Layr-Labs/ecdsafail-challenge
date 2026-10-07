@@ -1,0 +1,13 @@
+{
+  "at": "2026-09-12T19:30:05.058270+00:00",
+  "status": "PRE_EXECUTION_DECLARATION",
+  "jobs": 5656,
+  "both_B50_required": true,
+  "CPU_selection": false,
+  "assumption": "Held C=1 gives C4=C5=0; complete C1 arithmetic and center do not otherwise read/write C4/C5; original high cache stays C2. Restore nested low caches before changing their source high cache. All caches unwind by literal reverse updates.",
+  "identity": {
+    "c1_lifetime_search_r01.cpp": "519c525a2de1150fc4ef6d91fc6246e9306e4f6a3fab31178f1c2d7fb966759e",
+    "c1_lifetime_search_r01": "82870f4932663ec19fcd9cef6190363092857888217645f6d4f7c7c2ac4e7d49",
+    "c1-lifetime-input-r01.txt": "3fc4b958db0bb21d23d7cb768f4c788ace0d9874f9da7137ea643f9562438fc6"
+  }
+}
