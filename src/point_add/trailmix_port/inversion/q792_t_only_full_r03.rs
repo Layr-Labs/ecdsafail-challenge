@@ -1,0 +1,9 @@
+//! Complete public T backend selection. Each new branch owns a disjoint A
+//! interval, restores the folded metadata/phase ABI, and allocates no wire.
+use crate::point_add::trailmix_port::circuit::{Circuit,QReg};
+fn price(ops:&[crate::circuit::Op])->(usize,usize){(ops.iter().filter(|o|o.kind==crate::circuit::OperationType::CCX).count(),ops.len())}
+pub(super)fn emit_new_with_loan(c:&mut Circuit,m:&[QReg],p1:&QReg,p2:&QReg,w1:&[QReg],w2:&[QReg],h:&[QReg],n:usize,j:usize,held:bool){let owned=c.b.next_qubit;let bank:Vec<_>=(0..256).map(|a|if a==255{&w2[258]}else{&w1[a+1]}).collect();if !held{super::q792_fold20_address_r01::exchange(c,m,&h[0],&bank,&h[1..]);}super::q792_t_only_narrow_r02::emit_with_loan(c,m,p1,p2,w1,w2,h,n,j,true);super::q792_t_only_wide_r02::emit_with_loan(c,m,p1,p2,w1,w2,h,n,j,true);super::q792_t_only_apex_select_r01::emit_with_loan(c,m,p1,p2,w1,w2,h,n,j,true);if !held{super::q792_fold20_address_r01::exchange(c,m,&h[0],&bank,&h[1..]);}assert_eq!(c.b.next_qubit,owned);}
+pub(super)fn emit_with_loan(c:&mut Circuit,m:&[QReg],p1:&QReg,p2:&QReg,w1:&[QReg],w2:&[QReg],h:&[QReg],n:usize,j:usize,held:bool){let owned=c.b.next_qubit;let at=c.b.ops.len();emit_new_with_loan(c,m,p1,p2,w1,w2,h,n,j,held);let new=c.b.ops.split_off(at);super::q792_t10_phaselease_r01::emit_with_loan(c,m,p1,p2,w1,w2,h,n,j,held);let old=c.b.ops.split_off(at);let np=price(&new);let op=price(&old);let selected=np.0<op.0; if std::env::var_os("Q792_T_ONLY_SELECTION_LOG").is_some(){eprintln!("T_ONLY_PUBLIC_SELECT j={j} support={:?} old_T={} new_T={} old_N={} new_N={} new_selected={selected}",c.q797_a_support,op.0,np.0,op.1,np.1);}c.b.ops.extend(if selected{new}else{old});assert_eq!(c.b.next_qubit,owned);}
+pub(super)fn emit(c:&mut Circuit,m:&[QReg],p1:&QReg,p2:&QReg,w1:&[QReg],w2:&[QReg],h:&[QReg],n:usize,j:usize){emit_new_with_loan(c,m,p1,p2,w1,w2,h,n,j,false);}
+#[path="q792_t_only_full_check_r03.rs"]mod check;
+pub fn run(){check::run();}
