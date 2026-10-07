@@ -51,19 +51,19 @@ pub(crate) fn install_recipe() {
         ("LF_MERGED_LATE_WIN", "58"),
         // ticks 0..77 of the payload-fused traversals split into a rails-only pass (one payload register live: no
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
-        ("LF_REORDER", "75"),
+        ("LF_REORDER", "77"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
         // with the coordinate seams
         ("LF_TIE_SEED", "1"),
         ("LF_SIGNWIRE", "1"),
         ("LF_SEAMS", "1"),
         // peak cap, co-tuned with LF_REORDER
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1242"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1244"),
         ("NATIVE_SFUSE_B", "1"),
         // payload cells: fold window floored at 54 bits (Skywalk's late-round profile narrows it to 49),
         // chunk-boundary / flag compares widened by 1 / 1 bits
-        ("LF_CELL_FOLD_MIN", "55"),
-        ("LF_CMP_SHIFT", "0,0"),
+        ("LF_CELL_FOLD_MIN", "54"),
+        ("LF_CMP_SHIFT", "1,1"),
         // tie-safe cell mode off (LF_TIE_FROM past the last tick): Leapfrog rail steps never cancel to zero, so the
         // cells see no structural ties
         ("LF_TIE_FROM", "999"),
@@ -206,8 +206,11 @@ fn signed_add(c: &mut Builder, sign: QubitId, src: &[QubitId], dst: &[QubitId]) 
 /// it applies the phase (-1)^(NOT carry_out) instead (for MBU erasure of a kept carry, under a condition).
 fn carry_out_xor(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, out: Option<QubitId>) {
     let n = a.len();
+    // Phase-only form: the top carry is never built. carry[n] = c ^ (a ^ c)(b ^ c) with c = carry[n - 1], so
+    // (-1)^(NOT carry[n]) is one CZ on the two operand wires (while they hold a ^ c, b ^ c) times (-1)^(NOT c).
+    let m = if out.is_none() && n >= 1 { n - 1 } else { n };
     let mut carry = vec![cin];
-    for i in 0..n {
+    for i in 0..m {
         let ci = carry[i];
         c.cx(ci, a[i]);
         c.cx(ci, b[i]);
@@ -218,12 +221,20 @@ fn carry_out_xor(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, ou
     match out {
         Some(out) => c.cx(carry[n], out),
         None => {
-            c.x(carry[n]);
-            c.z_if(carry[n], NO_BIT);
-            c.x(carry[n]);
+            let ci = carry[m];
+            if m < n {
+                c.cx(ci, a[m]);
+                c.cx(ci, b[m]);
+                c.cz(a[m], b[m]);
+                c.cx(ci, a[m]);
+                c.cx(ci, b[m]);
+            }
+            c.x(ci);
+            c.z_if(ci, NO_BIT);
+            c.x(ci);
         }
     }
-    for i in (0..n).rev() {
+    for i in (0..m).rev() {
         let (ci, t) = (carry[i], carry[i + 1]);
         c.cx(ci, t);
         and_erase(c, t, a[i], b[i]);
@@ -269,6 +280,50 @@ fn rail_signed_add(c: &mut Builder, sign: QubitId, src: &[QubitId], dst: &[Qubit
     c.cx_all(sign, src);
 }
 
+/// [`gidney_add`] with the top carry XORed straight into the top sum wire (one CCX, nothing to erase): the same
+/// n - 1 Toffoli on n - 2 carry wires instead of n - 1.
+fn gidney_add_lean(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>) {
+    let n = a.len();
+    assert!(n >= 1 && b.len() == n);
+    if n < 2 {
+        return gidney_add(c, a, b, cin);
+    }
+    let mut carry: Vec<Option<QubitId>> = vec![None; n];
+    carry[0] = cin;
+    for i in 0..n - 1 {
+        if let Some(ci) = carry[i] {
+            c.cx(ci, a[i]);
+            c.cx(ci, b[i]);
+        }
+        if i + 2 == n {
+            c.ccx(a[i], b[i], b[n - 1]);
+            if let Some(ci) = carry[i] {
+                c.cx(ci, b[n - 1]);
+            }
+        } else {
+            let t = and_new(c, a[i], b[i]);
+            if let Some(ci) = carry[i] {
+                c.cx(ci, t);
+            }
+            carry[i + 1] = Some(t);
+        }
+    }
+    c.cx(a[n - 1], b[n - 1]);
+    for i in (0..n - 1).rev() {
+        if let Some(next) = carry[i + 1] {
+            if let Some(ci) = carry[i] {
+                c.cx(ci, next);
+            }
+            and_erase(c, next, a[i], b[i]);
+        }
+        c.cx(a[i], b[i]);
+        if let Some(ci) = carry[i] {
+            c.cx(ci, a[i]);
+            c.cx(ci, b[i]);
+        }
+    }
+}
+
 /// `b += a + cin` (Gidney) whose carry ladder respects the walk cap, as [`rail_signed_add`]'s split but for any
 /// carry-in (None = 0). The kept carry is [b_low_new < a_low + cin] = NOT carry_out(b_low_new + NOT a_low +
 /// NOT cin), erased with an exact compare.
@@ -276,16 +331,17 @@ fn capped_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId
     let n = b.len();
     let room = cells::cap().saturating_sub(c.active_qubits() as usize);
     let off = std::env::var("LF_RAIL_SPLIT").is_ok_and(|v| v == "0");
-    if off || n <= 3 || n - 1 <= room {
-        gidney_add(c, a, b, cin);
+    // the lean ladder holds n - 2 carries (its top carry goes straight into the top sum wire)
+    if off || n <= 3 || n - 2 <= room {
+        gidney_add_lean(c, a, b, cin);
         return;
     }
-    let delta = n + 1 - room - split_tight() as usize;
+    let delta = n - room - split_tight() as usize;
     if std::env::var_os("LF_SPLIT_TRACE").is_some() {
         eprintln!("LF_SPLIT n={n} room={room} delta={delta}");
     }
     if delta + 3 > room || delta + 1 >= n {
-        gidney_add(c, a, b, cin);
+        gidney_add_lean(c, a, b, cin);
         return;
     }
     let (za, cq) = (c.alloc_qubit(), c.alloc_qubit());
@@ -293,9 +349,9 @@ fn capped_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId
     al.push(za);
     let mut bl = b[..delta].to_vec();
     bl.push(cq);
-    gidney_add(c, &al, &bl, cin);
+    gidney_add_lean(c, &al, &bl, cin);
     c.free(za);
-    gidney_add(c, &a[delta..], &b[delta..], Some(cq));
+    gidney_add_lean(c, &a[delta..], &b[delta..], Some(cq));
     c.x_all(&a[..delta]);
     let ncin = match cin {
         Some(q) => {
@@ -430,10 +486,11 @@ fn rail_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>)
     let n = b.len();
     let room = cells::cap().saturating_sub(c.active_qubits() as usize);
     let off = std::env::var("LF_RAIL_SPLIT").is_ok_and(|v| v == "0");
-    if off || n <= 3 || n - 1 <= room {
+    // the parity ladder holds n - 2 carries (its top carry goes straight into the top sum wire)
+    if off || n <= 3 || n - 2 <= room {
         return ladder_parity_add(c, b, &add, cin);
     }
-    let delta = n + 1 - room - split_tight() as usize;
+    let delta = n - room - split_tight() as usize;
     if delta + 3 > room || delta + 1 >= n || delta >= a.len() {
         return ladder_parity_add(c, b, &add, cin);
     }
@@ -568,20 +625,25 @@ fn lr_restore(c: &mut Builder, r: &mut Vec<QubitId>) {
 /// [`fast_add_halve_forced`] on bit-0-less rails; the halved target's bit 0 (1) is not held either.
 fn fast_add_halve_forced_lr(c: &mut Builder, sign: QubitId, b: &[QubitId], t: &mut Vec<QubitId>) {
     c.cx_all(sign, b);
-    rail_add(c, &b[1..], &t[1..], Some(t[0]));
-    c.cx(b[0], t[0]); // bit 1 of the sum: t1 ^ b1 ^ sign = 0 (the halved rail's bit 0 is 1: released)
-    c.cx_all(sign, b);
+    // bit 1 of the sum: t1 ^ b1 ^ sign = 0 (the halved rail's bit 0 is 1: released). sign = t1 ^ b1, so the
+    // complemented source's bit 1 already equals t1, the carry into bit 2: t's bit-1 wire is cleared and released
+    // BEFORE the ladder, which takes its carry-in from the source wire (one more free wire during the add).
+    c.cx(b[0], t[0]);
     let low = t.remove(0);
     c.free(low);
+    rail_add(c, &b[1..], t, Some(b[0]));
+    c.cx_all(sign, b);
 }
 /// Inverse of [`fast_add_halve_forced_lr`].
 fn fast_double_sub_forced_lr(c: &mut Builder, sign: QubitId, b: &[QubitId], t: &mut Vec<QubitId>) {
-    let u = c.alloc_qubit();
+    // mirror of the forward step: the ladder's carry-in is the complemented source's bit 1; t's bit-1 wire (the
+    // same value) is made only after the ladder
     c.cx_all(sign, b);
+    c.x_all(t);
+    rail_add(c, &b[1..], t, Some(b[0]));
+    c.x_all(t);
+    let u = c.alloc_qubit();
     c.cx(b[0], u);
-    c.x_all(t);
-    rail_add(c, &b[1..], t, Some(u));
-    c.x_all(t);
     c.cx_all(sign, b);
     t.insert(0, u);
 }
@@ -821,16 +883,20 @@ fn fast_choice(c: &mut Builder, t: &[QubitId], b: &[QubitId], out: QubitId, k1: 
     for i in 2..5 {
         c.x(t[i]);
     }
+    // barrel letters as XORs of wires at hand (t2 holds !z2), no Toffoli: k2 = Dsel & !z2 = !z2 ^ a2 (Dsel =
+    // 1 ^ a2 ^ g.., g lies inside z2 and a2 inside !z2); k2 & z3 = !z2 & z3 = !z2 ^ a1, so k1 = Dsel ^ !z2 ^ a1
+    c.cx(t[2], k2);
+    c.cx(a2, k2);
+    c.cx(t[2], k1);
+    c.cx(a1, k1);
     and_erase(c, a2, a1, t[4]);
     and_erase(c, a1, t[2], t[3]);
     // Dsel on out's wire
     c.cx(t[1], out);
-    c.ccx(out, t[2], k2); // t2 holds !z2
     for i in 2..5 {
         c.x(t[i]);
     }
     c.cx(out, k1);
-    c.ccx(k2, t[3], k1);
     c.cx(t[1], out);
     zlin_off(c, t, b);
     if let Some((_, recs, wa, wb)) = w1 {
@@ -912,17 +978,18 @@ fn fast_choice_erase(c: &mut Builder, t: &[QubitId], b: &[QubitId], out: QubitId
 fn fast_k_erase(c: &mut Builder, t: &[QubitId], k1: QubitId, k2: QubitId) {
     c.x(t[0]);
     c.x(t[1]);
+    // k1 first, while k2 is still live: k1 = !t0 ^ (k2 & t2), so its phase fix is Z + CZ (no Toffoli)
+    let m1 = c.alloc_bit();
+    c.hmr(k1, m1);
+    c.release_clean(k1);
+    c.z_if(t[0], m1);
+    c.cz_if(k2, t[2], m1);
+    c.free_bit(m1);
     let m2 = c.alloc_bit();
     c.hmr(k2, m2);
     c.release_clean(k2);
     c.cz_if(t[0], t[1], m2);
     c.free_bit(m2);
-    let m1 = c.alloc_bit();
-    c.hmr(k1, m1);
-    c.release_clean(k1);
-    c.z_if(t[0], m1);
-    ccz_if(c, t[0], t[1], t[2], m1);
-    c.free_bit(m1);
     c.x(t[1]);
     c.x(t[0]);
 }
@@ -931,8 +998,16 @@ fn fast_k_erase(c: &mut Builder, t: &[QubitId], k1: QubitId, k2: QubitId) {
 /// rail_lin_explicit.py): h1 = k1 & S, h2 = k2 & S; rho_0 (k2, minus the pair (1, w-1), done by h2), rho_-2
 /// (k1 ^ k2), rho_-3 (k1, minus the no-op pair (w-2, w-1)); 1.5w - 2 Toffoli (even w). Same promise: the e low
 /// wires are 0. `LF_RAILLIN=0` keeps [`fast_rail_barrel`]'s sign-fill form.
-fn lin_rail_barrel(c: &mut Builder, k1: QubitId, k2: QubitId, t: &[QubitId], inverse: bool) {
+///
+/// `drop0` (forward only; the caller holds an odd result without its bit-0 wire, LF_LOWREL): wire 0 ends as the
+/// constant 1, so the last Fredkin that writes it, rho_-3's pair (0, w-3) under k1, needs no Toffoli. When k1 = 1 the
+/// partner wire holds the rail's lowest set bit (1) and takes t0; when k1 = 0, t0 already holds that 1. Either way
+/// t[w-3] <- t0 ^ t[w-3] ^ 1, and t0 is left holding 1 ^ (k1 & !t[w-3]): it is measured away (phase fix
+/// CZ(k1, !t[w-3])) and released here. Returns true when wire 0 was released (the caller only forgets it).
+fn lin_rail_barrel(c: &mut Builder, k1: QubitId, k2: QubitId, t: &[QubitId], inverse: bool, drop0: bool) -> bool {
     let w = t.len();
+    let drop0 = drop0 && !inverse && w >= 4 && !std::env::var("LF_BARREL_DROP0").is_ok_and(|v| v == "0");
+    let mut dropped = false;
     let s = t[w - 1];
     let h1 = and_new(c, k1, s);
     let h2 = and_new(c, k2, s);
@@ -968,7 +1043,21 @@ fn lin_rail_barrel(c: &mut Builder, k1: QubitId, k2: QubitId, t: &[QubitId], inv
                     k12 = want;
                 }
                 let ctrl = if kind == 1 { k1 } else { k2 };
-                fredkin(c, ctrl, t[a], t[b]);
+                if drop0 && kind == 1 && (a, b) == (0, w - 3) {
+                    c.cx(t[0], t[b]);
+                    c.x(t[b]);
+                    c.x(t[0]); // now k1 & !t[b]
+                    let m = c.alloc_bit();
+                    c.hmr(t[0], m);
+                    c.x(t[b]);
+                    c.cz_if(k1, t[b], m);
+                    c.x(t[b]);
+                    c.free_bit(m);
+                    c.release_clean(t[0]);
+                    dropped = true;
+                } else {
+                    fredkin(c, ctrl, t[a], t[b]);
+                }
             }
         }
     }
@@ -977,12 +1066,13 @@ fn lin_rail_barrel(c: &mut Builder, k1: QubitId, k2: QubitId, t: &[QubitId], inv
     }
     and_erase(c, h1, k1, t[w - 1]);
     and_erase(c, h2, k2, t[w - 1]);
+    dropped
 }
 
 /// Rail barrel with the 3-Toffoli sign fill (h = k2 & sg -> t1, t0; h2 = k1 & h -> t2, t0; k1 & sg -> t0).
-fn fast_rail_barrel(c: &mut Builder, k1: QubitId, k2: QubitId, t: &[QubitId], inverse: bool) {
+fn fast_rail_barrel(c: &mut Builder, k1: QubitId, k2: QubitId, t: &[QubitId], inverse: bool, drop0: bool) -> bool {
     if !std::env::var("LF_RAILLIN").is_ok_and(|v| v == "0") {
-        return lin_rail_barrel(c, k1, k2, t, inverse);
+        return lin_rail_barrel(c, k1, k2, t, inverse, drop0);
     }
     let sg = *t.last().unwrap();
     if inverse {
@@ -1000,6 +1090,7 @@ fn fast_rail_barrel(c: &mut Builder, k1: QubitId, k2: QubitId, t: &[QubitId], in
     if !inverse {
         rot4(c, k1, k2, t, false);
     }
+    false
 }
 
 /// `t <- (t + (-1)^sign * b) / 2` on rails (exact: the sum is even). Widths: t and b at w on entry and exit.
@@ -1256,6 +1347,17 @@ fn ladder_parity_add(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], cin
             c.cx(ci, acc[i]);
         }
         let v = v_on(c, &add[i], false, ci);
+        if i + 2 == n {
+            // the carry into the top position is used once, for that position's sum bit: XOR it straight into
+            // the top wire (one CCX, nothing to erase) instead of holding it on a carry wire
+            c.ccx(acc[i], v, acc[n - 1]);
+            v_off(c, &add[i], false, ci);
+            if let Some(ci) = ci {
+                c.cx(ci, acc[n - 1]);
+                c.cx(ci, acc[i]);
+            }
+            continue;
+        }
         let t = and_new(c, acc[i], v);
         v_off(c, &add[i], false, ci);
         if let Some(ci) = ci {
@@ -1293,8 +1395,11 @@ fn ladder_parity_add(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], cin
 /// acc unchanged; Gidney carries, measurement-uncomputed.
 fn carry_out_parity_xor(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], comp: bool, cin: QubitId, out: Option<QubitId>) {
     let n = acc.len();
+    // Phase-only form: the top carry is never built (see `carry_out_xor`): one CZ on the two AND inputs of the
+    // top position and the phase (-1)^(NOT carry[n - 1]).
+    let m = if out.is_none() && n >= 1 { n - 1 } else { n };
     let mut carry = vec![cin];
-    for i in 0..n {
+    for i in 0..m {
         let ci = carry[i];
         c.cx(ci, acc[i]);
         let v = v_on(c, &add[i], comp, Some(ci));
@@ -1307,12 +1412,20 @@ fn carry_out_parity_xor(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], 
     match out {
         Some(out) => c.cx(carry[n], out),
         None => {
-            c.x(carry[n]);
-            c.z_if(carry[n], NO_BIT);
-            c.x(carry[n]);
+            let ci = carry[m];
+            if m < n {
+                c.cx(ci, acc[m]);
+                let v = v_on(c, &add[m], comp, Some(ci));
+                c.cz(acc[m], v);
+                v_off(c, &add[m], comp, Some(ci));
+                c.cx(ci, acc[m]);
+            }
+            c.x(ci);
+            c.z_if(ci, NO_BIT);
+            c.x(ci);
         }
     }
-    for i in (0..n).rev() {
+    for i in (0..m).rev() {
         let (ci, t) = (carry[i], carry[i + 1]);
         c.cx(ci, t);
         c.cx(ci, acc[i]);
@@ -1333,13 +1446,14 @@ fn lpa_capped(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], cin: Optio
     let n = acc.len();
     let room = cells::cap().saturating_sub(c.active_qubits() as usize);
     let off = std::env::var("LF_RAIL_SPLIT").is_ok_and(|v| v == "0");
-    if off || n <= room + split_tight() as usize {
+    // the parity ladder holds n - 2 carries (its top carry goes straight into the top sum wire)
+    if off || n <= room + 1 + split_tight() as usize {
         ladder_parity_add(c, acc, add, cin);
         return;
     }
     // tight: the minimal low chunk when it fits beside its kept carry; otherwise the room-sized low chunk (recursive)
     let tight = split_tight() && n - room + 2 <= room;
-    let l = if tight { n - room } else { room.saturating_sub(4) };
+    let l = if tight { n - room - 1 } else { room.saturating_sub(4) };
     if (!tight && l < 4) || l + 1 >= n {
         ladder_parity_add(c, acc, add, cin);
         return;
@@ -1645,8 +1759,81 @@ fn m_u_build(c: &mut Builder, recs: &mut Recs, x: &[Lin; 4], ov: &Lin, sg: &Lin)
     u.try_into().unwrap()
 }
 
+/// Bits [0, MW) of (f - 1)(u - 15) mod 2^MW from the 5 bits of u with 10 ANDs (the ANF monomial route takes 19; 10
+/// is the rank bound: the 16 distinct output bits span 10 dimensions beyond the affine functions of u). Written
+/// over any XOR/AND algebra `T`, so the same code emits the wire forms and checks itself on truth tables.
+/// With n = u - 15 in [-15, 16] and (f - 1) = 2^32 + 16 * 61:
+///   * bits 4..14 = 61 n mod 2^10 = (64 u + (109 - 3u)) mod 2^10, and 109 - 3u = 3 v + 16 with v = NOT u = 31 - u,
+///     in [16, 109]: bits 4..10 are the low 6 bits of 3v + 16 (ripple v + 2v, carries c2 = v0 v1 = 1 ^ u0 ^ u1 ^ u0u1
+///     and three MAJ; the + 16 is free), and bits 10..14 are (u + !u4) mod 16 (bit 6 of 109 - 3u is [u <= 15]);
+///   * bits 14..32 = s = [n < 0] = !u4 & !(u0 u1 u2 u3) (sign extension of 61 n);
+///   * bits 32.. = n - s: (u + !s) mod 16, then 1 ^ u4 ^ u0u1u2u3, then s. The carries of u + !s are
+///     !s & p = p ^ (!u4 & p) ^ s ^ !u4 for a prefix product p of u0..u2: XORs of ANDs already made.
+fn addend10<T: Clone>(u: &[T; 5], one: &T, zero: &T, mw: usize, x: &dyn Fn(&T, &T) -> T, and: &mut dyn FnMut(T, T) -> T) -> Vec<T> {
+    let p1 = and(u[0].clone(), u[1].clone());
+    let p2 = and(p1.clone(), u[2].clone());
+    let m15 = and(p2.clone(), u[3].clone());
+    let nu4 = x(&u[4], one);
+    let s = x(&nu4, &and(nu4.clone(), m15.clone()));
+    let d1 = and(nu4.clone(), u[0].clone());
+    let d2 = and(nu4.clone(), p1.clone());
+    let d3 = and(nu4.clone(), p2.clone());
+    let v: Vec<T> = u.iter().map(|l| x(l, one)).collect();
+    let c2 = x(&x(&x(one, &u[0]), &u[1]), &p1);
+    let c3 = x(&and(x(&v[2], &c2), x(&v[1], &c2)), &c2);
+    let c4 = x(&and(x(&v[3], &c3), x(&v[2], &c3)), &c3);
+    let c5 = x(&and(x(&v[4], &c4), x(&v[3], &c4)), &c4);
+    // 3v + 16, bits 0..6
+    let b4 = x(&x(&v[4], &v[3]), &c4);
+    let low = [v[0].clone(), x(&v[1], &v[0]), x(&x(&v[2], &v[1]), &c2), x(&x(&v[3], &v[2]), &c3), x(&b4, one), x(&x(&v[4], &c5), &b4)];
+    let sn = x(&s, &nu4); // !u4 & u0u1u2u3
+    let e = [x(&s, one), x(&x(&u[0], &d1), &sn), x(&x(&p1, &d2), &sn), x(&x(&p2, &d3), &sn)];
+    let dd = [nu4.clone(), d1, d2, d3];
+    (0..mw)
+        .map(|b| match b {
+            0..=3 => zero.clone(),
+            4..=9 => low[b - 4].clone(),
+            10..=13 => x(&u[b - 10], &dd[b - 10]),
+            14..=31 => s.clone(),
+            32..=35 => x(&u[b - 32], &e[b - 32]),
+            36 => x(&x(&u[4], one), &m15),
+            _ => s.clone(),
+        })
+        .collect()
+}
+
+/// `LF_ADDEND=anf` keeps the ANF monomial route of [`m_addend`] (19 ANDs); default: [`addend10`].
+fn lf_addend10() -> bool {
+    static A: OnceLock<bool> = OnceLock::new();
+    *A.get_or_init(|| {
+        if std::env::var("LF_ADDEND").is_ok_and(|v| v == "anf") {
+            return false;
+        }
+        // self-check on truth tables over the 32 values of u (bit i of a table = the value at u = i)
+        let mw = merged_win();
+        let ut: [u32; 5] = std::array::from_fn(|i| (0..32u32).filter(|v| v >> i & 1 == 1).map(|v| 1u32 << v).sum());
+        let mut n_and = 0usize;
+        let got = addend10(&ut, &u32::MAX, &0u32, mw, &|a, b| a ^ b, &mut |a, b| {
+            n_and += 1;
+            a & b
+        });
+        let g16: i128 = (1i128 << 32) + 976;
+        for b in 0..mw {
+            let want: u32 = (0..32i128).filter(|&v| (g16 * (v - M_OFF)).rem_euclid(1i128 << mw) >> b & 1 == 1).map(|v| 1u32 << v).sum();
+            assert_eq!(got[b], want, "addend10 bit {b}");
+        }
+        assert_eq!(n_and, 10);
+        true
+    })
+}
+
 /// The nonlinear monomials of u (ANDs into `recs`) and the addend forms of bits [0, MW): bit 0 = ov, 1..3 = 0.
 fn m_addend(c: &mut Builder, recs: &mut Recs, u: &[Lin; 5], ov: &Lin) -> Vec<Lin> {
+    if lf_addend10() {
+        let mut add = addend10(u, &Lin::k(true), &Lin::k(false), merged_win(), &|a: &Lin, b: &Lin| a.x(b), &mut |a: Lin, b: Lin| m_and(c, recs, a, b));
+        add[0] = ov.clone();
+        return add;
+    }
     let (table, plan) = merged_tables();
     let mut mono: Vec<Option<Lin>> = vec![None; 32];
     for i in 0..5 {
@@ -1705,10 +1892,21 @@ fn m_fold(c: &mut Builder, acc: &[QubitId], ov: QubitId, recs: &mut Recs, plan: 
     for (j, &w) in plan.iter().enumerate() {
         let hi = lo + w;
         let last = j + 1 == plan.len();
+        // lean final chunk: the carry into its top bit is used once, so it goes straight into that bit's wire (one
+        // CCX, nothing to erase) and the chunk holds w - 2 carries ([`m_fold_plan`] gives it the extra bit)
+        let direct = last && w >= 2 && m_fold_lean();
         let mut cc = vec![cin]; // cc[k] = carry into bit lo + k
-        for i in lo..(if last { hi - 1 } else { hi }) {
+        for i in lo..(if last { hi - 1 - direct as usize } else { hi }) {
             let t = m_carry(c, acc[i], &add[i], cc[i - lo]);
             cc.push(t);
+        }
+        if direct {
+            let (i, ci) = (hi - 2, cc[w - 2]);
+            let (a, b) = (Lin::of(&[acc[i], ci]), add[i].x(&Lin::of(&[ci])));
+            let (ha, hb) = lin_pair_on(c, &a, &b);
+            c.ccx(ha, hb, acc[hi - 1]);
+            lin_pair_off(c, &a, &b);
+            c.cx(ci, acc[hi - 1]);
         }
         if lf_merged_trace() && (last || plan.len() > 1) {
             eprintln!("LF_MERGED_FOLD chunk={j} [{lo},{hi}) active={} cap={}", c.active_qubits(), cells::cap());
@@ -1717,6 +1915,9 @@ fn m_fold(c: &mut Builder, acc: &[QubitId], ov: QubitId, recs: &mut Recs, plan: 
             "merged fold over the walk cap: {} > {}", c.active_qubits(), cells::cap());
         for i in (lo..hi).rev() {
             lin_xor_into(c, &add[i], acc[i]);
+            if direct && i == hi - 1 {
+                continue; // its carry is already in the wire
+            }
             c.cx(cc[i - lo], acc[i]);
             if i > lo {
                 m_carry_erase(c, cc[i - lo], acc[i - 1], &add[i - 1], cc[i - lo - 1]);
@@ -1876,7 +2077,7 @@ fn m_fold_fwd(c: &mut Builder, acc: &[QubitId], ov: QubitId, sg: QubitId, k1: Qu
 /// Fold extra (live wires beyond the adder's overflow) of the merged ops: MW - 1 carries plus 31 (forward: k-gate,
 /// gated mu bits, u, monomials) or 27 (reverse: u, monomials; its 5 mu copies are live before the add).
 fn m_fold_need(rev: bool) -> usize {
-    merged_win() - 1 + if rev { if lf_merged_rev2() { 3 + 4 + 23 } else { 23 } } else { 27 }
+    merged_win() - 1 + if rev { if lf_merged_rev2() { 3 + 4 + 27 } else { 27 } } else { 31 }
 }
 
 /// Exact-flag split (`LF_MERGED_EXACT`, default 1): the lowest split s such that the top ripple [s, N) (N - s - 1
@@ -2059,17 +2260,43 @@ fn merged_rev2(c: &mut Builder, sg: QubitId, src: &[QubitId], tgt: &[QubitId], k
 }
 
 /// Live wires of the merged fold beyond the op's starting count, excluding the upper ladder's carries: the fold's
-/// own carries into bits 1..4 and its helper ANDs (forward: k-gate, gated mu bits, u, monomials = 27), measured
-/// from the fold's start (overflow live); the reverse's u + monomials (23) with its 5 mu copies counted at the op.
-const M_FIXED_FWD: usize = 4 + 27;
-const M_FIXED_REV: usize = 4 + 23;
+/// own carries into bits 1..4 and its helper ANDs (forward: k-gate, gated mu bits, u, monomials = 31), measured
+/// from the fold's start (overflow live); the reverse's u + monomials (27) with its 5 mu copies counted at the op.
+const M_FIXED_FWD: usize = 4 + 31;
+const M_FIXED_REV: usize = 4 + 27;
 /// [`merged_rev2`]: carries into bits 1..4, 3 borrows, k-gate + 3 gated mu bits, u, monomials.
-const M_FIXED_REV2: usize = 4 + 3 + 4 + 23;
+const M_FIXED_REV2: usize = 4 + 3 + 4 + 27;
+
+/// Wires counted in M_FIXED_* that the fold no longer holds: 4 since [`m_u_build`] went from 8 ANDs to 4, and 9 more
+/// with [`addend10`]. The fit and split rules ([`merged_fits`], [`merged_split`], [`m_fold_need`]) keep the old
+/// counts, so the same ticks run the merged op with the same windows and compares; only the fold's own chunk plan
+/// uses the freed room (fewer or shorter kept chunks; a kept carry is erased with an exact compare, so the map does
+/// not change). The cap assert inside [`m_fold`] guards the count. `LF_FOLD_SLACK=0` keeps the old plan.
+fn m_fold_slack() -> usize {
+    if std::env::var("LF_FOLD_SLACK").is_ok_and(|v| v == "0") {
+        return 0;
+    }
+    4 + if lf_addend10() { 9 } else { 0 }
+}
+
+/// `LF_FOLD_LEAN=0` keeps the merged fold's final chunk with a carry wire for its top bit.
+fn m_fold_lean() -> bool {
+    !std::env::var("LF_FOLD_LEAN").is_ok_and(|v| v == "0")
+}
 
 /// The fold's chunk plan at the current live count (`fixed`: the fold's non-ladder wires still to be allocated).
 fn m_fold_plan(c: &Builder, fixed: usize, mw: usize) -> Vec<usize> {
-    let budget = cells::cap().saturating_sub(c.active_qubits() as usize + fixed);
-    let plan = merged_plan(mw - 4, budget).expect("merged fold plan (checked by merged_fits)");
+    let budget = cells::cap().saturating_sub(c.active_qubits() as usize + fixed - m_fold_slack());
+    // lean final chunk ([`m_fold`]): it holds one carry fewer, so plan one bit less and give that bit to the final
+    // chunk. The fit rule ([`merged_fits`]) keeps the plain plan, so the same ticks run the merged op.
+    let lean = if m_fold_lean() && mw >= 7 { merged_plan(mw - 5, budget) } else { None };
+    let plan = match lean {
+        Some(mut p) => {
+            *p.last_mut().unwrap() += 1;
+            p
+        }
+        None => merged_plan(mw - 4, budget).expect("merged fold plan (checked by merged_fits)"),
+    };
     if lf_merged_trace() && plan.len() > 1 {
         eprintln!("LF_MERGED_PLAN budget={budget} plan={plan:?} x2={}", plan_x2(&plan));
     }
@@ -2833,8 +3060,9 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     pacc(c, &format!("fwd{fk}.pay_cell"), q0);
     resize(c, tr, nb);
     let q0 = pmark(c);
-    fast_rail_barrel(c, k1, k2, tr, false);
-    if lr {
+    if fast_rail_barrel(c, k1, k2, tr, false, lr) {
+        tr.remove(0); // released inside the barrel
+    } else if lr {
         lr_drop(c, tr);
     }
     pacc(c, &format!("fwd{fk}.rail_barrel"), q0);
@@ -2955,7 +3183,7 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     if lr {
         lr_restore(c, tr);
     }
-    fast_rail_barrel(c, k1, k2, tr, true);
+    fast_rail_barrel(c, k1, k2, tr, true, false);
     pacc(c, &format!("rev{fk}.rail_barrel"), q0);
     resize(c, tr, n2 - 1);
     let q0 = pmark(c);
