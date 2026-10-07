@@ -45,7 +45,7 @@ pub(crate) fn install_recipe() {
         // ... also on the late ticks (split fold where room is short)
         ("LF_MERGED_LATE", "1"),
         // late merged-op fold window
-        ("LF_MERGED_LATE_WIN", "58"),
+        ("LF_MERGED_LATE_WIN", "52"),
         // ticks 0..76 of the payload-fused traversals split into a rails-only pass (one payload register live: no
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
         ("LF_REORDER", "76"),
