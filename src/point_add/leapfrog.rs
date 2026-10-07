@@ -49,7 +49,7 @@ pub(crate) fn install_recipe() {
         // merged-op fold windows: standard 56 bits; late 58, capped by the standard window
         ("LF_MERGED_WIN", "56"),
         ("LF_MERGED_LATE_WIN", "58"),
-        // ticks 0..75 of the payload-fused traversals split into a rails-only pass (one payload register live: no
+        // ticks 0..74 of the payload-fused traversals split into a rails-only pass (one payload register live: no
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
         ("LF_REORDER", "74"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
@@ -58,9 +58,11 @@ pub(crate) fn install_recipe() {
         ("LF_SIGNWIRE", "1"),
         ("LF_SEAMS", "1"),
         // peak cap, co-tuned with LF_REORDER
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1241"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1240"),
+        // one wire lent out at every stretch where the walks sit at the cap (tape parity, CNOTs only): cap 1241 -> 1240
+        ("LF_PARITY_LOAN", "1"),
         ("NATIVE_SFUSE_B", "1"),
-        // payload cells: fold window floored at 55 bits (Skywalk's late-round profile narrows it to 49),
+        // payload cells: fold window floored at 54 bits (Skywalk's late-round profile narrows it to 49),
         // chunk-boundary / flag compares not widened (0 / 0 bits)
         ("LF_CELL_FOLD_MIN", "54"),
         ("LF_CMP_SHIFT", "0,0"),
@@ -2074,8 +2076,8 @@ fn m_fold_fwd(c: &mut Builder, acc: &[QubitId], ov: QubitId, sg: QubitId, k1: Qu
     });
 }
 
-/// Fold extra (live wires beyond the adder's overflow) of the merged ops: MW - 1 carries plus 18 (forward: k-gate,
-/// gated mu bits, u, monomials) or 14 (reverse: u, monomials; its 5 mu copies are live before the add).
+/// Fold extra (live wires beyond the adder's overflow) of the merged ops: MW - 1 carries plus 31 (forward: k-gate,
+/// gated mu bits, u, monomials) or 27 (reverse: u, monomials; its 5 mu copies are live before the add).
 fn m_fold_need(rev: bool) -> usize {
     merged_win() - 1 + if rev { if lf_merged_rev2() { 3 + 4 + 14 } else { 14 } } else { 18 }
 }
@@ -2260,18 +2262,24 @@ fn merged_rev2(c: &mut Builder, sg: QubitId, src: &[QubitId], tgt: &[QubitId], k
 }
 
 /// Live wires of the merged fold beyond the op's starting count, excluding the upper ladder's carries: the fold's
-/// own carries into bits 1..4 and its helper ANDs (forward: k-gate, gated mu bits, u, monomials = 18), measured
-/// from the fold's start (overflow live); the reverse's u + monomials (14) with its 5 mu copies counted at the op.
+/// own carries into bits 1..4 and its helper ANDs (forward: k-gate, gated mu bits, u, monomials = 31), measured
+/// from the fold's start (overflow live); the reverse's u + monomials (27) with its 5 mu copies counted at the op.
 const M_FIXED_FWD: usize = 4 + 18;
 const M_FIXED_REV: usize = 4 + 14;
 /// [`merged_rev2`]: carries into bits 1..4, 3 borrows, k-gate + 3 gated mu bits, u, monomials.
 const M_FIXED_REV2: usize = 4 + 3 + 4 + 14;
 
-/// Wires counted in M_FIXED_* that the fold no longer holds. [`m_u_build`] (8 ANDs to 4) and [`addend10`] freed
-/// 4 + 9 wires; M_FIXED_* and [`m_fold_need`] no longer count any of them, so the fit and split rules
-/// ([`merged_fits`], [`merged_split`], [`m_fold_need`]) and the fold's own chunk plan all see the same live
-/// count and nothing is left over. The cap assert inside [`m_fold`] guards the count.
+/// Wires counted in M_FIXED_* that the fold no longer holds: 4 since [`m_u_build`] went from 8 ANDs to 4, and 9 more
+/// with [`addend10`]. The fit and split rules ([`merged_fits`], [`merged_split`], [`m_fold_need`]) keep the old
+/// counts, so the same ticks run the merged op with the same windows and compares; only the fold's own chunk plan
+/// uses the freed room (fewer or shorter kept chunks; a kept carry is erased with an exact compare, so the map does
+/// not change). The cap assert inside [`m_fold`] guards the count. `LF_FOLD_SLACK=0` keeps the old plan.
 fn m_fold_slack() -> usize {
+    if std::env::var("LF_FOLD_SLACK").is_ok_and(|v| v == "0") {
+        return 0;
+    }
+    // the 13 freed wires (4 from the 4-AND u build, 9 from addend10) are no longer in M_FIXED_* or m_fold_need,
+    // so the fit and split rules see them too and nothing is left to give back here
     0
 }
 
@@ -3298,6 +3306,83 @@ fn rounds() -> usize {
     envelope().len()
 }
 
+/// `LF_PARITY_LOAN=1` (off by default): one wire lent out wherever the walk sits at the qubit cap, with CNOTs only.
+///
+/// Invariant (every input): a forced step is T <- (T +- B)/2 with letter s = T1 ^ B1 on odd rails, and for the two
+/// forced steps of a tick  s0 ^ s1 = (T1 ^ T2) ^ (B1 ^ B2)  (bits 1 and 2 of the tick's target and source at its
+/// start; three-bit arithmetic, the choice step does not enter). The target of tick t is the source of tick t-1, so
+/// the sum over ticks 0..b telescopes to (T1 ^ T2 at the seed) ^ (B1 ^ B2 of tick b's source), and the half seed
+/// makes R1 = (R0 -+ p)/2 with p = 7 mod 8, which gives R0[2] = R1[1] and so (T1 ^ T2 at the seed) = s0 of tick 0.
+/// Hence, with B the source rail of tick b, at any moment between tick b and tick b+1 (either direction):
+///     B[1] ^ B[2] ^ s1(0) ^ XOR_{t=1..b} (s0(t) ^ s1(t)) = 0.
+/// Any one wire of the relation can be cleared by CNOTs from the others, released, and rebuilt the same way.
+/// Used at the reorder boundary (b = LF_REORDER - 1): the parked source rail's bit-1 wire is out through the
+/// payload-only passes, and tick 0's s1 letter (not read between the boundary and the walk's return to it) is out
+/// through the payload-fused ticks and the endpoints.
+/// `LF_PARITY_PAD=1` (test only): hold an idle placeholder wire while a wire is out, so every live count and with
+/// it every cell plan is the unchanged circuit's; the gate list then differs by the CNOT fans only.
+fn parity_loan() -> bool {
+    std::env::var("LF_PARITY_LOAN").is_ok_and(|v| v == "1") && lf_fast() && seed_half() && lf_reorder(false) >= 2 && lf_reorder(false) == lf_reorder(true)
+}
+fn parity_pad() -> bool {
+    std::env::var("LF_PARITY_PAD").is_ok_and(|v| v == "1")
+}
+/// The relation's wires at the boundary after tick `ahead - 1`: source rail bits 1 and 2, then the forced letters.
+fn parity_wires(wk: &Walk, ahead: usize) -> Vec<QubitId> {
+    let o = lowrel() as usize;
+    let si = 1 - (ahead - 1) % 2;
+    let mut ws = vec![wk.r[si][1 - o], wk.r[si][2 - o]];
+    for t in 0..ahead {
+        if t > 0 {
+            ws.push(wk.tape[t][0]);
+        }
+        ws.push(wk.tape[t][1]);
+    }
+    ws
+}
+/// Clear wire `k` of the relation from the others and release it (`pad`: the placeholder taken in its place).
+fn parity_out(c: &mut Builder, wk: &Walk, ahead: usize, k: usize) -> Option<QubitId> {
+    let ws = parity_wires(wk, ahead);
+    for (i, &w) in ws.iter().enumerate() {
+        if i != k {
+            c.cx(w, ws[k]);
+        }
+    }
+    c.free(ws[k]);
+    parity_pad().then(|| c.alloc_qubit())
+}
+/// Rebuild wire `k` of the relation on a fresh wire; returns it (the caller puts it back in its register).
+fn parity_in(c: &mut Builder, wk: &Walk, ahead: usize, k: usize, pad: Option<QubitId>) -> QubitId {
+    if let Some(p) = pad {
+        c.release_clean(p);
+    }
+    let q = c.alloc_qubit();
+    let ws = parity_wires(wk, ahead);
+    for (i, &w) in ws.iter().enumerate() {
+        if i != k {
+            c.cx(w, q);
+        }
+    }
+    q
+}
+/// Rail side: the parked source rail's bit-1 wire (relation wire 0).
+fn parity_rail_out(c: &mut Builder, wk: &Walk, ahead: usize) -> Option<QubitId> {
+    parity_out(c, wk, ahead, 0)
+}
+fn parity_rail_in(c: &mut Builder, wk: &mut Walk, ahead: usize, pad: Option<QubitId>) {
+    let q = parity_in(c, wk, ahead, 0, pad);
+    let o = lowrel() as usize;
+    wk.r[1 - (ahead - 1) % 2][1 - o] = q;
+}
+/// Tape side: tick 0's s1 letter (relation wire 2).
+fn parity_tape_out(c: &mut Builder, wk: &Walk, ahead: usize) -> Option<QubitId> {
+    parity_out(c, wk, ahead, 2)
+}
+fn parity_tape_in(c: &mut Builder, wk: &mut Walk, ahead: usize, pad: Option<QubitId>) {
+    let q = parity_in(c, wk, ahead, 2, pad);
+    wk.tape[0][1] = q;
+}
+
 /// LF_REORDER=T: the payload-fused traversals leave their first T ticks to a rails-only pass plus a payload-only
 /// pass (letters read back from the tape). The rail adds then run with one payload register live (no room splits)
 /// and the cells run beside the rails parked at tick T. 0 = off. T must stay below the tie-safe ticks.
@@ -3437,11 +3522,17 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
     }
     let mut pay = [y.to_vec(), p1];
     pacc(c, "div.p1_setup", q0);
+    let loan = parity_loan();
+    let mut loan_pad = if loan { parity_rail_out(c, &wk, ahead) } else { None };
     for t in 0..ahead {
         let letter = wk.tape[t].clone();
         let pads = lr_pad(c, 2 * lowrel() as usize);
         pay_fwd_tick(c, t, &letter, &mut pay);
         lr_unpad(c, pads);
+    }
+    if loan {
+        parity_rail_in(c, &mut wk, ahead, loan_pad);
+        loan_pad = parity_tape_out(c, &wk, ahead);
     }
     for t in ahead..rounds() {
         fwd_tick(c, &mut wk, t, Some(&mut pay));
@@ -3464,6 +3555,9 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
     cells::cond_negate(c, s0, &pay[0]);
     pacc(c, "div.endpoint", q0);
     for t in (0..rounds()).rev() {
+        if loan && t + 1 == ahead {
+            parity_tape_in(c, &mut wk, ahead, loan_pad.take()); // back at the boundary: the relation it left by
+        }
         rev_tick(c, &mut wk, t, None);
     }
     let q0 = pmark(c);
@@ -3486,8 +3580,14 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
     let r = seed(c, x);
     pacc(c, "mul.seed", q0);
     let mut wk = Walk { r, tape: Vec::new() };
+    let loan = parity_loan();
+    let ahead = lf_reorder(true);
+    let mut loan_pad = None;
     for t in 0..rounds() {
         fwd_tick(c, &mut wk, t, None);
+        if loan && t + 1 == ahead {
+            loan_pad = parity_tape_out(c, &wk, ahead);
+        }
     }
     let (s0, s1) = (*wk.r[0].last().unwrap(), *wk.r[1].last().unwrap());
     let q0 = pmark(c);
@@ -3502,15 +3602,21 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
     c.cx(s1, x01);
     c.free(x01);
     pacc(c, "mul.endpoint", q0);
-    let ahead = lf_reorder(true);
     for t in (ahead..rounds()).rev() {
         rev_tick(c, &mut wk, t, Some(&mut pay));
+    }
+    if loan {
+        parity_tape_in(c, &mut wk, ahead, loan_pad.take());
+        loan_pad = parity_rail_out(c, &wk, ahead);
     }
     for t in (0..ahead).rev() {
         let letter = wk.tape[t].clone();
         let pads = lr_pad(c, 2 * lowrel() as usize);
         pay_rev_tick(c, t, &letter, &mut pay);
         lr_unpad(c, pads);
+    }
+    if loan {
+        parity_rail_in(c, &mut wk, ahead, loan_pad.take());
     }
     let q0 = pmark(c);
     let p1 = std::mem::take(&mut pay[1]);
