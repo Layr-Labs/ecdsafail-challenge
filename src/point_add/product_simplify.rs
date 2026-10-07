@@ -184,3 +184,6 @@ fn quantum_touches(op: &Op) -> Vec<usize> {
     }
 }
 
+#[cfg(test)]
+#[path = "product_simplify_tests.rs"]
+mod tests;
