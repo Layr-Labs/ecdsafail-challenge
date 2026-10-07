@@ -36,6 +36,8 @@ pub(crate) fn install_recipe() {
         ("LF_SEED", "half"),
         // W1-window choice rule (one 24-bit top-window compare at e = 1, equal signs): R 143 -> 140, tape -15
         ("LF_W1", "1"),
+        // ... narrowed to an 18-bit window read 4 bits lower (leapfrog_data/anch_w1_k18a4.txt, see `w1_anchor`)
+        ("LF_W1K", "18"),
         // joint-optimised width envelope, 139 ticks
         ("LF_PEEL", "1"),
         // rails held at their already-implied widths through the payload ops
@@ -44,23 +46,24 @@ pub(crate) fn install_recipe() {
         ("LF_MERGED", "1"),
         // ... also on the late ticks (split fold where room is short)
         ("LF_MERGED_LATE", "1"),
-        // late merged-op fold window
-        ("LF_MERGED_LATE_WIN", "52"),
-        // ticks 0..76 of the payload-fused traversals split into a rails-only pass (one payload register live: no
+        // merged-op fold windows: standard 56 bits; late 58, capped by the standard window
+        ("LF_MERGED_WIN", "56"),
+        ("LF_MERGED_LATE_WIN", "58"),
+        // ticks 0..77 of the payload-fused traversals split into a rails-only pass (one payload register live: no
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
-        ("LF_REORDER", "76"),
+        ("LF_REORDER", "77"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
         // with the coordinate seams
         ("LF_TIE_SEED", "1"),
         ("LF_SIGNWIRE", "1"),
         ("LF_SEAMS", "1"),
         // peak cap, co-tuned with LF_REORDER
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1243"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1244"),
         ("NATIVE_SFUSE_B", "1"),
-        // payload cells: fold window floored at 56 bits (Skywalk's late-round profile narrows it to 49),
-        // chunk-boundary / flag compares widened by 2 / 3 bits
-        ("LF_CELL_FOLD_MIN", "56"),
-        ("LF_CMP_SHIFT", "2,3"),
+        // payload cells: fold window floored at 54 bits (Skywalk's late-round profile narrows it to 49),
+        // chunk-boundary / flag compares widened by 1 / 1 bits
+        ("LF_CELL_FOLD_MIN", "54"),
+        ("LF_CMP_SHIFT", "1,1"),
         // tie-safe cell mode off (LF_TIE_FROM past the last tick): Leapfrog rail steps never cancel to zero, so the
         // cells see no structural ties
         ("LF_TIE_FROM", "999"),
@@ -650,7 +653,13 @@ fn w1_k() -> usize {
 fn w1_anchor(t: usize) -> usize {
     static A: OnceLock<Vec<usize>> = OnceLock::new();
     let a = A.get_or_init(|| {
-        include_str!("leapfrog_data/anch_w1.txt").split(',').filter_map(|v| v.trim().parse().ok()).collect()
+        // K = 18 reads its window 4 bits lower: every anchor - 4, floored at 3
+        let table = if w1_k() == 18 {
+            include_str!("leapfrog_data/anch_w1_k18a4.txt")
+        } else {
+            include_str!("leapfrog_data/anch_w1.txt")
+        };
+        table.split(',').filter_map(|v| v.trim().parse().ok()).collect()
     });
     a[t.min(a.len() - 1)]
 }
