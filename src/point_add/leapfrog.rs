@@ -51,18 +51,18 @@ pub(crate) fn install_recipe() {
         ("LF_MERGED_LATE_WIN", "58"),
         // ticks 0..75 of the payload-fused traversals split into a rails-only pass (one payload register live: no
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
-        ("LF_REORDER", "75"),
+        ("LF_REORDER", "74"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
         // with the coordinate seams
         ("LF_TIE_SEED", "1"),
         ("LF_SIGNWIRE", "1"),
         ("LF_SEAMS", "1"),
         // peak cap, co-tuned with LF_REORDER
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1242"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1241"),
         ("NATIVE_SFUSE_B", "1"),
         // payload cells: fold window floored at 55 bits (Skywalk's late-round profile narrows it to 49),
         // chunk-boundary / flag compares not widened (0 / 0 bits)
-        ("LF_CELL_FOLD_MIN", "55"),
+        ("LF_CELL_FOLD_MIN", "54"),
         ("LF_CMP_SHIFT", "0,0"),
         // tie-safe cell mode off (LF_TIE_FROM past the last tick): Leapfrog rail steps never cancel to zero, so the
         // cells see no structural ties
