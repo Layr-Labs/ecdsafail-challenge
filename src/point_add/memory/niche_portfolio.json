@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "frontier": {
+    "source_ref": "7fa872d08f121648554d9a8869ac032624f20472",
+    "score": 1489216228,
+    "rounded_average_toffoli": 1290482,
+    "measured_average_toffoli": 1290481.644947,
+    "qubits": 1154
+  },
+  "objective": {
+    "exact": "round(average_executed_toffoli) * qubits",
+    "absolute_floor": 0,
+    "zero_score_condition": "total executed Toffoli across 9024 shots <= 4511",
+    "abi_qubit_floor": 512,
+    "status": "floor proved; attainability open"
+  },
+  "strict_improvement_thresholds": [
+    {"qubits": 512, "maximum_rounded_toffoli": 2908625},
+    {"qubits": 768, "maximum_rounded_toffoli": 1939083},
+    {"qubits": 1024, "maximum_rounded_toffoli": 1454312},
+    {"qubits": 1100, "maximum_rounded_toffoli": 1353832},
+    {"qubits": 1145, "maximum_rounded_toffoli": 1300625},
+    {"qubits": 1154, "maximum_rounded_toffoli": 1290481}
+  ],
+  "profile": {
+    "pre_postpass_expected_toffoli": 1304986.5,
+    "calibrated_postpass_credit": -13127.198,
+    "official_average_toffoli": 1291859.302,
+    "profile_rows": 40
+  },
+  "niches": [
+    {
+      "id": "H0-zero-rounding",
+      "role": "orthogonal verifier construction",
+      "current_expected_toffoli": null,
+      "first_principle_constraint": "A candidate semantic stream determines its own SHAKE256 test draw; a finite table fit to another stream is not a candidate.",
+      "champion": null,
+      "prior_evidence": "A 27-bit frozen lookup fit 9024/9024 samples in 3042193 zero-Toffoli ops, then had 0 self-seeded hits and 9024 classical failures. An exact census of 1149296 reduced self-seeded states found 0-2 fixed points per scope and extrapolated a direct production search space of about 2^4758375 states.",
+      "stepping_stones": [
+        {
+          "id": "H0.1-seed-invariant-semantics",
+          "claim": "Find a non-byte-identical semantic change that preserves the verifier seed or prove the serialized ABI makes this impossible without a SHAKE256 collision.",
+          "cheapest_discriminator": "canonical operation-stream hash derivation and exact source proof",
+          "exit": "machine proof or explicit collision obligation"
+        },
+        {
+          "id": "H0.2-fixed-point-map",
+          "claim": "The direct canonical table map has O(1) fixed points but inverse-density search cost.",
+          "cheapest_discriminator": "closed by h0_fixed_point_census.py over 1149296 exact reduced states",
+          "exit": "retired as a scalable route; reopen only with a construction that removes inverse-density search"
+        },
+        {
+          "id": "H0.3-generic-input-extraction",
+          "claim": "Determine whether the verifier's free classical condition stack can reveal quantum register contents without measured or Toffoli-mediated transfer.",
+          "cheapest_discriminator": "operation semantics proof over Simulator::qubit, phase, conditions, and register readback",
+          "exit": "generic extraction primitive or impossibility within the ABI"
+        },
+        {
+          "id": "H0.4-seed-independent-translation",
+          "claim": "Construct a generic zero-Toffoli affine translation or prove that nonlinear secp256k1 addition forces a nonlinear reversible primitive.",
+          "cheapest_discriminator": "algebraic-degree argument followed by a reduced-width exhaustive circuit census",
+          "exit": "scalable construction or explicit lower-bound premise"
+        }
+      ]
+    },
+    {
+      "id": "H1-gcd-apply",
+      "role": "dominant Toffoli kernel",
+      "current_expected_toffoli": 1235398.5,
+      "emitted_profile_ops": 1291549,
+      "first_principle_constraint": "This term contains most executed nonlinear work; local suffix savings matter only when multiplied by their measured invocation count and surviving postpasses.",
+      "champion": "cf5aa02 promoted frontier",
+      "prior_evidence": "Known suffix, composite, cap, and traversal searches are documented in 06-research-status.md; no global lower bound exists.",
+      "stepping_stones": [
+        {
+          "id": "H1.1-exact-call-census",
+          "claim": "Attribute every emitted and expected Toffoli to a source kernel, call count, control regime, and postpass fate.",
+          "cheapest_discriminator": "TRACE_TLM_TOF profile plus source-indexed transition replay",
+          "exit": "cost ledger closes exactly to 1235398.5 before postpass credit"
+        },
+        {
+          "id": "H1.2-controlled-composition",
+          "claim": "Synthesize controlled add/apply composites across call boundaries instead of optimizing isolated primitives.",
+          "cheapest_discriminator": "exact reduced-domain miter and weighted invocation model",
+          "exit": "positive full-stream predicted saving with no unproved composition edge"
+        },
+        {
+          "id": "H1.3-one-traversal-representation",
+          "claim": "Replace paired forward/reverse affine-inversion work with a representation that needs one inversion traversal.",
+          "cheapest_discriminator": "symbolic dataflow and liveness proof before circuit construction",
+          "exit": "closed reversible schedule with ancilla cleanup and lower modeled product"
+        },
+        {
+          "id": "H1.4-unrestricted-joint-codec",
+          "claim": "Resolve the exact-eight joint codec without restricting to the exhausted local shear family.",
+          "cheapest_discriminator": "SAT/SMT synthesis with exact semantic replay",
+          "exit": "witness below retained reference or a scoped UNSAT certificate"
+        }
+      ]
+    },
+    {
+      "id": "H2-square",
+      "role": "specialized nonlinear kernel",
+      "current_expected_toffoli": 67988.0,
+      "emitted_profile_ops": 68406,
+      "first_principle_constraint": "Squaring is not free in the prime-field bit basis, but it has symmetry absent from generic multiplication and the modulus is pseudo-Mersenne.",
+      "champion": "cf5aa02 promoted frontier",
+      "prior_evidence": "The present profile isolates square cost, but no square-specific global optimum certificate exists.",
+      "stepping_stones": [
+        {
+          "id": "H2.1-bilinear-symmetry",
+          "claim": "Separate diagonal, doubled cross-term, and modular-fold costs in the exact reversible representation.",
+          "cheapest_discriminator": "symbolic carry/cross-term census on reduced widths",
+          "exit": "closed formula reproducing current 256-bit cost"
+        },
+        {
+          "id": "H2.2-pseudo-mersenne-fold",
+          "claim": "Exploit p = 2^256 - 2^32 - 977 with a square-specific reduction schedule.",
+          "cheapest_discriminator": "classical exact arithmetic model plus reversible liveness bound",
+          "exit": "candidate schedule with lower T and bounded peak Q"
+        },
+        {
+          "id": "H2.3-joint-square-reduction",
+          "claim": "Fuse production of high square limbs with modular reduction so temporary products never fully materialize.",
+          "cheapest_discriminator": "dependency DAG and peak-live interval solver",
+          "exit": "end-to-end square miter with positive score delta"
+        }
+      ]
+    },
+    {
+      "id": "H3-coordinate-shell",
+      "role": "small direct Toffoli shell and correctness invariants",
+      "current_expected_toffoli": 1600.0,
+      "emitted_profile_ops": 1660,
+      "first_principle_constraint": "Its direct cost is small, but source-indexed invariants here can delete or constrain much larger controlled arithmetic upstream.",
+      "champion": "cf5aa02 promoted frontier",
+      "prior_evidence": "The q1145 local-miter counterexample proved that primitive equivalence does not imply full-circuit equivalence.",
+      "stepping_stones": [
+        {
+          "id": "H3.1-source-indexed-invariants",
+          "claim": "Mine exact value, phase, cleanliness, and reachability facts at each callsite rather than assuming a primitive-wide domain.",
+          "cheapest_discriminator": "trusted-source lane census and exact callsite miter",
+          "exit": "machine-checkable invariant keyed to source and operation hashes"
+        },
+        {
+          "id": "H3.2-offset-shell-fusion",
+          "claim": "Fuse offset injection and output shell corrections into adjacent controlled arithmetic.",
+          "cheapest_discriminator": "local symbolic composition plus full-stream op diff",
+          "exit": "non-no-op artifact with transferred full-circuit proof obligations explicit"
+        },
+        {
+          "id": "H3.3-composition-counterexamples",
+          "claim": "Continuously replay retained q1145 and HMR/phase counterexamples against every new local proof scope.",
+          "cheapest_discriminator": "exact retained counterexample suite",
+          "exit": "zero unexplained counterexamples at the candidate scope"
+        }
+      ]
+    },
+    {
+      "id": "H4-postpasses",
+      "role": "negative calibrated correction and proof-preserving transforms",
+      "current_expected_toffoli": -13127.198,
+      "first_principle_constraint": "A raw source saving is not real until the exact final stream survives strip, cap, cancellation, and density recalibration; the correction is artifact-bound, not additive folklore.",
+      "champion": "cf5aa02 postpass chain",
+      "prior_evidence": "Current profile removes 10743/10743 dead ops and downgrades 3088/3088, with 13127.198 expected Toffoli credit beyond pre-postpass terms.",
+      "stepping_stones": [
+        {
+          "id": "H4.1-provenance-replay",
+          "claim": "Associate every removed/downgraded operation with an exact source and proof witness.",
+          "cheapest_discriminator": "content-addressed strip-key replay",
+          "exit": "zero stale/unattributed transformations"
+        },
+        {
+          "id": "H4.2-contextual-identities",
+          "claim": "Search exact commuting/conjugation identities unavailable to local adjacency passes.",
+          "cheapest_discriminator": "bounded window canonicalization with exact phase-aware miter",
+          "exit": "strict semantic op reduction outside the known pass family"
+        },
+        {
+          "id": "H4.3-density-calibration",
+          "claim": "Predict executed/static Toffoli conversion for the exact changed stream without reusing stale density.",
+          "cheapest_discriminator": "paired fixed-randomness differential",
+          "exit": "historically backtested error band narrow enough to gate a full run"
+        }
+      ]
+    },
+    {
+      "id": "H5-width",
+      "role": "multiplicative qubit term and representation geometry",
+      "current_qubits": 1154,
+      "abi_qubit_floor": 512,
+      "first_principle_constraint": "Reducing peak Q helps only if added executed Toffoli stays below the exact break-even threshold; no nontrivial global Q lower bound beyond the 512 output wires is proved.",
+      "champion": "cf5aa02 promoted frontier",
+      "prior_evidence": "A q1145 artifact passed local miters but failed trusted full verification; width changes invalidate seed, cap, strip, density, and correctness evidence.",
+      "stepping_stones": [
+        {
+          "id": "H5.1-live-interval-proof",
+          "claim": "Derive the exact source-indexed peak liveness witness and the minimum schedule under the current representation.",
+          "cheapest_discriminator": "interval graph / dependency schedule with operation replay",
+          "exit": "machine-checkable current-representation Q bound or lower schedule"
+        },
+        {
+          "id": "H5.2-cap-break-even",
+          "claim": "For each proposed width, price recomputation and cap changes against the strict Toffoli threshold table.",
+          "cheapest_discriminator": "exact static rebuild plus calibrated executed-cost interval",
+          "exit": "score interval strictly below frontier before full spend"
+        },
+        {
+          "id": "H5.3-alternative-representation",
+          "claim": "Evaluate projective, batch-inversion, or streaming representations end to end rather than importing published gate counts.",
+          "cheapest_discriminator": "full reversible dataflow model including conversion, cleanup, and peak liveness",
+          "exit": "complete candidate whose modeled QxT dominates the current frontier"
+        }
+      ]
+    }
+  ],
+  "aggregation_rule": "A candidate is promotable only after rebuilding every invalidated dependency, trusted 9024-shot certification, refreshed-frontier comparison, and exact artifact submission."
+}
