@@ -106,6 +106,8 @@ impl Builder {
     /// B3b: (native, expected) Toffoli so far, when the phase report is on.
     pub fn report_totals(&self) -> Option<(usize, f64)> { self.report.as_deref().map(|r| (r.total_native, r.total_expected)) }
     pub(crate) fn i35_cost(&self)->f64{self.model_weighted}
+    /// Running expected (condition-weighted) Toffoli count of the phase report; 0 when the report is off.
+    pub(crate) fn expected_total(&self) -> f64 { self.report.as_deref().map_or(0.0, |r| r.total_expected) }
     pub fn i13_dims(&self)->(usize,usize){(self.next_qubit as usize,self.next_bit as usize)}
     pub fn take_ops(&mut self) -> Vec<Op> {
         if self.model {

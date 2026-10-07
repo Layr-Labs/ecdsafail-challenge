@@ -15,7 +15,7 @@ fn plan(c:&Builder,r:usize,fw:usize,drop:bool)->Option<Plan>{
  if bounds.len()<2{return None;}
  let &(lo,hi)=bounds.last()?;let(plo,phi)=bounds[bounds.len()-2];let(k,seed)=boundary_repair_spec(r,false,plo,phi);
  if lo<fw||phi-k-usize::from(seed)<fw{drop_trace(r,false,"lofw",format!("drop={} fw={} {:?}",drop,fw,bounds));return None;}
- let need=((bits-3).max(fw-34)).saturating_sub(super::super::optional_env::<usize>("S5_NEED_ADJ").unwrap_or(0));
+ let need=(bits-3).max(fw-34);
  let existing=room as isize-(hi-lo)as isize-3;
  let missing=(need as isize-existing).max(0)as usize;
  let prefix=if missing==0{0}else{missing+1};if prefix+1>=hi-lo{drop_trace(r,false,"prefix",format!("drop={} fw={} missing={} {:?}",drop,fw,missing,bounds));return None;}

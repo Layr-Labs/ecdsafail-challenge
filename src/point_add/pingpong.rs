@@ -3178,8 +3178,8 @@ fn replay_add_halve_impl(
     fold_window: usize,
     round: usize,
 ) {
-    if heo_tie().is_none() && retained_prebias::try_replay(circ,sign,source,target,retained_window(fold_window,round),round) {return;}
-    if heo_tie().is_none() && env_flag("PP_JOINT_PREBIAS_DIV") && joint_prebias::eligible(circ,round) {
+    if tie_route_ok(1) && retained_prebias::try_replay(circ,sign,source,target,retained_window(fold_window,round),round) {return;}
+    if tie_route_ok(2) && env_flag("PP_JOINT_PREBIAS_DIV") && joint_prebias::eligible(circ,round) {
         joint_prebias::joint_prebias_div(circ,sign,source,target,fold_window,round);return;
     }
     let f = f();
@@ -3189,7 +3189,7 @@ fn replay_add_halve_impl(
     if env_flag("PP_REUSE_DIV_PARITY") {
         fold_halve_reused(circ, &target[..fold_window], sign, overflow);
         let mut k = flag_compare(round) + usize::from(policy_width(round) >= flag_widen_div());
-        let borrow = if let Some(p)=heo_tie() {Some(p)} else if env_flag("CMP_SEED_ALL") { if !seed_keep_width_for(false){k -= 1;} Some(source[N-k-1]) } else {None};
+        let borrow = if let Some(p)=tie_borrow() {Some(p)} else if env_flag("CMP_SEED_ALL") { if !seed_keep_width_for(false){k -= 1;} Some(source[N-k-1]) } else {None};
         k=refined_flag_window(k,fold_window,borrow.is_some());
         circ.record_replay_site('F', round, N, k);
         trace_replay_predictor('F',round,false,N,k,source,borrow);
@@ -3253,7 +3253,7 @@ fn replay_add_halve_impl(
     circ.cx(overflow, parity);
     circ.cx(sign, parity);
     let mut k = flag_compare(round) + usize::from(policy_width(round) >= flag_widen_div());
-    let borrow = if let Some(p)=heo_tie() {Some(p)} else if env_flag("CMP_SEED_ALL") { if !seed_keep_width_for(false){k -= 1;} Some(source[N-k-1]) } else {None};
+    let borrow = if let Some(p)=tie_borrow() {Some(p)} else if env_flag("CMP_SEED_ALL") { if !seed_keep_width_for(false){k -= 1;} Some(source[N-k-1]) } else {None};
     k=refined_flag_window(k,fold_window,borrow.is_some());
     circ.record_replay_site('F', round, N, k);
     trace_replay_predictor('F',round,false,N,k,source,borrow);
@@ -3297,7 +3297,7 @@ fn replay_double_add_impl(
     joint_lowfold::DPARK.with(|p|p.set(park));
 
     circ.cx_all(sign, target);
-    if heo_tie().is_none() && joint_lowfold::try_replay(circ,sign,source,target,retained_window(fold_window,round),round,Some(doubled_out)) {
+    if tie_route_ok(4) && joint_lowfold::try_replay(circ,sign,source,target,retained_window(fold_window,round),round,Some(doubled_out)) {
         joint_lowfold::DPARK.with(|p|p.set(false));
         circ.cx_all(sign,target);return;
     }
@@ -3397,7 +3397,7 @@ fn replay_double_add_impl(
 
     let wide = policy_width(round) >= 38;
     let mut k = flag_compare(round) + usize::from(a5_policy() == "mul-f-plus1-early200" && (2..202).contains(&round));
-    let borrow = if let Some(p) = heo_tie() {
+    let borrow = if let Some(p) = tie_borrow() {
         Some(p)
     } else if wide && matches!(a5_policy(), "mul-f-seed" | "mul-fb-seed") {
         Some(source[N - k - 1])
@@ -3980,7 +3980,7 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
     let old_ladder=ladder.saturating_sub(loans);
     let pinned=pinned_replay_bounds(addend.len(),round,multiply);
     let layout = pinned.clone().or_else(||chunk_layout(addend.len(), old_ladder+super::bridge::budget()));
-    if pinned.is_none() && heo_tie().is_none() && env_flag("PP_NEW_REPLAY") {
+    if pinned.is_none() && tie_route_ok(8) && env_flag("PP_NEW_REPLAY") {
         let old_fallback=layout.is_none() || old_ladder<replay_chunk_compare()+2;
         let old_extra2=if old_fallback {2*addend.len()} else {
             let bounds=layout.as_ref().unwrap();
@@ -4035,7 +4035,7 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
         };
         // Erase the previous chunk's carry as soon as it has been consumed.
         if let Some((carry, plo, phi)) = previous {
-            let tie=heo_tie();
+            let tie=tie_borrow();
             let(compare,seeded)=if tie.is_some(){(chunk_compare(round).min(phi-plo),false)}else{boundary_repair_spec(round,multiply,plo,phi)};
             let borrow = if tie.is_some() {
                 // B3b fix: a whole leading chunk is compared EXACTLY with its true
@@ -4608,6 +4608,26 @@ thread_local! { static HEO_TIE: std::cell::Cell<Option<QubitId>> = const { std::
 /// exactly 0 (HEO's first post-swap cell) produces. Prebias / low-fold /
 /// width-composition routes are bypassed while it is set.
 fn heo_tie() -> Option<QubitId> { HEO_TIE.with(|c| c.get()) }
+/// The tie predictor as the cells' compares see it. Leapfrog `LF_TIE_SEED=1`: in tie mode the compares keep their
+/// ordinary seeded predictors (the prebias / low-fold / width-composition routes stay bypassed). The predictor exists
+/// for a cell target of exactly 0 (the add/subtract cancels: HEO's post-swap cell); a Leapfrog step never cancels --
+/// every rail step result is odd, so a cell target is lam * odd, nonzero for lam != 0 (parked pairs P = lam (+-1, +-1)
+/// always take the doubling sign).
+fn tie_borrow() -> Option<QubitId> {
+    static SEED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *SEED.get_or_init(|| std::env::var("LF_TIE_SEED").is_ok_and(|v| v == "1")) { None } else { heo_tie() }
+}
+/// Research knob, NOT lambda-neutral: `LF_TIE_ROUTES=1` keeps the bypassed routes on in tie mode (bitmask
+/// `LF_TIE_ALLOW`: 1 retained_prebias, 2 joint_prebias, 4 joint_lowfold, 8 new-replay width composition). The routes'
+/// own approximations (low-32 fold cut, prebias windows) fail more often than the plain tie-mode cell at ticks >= 100
+/// (64M-shot single-cell rates: joint_lowfold 14 vs 2 value errors at t=124; retained_prebias 32 vs 1 at t=138).
+fn tie_route_ok(bit: u32) -> bool {
+    static M: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    heo_tie().is_none() || (*M.get_or_init(|| {
+        if let Some(m) = std::env::var("LF_TIE_ALLOW").ok().and_then(|v| v.parse().ok()) { return m; }
+        if std::env::var("LF_TIE_ROUTES").is_ok_and(|v| v == "1") { 15 } else { 0 }
+    }) & bit != 0)
+}
 thread_local! { static HEO_CMP_SHIFT: std::cell::Cell<(isize, isize)> = const { std::cell::Cell::new((0, 0)) }; }
 /// B6 (R5-A `HEO_CELL_WINDOWS`): per-cell shifts of the chunk-boundary and flag COMPARE widths. `(0, 0)`
 /// (always, in the default build) leaves [`chunk_compare`] / [`flag_compare`] exactly as the head emits them;
@@ -4677,6 +4697,75 @@ pub(crate) mod heo_hooks {
         let k = flag_compare(round) + usize::from(a5_policy() == "mul-f-plus1-early200" && (2..202).contains(&round));
         let seeded = wide && matches!(a5_policy(), "mul-f-seed" | "mul-fb-seed");
         (refined_flag_window(k, fold_window, seeded), seeded)
+    }
+
+    /// LF_MERGED (Leapfrog merged last cell + payload barrel): measure out a replay cell's overflow flag
+    /// with the cell's own flag-compare rule at `round` -- window width, source-bit seed (or the HEO tie
+    /// predictor when set) and refinement exactly as `replay_add_halve_impl` (PP_REUSE_DIV_PARITY branch,
+    /// `multiply = false`) or `replay_double_add_impl` (`multiply = true`) choose them. `target` is in the
+    /// complemented (sign-XORed) frame, as at the production call sites. The caller frees `overflow`.
+    pub(crate) fn flag_erase(circ: &mut Builder, overflow: QubitId, target: &[QubitId], source: &[QubitId],
+                             fold_window: usize, round: usize, multiply: bool) -> usize {
+        let (k, borrow) = if multiply {
+            let wide = policy_width(round) >= 38;
+            let mut k = flag_compare(round) + usize::from(a5_policy() == "mul-f-plus1-early200" && (2..202).contains(&round));
+            let borrow = if let Some(p) = tie_borrow() {
+                Some(p)
+            } else if wide && matches!(a5_policy(), "mul-f-seed" | "mul-fb-seed") {
+                Some(source[N - k - 1])
+            } else if !wide && env_flag("PP_SEED_SHORT_MUL_F_COST") {
+                k -= 1;
+                Some(source[N - k - 1])
+            } else if !wide && env_flag("PP_SEED_SHORT_MUL_F") {
+                Some(source[N - k - 1])
+            } else { None };
+            (refined_flag_window(k, fold_window, borrow.is_some()), borrow)
+        } else {
+            let mut k = flag_compare(round) + usize::from(policy_width(round) >= flag_widen_div());
+            let borrow = if let Some(p) = tie_borrow() {
+                Some(p)
+            } else if env_flag("CMP_SEED_ALL") {
+                if !seed_keep_width_for(false) { k -= 1; }
+                Some(source[N - k - 1])
+            } else { None };
+            (refined_flag_window(k, fold_window, borrow.is_some()), borrow)
+        };
+        erase_with_compare(circ, overflow, &target[N - k..], &source[N - k..], borrow);
+        k
+    }
+
+    /// LF_MERGED exact-flag route (the retained-prebias frame trick): `acc += addend` as the production chunked
+    /// adder on bits [0, split) (its carry-out kept), then one ripple on [split, N) whose carries stay live while
+    /// `consumer(circ, overflow)` runs; the overflow is erased exactly from the completed top-bit frame, and the split
+    /// carry with the cell's chunk compare at `split`. The consumer may only touch bits below `split - width - 1`
+    /// ([`split_compare_width`]) of `acc` (and no bit of `addend` at or above `split`).
+    pub(crate) fn add_consume_exact(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: usize, multiply: bool,
+                                    split: usize, consumer: impl FnOnce(&mut Builder, QubitId)) {
+        assert!(split >= 2 && split + 1 < N);
+        let m = super::chunked_add(circ, &addend[..split], &acc[..split], round, multiply);
+        let ov = circ.alloc_qubit();
+        super::super::modular::ripple_add_consume(circ, &addend[split..], &acc[split..], Some(m), ov, |c, o, a, s, p| {
+            consumer(c, o);
+            super::super::modular::erase_overflow_from_frame(c, o, a, s, p);
+        });
+        let (k, seeded) = boundary_repair_spec(round, multiply, 0, split);
+        let borrow = seeded.then(|| addend[split - k - 1]);
+        let k = if seeded { refined_seeded_width(k, split, "PP_REFINE_SEEDED_B") } else { k };
+        circ.record_replay_site('B', round, split, k);
+        erase_with_compare(circ, m, &acc[split - k..split], &addend[split - k..split], borrow);
+        circ.free(m);
+    }
+    /// Bits below `split` read by [`add_consume_exact`]'s split-carry compare (window plus seed).
+    pub(crate) fn split_compare_width(round: usize, multiply: bool, split: usize) -> usize {
+        let (k, seeded) = boundary_repair_spec(round, multiply, 0, split);
+        (if seeded { refined_seeded_width(k, split, "PP_REFINE_SEEDED_B") } else { k }).max(k + usize::from(seeded))
+    }
+
+    /// LF_MERGED: run `body` inside the replay cell's I35 bridge scope at `round` (as `replay_add_halve` /
+    /// `replay_double_add` do), so the chunked adder sees the cell's bridge budget.
+    pub(crate) fn with_bridge<R>(round: usize, multiply: bool, body: impl FnOnce() -> R) -> R {
+        let _scope = super::super::bridge::enter(round, multiply);
+        body()
     }
 
     /// B6: run `body` with the compare-width shifts `(dB, dF)` set (see `heo_cmp_shift`).

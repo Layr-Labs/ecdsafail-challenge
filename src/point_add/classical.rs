@@ -147,6 +147,28 @@ pub fn coord_add3x(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
     });
 }
 
+/// Leapfrog `LF_SEAMS`: the classical operand [`coord_add3x`] adds (3 coord + the square's offset, mod p), in fresh
+/// bits (release with [`release_operand`]).
+pub(crate) fn add3x_operand(circ: &mut Builder, coord: &[BitId]) -> Vec<BitId> {
+    let three_coord = classical_times3_mod_q(circ, coord);
+    let offset = super::square::sub_square_offset();
+    if offset.is_zero() {
+        return three_coord;
+    }
+    let shifted = classical_add_const_mod_q(circ, &three_coord, offset);
+    zero(circ, &three_coord);
+    circ.free_bit_vec(&three_coord);
+    shifted
+}
+/// Leapfrog `LF_SEAMS`: `coord + 1 mod 2^N` in fresh bits (the operand [`coord_rsub`] loads).
+pub(crate) fn plus1_operand(circ: &mut Builder, coord: &[BitId]) -> Vec<BitId> {
+    classical_plus1_mod_2n(circ, coord)
+}
+pub(crate) fn release_operand(circ: &mut Builder, bits: &[BitId]) {
+    zero(circ, bits);
+    circ.free_bit_vec(bits);
+}
+
 /// `(v + k) mod 2^len` in freshly allocated classical bits, `k < 2^128`.
 pub(crate) fn classical_add_const_mod2n_at(circ: &mut Builder, v: &[BitId], k: u128) -> Vec<BitId> {
     let s = circ.alloc_bits(v.len());

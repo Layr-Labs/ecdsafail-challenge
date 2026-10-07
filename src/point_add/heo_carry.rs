@@ -1904,8 +1904,8 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
     let retune = RETUNE.get_or_init(|| {
         let mut map = HashMap::new();
         if std::env::var("SKYX_K3B_RETUNE").is_ok() {
-            // Embedded: the official runner denies file reads at build time, so the table is compiled in like the other skywalk_data files.
-            for line in include_str!("skywalk_data/q70c_k3b_retune.txt").lines().filter(|l| !l.trim().is_empty()) {
+            let text = include_str!("skywalk_data/cap1172_bridge_room_profile_probe.txt");
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
                 let f: Vec<&str> = line.split_whitespace().collect();
                 assert_eq!(f.len(),5);
                 let id: usize = f[0].parse().unwrap();
@@ -1913,7 +1913,7 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
                 let room: isize = f[2].parse().unwrap();
                 let tick: usize = f[3].parse().unwrap();
                 assert!(["+0","+1","+2","+3","-1","-2","0"].contains(&bridge.as_str()));
-                assert!((-16..=16).contains(&room)); // J1: widened as in 9db31da9
+                assert!((-16..=16).contains(&room)); // widened for the extended negative-room grid (cap-probe regridx)
                 assert!(map.insert(id,(bridge,room,tick,f[4].to_string())).is_none());
             }
         }
@@ -1925,11 +1925,6 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
         let current: isize = pins.get("K3B_EXTRA_ROOM").map_or(0,|v|v.parse().unwrap());
         pins.insert("K3B_EXTRA_ROOM".into(),(current+room).to_string());
     }
-    // S5 need table (q70c: need_1170x, fold workspace shortfall taken by the exact direct_plan split instead of the
-    // carry prefix): lines `idx adj` pin S5_NEED_ADJ=adj for that cell. Embedded: the official runner denies file reads.
-    static S5NEED: OnceLock<HashMap<usize,String>> = OnceLock::new();
-    let s5need = S5NEED.get_or_init(|| if std::env::var_os("S5_NEED_FILE").is_none() { HashMap::new() } else { include_str!("skywalk_data/q70c_need.txt").lines().filter(|l| !l.trim().is_empty()).map(|l| { let (i,a)=l.trim().split_once(char::is_whitespace).unwrap(); (i.parse::<usize>().unwrap(), a.trim().to_string()) }).collect() });
-    if let Some(a) = s5need.get(&idx) { pins.insert("S5_NEED_ADJ".into(), a.clone()); }
     // R3 sign loan: per-cell room pin delta from R3_SGN_FILE (`idx delta` lines).
     if let Some(d) = r3_sgn_map().as_ref().and_then(|m| m.get(&idx)).copied() {
         if d != 0 {
@@ -1988,7 +1983,7 @@ fn cell_div(c: &mut Builder, cfg: &HeoConfig, t: usize, typ: QubitId, sig: &[Qub
     }
     k3b_cell(c, "div", t, proxy, |c| {
         if std::env::var_os("TERMINAL_PAIR").is_some() && t+1==cfg.rounds() {
-            let fw=std::env::var("TERMINAL_FW_DIV").or_else(|_|std::env::var("TERMINAL_FW")).ok().map(|x|x.parse().unwrap()).unwrap_or(50);
+            let fw=std::env::var("TERMINAL_FW").ok().map(|x|x.parse().unwrap()).unwrap_or(50);
             eprintln!("TERMINAL_SITE {} {} {} {}","div",t,c.active_qubits(),fw);
             super::super::pingpong::terminal_pair(c,typ,sig,del,fw,true);return;
         }
@@ -2012,7 +2007,7 @@ fn cell_mul(c: &mut Builder, cfg: &HeoConfig, t: usize, typ: QubitId, sig: &[Qub
     }
     k3b_cell(c, "mul", t, proxy, |c| {
         if std::env::var_os("TERMINAL_PAIR").is_some() && t+1==cfg.rounds() {
-            let fw=std::env::var("TERMINAL_FW_MUL").or_else(|_|std::env::var("TERMINAL_FW")).ok().map(|x|x.parse().unwrap()).unwrap_or(50);
+            let fw=std::env::var("TERMINAL_FW").ok().map(|x|x.parse().unwrap()).unwrap_or(50);
             eprintln!("TERMINAL_SITE {} {} {} {}","mul",t,c.active_qubits(),fw);
             super::super::pingpong::terminal_pair(c,typ,sig,del,fw,false);return;
         }
@@ -2112,7 +2107,7 @@ fn pair_pack(c: &mut Builder, h1: QubitId, l1: QubitId, h2: QubitId, l2: QubitId
     c.free_bit(m);
     c.free(anc);
 }
-/// Exact shared pair compressor (port of 9db31da9 EXACT_PAIR_CARRY). Outputs match ordinary pair_pack on all 9.
+/// Exact shared pair compressor (bdff8c8 exact-arithmetic-v2). Outputs match ordinary pair_pack on all 9.
 /// The product measurement is repaired on pair_unpack's already computed AND.
 fn pair_pack_shared(c: &mut Builder, a: QubitId, b: QubitId, cc: QubitId, d: QubitId, p: QubitId) -> (QubitId, BitId) {
     let h=c.alloc_qubit(); c.ccx(a,cc,h);
@@ -2136,23 +2131,6 @@ fn pair_unpack(c: &mut Builder, h1: QubitId, l1: QubitId, h2: QubitId, l2: Qubit
     c.free_bit(m);
     c.free(anc);
     c.cx(h1, h2);
-}
-
-/// X2_REV_PAIR: exact inverse of pair_pack_shared on the packed pair (h, b, cc, d) that also returns the shared
-/// product p = anc*(1-b) = h4*typ5 (anc = cc*d). 2 CCX like pair_unpack. A pending pack measurement m_pair is
-/// repaired on the explicit p (Clifford).
-fn pair_unpack_retained(c: &mut Builder, h: QubitId, bq: QubitId, cc: QubitId, d: QubitId, m_pair: Option<BitId>) -> (QubitId, QubitId) {
-    let anc = c.alloc_qubit();
-    c.ccx(cc, d, anc);
-    let a = c.alloc_qubit();
-    c.cx(h, a); c.cx(anc, a);
-    let p = c.alloc_qubit();
-    c.x(bq); c.ccx(anc, bq, p); c.x(bq);
-    if let Some(m) = m_pair { c.z_if(p, m); c.free_bit(m); }
-    let m = c.alloc_bit(); c.hmr(anc, m); c.cz_if(cc, d, m); c.free_bit(m); c.free(anc);
-    c.cx(p, d); c.cx(a, cc); c.cx(h, bq); c.cx(a, bq); c.cx(p, bq);
-    let m = c.alloc_bit(); c.hmr(h, m); c.cz_if(a, cc, m); c.free_bit(m); c.free(h);
-    (a, p)
 }
 
 impl Tape {
@@ -2202,7 +2180,7 @@ impl Tape {
         let h4=if let Some(p)=self.outer_shared[g].take() {
             assert!(grp.m_pair.is_none());
             let (h,m)=pair_pack_shared(c,h4,l4,h5,l5,p); grp.m_pair=Some(m);
-            if std::env::var_os("PAIR_CARRY_TRACE").is_some() { eprintln!("PAIR_CARRY_PACK group={g} t0={t0} op={}",c.op_count()); }
+            eprintln!("PAIR_CARRY_PACK group={g} t0={t0} op={}",c.op_count());
             h
         } else { pair_pack(c,h4,l4,h5,l5); h4 };
         let (gw, b2, b1, b0) = (h4, l4, h5, l5);
@@ -2255,19 +2233,8 @@ impl Tape {
         for (x, y) in [(grp.a2, grp.b2), (grp.h3, grp.b1), (grp.l3, grp.b0)] {
             fredkin(c, gw, x, y);
         }
-        let (mut h4, l4, h5, l5) = (gw, grp.b2, grp.b1, grp.b0);
-        let t4 = t0 + 4;
-        let rp = REVERSE_CODEC_CAPTURE.with(|v| v.get()) && env_bool("X2_REV_PAIR", false)
-            && REV_PAIR_TICK.with(|v| { let (tk, lo) = v.get(); (tk == t4 || tk == t4 + 1) && t4 >= lo.max(1) });
-        if rp {
-            let (a, p) = pair_unpack_retained(c, h4, l4, h5, l5, grp.m_pair.take());
-            h4 = a;
-            assert!(self.outer_shared[g].is_none());
-            self.outer_shared[g] = Some(p);
-            if std::env::var_os("PAIR_CARRY_TRACE").is_some() { eprintln!("REV_PAIR_CAPTURE group={g} t4={t4}"); }
-        } else {
-            pair_unpack(c, h4, l4, h5, l5, grp.m_pair.take());
-        }
+        let (h4, l4, h5, l5) = (gw, grp.b2, grp.b1, grp.b0);
+        pair_unpack(c, h4, l4, h5, l5, grp.m_pair.take());
         self.raw[t0 + 3] = Some(from_hl(c, h4, l4));
         self.raw[t0 + 4] = Some(from_hl(c, h5, l5));
         grp.state = GState::P3;
@@ -2931,13 +2898,9 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
     if !defer_s1 {
         if let Some(m) = mid.as_mut() {
             let loan = !o0_erase && r3_sgn_hit();
-            let (rh, rx) = r0_mid_trim(c, label, t, &mut hs, &mut x2);
-            let pad = r0_mid_pad(c, label, t);
             if loan { p1 = r3_sgn_lend(c, p1, x2[0], cw); }
             m(c, cw);
-            for q in pad.into_iter().rev() { c.free(q); }
             if loan { p1 = r3_sgn_restore(c, x2[0], cw); }
-            r0_mid_regrow(c, &mut hs, &mut x2, rh, rx);
         }
     }
     if env_bool("R4_RAIL_TRACE", false) { eprintln!("R4F {label} {t} w1={w1} mpost={mpost} mad={mad} x2r={} hsr={} msw={msw} wp={}", x2.len(), hs.len(), wpost(cfg, t)); }
@@ -2986,49 +2949,6 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
 /// Family A reverse tick t >= 1: exact mirror of [`fama_fwd`]; consumes the tape pair. Returns parked rails at
 /// wbefore(t) and the rebuilt o_0 wire (div O0 at t = 1).
 #[allow(clippy::too_many_arguments)]
-/// Q70-R0 mid-cell register trim (research): `R0_MID_TRIM=LABEL:lo-hi:a:b,...` frees the top a wires of the hs
-/// magnitude slot and the top b wires of x2 for the mid-tick cell at ticks lo..=hi of LABEL (divfwd, mulfused, ...),
-/// and allocates fresh wires back to the same lengths after it. Exact only where those wires are zero.
-fn r0_mid_trim(c: &mut Builder, label: &str, t: usize, hs: &mut Vec<QubitId>, x2: &mut Vec<QubitId>) -> (usize, usize) {
-    static SPEC: OnceLock<Vec<(String, usize, usize, usize, usize)>> = OnceLock::new();
-    let spec = SPEC.get_or_init(|| std::env::var("R0_MID_TRIM").map(|v| v.split(',').filter(|x| !x.trim().is_empty()).map(|x| {
-        let f: Vec<&str> = x.trim().split(':').collect(); let (lo, hi) = f[1].split_once('-').expect("R0_MID_TRIM lo-hi");
-        (f[0].to_string(), lo.parse().unwrap(), hi.parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap())
-    }).collect()).unwrap_or_default());
-    let (lh, lx) = (hs.len(), x2.len());
-    if let Some(&(_, _, _, a, b)) = spec.iter().find(|e| e.0 == label && e.1 <= t && t <= e.2) {
-        for _ in 0..a.min(lh.saturating_sub(2)) { let q = hs.pop().unwrap(); c.free(q); }
-        for _ in 0..b.min(lx.saturating_sub(2)) { let q = x2.pop().unwrap(); c.free(q); }
-        if env_bool("R0_MID_TRACE", false) { eprintln!("R0_MID_TRIM {label} {t} hs {lh}->{} x2 {lx}->{}", hs.len(), x2.len()); }
-    }
-    (lh, lx)
-}
-fn r0_mid_regrow(c: &mut Builder, hs: &mut Vec<QubitId>, x2: &mut Vec<QubitId>, lh: usize, lx: usize) {
-    while hs.len() < lh { hs.push(c.alloc_qubit()); }
-    while x2.len() < lx { x2.push(c.alloc_qubit()); }
-}
-/// Q70-R0 room pad (research, exact): `R0_MID_PAD=LABEL:lo-hi:n,...` holds n idle zero wires across the mid-tick cell
-/// at ticks lo..=hi of LABEL, so the cell sees n less room. Returns the wires; the caller frees them after the cell.
-fn r0_mid_pad(c: &mut Builder, label: &str, t: usize) -> Vec<QubitId> {
-    static SPEC: OnceLock<Vec<(String, usize, usize, usize)>> = OnceLock::new();
-    let spec = SPEC.get_or_init(|| std::env::var("R0_MID_PAD").map(|v| v.split(',').filter(|x| !x.trim().is_empty()).map(|x| {
-        let f: Vec<&str> = x.trim().split(':').collect(); let (lo, hi) = f[1].split_once('-').expect("R0_MID_PAD lo-hi");
-        (f[0].to_string(), lo.parse().unwrap(), hi.parse().unwrap(), f[2].parse().unwrap())
-    }).collect()).unwrap_or_default());
-    spec.iter().find(|e| e.0 == label && e.1 <= t && t <= e.2).map_or_else(Vec::new, |e| c.alloc_qubits(e.3))
-}
-
-/// Q70-R0 (ii) `R0_RAW_FLUSH=lo,hi`: div batch ticks lo..hi pack3 a group right after its 3rd letter (the B7
-/// LAZY_BATCH early pack3, windowed) so the raw tape bits do not sit through the window. Exact codec. Unset = inert.
-fn r0_raw_flush(t: usize) -> bool {
-    static SPEC: OnceLock<Option<(usize, usize)>> = OnceLock::new();
-    let s = SPEC.get_or_init(|| std::env::var("R0_RAW_FLUSH").ok().map(|v| {
-        let f: Vec<usize> = v.split(',').map(|x| x.trim().parse().expect("R0_RAW_FLUSH lo,hi")).collect();
-        eprintln!("R0_RAW_FLUSH lo={} hi={}", f[0], f[1]); (f[0], f[1])
-    }));
-    s.is_some_and(|(lo, hi)| lo <= t && t <= hi)
-}
-
 fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: QubitId, typ_prev: Option<QubitId>, t: usize,
             o0_rebuild: bool, mode: SplitMode, def: &mut Vec<(usize, BitId)>, label: &'static str,
             mut mid: Option<&mut dyn FnMut(&mut Builder, QubitId)>, incoming:Option<QubitId>, codec:Option<(QubitId,QubitId)>) -> (Rails, Option<QubitId>, Option<QubitId>) {
@@ -3103,13 +3023,9 @@ fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: Qub
     }
     if let Some(m) = mid.as_mut() {
         let loan = !o0_rebuild && r3_sgn_hit();
-        let (rh, rx) = r0_mid_trim(c, label, t, &mut hs, &mut x2);
-        let pad = r0_mid_pad(c, label, t);
         if loan { p1 = r3_sgn_lend(c, p1, x2[0], typ); }
         m(c, typ);
-        for q in pad.into_iter().rev() { c.free(q); }
         if loan { p1 = r3_sgn_restore(c, x2[0], typ); }
-        r0_mid_regrow(c, &mut hs, &mut x2, rh, rx);
     }
     while hs.len() < mpost - 1 {
         hs.push(c.alloc_qubit());
@@ -3244,8 +3160,7 @@ fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x:
             let shared_on = mul_leg && env_bool("HEO_CARRY_CODEC", false) && truthy("HEO_CODEC_SYNTH");
             let u = t.checked_sub(w.tape.off);
             let pair_share = env_bool("EXACT_PAIR_CARRY",false) && label=="mulfwd";
-            let dpair = label=="divfwd" && u.is_some_and(|u| u % 5 == 3) && std::env::var("X2_DIVFWD_PAIR_T").is_ok_and(|v| v.split(',').any(|x| x.trim().parse::<usize>().ok() == Some(t)));
-            let keep_low = ((shared_on && u.is_some_and(|u| u % 5 == 1 || (pair_share && u % 5 == 3))) || dpair) && t + 2 < cfg.rounds();
+            let keep_low = shared_on && u.is_some_and(|u| u % 5 == 1 || (pair_share && u % 5 == 3)) && t + 2 < cfg.rounds();
             let pl = w.pending_low.take();
             let prior = pl.map(|q| (q, w.tape.get(t - 1).1));
             let (nr, typ, s, retained, shared) = {
@@ -3260,7 +3175,7 @@ fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x:
             w.pending_low = retained;
             if let Some(q) = shared {
                 let g = w.tape.gid(t);
-                if (pair_share || label=="divfwd") && u.is_some_and(|u|u%5==4) {
+                if pair_share && u.is_some_and(|u|u%5==4) {
                     assert!(w.tape.outer_shared[g].is_none(),"outer shared product already pending {g}");
                     w.tape.outer_shared[g]=Some(q);
                 } else {
@@ -3307,7 +3222,6 @@ fn reverse_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, t:
     assert!(mid.is_none() || t > 0, "HEO_CELL_INSIDE: no mid-tick cell at the unseed tick");
     let share=(label=="divrev" || (label=="mulrev2" && env_bool("GO_MULREV2_SHARE",false)) || (label=="mulrev" && env_bool("GO_MULREV_SHARE",false))) && env_bool("HEO_REVERSE_CARRY_CODEC",false) && truthy("HEO_CODEC_SYNTH");
     REVERSE_CODEC_CAPTURE.with(|v|v.set(share));
-    REV_PAIR_TICK.with(|v| v.set((t, if label == "mulrev" { k.r2m } else { 0 })));
     book(c, "codec", "rev codec", t, |c| {
         w.tape.ensure_raw(c, t);
         if t > 0 {
@@ -3360,8 +3274,6 @@ fn reverse_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, t:
         let incoming=if share{w.pending_low.take()}else{None};
         let codec=if share && t>=w.tape.off && (t-w.tape.off)%5==2 {
             let g=w.tape.gid(t);w.tape.shared[g].take().map(|q|(q,w.tape.get(t-1).1))
-        }else if share && t>=w.tape.off && (t-w.tape.off)%5==4 && env_bool("X2_REV_PAIR",false) {
-            let g=w.tape.gid(t);w.tape.outer_shared[g].take().map(|q|(q,w.tape.get(t-1).1))
         }else{None};
         let (nr, rebuilt, retained) = {
             let tape = &w.tape;
@@ -3497,7 +3409,7 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
         }
         // B7 V-P6: HEO_DIV_LIFO_N = n leaves the last n+1 groups raw (base n = 0: the last group)
         let lifo_keep = k.lifo && g + k.div_lifo_n >= last_g;
-        if (k.div_early_p3 || r0_raw_flush(t)) && (t - off) % 5 == 2 && !lifo_keep {
+        if k.div_early_p3 && (t - off) % 5 == 2 && !lifo_keep {
             // B7 LAZY_BATCH (div): letters 0..2 of the group are consumed; pack them now (repack then does pack5 only)
             let t0 = 5 * g + off;
             if t0 + 2 < r && w.tape.state(g) == GState::Raw && (t0..t0 + 3).all(|u| w.tape.raw[u].is_some()) {
@@ -3619,15 +3531,6 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
     if lt0m {
         // RB-1: single head batch with the class rebuilt from the frame invariant (see CarryCfg::lt0_mul).
         c.set_phase("heo_mul_headbatch");
-        // Q70-R0 register trim (research): R0_HEAD_TRIM=a,b drops the top a (b) wires of R1 (R2) for the head batch
-        // (CX from the new top + free: correct only where they are sign copies) and sign-extends them back before railsrev2.
-        let (htr1, htr2) = std::env::var("R0_HEAD_TRIM").ok().map(|v| { let x: Vec<usize> = v.split(',').map(|y| y.trim().parse().expect("R0_HEAD_TRIM")).collect(); (x[0], x[1]) }).unwrap_or((0, 0));
-        let (hw1, hw2) = { let rails = w.rails.as_ref().unwrap(); (rails.r1.len(), rails.r2.len()) };
-        if htr1 + htr2 > 0 {
-            let rails = w.rails.as_mut().unwrap();
-            book(c, "rails", "mul head trim", k.r1m, |c| { resize(c, &mut rails.r1, hw1 - htr1); resize(c, &mut rails.r2, hw2 - htr2); });
-            eprintln!("R0_HEAD_TRIM r1 {hw1}->{} r2 {hw2}->{}", hw1 - htr1, hw2 - htr2);
-        }
         let (s1, s2) = {
             let rails = w.rails.as_ref().unwrap();
             (*rails.r1.last().unwrap(), *rails.r2.last().unwrap())
@@ -3701,10 +3604,6 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
         if !r5_take_del_freed() { c.free_vec(&del); }
         w.bwire = Some(a);
         w.ywire = Some(b);
-        if htr1 + htr2 > 0 {
-            let rails = w.rails.as_mut().unwrap();
-            book(c, "rails", "mul head untrim", 0, |c| { resize(c, &mut rails.r1, hw1); resize(c, &mut rails.r2, hw2); });
-        }
         c.set_phase("heo_mul_railsrev2");
         let mut x_out = None;
         for t in (0..k.r1m).rev() {
@@ -3795,7 +3694,6 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
 
 thread_local! {
  static REVERSE_CODEC_CAPTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
- static REV_PAIR_TICK: std::cell::Cell<(usize,usize)> = const { std::cell::Cell::new((0,0)) };
  static REVERSE_LOW: std::cell::RefCell<Option<(QubitId,QubitId,QubitId,QubitId)>> = const { std::cell::RefCell::new(None) };
 }
 fn reverse_carries(c:&mut Builder,n:usize,a:QubitId,b:QubitId,prev:Option<QubitId>)->Vec<QubitId>{
