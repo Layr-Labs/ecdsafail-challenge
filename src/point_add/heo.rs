@@ -47,7 +47,12 @@ use std::sync::{Mutex, OnceLock};
 // ─── Research environment overlay ──────────────────────────────────────────
 
 fn truthy(var: &str) -> bool {
-    std::env::var(var).is_ok_and(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "" | "0" | "false" | "no" | "off"))
+    std::env::var(var).is_ok_and(|v| {
+        !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "no" | "off"
+        )
+    })
 }
 
 /// True iff the process asked for research behaviour. Read once.
@@ -65,8 +70,10 @@ pub fn enabled() -> bool {
 /// B3b: fit the square's wide exact adds under the cap (`HEO_FIT_ADDS`, default on).
 pub fn fit_adds() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| (enabled() && std::env::var("HEO_FIT_ADDS").map_or(true, |v| v.trim() != "0"))
-        || (research_on() && truthy("HEO_FIT_ON_HEAD")))
+    *ON.get_or_init(|| {
+        (enabled() && std::env::var("HEO_FIT_ADDS").map_or(true, |v| v.trim() != "0"))
+            || (research_on() && truthy("HEO_FIT_ON_HEAD"))
+    })
 }
 
 /// B3b: `HEO_FIT_MODE` = `wc` (width_composition for window/fold adds, exact split
@@ -74,13 +81,25 @@ pub fn fit_adds() -> bool {
 /// or `win` (chunked, boundaries erased immediately by `HEO_FIT_K`-bit windows).
 pub fn fit_mode_split() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| matches!(std::env::var("HEO_FIT_MODE").as_deref(), Ok("split") | Ok("win")))
+    *ON.get_or_init(|| {
+        matches!(
+            std::env::var("HEO_FIT_MODE").as_deref(),
+            Ok("split") | Ok("win")
+        )
+    })
 }
 pub fn fit_window() -> usize {
     static K: OnceLock<usize> = OnceLock::new();
-    *K.get_or_init(|| if std::env::var("HEO_FIT_MODE").as_deref() == Ok("win") {
-        std::env::var("HEO_FIT_K").ok().and_then(|s| s.parse().ok()).unwrap_or(24)
-    } else { 0 })
+    *K.get_or_init(|| {
+        if std::env::var("HEO_FIT_MODE").as_deref() == Ok("win") {
+            std::env::var("HEO_FIT_K")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(24)
+        } else {
+            0
+        }
+    })
 }
 
 /// Builder phase report switch (see `Builder::report_phase`).
@@ -91,7 +110,12 @@ pub fn phase_report_enabled() -> bool {
 fn log_once(kind: &str, name: &str, value: &str) {
     static SEEN: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
     let key = format!("{kind} {name}");
-    if SEEN.get_or_init(Default::default).lock().unwrap().insert(key) {
+    if SEEN
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .insert(key)
+    {
         eprintln!("HEO_OVERLAY {kind} {name}={value}");
     }
 }
@@ -122,7 +146,10 @@ pub fn passthrough(name: &str) -> Option<String> {
     }
     static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
     let mut cache = CACHE.get_or_init(Default::default).lock().unwrap();
-    let v = cache.entry(name.to_string()).or_insert_with(|| std::env::var(name).ok()).clone();
+    let v = cache
+        .entry(name.to_string())
+        .or_insert_with(|| std::env::var(name).ok())
+        .clone();
     drop(cache);
     if let Some(v) = &v {
         log_once("env", name, v);
@@ -178,10 +205,20 @@ impl HeoConfig {
 
 pub fn parse_envelope(text: &str) -> (Vec<usize>, Vec<usize>) {
     let (mut esw, mut ead) = (Vec::new(), Vec::new());
-    for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
-        let f: Vec<usize> = line.split_whitespace().map(|x| x.parse().expect("envelope: integer widths")).collect();
+    for line in text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+    {
+        let f: Vec<usize> = line
+            .split_whitespace()
+            .map(|x| x.parse().expect("envelope: integer widths"))
+            .collect();
         assert_eq!(f.len(), 2, "envelope line {line:?} is not `esw ead`");
-        assert!(f[0] >= 3 && f[1] >= 2 && f[0] <= N + 3 && f[1] <= N + 3, "envelope widths out of range: {line:?}");
+        assert!(
+            f[0] >= 3 && f[1] >= 2 && f[0] <= N + 3 && f[1] <= N + 3,
+            "envelope widths out of range: {line:?}"
+        );
         esw.push(f[0]);
         ead.push(f[1]);
     }
@@ -193,8 +230,8 @@ pub fn config() -> &'static HeoConfig {
     static CFG: OnceLock<HeoConfig> = OnceLock::new();
     CFG.get_or_init(|| {
         let path = std::env::var("HEO_ENVELOPE").expect("HEO_WALK needs HEO_ENVELOPE=<path to `esw ead` lines>");
-        // sky8 submission: the division envelope is the package's iA.d.100 (compiled in).
-        let text = include_str!("skywalk_data/sky8_env_div_iA.d.100.txt").to_owned();
+        // cap-1145: the division envelope is hyb_div_R395_m10_t0 (395 ticks, compiled in).
+        let text = include_str!("skywalk_data/hyb_div_R395_m10_t0.txt").to_owned();
         let (mut esw, mut ead) = parse_envelope(&text);
         if let Some(r) = std::env::var("HEO_R").ok().and_then(|s| s.parse::<usize>().ok()) {
             assert!(r <= esw.len(), "HEO_R {r} exceeds the envelope's {} ticks", esw.len());
@@ -228,19 +265,37 @@ pub fn config_mul() -> &'static HeoConfig {
         let base = config();
         let (mut esw, mut ead) = match std::env::var("HEO_ENVELOPE_MUL") {
             Ok(path) => {
-                // sky8 submission: the multiply envelope is the package's iA.m.100 (compiled in).
-                let text = include_str!("skywalk_data/sky8_env_mul_iA.m.100.txt").to_owned();
+                // cap-1145: the multiply envelope is hyb_mul_R395_m10_t0 (395 ticks, compiled in).
+                let text = include_str!("skywalk_data/hyb_mul_R395_m10_t0.txt").to_owned();
                 parse_envelope(&text)
             }
             Err(_) => (base.esw.clone(), base.ead.clone()),
         };
-        if let Some(r) = std::env::var("HEO_R_MUL").ok().and_then(|s| s.parse::<usize>().ok()) {
-            assert!(r <= esw.len(), "HEO_R_MUL {r} exceeds the envelope's {} ticks", esw.len());
+        if let Some(r) = std::env::var("HEO_R_MUL")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            assert!(
+                r <= esw.len(),
+                "HEO_R_MUL {r} exceeds the envelope's {} ticks",
+                esw.len()
+            );
             esw.truncate(r);
             ead.truncate(r);
         }
-        eprintln!("HEO_CONFIG_MUL R={} sum_esw={} sum_ead={}", esw.len(), esw.iter().sum::<usize>(), ead.iter().sum::<usize>());
-        HeoConfig { esw, ead, schedule: base.schedule, tie_ticks: base.tie_ticks, seed: base.seed }
+        eprintln!(
+            "HEO_CONFIG_MUL R={} sum_esw={} sum_ead={}",
+            esw.len(),
+            esw.iter().sum::<usize>(),
+            ead.iter().sum::<usize>()
+        );
+        HeoConfig {
+            esw,
+            ead,
+            schedule: base.schedule,
+            tie_ticks: base.tie_ticks,
+            seed: base.seed,
+        }
     })
 }
 
@@ -325,7 +380,13 @@ fn resize(c: &mut Builder, reg: &mut Vec<QubitId>, w: usize) {
 }
 
 /// One forward rail tick. Returns the tape pair `(typ_t, s_t)`.
-pub fn fwd_tick(c: &mut Builder, rails: &mut Rails, typ_prev: Option<QubitId>, wsw: usize, wad: usize) -> (QubitId, QubitId) {
+pub fn fwd_tick(
+    c: &mut Builder,
+    rails: &mut Rails,
+    typ_prev: Option<QubitId>,
+    wsw: usize,
+    wad: usize,
+) -> (QubitId, QubitId) {
     resize(c, &mut rails.r1, wsw);
     resize(c, &mut rails.r2, wsw);
     let (r1, r2) = (&rails.r1, &rails.r2);
@@ -357,10 +418,21 @@ pub fn fwd_tick(c: &mut Builder, rails: &mut Rails, typ_prev: Option<QubitId>, w
 
 /// Exact inverse of [`fwd_tick`]; `prev` are the rail lengths before it.
 #[allow(clippy::too_many_arguments)]
-pub fn rev_tick(c: &mut Builder, rails: &mut Rails, typ: QubitId, s: QubitId, typ_prev: Option<QubitId>,
-                wsw: usize, prev: (usize, usize)) {
+pub fn rev_tick(
+    c: &mut Builder,
+    rails: &mut Rails,
+    typ: QubitId,
+    s: QubitId,
+    typ_prev: Option<QubitId>,
+    wsw: usize,
+    prev: (usize, usize),
+) {
     let wad = rails.r1.len();
-    assert_eq!(rails.r2.len(), wad, "rev_tick: rails must both be at the add width");
+    assert_eq!(
+        rails.r2.len(),
+        wad,
+        "rev_tick: rails must both be at the add width"
+    );
     let tau = s;
     c.cx(rails.r1[wad - 1], tau);
     c.cx(rails.r2[wad - 1], tau);
@@ -453,7 +525,10 @@ fn seed_rails_3dpp(c: &mut Builder, d: &[QubitId], esw0: usize) -> Rails {
     let r1 = c.alloc_qubits(w0);
     c.cx_pairs(&d[..N], &r1[..N]); // d
     let z = c.alloc_qubits(2);
-    let two_d: Vec<QubitId> = std::iter::once(z[0]).chain(d[..N].iter().copied()).chain(std::iter::once(z[1])).collect();
+    let two_d: Vec<QubitId> = std::iter::once(z[0])
+        .chain(d[..N].iter().copied())
+        .chain(std::iter::once(z[1]))
+        .collect();
     gidney_add(c, &two_d, &r1[..N + 2], None); // 3d  (< 2^258)
     c.free_vec(&z);
     add_const(c, &r1, super::SECP256K1_P); // 3d + p
@@ -468,7 +543,10 @@ fn unseed_rails_3dpp(c: &mut Builder, rails: Rails, d: &[QubitId]) {
     add_const(c, &r1, super::SECP256K1_P);
     c.x_all(&r1); // 3d
     let z = c.alloc_qubits(2);
-    let two_d: Vec<QubitId> = std::iter::once(z[0]).chain(r2[..N].iter().copied()).chain(std::iter::once(z[1])).collect();
+    let two_d: Vec<QubitId> = std::iter::once(z[0])
+        .chain(r2[..N].iter().copied())
+        .chain(std::iter::once(z[1]))
+        .collect();
     gidney_sub(c, &two_d, &r1[..N + 2], None); // d
     c.free_vec(&z);
     c.cx_pairs(&r2[..N], &r1[..N]);
@@ -480,7 +558,11 @@ fn unseed_rails_3dpp(c: &mut Builder, rails: Rails, d: &[QubitId]) {
 /// `r <- p - r (mod 2^len)`: NOT r, then + (p + 1). `len - 2` CCX.
 fn p_minus(c: &mut Builder, r: &[QubitId]) {
     c.x_all(r);
-    add_const(c, r, super::SECP256K1_P + alloy_primitives::U256::from(1u64));
+    add_const(
+        c,
+        r,
+        super::SECP256K1_P + alloy_primitives::U256::from(1u64),
+    );
 }
 
 /// Unconditional `value <- p - value` through the head's controlled negate.
@@ -544,8 +626,14 @@ fn restore_layout(c: &mut Builder, current: &[QubitId], wanted: &[QubitId]) {
 }
 
 /// Forward walk of ticks `range`, pushing the tape and the pre-tick widths.
-fn walk_forward(c: &mut Builder, cfg: &HeoConfig, rails: &mut Rails, tape: &mut Vec<(QubitId, QubitId)>,
-                widths: &mut Vec<(usize, usize)>, t: usize) -> (QubitId, QubitId) {
+fn walk_forward(
+    c: &mut Builder,
+    cfg: &HeoConfig,
+    rails: &mut Rails,
+    tape: &mut Vec<(QubitId, QubitId)>,
+    widths: &mut Vec<(usize, usize)>,
+    t: usize,
+) -> (QubitId, QubitId) {
     widths.push((rails.r1.len(), rails.r2.len()));
     let prev = tape.last().map(|&(typ, _)| typ);
     let pair = fwd_tick(c, rails, prev, cfg.esw[t], cfg.ead[t]);
@@ -553,8 +641,14 @@ fn walk_forward(c: &mut Builder, cfg: &HeoConfig, rails: &mut Rails, tape: &mut 
     pair
 }
 
-fn walk_back_tick(c: &mut Builder, cfg: &HeoConfig, rails: &mut Rails, tape: &[(QubitId, QubitId)],
-                  widths: &[(usize, usize)], t: usize) {
+fn walk_back_tick(
+    c: &mut Builder,
+    cfg: &HeoConfig,
+    rails: &mut Rails,
+    tape: &[(QubitId, QubitId)],
+    widths: &[(usize, usize)],
+    t: usize,
+) {
     let (typ, s) = tape[t];
     let prev = if t > 0 { Some(tape[t - 1].0) } else { None };
     rev_tick(c, rails, typ, s, prev, cfg.esw[t], widths[t]);
@@ -568,7 +662,15 @@ pub static TICK_MARKS: Mutex<Vec<(usize, usize, usize, usize)>> = Mutex::new(Vec
 
 /// Forward payload cell of tick `t`. B2's HEO-specialised cell replaces the
 /// `h7::add_halve` call; the routing is at its MC floor (256 CCX).
-pub fn cell_fwd(c: &mut Builder, cfg: &HeoConfig, t: usize, typ: QubitId, s: QubitId, sig: &[QubitId], del: &[QubitId]) {
+pub fn cell_fwd(
+    c: &mut Builder,
+    cfg: &HeoConfig,
+    t: usize,
+    typ: QubitId,
+    s: QubitId,
+    sig: &[QubitId],
+    del: &[QubitId],
+) {
     let proxy = h7::proxy_round(cfg.esw[t]);
     let fw = h7::fold_window(proxy, false);
     c.x(typ); // the head cell adds (-1)^sign * source; HEO wants -(-1)^g Del
@@ -579,7 +681,15 @@ pub fn cell_fwd(c: &mut Builder, cfg: &HeoConfig, t: usize, typ: QubitId, s: Qub
 }
 
 /// Inverse payload cell of tick `t` (multiply leg).
-pub fn cell_rev(c: &mut Builder, cfg: &HeoConfig, t: usize, typ: QubitId, s: QubitId, sig: &[QubitId], del: &[QubitId]) {
+pub fn cell_rev(
+    c: &mut Builder,
+    cfg: &HeoConfig,
+    t: usize,
+    typ: QubitId,
+    s: QubitId,
+    sig: &[QubitId],
+    del: &[QubitId],
+) {
     route(c, s, sig, del);
     let proxy = h7::proxy_round(cfg.esw[t]);
     let fw = h7::fold_window(proxy, true);
@@ -618,8 +728,12 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
         let o1 = c.op_count();
         cell_fwd(c, cfg, t, typ, s, sig, &del);
         if trace {
-            eprintln!("HEO_TICK div {t} rail={o0} cell={o1} end={} proxy={} live={}", c.op_count(),
-                h7::proxy_round(cfg.esw[t]), c.active_qubits());
+            eprintln!(
+                "HEO_TICK div {t} rail={o0} cell={o1} end={} proxy={} live={}",
+                c.op_count(),
+                h7::proxy_round(cfg.esw[t]),
+                c.active_qubits()
+            );
             TICK_MARKS.lock().unwrap().push((t, o0, o1, c.op_count()));
         }
     }
@@ -679,7 +793,13 @@ fn tick0_closed_form_into(c: &mut Builder, g0: QubitId, del: &[QubitId], out: &[
     negate_if_zero(c, g0, out); // (-1)^g0 N
 }
 
-fn divide_pmd(c: &mut Builder, cfg: &HeoConfig, mut rails: Rails, numerator: &[QubitId], denominator: &[QubitId]) {
+fn divide_pmd(
+    c: &mut Builder,
+    cfg: &HeoConfig,
+    mut rails: Rails,
+    numerator: &[QubitId],
+    denominator: &[QubitId],
+) {
     let r = cfg.rounds();
     let del = numerator; // Del lives on the ABI wires: -2N
     h7::mod_double(c, del);
@@ -714,7 +834,13 @@ fn divide_pmd(c: &mut Builder, cfg: &HeoConfig, mut rails: Rails, numerator: &[Q
     unseed_rails(c, rails, denominator, cfg.seed);
 }
 
-fn multiply_pmd(c: &mut Builder, cfg: &HeoConfig, mut rails: Rails, numerator: &[QubitId], denominator: &[QubitId]) {
+fn multiply_pmd(
+    c: &mut Builder,
+    cfg: &HeoConfig,
+    mut rails: Rails,
+    numerator: &[QubitId],
+    denominator: &[QubitId],
+) {
     let r = cfg.rounds();
     c.set_phase("heo_mul_walk");
     let (mut tape, mut widths) = (Vec::with_capacity(r), Vec::with_capacity(r));
@@ -827,5 +953,12 @@ pub fn probe(kind: &str) -> Probe {
     b.finalize_records();
     let (num_qubits, num_bits) = b.i13_dims();
     let peak = b.peak_total();
-    Probe { ops: b.take_ops(), x, y, num_qubits, num_bits, peak }
+    Probe {
+        ops: b.take_ops(),
+        x,
+        y,
+        num_qubits,
+        num_bits,
+        peak,
+    }
 }
