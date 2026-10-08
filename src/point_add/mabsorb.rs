@@ -18,10 +18,14 @@ pub fn absorb(ops: Vec<Op>) -> Vec<Op> {
     let mut nq: u64 = 0;
     for op in &ops {
         for b in [op.c_target, op.c_condition] {
-            if b != NO_BIT { nb = nb.max(b.0 + 1); }
+            if b != NO_BIT {
+                nb = nb.max(b.0 + 1);
+            }
         }
         for q in [op.q_control1, op.q_control2, op.q_target] {
-            if q != NO_QUBIT { nq = nq.max(q.0 + 1); }
+            if q != NO_QUBIT {
+                nq = nq.max(q.0 + 1);
+            }
         }
     }
     // window[t] = indices of X-type writes into t since its last read; ok[t] = window still valid
@@ -38,27 +42,52 @@ pub fn absorb(ops: Vec<Op>) -> Vec<Op> {
     };
     for (i, op) in ops.iter().enumerate() {
         match op.kind {
-            K::PushCondition => { depth += 1; continue; }
-            K::PopCondition => { depth -= 1; continue; }
+            K::PushCondition => {
+                depth += 1;
+                continue;
+            }
+            K::PopCondition => {
+                depth -= 1;
+                continue;
+            }
             _ => {}
         }
         let t = op.q_target;
         match op.kind {
             K::X | K::CX | K::CCX => {
-                if op.kind != K::X { read(op.q_control1, &mut window, &mut ok); }
-                if op.kind == K::CCX { read(op.q_control2, &mut window, &mut ok); }
+                if op.kind != K::X {
+                    read(op.q_control1, &mut window, &mut ok);
+                }
+                if op.kind == K::CCX {
+                    read(op.q_control2, &mut window, &mut ok);
+                }
                 let ti = t.0 as usize;
-                if depth > 0 || op.c_condition != NO_BIT { ok[ti] = false; }
+                if depth > 0 || op.c_condition != NO_BIT {
+                    ok[ti] = false;
+                }
                 window[ti].push(i);
             }
-            K::CZ => { read(op.q_control1, &mut window, &mut ok); read(t, &mut window, &mut ok); }
-            K::CCZ => { read(op.q_control1, &mut window, &mut ok); read(op.q_control2, &mut window, &mut ok); read(t, &mut window, &mut ok); }
-            K::Z => { read(t, &mut window, &mut ok); }
-            K::Swap => { read(op.q_control1, &mut window, &mut ok); read(t, &mut window, &mut ok); }
+            K::CZ => {
+                read(op.q_control1, &mut window, &mut ok);
+                read(t, &mut window, &mut ok);
+            }
+            K::CCZ => {
+                read(op.q_control1, &mut window, &mut ok);
+                read(op.q_control2, &mut window, &mut ok);
+                read(t, &mut window, &mut ok);
+            }
+            K::Z => {
+                read(t, &mut window, &mut ok);
+            }
+            K::Swap => {
+                read(op.q_control1, &mut window, &mut ok);
+                read(t, &mut window, &mut ok);
+            }
             K::Hmr | K::R => {
                 let ti = t.0 as usize;
                 let has_ccx = window[ti].iter().any(|&j| ops[j].kind == K::CCX);
-                if op.kind == K::Hmr && has_ccx && ok[ti] && depth == 0 && op.c_condition == NO_BIT {
+                if op.kind == K::Hmr && has_ccx && ok[ti] && depth == 0 && op.c_condition == NO_BIT
+                {
                     plan.push((std::mem::take(&mut window[ti]), i));
                 }
                 window[ti].clear();
@@ -80,7 +109,9 @@ pub fn absorb(ops: Vec<Op>) -> Vec<Op> {
         let t = ops[*h].q_target;
         let m = ops[*h].c_target;
         let mut hm = Op::empty();
-        hm.kind = K::Hmr; hm.q_target = t; hm.c_target = fresh;
+        hm.kind = K::Hmr;
+        hm.q_target = t;
+        hm.c_target = fresh;
         hm.validate();
         before.insert(writes[0], hm);
         for &j in writes {
@@ -88,22 +119,41 @@ pub fn absorb(ops: Vec<Op>) -> Vec<Op> {
             let mut p = Op::empty();
             p.c_condition = fresh;
             match w.kind {
-                K::X => { p.kind = K::Neg; }
-                K::CX => { p.kind = K::Z; p.q_target = w.q_control1; }
-                K::CCX => { p.kind = K::CZ; p.q_control1 = w.q_control1; p.q_target = w.q_control2; saved += 1; }
+                K::X => {
+                    p.kind = K::Neg;
+                }
+                K::CX => {
+                    p.kind = K::Z;
+                    p.q_target = w.q_control1;
+                }
+                K::CCX => {
+                    p.kind = K::CZ;
+                    p.q_control1 = w.q_control1;
+                    p.q_target = w.q_control2;
+                    saved += 1;
+                }
                 _ => unreachable!(),
             }
             p.validate();
             replace.insert(j, vec![p]);
         }
         // old measurement: m <- fresh (t is already |0>)
-        let mut s0 = Op::empty(); s0.kind = K::BitStore0; s0.c_target = m; s0.validate();
-        let mut inv = Op::empty(); inv.kind = K::BitInvert; inv.c_target = m; inv.c_condition = fresh; inv.validate();
+        let mut s0 = Op::empty();
+        s0.kind = K::BitStore0;
+        s0.c_target = m;
+        s0.validate();
+        let mut inv = Op::empty();
+        inv.kind = K::BitInvert;
+        inv.c_target = m;
+        inv.c_condition = fresh;
+        inv.validate();
         replace.insert(*h, vec![s0, inv]);
     }
     let mut out = Vec::with_capacity(n + 2 * plan.len());
     for (i, op) in ops.into_iter().enumerate() {
-        if let Some(h) = before.remove(&i) { out.push(h); }
+        if let Some(h) = before.remove(&i) {
+            out.push(h);
+        }
         match replace.remove(&i) {
             Some(v) => out.extend(v),
             None => out.push(op),
