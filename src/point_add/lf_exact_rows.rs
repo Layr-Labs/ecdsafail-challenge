@@ -4,14 +4,16 @@
 use crate::circuit::{Op,OperationType,QubitId,NO_BIT};
 use sha3::{Digest,Sha3_256};
 pub(super) fn apply(mut ops:Vec<Op>) -> Vec<Op> {
-    assert_eq!(ops.len(), 9457301, "LF exact3 source length mismatch");
+    // Guard: the state-producing prefix through the last row site (111,717 records) must be byte-identical to the
+    // stream the rows were proved on (same SHA3-256 as the 7e2647 / afbbdb2 / 6c70b7 pre-rewrite prefixes).
+    assert!(ops.len() > 111717, "LF exact3 stream too short");
     let mut h=Sha3_256::new();
-    for o in &ops[..ops.len()-96] {
+    for o in &ops[..111717] {
         h.update((o.kind as u32).to_le_bytes());h.update(0u32.to_le_bytes());
         for v in [o.q_control2.0,o.q_control1.0,o.q_target.0,o.c_target.0,o.c_condition.0,o.r_target.0] {h.update(v.to_le_bytes());}
     }
     let digest=format!("{:x}",h.finalize());
-    assert_eq!(digest,"2cb68a87747f0d1bc75cbbb10c36d0d429d1cccb9e424dbca965817a72f7a50b", "LF exact3 computational stream mismatch");
+    assert_eq!(digest,"afdcbc3c58c02c97e6ff61cdcbf1dbc8995d2d14a64997927b5949a637ea4db7", "LF exact3 proof prefix mismatch");
     let mut rows:Vec<(usize,u64,u64,u64,bool,Vec<u64>)>=include_str!("leapfrog_data/q1239_selected_exact3.txt").lines().map(|l| {
         let f:Vec<&str>=l.split_whitespace().collect();
         (f[0].parse().unwrap(),f[1].parse().unwrap(),f[2].parse().unwrap(),f[3].parse().unwrap(),f[4]=="1",f[5].split(',').map(|x|x.parse().unwrap()).collect())
