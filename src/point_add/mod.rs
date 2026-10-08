@@ -152,7 +152,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "402416799",
+        "TAIL_NONCE" => "281312206432514",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -582,6 +582,7 @@ pub fn build() -> Vec<Op> {
     x.q_target = QubitId(0);
     ops.extend(std::iter::repeat_n(x, 96));
     ops = apply_tail_nonce(ops, nonce);
+    ops = lf_exact_rows::apply(ops);
     ops
 }
 
@@ -620,3 +621,5 @@ mod mabsorb;
 pub mod constant_templates;
 
 mod native_sfuse_b;
+
+mod lf_exact_rows;
