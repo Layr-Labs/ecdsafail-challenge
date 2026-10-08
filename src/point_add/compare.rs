@@ -16,17 +16,32 @@ use crate::circuit::QubitId;
 /// starts clean, and after the first CX `u[0]` already holds what a clean
 /// carry-in wire would have held — so it serves as the first nonlinear control
 /// and no wire is needed either way.
-pub(crate) fn cmp_lt_phase(circ: &mut Builder, u: &[QubitId], v: &[QubitId], borrow_in: Option<QubitId>) {
+pub(crate) fn cmp_lt_phase(
+    circ: &mut Builder,
+    u: &[QubitId],
+    v: &[QubitId],
+    borrow_in: Option<QubitId>,
+) {
     cmp_lt_phase_v0(circ, u, v, borrow_in, None)
 }
 
 /// R5_CCMP (sky-PM Round 5): [`cmp_lt_phase`] where `v[0]` is known to hold the classical bit `v0cl`
 /// (a register loaded from classical data). The first carry `u0' & (v0 ^ u0') = u0' & !v0` is then a
 /// CX plus a classically conditioned CX: one Toffoli less, same predicate, same measurements.
-pub(crate) fn cmp_lt_phase_v0(circ: &mut Builder, u: &[QubitId], v: &[QubitId], borrow_in: Option<QubitId>, v0cl: Option<crate::circuit::BitId>) {
-    if super::dirty_boundary_probe::try_tail(circ,u,v,borrow_in){return;}
-    if super::constant_templates::square_compare(circ,u,v,borrow_in){return;}
-    let _dirty_trace=super::dirty_boundary_probe::Trace::new(circ,"cmp_lt_phase",u.len());
+pub(crate) fn cmp_lt_phase_v0(
+    circ: &mut Builder,
+    u: &[QubitId],
+    v: &[QubitId],
+    borrow_in: Option<QubitId>,
+    v0cl: Option<crate::circuit::BitId>,
+) {
+    if super::dirty_boundary_probe::try_tail(circ, u, v, borrow_in) {
+        return;
+    }
+    if super::constant_templates::square_compare(circ, u, v, borrow_in) {
+        return;
+    }
+    let _dirty_trace = super::dirty_boundary_probe::Trace::new(circ, "cmp_lt_phase", u.len());
 
     let n = u.len();
     assert_eq!(v.len(), n);
@@ -40,12 +55,18 @@ pub(crate) fn cmp_lt_phase_v0(circ: &mut Builder, u: &[QubitId], v: &[QubitId], 
     // is redundant. Otherwise restore the predictor before its operand bit
     // is read, and recreate the first control only for the final phase erase.
     // No separate predictor copy or extra nonlinear gate is necessary.
-    if borrow_in==Some(v[0]) {
-        assert!(n>=3,"aliased low seed needs at least two remaining comparison bits");
-        return cmp_lt_phase_v0(circ,&u[1..],&v[1..],borrow_in,None);
+    if borrow_in == Some(v[0]) {
+        assert!(
+            n >= 3,
+            "aliased low seed needs at least two remaining comparison bits"
+        );
+        return cmp_lt_phase_v0(circ, &u[1..], &v[1..], borrow_in, None);
     }
-    let operand_seed=borrow_in.is_some_and(|q|v[1..].contains(&q));
-    assert!(!borrow_in.is_some_and(|q|u.contains(&q)),"seed cannot alias the accumulator");
+    let operand_seed = borrow_in.is_some_and(|q| v[1..].contains(&q));
+    assert!(
+        !borrow_in.is_some_and(|q| u.contains(&q)),
+        "seed cannot alias the accumulator"
+    );
     let last = n - 1;
 
     let carries = circ.alloc_qubits(last);
@@ -66,7 +87,9 @@ pub(crate) fn cmp_lt_phase_v0(circ: &mut Builder, u: &[QubitId], v: &[QubitId], 
         }
         _ => circ.ccx(first_ctrl, v[0], carries[0]),
     }
-    if operand_seed {circ.cx(u[0],borrow_in.unwrap());}
+    if operand_seed {
+        circ.cx(u[0], borrow_in.unwrap());
+    }
     circ.cx(carries[0], u[0]);
     for i in 1..last {
         circ.cx(u[i], v[i]);
@@ -95,7 +118,9 @@ pub(crate) fn cmp_lt_phase_v0(circ: &mut Builder, u: &[QubitId], v: &[QubitId], 
     circ.hmr(carries[0], m0);
     match borrow_in {
         Some(p) => {
-            if operand_seed {circ.cx(u[0],p);}
+            if operand_seed {
+                circ.cx(u[0], p);
+            }
             circ.cz_if(p, v[0], m0);
             circ.cx(u[0], p);
         }
@@ -125,7 +150,13 @@ pub(crate) fn cmp_lt_phase_v0(circ: &mut Builder, u: &[QubitId], v: &[QubitId], 
 ///
 /// The caller owns `target` and frees it.
 /// [`erase_with_compare`] with `b[0]` known to hold the classical bit `b0cl` (see [`cmp_lt_phase_v0`]).
-pub fn erase_with_compare_v0(circ: &mut Builder, target: QubitId, a: &[QubitId], b: &[QubitId], b0cl: crate::circuit::BitId) {
+pub fn erase_with_compare_v0(
+    circ: &mut Builder,
+    target: QubitId,
+    a: &[QubitId],
+    b: &[QubitId],
+    b0cl: crate::circuit::BitId,
+) {
     let bit = circ.alloc_bit();
     circ.hmr(target, bit);
     circ.push_condition(bit);
@@ -147,4 +178,80 @@ pub fn erase_with_compare(
     cmp_lt_phase(circ, a, b, borrow_in);
     circ.pop_condition();
     circ.free_bit(bit);
+}
+
+/// Exact comparison phase `u < v` when `v` is a runtime-classical word.
+///
+/// Keeping `v` classical removes the second 256-qubit operand bank.  Each
+/// majority stage then has one classical input and one nonlinear quantum term,
+/// so it still costs one Toffoli but needs only the carry bank.  This is the
+/// all-input fallback used by the sub-1000Q coordinate shell: a full 256-bit
+/// comparison peaks well below the cap, whereas materializing `v` and using
+/// [`cmp_lt_phase`] would require 1023 live qubits beside both point registers.
+pub(crate) fn cmp_lt_phase_cbits(circ: &mut Builder, u: &[QubitId], v: &[crate::circuit::BitId]) {
+    let n = u.len();
+    assert_eq!(v.len(), n);
+    assert!(n > 1);
+
+    let carries = circ.alloc_qubits(n - 1);
+    circ.x_all(u); // a = !u; carry(~u + v) is exactly v > u.
+
+    // First carry is a[0] & v[0].
+    circ.push_condition(v[0]);
+    circ.cx(u[0], carries[0]);
+    circ.pop_condition();
+
+    // For a classical bit b, MAJ(a,b,c) is a&c when b=0 and
+    // a|c = a^c^(a&c) when b=1.
+    for i in 1..n - 1 {
+        circ.ccx(u[i], carries[i - 1], carries[i]);
+        circ.push_condition(v[i]);
+        circ.cx(u[i], carries[i]);
+        circ.cx(carries[i - 1], carries[i]);
+        circ.pop_condition();
+    }
+
+    // Emit the top carry as phase, without allocating its wire.
+    circ.cz(u[n - 1], carries[n - 2]);
+    circ.push_condition(v[n - 1]);
+    circ.cz(u[n - 1], u[n - 1]);
+    circ.cz(carries[n - 2], carries[n - 2]);
+    circ.pop_condition();
+
+    // Measurement-uncompute each carry.  The correction is the same Boolean
+    // expression used above, now applied as phase under the measurement bit.
+    for i in (1..n - 1).rev() {
+        let m = circ.alloc_bit();
+        circ.hmr(carries[i], m);
+        circ.cz_if(u[i], carries[i - 1], m);
+        circ.push_condition(v[i]);
+        circ.cz_if(u[i], u[i], m);
+        circ.cz_if(carries[i - 1], carries[i - 1], m);
+        circ.pop_condition();
+        circ.free_bit(m);
+    }
+    let m0 = circ.alloc_bit();
+    circ.hmr(carries[0], m0);
+    circ.push_condition(v[0]);
+    circ.cz_if(u[0], u[0], m0);
+    circ.pop_condition();
+    circ.free_bit(m0);
+
+    circ.free_vec(&carries);
+    circ.x_all(u);
+}
+
+/// Measured carry erasure with an exact full-width runtime-classical compare.
+pub(crate) fn erase_with_compare_cbits(
+    circ: &mut Builder,
+    target: QubitId,
+    a: &[QubitId],
+    b: &[crate::circuit::BitId],
+) {
+    let m = circ.alloc_bit();
+    circ.hmr(target, m);
+    circ.push_condition(m);
+    cmp_lt_phase_cbits(circ, a, b);
+    circ.pop_condition();
+    circ.free_bit(m);
 }
