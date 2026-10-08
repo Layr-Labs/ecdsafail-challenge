@@ -286,3 +286,6 @@ pub(crate) fn simplify(ops: Vec<Op>) -> Vec<Op> {
     result
 }
 
+#[cfg(test)]
+#[path = "affine_simplify_tests.rs"]
+mod tests;
