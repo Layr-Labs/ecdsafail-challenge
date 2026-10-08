@@ -37,14 +37,14 @@ pub(crate) fn install_recipe() {
         // window choice rule: in the equal-sign cases that the low bits do not settle, a compare of the two rails on a
         // window of their top bits decides between deep and flat
         ("LF_W1", "1"),
-        // ... in this form on every tick but the first and the last: a 22-bit window, deep or flat by the compare
+        // ... in this form on every tick but the first and the last: a 21-bit window, deep or flat by the compare
         // [|T| > 2|B|] and by what the second forced step did (added, subtracted, or subtracted with a sign flip);
         // computed inside that step's rail add, while its carries are on wires. It has its own 138-tick width table
         // and window anchors (see `steps`, `w1_anchor`)
-        ("LF_YP8", "22"),
-        // ... with a shorter window on the late ticks: 20 bits from tick 90, 18 from 100, 16 from 112, 14 from 118,
-        // 12 from 124
-        ("LF_YP8_LATE", "90:20,100:18,112:16,118:14,124:12"),
+        ("LF_YP8", "21"),
+        // ... with a shorter window on the late ticks: 19 bits from tick 90, 17 from 100, 15 from 112, 13 from 118,
+        // 11 from 124
+        ("LF_YP8_LATE", "90:19,100:17,112:15,118:13,124:11"),
         // tick 0's letter is not held on the tape while a walk sits at the cap: it is measured away after its last
         // read and derived again from the source rail at the walk's end, where the measurement's phase is fixed
         ("LF_T0_FREE", "1"),
@@ -56,28 +56,28 @@ pub(crate) fn install_recipe() {
         ("LF_MERGED", "1"),
         // ... also on the late ticks (split fold where room is short)
         ("LF_MERGED_LATE", "1"),
-        // selected hunt package: standard merged window 54 bits; late 58, capped
-        // by the standard window
-        ("LF_MERGED_WIN", "54"),
+        // merged-op fold windows: standard 55 bits; late 58, capped by the standard window
+        ("LF_MERGED_WIN", "55"),
         ("LF_MERGED_LATE_WIN", "58"),
-        // ticks 0..76 of the payload-fused traversals split into a rails-only pass (one payload register live: no
+        // ticks 0..77 of the payload-fused traversals split into a rails-only pass (one payload register live: no
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
-        ("LF_REORDER", "76"),
+        ("LF_REORDER", "77"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
         // with the coordinate seams
         ("LF_TIE_SEED", "1"),
         ("LF_SIGNWIRE", "1"),
         ("LF_SEAMS", "1"),
         // peak cap, tuned together with LF_REORDER
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1236"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1237"),
         // the merged step's shared core has 13 ANDs (the rank bound) where it had 14; every fit, split and plan rule
         // counts the wire it no longer holds
         ("LF_CORE_FREED", "all"),
         ("NATIVE_SFUSE_B", "1"),
-        // payload cells: fold window floored at 50 bits; from tick 130 the chunk-boundary compare is widened by one bit
+        // payload cells: fold window floored at 50 bits (Skywalk's late-round profile narrows it to 49),
+        // chunk-boundary compare widened by one bit from tick 120 on, flag compare not widened (1 / 0 bits)
         ("LF_CELL_FOLD_MIN", "50"),
         ("LF_CMP_SHIFT", "1,0"),
-        ("LF_CMP_FROM", "130"),
+        ("LF_CMP_FROM", "120"),
         // tie-safe cell mode off (LF_TIE_FROM past the last tick): Leapfrog rail steps never cancel to zero, so the
         // cells see no structural ties
         ("LF_TIE_FROM", "999"),
