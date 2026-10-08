@@ -56,8 +56,9 @@ pub(crate) fn install_recipe() {
         ("LF_MERGED", "1"),
         // ... also on the late ticks (split fold where room is short)
         ("LF_MERGED_LATE", "1"),
-        // merged-op fold windows: standard 56 bits; late 58, capped by the standard window
-        ("LF_MERGED_WIN", "56"),
+        // merged-op fold windows: standard 55 bits (one bit narrower than c2fb64c3: a precision trade); late 58, capped
+        // by the standard window
+        ("LF_MERGED_WIN", "55"),
         ("LF_MERGED_LATE_WIN", "58"),
         // ticks 0..77 of the payload-fused traversals split into a rails-only pass (one payload register live: no
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
@@ -73,9 +74,9 @@ pub(crate) fn install_recipe() {
         // counts the wire it no longer holds
         ("LF_CORE_FREED", "all"),
         ("NATIVE_SFUSE_B", "1"),
-        // payload cells: fold window floored at 54 bits (Skywalk's late-round profile narrows it to 49),
+        // payload cells: fold window floored at 52 bits (54 in c2fb64c3; Skywalk's late-round profile narrows it to 49),
         // chunk-boundary / flag compares not widened (0 / 0 bits)
-        ("LF_CELL_FOLD_MIN", "54"),
+        ("LF_CELL_FOLD_MIN", "52"),
         ("LF_CMP_SHIFT", "0,0"),
         // tie-safe cell mode off (LF_TIE_FROM past the last tick): Leapfrog rail steps never cancel to zero, so the
         // cells see no structural ties
