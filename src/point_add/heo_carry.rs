@@ -151,24 +151,48 @@ pub struct CarryCfg {
 }
 
 /// B6: parse an R5-A window table: lines `leg t esw proxy pw pi dB dF dX` (leg = div | mul; '#' comments).
-fn parse_cell_windows(text: &str) -> std::collections::HashMap<(bool, usize), (isize, isize, isize)> {
+fn parse_cell_windows(
+    text: &str,
+) -> std::collections::HashMap<(bool, usize), (isize, isize, isize)> {
     let mut m = std::collections::HashMap::new();
-    for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+    for line in text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+    {
         let f: Vec<&str> = line.split_whitespace().collect();
         assert!(f.len() >= 9, "HEO_CELL_WINDOWS: bad line {line:?}");
-        let mul = match f[0] { "div" => false, "mul" => true, o => panic!("HEO_CELL_WINDOWS leg {o:?}") };
+        let mul = match f[0] {
+            "div" => false,
+            "mul" => true,
+            o => panic!("HEO_CELL_WINDOWS leg {o:?}"),
+        };
         let t: usize = f[1].parse().expect("HEO_CELL_WINDOWS t");
-        let p = |i: usize| f[i].parse::<isize>().unwrap_or_else(|_| panic!("HEO_CELL_WINDOWS field {i} in {line:?}"));
-        assert!(m.insert((mul, t), (p(6), p(7), p(8))).is_none(), "HEO_CELL_WINDOWS duplicate {line:?}");
+        let p = |i: usize| {
+            f[i].parse::<isize>()
+                .unwrap_or_else(|_| panic!("HEO_CELL_WINDOWS field {i} in {line:?}"))
+        };
+        assert!(
+            m.insert((mul, t), (p(6), p(7), p(8))).is_none(),
+            "HEO_CELL_WINDOWS duplicate {line:?}"
+        );
     }
     m
 }
 
 /// B6: the (dB, dF, dX) shift of cell (leg, t) under `HEO_CELL_WINDOWS` ((0, 0, 0) when absent).
 fn cell_shift(mul: bool, t: usize) -> (isize, isize, isize) {
-    let (b, f, x) = carry_cfg().cell_windows.as_ref().and_then(|m| m.get(&(mul, t)).copied()).unwrap_or((0, 0, 0));
+    let (b, f, x) = carry_cfg()
+        .cell_windows
+        .as_ref()
+        .and_then(|m| m.get(&(mul, t)).copied())
+        .unwrap_or((0, 0, 0));
     // GO r6: per-cell compare re-balance. GO_CELLB / GO_CELLF = "leg:lo-hi:delta,..." (leg div|mul|a) add to dB / dF.
-    (b + go_cell_delta("GO_CELLB", mul, t), f + go_cell_delta("GO_CELLF", mul, t), x)
+    (
+        b + go_cell_delta("GO_CELLB", mul, t),
+        f + go_cell_delta("GO_CELLF", mul, t),
+        x,
+    )
 }
 
 fn go_cell_delta(key: &str, mul: bool, t: usize) -> isize {
@@ -177,19 +201,29 @@ fn go_cell_delta(key: &str, mul: bool, t: usize) -> isize {
     for it in v.split(',').filter(|s| !s.is_empty()) {
         let f: Vec<&str> = it.split(':').collect();
         assert_eq!(f.len(), 3, "bad {key} {it}");
-        if (f[0] == "div" && mul) || (f[0] == "mul" && !mul) { continue; }
+        if (f[0] == "div" && mul) || (f[0] == "mul" && !mul) {
+            continue;
+        }
         let (lo, hi) = f[1].split_once('-').expect("lo-hi");
         let (lo, hi): (usize, usize) = (lo.parse().unwrap(), hi.parse().unwrap());
-        if t >= lo && t <= hi { d += f[2].parse::<isize>().unwrap(); }
+        if t >= lo && t <= hi {
+            d += f[2].parse::<isize>().unwrap();
+        }
     }
     d
 }
 fn env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(default)
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(default)
 }
 fn env_bool(name: &str, default: bool) -> bool {
     match std::env::var(name) {
-        Ok(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "" | "0" | "false" | "no" | "off"),
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "no" | "off"
+        ),
         Err(_) => default,
     }
 }
@@ -234,7 +268,7 @@ pub fn carry_cfg() -> &'static CarryCfg {
             loan_both: env_bool("HEO_LOAN_BOTH", false),
             rail_max: env_usize("HEO_RAIL_MAX", usize::MAX),
             proxy_esw: std::env::var("HEO_PROXY_ENVELOPE").ok().filter(|p| !p.trim().is_empty()).map(|p| {
-                let text = include_str!("skywalk_data/env_front07_R393_clamp.txt").to_owned();
+                let text = include_str!("skywalk_data/env_front07_R396_clamp.txt").to_owned(); // cap-1145 proxy envelope (compiled in)
                 super::parse_envelope(&text).0
             }),
             db_skip: env_bool("HEO_DB_SKIP", false),
@@ -298,6 +332,19 @@ pub struct Ledger {
 
 pub static LEDGER: Mutex<Option<Ledger>> = Mutex::new(None);
 
+thread_local! {
+    /// Semantic census at the start of the current step: (rails wires, tape wires, payload wires, walk singles).
+    pub static SEM: std::cell::Cell<(usize, usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0, 0)) };
+}
+fn sem_walk(w: &Walk, pay: usize, loaned: usize) {
+    let rails = w.rails.as_ref().map_or(0, |r| r.r1.len() + r.r2.len()) + loaned;
+    let extra = [w.o0, w.bwire, w.ywire, w.pending_low]
+        .iter()
+        .filter(|q| q.is_some())
+        .count();
+    SEM.with(|x| x.set((rails, w.tape.wires(), pay, extra)));
+}
+
 /// `(op index at the END of a booked step, label, t)` under `HEO_TICK_TRACE` (probe attribution).
 pub static CHECKPOINTS: Mutex<Vec<(usize, &'static str, usize)>> = Mutex::new(Vec::new());
 fn tracing() -> bool {
@@ -318,7 +365,13 @@ thread_local! {
 
 /// Run `body`, booking its OWN Toffoli (nested books excluded) under `comp` and its
 /// window peak (nested included) under `(label, t)`.
-fn book<R>(c: &mut Builder, comp: &'static str, label: &'static str, t: usize, body: impl FnOnce(&mut Builder) -> R) -> R {
+fn book<R>(
+    c: &mut Builder,
+    comp: &'static str,
+    label: &'static str,
+    t: usize,
+    body: impl FnOnce(&mut Builder) -> R,
+) -> R {
     let before = c.report_totals();
     let skywalk_before = (c.op_count(), c.active_qubits(), c.phase_name());
     let p0 = c.take_win_peak();
@@ -342,11 +395,12 @@ fn book<R>(c: &mut Builder, comp: &'static str, label: &'static str, t: usize, b
         _ => (0, 0.0),
     };
     if env_bool("SKYWALK_SITE_TRACE", false) {
-        eprintln!("SKYWALK_SITE\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.1}\t{}\t{:.1}",
+        let (sr, st, sp, sx) = SEM.with(|x| x.get());
+        eprintln!("SKYWALK_SITE\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.1}\t{}\t{:.1}\t{}\t{}\t{}\t{}",
             skywalk_before.2, comp, label, t, skywalk_before.0, c.op_count(),
             skywalk_before.1, c.active_qubits(), peak,
             h7::cap().saturating_sub(skywalk_before.1 as usize),
-            h7::cap().saturating_sub(c.active_qubits() as usize), dn, de, dn - cn, de - ce);
+            h7::cap().saturating_sub(c.active_qubits() as usize), dn, de, dn - cn, de - ce, sr, st, sp, sx);
     }
     ledger(|l| {
         let e = l.comp.entry(comp).or_insert((0, 0.0));
@@ -373,7 +427,10 @@ pub fn print_ledger() {
         tn += n;
         te += e;
     }
-    eprintln!("HEO_LEDGER {:<22} native={tn:>8} expected={te:>11.1}", "TOTAL(heo)");
+    eprintln!(
+        "HEO_LEDGER {:<22} native={tn:>8} expected={te:>11.1}",
+        "TOTAL(heo)"
+    );
     l.binders.sort_by(|a, b| b.0.cmp(&a.0));
     for (p, label, t) in l.binders.iter().take(12) {
         eprintln!("HEO_BINDER peak={p} {label} t={t}");
@@ -381,7 +438,10 @@ pub fn print_ledger() {
     for (k, v) in &l.splits {
         eprintln!("HEO_SPLITS {k} {v}");
     }
-    eprintln!("HEO_MIRROR over={} max_over={} infeasible={}", l.mirror_over, l.mirror_over_max, l.infeasible);
+    eprintln!(
+        "HEO_MIRROR over={} max_over={} infeasible={}",
+        l.mirror_over, l.mirror_over_max, l.infeasible
+    );
 }
 
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Exact ripple with deferred phases (B1 b1arith.ripple_add) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -391,9 +451,25 @@ fn carry_step(c: &mut Builder, a: QubitId, b: QubitId, prev: Option<QubitId>, ca
         c.cx(p, a);
         c.cx(p, b);
     }
-    let reused=REVERSE_LOW.with(|r| {let mut v=r.borrow_mut();if v.as_ref().is_some_and(|&(aa,bb,p,q)| (a,b,prev,carry)==(aa,bb,Some(p),q)){v.take();true}else{false}});
-    if !reused {c.ccx(a, b, carry);} else {eprintln!("REVERSE_CARRY_REUSE carry={} a={} b={}",carry.0,a.0,b.0);}
-    if let Some(p) = prev { c.cx(p, carry); }
+    let reused = REVERSE_LOW.with(|r| {
+        let mut v = r.borrow_mut();
+        if v.as_ref()
+            .is_some_and(|&(aa, bb, p, q)| (a, b, prev, carry) == (aa, bb, Some(p), q))
+        {
+            v.take();
+            true
+        } else {
+            false
+        }
+    });
+    if !reused {
+        c.ccx(a, b, carry);
+    } else {
+        eprintln!("REVERSE_CARRY_REUSE carry={} a={} b={}", carry.0, a.0, b.0);
+    }
+    if let Some(p) = prev {
+        c.cx(p, carry);
+    }
 }
 
 // v025 A-2 (two-tick shared product, ported from c1-001/two-tick-001): the tick's first
@@ -404,22 +480,45 @@ thread_local! {
     static SHARED_LOW: std::cell::RefCell<Option<(QubitId, QubitId, QubitId, Option<QubitId>)>> = const { std::cell::RefCell::new(None) };
 }
 fn shared_low_start(a: QubitId, b: QubitId, p: QubitId) {
-    SHARED_LOW.with(|x| { assert!(x.borrow().is_none()); *x.borrow_mut() = Some((a, b, p, None)); });
+    SHARED_LOW.with(|x| {
+        assert!(x.borrow().is_none());
+        *x.borrow_mut() = Some((a, b, p, None));
+    });
 }
 fn shared_low_finish() -> QubitId {
-    SHARED_LOW.with(|x| x.borrow_mut().take().unwrap().3.expect("shared low carry: first carry not encountered"))
+    SHARED_LOW.with(|x| {
+        x.borrow_mut()
+            .take()
+            .unwrap()
+            .3
+            .expect("shared low carry: first carry not encountered")
+    })
 }
 
-fn unwind_carry_step(c: &mut Builder, a: QubitId, b: QubitId, prev: Option<QubitId>, carry: QubitId) {
+fn unwind_carry_step(
+    c: &mut Builder,
+    a: QubitId,
+    b: QubitId,
+    prev: Option<QubitId>,
+    carry: QubitId,
+) {
     let keep = SHARED_LOW.with(|x| {
         let mut v = x.borrow_mut();
         if let Some((aa, bb, pp, out)) = v.as_mut() {
-            if a == *aa && b == *bb && prev == Some(*pp) { assert!(out.is_none()); *out = Some(carry); return true; }
+            if a == *aa && b == *bb && prev == Some(*pp) {
+                assert!(out.is_none());
+                *out = Some(carry);
+                return true;
+            }
         }
         false
     });
     if keep {
-        let p = prev.unwrap(); c.cx(p, carry); c.cx(p, a); c.cx(a, b); return;
+        let p = prev.unwrap();
+        c.cx(p, carry);
+        c.cx(p, a);
+        c.cx(a, b);
+        return;
     }
     if let Some(p) = prev {
         c.cx(p, carry);
@@ -464,8 +563,14 @@ fn terminal_step(c: &mut Builder, a: &[QubitId], b: &[QubitId], prev: Option<Qub
 /// `b += a + cin`. Vented to `cout` when given (`w - 1` owned carries), else wrapped
 /// (`w - 2` owned). `deferred` holds `(i, m)`: `Z^m` on the carry out of bit `i`
 /// while it still holds the arithmetic carry (I-H mirror repair).
-fn rail_ripple(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>, cout: Option<QubitId>,
-               deferred: &mut Vec<(usize, BitId)>) {
+fn rail_ripple(
+    c: &mut Builder,
+    a: &[QubitId],
+    b: &[QubitId],
+    cin: Option<QubitId>,
+    cout: Option<QubitId>,
+    deferred: &mut Vec<(usize, BitId)>,
+) {
     let w = b.len();
     assert!(w >= 1 && a.len() == w);
     let vented = cout.is_some();
@@ -538,8 +643,16 @@ fn split_sizes(w: usize, room: usize, exact: bool) -> Result<Option<Vec<usize>>,
 /// planner sees one more wire of room), read the top bit from `a[w-2]` in the terminal step, and restore the
 /// copy after the add. Clifford only; exact on every shot.
 #[allow(clippy::too_many_arguments)]
-fn rail_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, mode: SplitMode,
-            tick_def: &mut Vec<(usize, BitId)>, label: &'static str, top_copy: bool) {
+fn rail_add(
+    c: &mut Builder,
+    a: &[QubitId],
+    b: &[QubitId],
+    cin: QubitId,
+    mode: SplitMode,
+    tick_def: &mut Vec<(usize, BitId)>,
+    label: &'static str,
+    top_copy: bool,
+) {
     static ON: OnceLock<bool> = OnceLock::new();
     let on = *ON.get_or_init(|| env_bool("K3B_RAIL_LOAN", false));
     let w = b.len();
@@ -557,12 +670,22 @@ fn rail_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, mode: S
 }
 
 /// Servoed rail add `b += a + cin` (wrapped). See [`SplitMode`].
-fn rail_add_inner(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, mode: SplitMode,
-            tick_def: &mut Vec<(usize, BitId)>, label: &'static str) {
+fn rail_add_inner(
+    c: &mut Builder,
+    a: &[QubitId],
+    b: &[QubitId],
+    cin: QubitId,
+    mode: SplitMode,
+    tick_def: &mut Vec<(usize, BitId)>,
+    label: &'static str,
+) {
     let w = b.len();
     let room = h7::cap().saturating_sub(c.active_qubits() as usize);
     if env_bool("K3B_RAIL_TRACE", false) {
-        eprintln!("K3B_RAIL {label} w={w} room={room} mode={mode:?} def={}", tick_def.len());
+        eprintln!(
+            "K3B_RAIL {label} w={w} room={room} mode={mode:?} def={}",
+            tick_def.len()
+        );
     }
     if !tick_def.is_empty() || mode == SplitMode::Apply {
         if w > room + 2 {
@@ -572,7 +695,10 @@ fn rail_add_inner(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, m
             });
         }
         rail_ripple(c, a, b, Some(cin), None, tick_def);
-        assert!(tick_def.is_empty(), "deferred phase did not name an owned carry");
+        assert!(
+            tick_def.is_empty(),
+            "deferred phase did not name an owned carry"
+        );
         return;
     }
     let sizes = match split_sizes(w, room, mode == SplitMode::Exact) {
@@ -582,21 +708,40 @@ fn rail_add_inner(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, m
         }
         Err(()) => {
             ledger(|l| l.infeasible += 1);
+            if sq_railbridge() && w >= 3 {
+                let owned = w - 2;
+                let bridges = owned - room.min(owned);
+                eprintln!("SQ_RAILBRIDGE rail {label} w={w} room={room} bridged={bridges}");
+                ledger(|l| *l.splits.entry("SQ bridged rail stages").or_insert(0) += bridges);
+                super::super::bridge::raw_add(c, a, b, Some(cin), None, bridges);
+                return;
+            }
             rail_ripple(c, a, b, Some(cin), None, &mut Vec::new());
             return;
         }
         Ok(Some(s)) => s,
     };
     let kb = carry_cfg().rail_bridge;
-    if kb > 0.0 && (mode == SplitMode::Approx || (mode == SplitMode::Exact && carry_cfg().rail_bridge_exact)) {
+    if kb > 0.0
+        && (mode == SplitMode::Approx
+            || (mode == SplitMode::Exact && carry_cfg().rail_bridge_exact))
+    {
         // B7 S-C rule: the exact hybrid costs `excess` extra CCX (one UMA per in-place stage); the split costs one
         // coin-gated boundary erase per chunk boundary ((n - 1) / 2 expected T for an n-bit compare).
         let excess = w - 2 - room;
         let kw = carry_cfg().split_k;
-        let cost: f64 = sizes[..sizes.len() - 1].iter().enumerate().map(|(j, &s)| {
-            let n = if mode == SplitMode::Approx && !(j == 0 && s <= kw) { kw.min(s) } else { s };
-            (n as f64 - 1.0) / 2.0
-        }).sum();
+        let cost: f64 = sizes[..sizes.len() - 1]
+            .iter()
+            .enumerate()
+            .map(|(j, &s)| {
+                let n = if mode == SplitMode::Approx && !(j == 0 && s <= kw) {
+                    kw.min(s)
+                } else {
+                    s
+                };
+                (n as f64 - 1.0) / 2.0
+            })
+            .sum();
         if (excess as f64) < kb * cost {
             ledger(|l| {
                 *l.splits.entry("B7 bridged ticks").or_insert(0) += 1;
@@ -667,8 +812,17 @@ fn rail_add_inner(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, m
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Rail ticks (B1 b1heo fwd_tick / rev_tick) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 #[allow(clippy::too_many_arguments)]
-fn fwd_tick_c(c: &mut Builder, rails: &mut Rails, typ_prev: Option<QubitId>, wsw: usize, wad: usize,
-              mode: SplitMode, def: &mut Vec<(usize, BitId)>, label: &'static str, o0_erase: bool) -> (QubitId, QubitId) {
+fn fwd_tick_c(
+    c: &mut Builder,
+    rails: &mut Rails,
+    typ_prev: Option<QubitId>,
+    wsw: usize,
+    wad: usize,
+    mode: SplitMode,
+    def: &mut Vec<(usize, BitId)>,
+    label: &'static str,
+    o0_erase: bool,
+) -> (QubitId, QubitId) {
     resize(c, &mut rails.r1, wsw);
     resize(c, &mut rails.r2, wsw);
     let ctl = rails.r1[0];
@@ -722,9 +876,20 @@ fn fwd_tick_c(c: &mut Builder, rails: &mut Rails, typ_prev: Option<QubitId>, wsw
 
 /// Inverse of [`fwd_tick_c`]; rails enter at `wad`, leave at `w_before`.
 #[allow(clippy::too_many_arguments)]
-fn rev_tick_c(c: &mut Builder, rails: &mut Rails, typ: QubitId, s: QubitId, typ_prev: Option<QubitId>, wsw: usize,
-              w_before: usize, mode: SplitMode, def: &mut Vec<(usize, BitId)>, label: &'static str,
-              o0_rebuild: bool, top_copy: bool) -> Option<QubitId> {
+fn rev_tick_c(
+    c: &mut Builder,
+    rails: &mut Rails,
+    typ: QubitId,
+    s: QubitId,
+    typ_prev: Option<QubitId>,
+    wsw: usize,
+    w_before: usize,
+    mode: SplitMode,
+    def: &mut Vec<(usize, BitId)>,
+    label: &'static str,
+    o0_rebuild: bool,
+    top_copy: bool,
+) -> Option<QubitId> {
     let wad = rails.r1.len();
     assert_eq!(rails.r2.len(), wad);
     let tau = s;
@@ -827,58 +992,92 @@ enum How {
 /// `acc += (ctrl ? k1 : k0) mod 2^len(acc)`, exact, one Toffoli per live carry.
 fn cselect_const_add(c: &mut Builder, acc: &[QubitId], k0: &[bool], k1: &[bool], ctrl: QubitId) {
     let w = acc.len();
-    let kind: Vec<Kind> = (0..w).map(|i| match (k0[i], k1[i]) {
-        (false, false) => Kind::Zero,
-        (true, true) => Kind::One,
-        (false, true) => Kind::Ctl,
-        (true, false) => Kind::NCtl,
-    }).collect();
+    let kind: Vec<Kind> = (0..w)
+        .map(|i| match (k0[i], k1[i]) {
+            (false, false) => Kind::Zero,
+            (true, true) => Kind::One,
+            (false, true) => Kind::Ctl,
+            (true, false) => Kind::NCtl,
+        })
+        .collect();
     let mut car: Vec<Option<QubitId>> = vec![None; w + 1];
     let mut how: Vec<Option<How>> = vec![None; w + 1];
     let maj_fwd = |c: &mut Builder, i: usize, prev: QubitId, q: QubitId, kind: &[Kind]| {
         let neg = kind[i] == Kind::NCtl;
-        if neg { c.x(ctrl); }
+        if neg {
+            c.x(ctrl);
+        }
         c.cx(prev, acc[i]);
         c.cx(prev, ctrl);
         c.ccx(acc[i], ctrl, q);
         c.cx(prev, ctrl);
         c.cx(prev, acc[i]);
-        if neg { c.x(ctrl); }
+        if neg {
+            c.x(ctrl);
+        }
         c.cx(prev, q);
     };
     let maj_undo = |c: &mut Builder, i: usize, prev: QubitId, m: BitId, kind: &[Kind]| {
         let neg = kind[i] == Kind::NCtl;
-        if neg { c.x(ctrl); }
+        if neg {
+            c.x(ctrl);
+        }
         c.cx(prev, acc[i]);
         c.cx(prev, ctrl);
         c.cz_if(acc[i], ctrl, m);
         c.cx(prev, ctrl);
         c.cx(prev, acc[i]);
-        if neg { c.x(ctrl); }
+        if neg {
+            c.x(ctrl);
+        }
         c.z_if(prev, m);
     };
     for i in 0..w.saturating_sub(1) {
         let k = kind[i];
         match car[i] {
             None => {
-                if k == Kind::Zero { continue; }
+                if k == Kind::Zero {
+                    continue;
+                }
                 let q = c.alloc_qubit();
                 match k {
-                    Kind::One => { c.cx(acc[i], q); how[i + 1] = Some(How::Copy); }
-                    Kind::Ctl => { c.ccx(acc[i], ctrl, q); how[i + 1] = Some(How::AndC); }
-                    _ => { c.x(ctrl); c.ccx(acc[i], ctrl, q); c.x(ctrl); how[i + 1] = Some(How::AndNc); }
+                    Kind::One => {
+                        c.cx(acc[i], q);
+                        how[i + 1] = Some(How::Copy);
+                    }
+                    Kind::Ctl => {
+                        c.ccx(acc[i], ctrl, q);
+                        how[i + 1] = Some(How::AndC);
+                    }
+                    _ => {
+                        c.x(ctrl);
+                        c.ccx(acc[i], ctrl, q);
+                        c.x(ctrl);
+                        how[i + 1] = Some(How::AndNc);
+                    }
                 }
                 car[i + 1] = Some(q);
             }
             Some(prev) => {
                 let q = c.alloc_qubit();
                 match k {
-                    Kind::Zero => { c.ccx(acc[i], prev, q); how[i + 1] = Some(How::AndP); }
+                    Kind::Zero => {
+                        c.ccx(acc[i], prev, q);
+                        how[i + 1] = Some(How::AndP);
+                    }
                     Kind::One => {
-                        c.x(acc[i]); c.x(prev); c.ccx(acc[i], prev, q); c.x(q); c.x(acc[i]); c.x(prev);
+                        c.x(acc[i]);
+                        c.x(prev);
+                        c.ccx(acc[i], prev, q);
+                        c.x(q);
+                        c.x(acc[i]);
+                        c.x(prev);
                         how[i + 1] = Some(How::OrP);
                     }
-                    _ => { maj_fwd(c, i, prev, q, &kind); how[i + 1] = Some(How::Maj); }
+                    _ => {
+                        maj_fwd(c, i, prev, q, &kind);
+                        how[i + 1] = Some(How::Maj);
+                    }
                 }
                 car[i + 1] = Some(q);
             }
@@ -895,12 +1094,20 @@ fn cselect_const_add(c: &mut Builder, acc: &[QubitId], k0: &[bool], k1: &[bool],
                         c.hmr(q, m);
                         match h {
                             How::AndC => c.cz_if(acc[i], ctrl, m),
-                            How::AndNc => { c.x(ctrl); c.cz_if(acc[i], ctrl, m); c.x(ctrl); }
+                            How::AndNc => {
+                                c.x(ctrl);
+                                c.cz_if(acc[i], ctrl, m);
+                                c.x(ctrl);
+                            }
                             How::AndP => c.cz_if(acc[i], prev.unwrap(), m),
                             How::OrP => {
                                 neg_if(c, acc[i], m);
                                 let p = prev.unwrap();
-                                c.x(acc[i]); c.x(p); c.cz_if(acc[i], p, m); c.x(acc[i]); c.x(p);
+                                c.x(acc[i]);
+                                c.x(p);
+                                c.cz_if(acc[i], p, m);
+                                c.x(acc[i]);
+                                c.x(p);
                             }
                             How::Maj => maj_undo(c, i, prev.unwrap(), m, &kind),
                             How::Copy => unreachable!(),
@@ -914,7 +1121,10 @@ fn cselect_const_add(c: &mut Builder, acc: &[QubitId], k0: &[bool], k1: &[bool],
         match kind[i] {
             Kind::One => c.x(acc[i]),
             Kind::Ctl => c.cx(ctrl, acc[i]),
-            Kind::NCtl => { c.cx(ctrl, acc[i]); c.x(acc[i]); }
+            Kind::NCtl => {
+                c.cx(ctrl, acc[i]);
+                c.x(acc[i]);
+            }
             Kind::Zero => {}
         }
         if let Some(p) = car[i] {
@@ -966,7 +1176,13 @@ fn g3_seed(c: &mut Builder, x: &[QubitId], wout: usize) -> (Rails, QubitId, Qubi
     for i in 0..N {
         c.cx(r1[i], r2[i]);
     }
-    cselect_const_add(c, &r2, &bits_of(SECP256K1_P, wout), &neg_bits(SECP256K1_P, wout), r1[N - 1]);
+    cselect_const_add(
+        c,
+        &r2,
+        &bits_of(SECP256K1_P, wout),
+        &neg_bits(SECP256K1_P, wout),
+        r1[N - 1],
+    );
     (Rails { r1, r2 }, typ0, s0)
 }
 
@@ -975,7 +1191,13 @@ fn g3_unseed(c: &mut Builder, rails: Rails, typ0: QubitId, s0: QubitId) -> Vec<Q
     let Rails { r1, r2 } = rails;
     let w = r2.len();
     assert_eq!(r1.len(), w);
-    cselect_const_add(c, &r2, &neg_bits(SECP256K1_P, w), &bits_of(SECP256K1_P, w), r1[N - 1]);
+    cselect_const_add(
+        c,
+        &r2,
+        &neg_bits(SECP256K1_P, w),
+        &bits_of(SECP256K1_P, w),
+        r1[N - 1],
+    );
     for i in 0..N {
         c.cx(r1[i], r2[i]);
     }
@@ -1003,7 +1225,13 @@ fn g3_unseed(c: &mut Builder, rails: Rails, typ0: QubitId, s0: QubitId) -> Vec<Q
 fn seed_base(c: &mut Builder, x: &[QubitId], w0: usize) -> Rails {
     let r1 = c.alloc_qubits(w0);
     c.cx_pairs(&x[..N], &r1[..N]);
-    cselect_const_add(c, &r1, &bits_of(SECP256K1_P, w0), &bits_of(SECP256K1_P, w0), x[0]);
+    cselect_const_add(
+        c,
+        &r1,
+        &bits_of(SECP256K1_P, w0),
+        &bits_of(SECP256K1_P, w0),
+        x[0],
+    );
     let mut r2 = x.to_vec();
     r2.extend(c.alloc_qubits(w0 - N));
     Rails { r1, r2 }
@@ -1011,7 +1239,13 @@ fn seed_base(c: &mut Builder, x: &[QubitId], w0: usize) -> Rails {
 fn unseed_base(c: &mut Builder, rails: Rails) -> Vec<QubitId> {
     let Rails { r1, r2 } = rails;
     let w = r1.len();
-    cselect_const_add(c, &r1, &neg_bits(SECP256K1_P, w), &neg_bits(SECP256K1_P, w), r2[0]);
+    cselect_const_add(
+        c,
+        &r1,
+        &neg_bits(SECP256K1_P, w),
+        &neg_bits(SECP256K1_P, w),
+        r2[0],
+    );
     c.cx_pairs(&r2[..N], &r1[..N]);
     c.free_vec(&r1);
     c.free_vec(&r2[N..]);
@@ -1102,7 +1336,13 @@ fn h0_payload_div(c: &mut Builder, sig: &[QubitId], om1: QubitId, o1: QubitId) -
 
 /// Inverse of [`h0_payload_div`] at the end of the multiply head batch: from
 /// `(Sig, Del) = ((-1)^{1+o_{-1}+o_1} M/2, (-1)^{o_{-1}} M)` to `Sig = M`, `Del = 0`.
-fn h0_payload_mul_inv(c: &mut Builder, sig: &[QubitId], del: &[QubitId], om1: QubitId, o1: QubitId) {
+fn h0_payload_mul_inv(
+    c: &mut Builder,
+    sig: &[QubitId],
+    del: &[QubitId],
+    om1: QubitId,
+    o1: QubitId,
+) {
     c.cx(om1, o1);
     c.x(o1);
     h7::cond_negate(c, o1, sig);
@@ -1119,24 +1359,61 @@ fn h0_payload_mul_inv(c: &mut Builder, sig: &[QubitId], del: &[QubitId], om1: Qu
 /// (walk-search CHECK c11 fused seed). Pseudo-letter `(o_0, s_0)`: `o_0 = [|X| < |Y|] = NOT(X_sign ^ X[254])`
 /// (exact but for a 2^-220 sliver), `s_0 = Y_sign & NOT o_0` (a legal trit; lets the multiply leg decode the
 /// payload class). `x`'s wires become `X`'s low 256 bits.
-pub(crate) fn fd_seed(c: &mut Builder, x: &[QubitId], wout: usize, with_s0: bool) -> (Rails, QubitId, Option<QubitId>) {
+pub(crate) fn fd_seed(
+    c: &mut Builder,
+    x: &[QubitId],
+    wout: usize,
+    with_s0: bool,
+) -> (Rails, QubitId, Option<QubitId>) {
     assert!(wout >= N + 1, "FD rails need a sign bit above 256");
-    if let Some((r1,y))=super::super::native_sfuse_b::take_native(c,x,wout){
-        let typ0=c.alloc_qubit();c.cx(r1[wout-1],typ0);c.cx(r1[N-2],typ0);c.x(typ0);
-        let s=if with_s0{let q=c.alloc_qubit();c.x(typ0);c.ccx(y[wout-1],typ0,q);c.x(typ0);Some(q)}else{None};
-        return(Rails{r1,r2:y},typ0,s);
+    if let Some((r1, y)) = super::super::native_sfuse_b::take_native(c, x, wout) {
+        let typ0 = c.alloc_qubit();
+        c.cx(r1[wout - 1], typ0);
+        c.cx(r1[N - 2], typ0);
+        c.x(typ0);
+        let s = if with_s0 {
+            let q = c.alloc_qubit();
+            c.x(typ0);
+            c.ccx(y[wout - 1], typ0, q);
+            c.x(typ0);
+            Some(q)
+        } else {
+            None
+        };
+        return (Rails { r1, r2: y }, typ0, s);
     }
-    if super::super::fd_coordinate::enabled(){if let Some((r1,y))=super::super::fd_coordinate::native_seed(c,x,wout){
-        let typ0=c.alloc_qubit();c.cx(r1[wout-1],typ0);c.cx(r1[N-2],typ0);c.x(typ0);
-        let s=if with_s0{let q=c.alloc_qubit();c.x(typ0);c.ccx(y[wout-1],typ0,q);c.x(typ0);Some(q)}else{None};
-        return(Rails{r1,r2:y},typ0,s);
-    }}
+    if super::super::fd_coordinate::enabled() {
+        if let Some((r1, y)) = super::super::fd_coordinate::native_seed(c, x, wout) {
+            let typ0 = c.alloc_qubit();
+            c.cx(r1[wout - 1], typ0);
+            c.cx(r1[N - 2], typ0);
+            c.x(typ0);
+            let s = if with_s0 {
+                let q = c.alloc_qubit();
+                c.x(typ0);
+                c.ccx(y[wout - 1], typ0, q);
+                c.x(typ0);
+                Some(q)
+            } else {
+                None
+            };
+            return (Rails { r1, r2: y }, typ0, s);
+        }
+    }
     fd_seed_at(c, x, wout, with_s0, N, f(), fw_slice())
 }
 
 /// [`fd_seed`] at width `n`, fold constant `f` (`p = 2^n - f`) and ladder window `fw`: the production
 /// body, parametrised so the back-seam certificate runs it at n = 4 / 6.
-pub(crate) fn fd_seed_at(c: &mut Builder, x: &[QubitId], wout: usize, with_s0: bool, n: usize, f: U256, fw: usize) -> (Rails, QubitId, Option<QubitId>) {
+pub(crate) fn fd_seed_at(
+    c: &mut Builder,
+    x: &[QubitId],
+    wout: usize,
+    with_s0: bool,
+    n: usize,
+    f: U256,
+    fw: usize,
+) -> (Rails, QubitId, Option<QubitId>) {
     assert!(wout >= n + 1, "FD rails need a sign bit above the register");
     assert_eq!(x.len(), n);
     let b = c.alloc_qubit();
@@ -1182,12 +1459,36 @@ pub(crate) fn fd_seed_at(c: &mut Builder, x: &[QubitId], wout: usize, with_s0: b
 /// Inverse of [`fd_seed`]; returns the 256 wires now holding `d` (in order). With the back seam fused
 /// for `leg` (`BACK_SEAM_FUSE`), the wires hold `d + b (F+1)` on the low window instead and the
 /// coordinate op that follows completes the correction (see `back_seam`).
-fn fd_unseed(c: &mut Builder, rails: Rails, typ0: QubitId, s0: Option<QubitId>, leg: super::super::back_seam::Leg) -> Vec<QubitId> {
-    fd_unseed_at(c, rails, typ0, s0, N, f(), fw_slice(), super::super::back_seam::fused(leg))
+fn fd_unseed(
+    c: &mut Builder,
+    rails: Rails,
+    typ0: QubitId,
+    s0: Option<QubitId>,
+    leg: super::super::back_seam::Leg,
+) -> Vec<QubitId> {
+    fd_unseed_at(
+        c,
+        rails,
+        typ0,
+        s0,
+        N,
+        f(),
+        fw_slice(),
+        super::super::back_seam::fused(leg),
+    )
 }
 
 /// [`fd_unseed`] at width `n`, fold constant `f` and ladder window `fw`; `fused` = the back seam.
-pub(crate) fn fd_unseed_at(c: &mut Builder, rails: Rails, typ0: QubitId, s0: Option<QubitId>, n: usize, f: U256, fw: usize, fused: bool) -> Vec<QubitId> {
+pub(crate) fn fd_unseed_at(
+    c: &mut Builder,
+    rails: Rails,
+    typ0: QubitId,
+    s0: Option<QubitId>,
+    n: usize,
+    f: U256,
+    fw: usize,
+    fused: bool,
+) -> Vec<QubitId> {
     let Rails { r1, r2: y } = rails;
     let wout = y.len();
     assert_eq!(r1.len(), wout);
@@ -1226,7 +1527,13 @@ pub(crate) fn fd_unseed_at(c: &mut Builder, rails: Rails, typ0: QubitId, s0: Opt
         // I-2 back seam: `y += b ? (F+1) : -F` as one selected ladder; `y` then equals the
         // uncorrected `x` (= d + b (F+1) on the window) and the XOR below still clears it.
         c.x(b);
-        super::super::back_seam::selected_ladder(c, &y[..fw], b, U256::ZERO.wrapping_sub(f), f + U256::from(1u64));
+        super::super::back_seam::selected_ladder(
+            c,
+            &y[..fw],
+            b,
+            U256::ZERO.wrapping_sub(f),
+            f + U256::from(1u64),
+        );
         super::super::back_seam::note_fused_unseed();
     } else {
         cadd_const_trunc(c, &y[..fw], U256::ZERO.wrapping_sub(f), b, false);
@@ -1246,27 +1553,59 @@ pub(crate) fn fd_unseed_at(c: &mut Builder, rails: Rails, typ0: QubitId, s0: Opt
 // negation lands on), so Del's negation control becomes cS ^ cD = NOT o_0 and Sig's is cS = ys ^ (A & NOT o_0).
 // Del <- c ? p - 2 Del : 2 Del as XOR_c(rot_up(Del) + t f + c (f - 1)) with t the doubling overflow; above
 // bit 0 the constant is (t + c) (f - 1)/2, one selector per position from {t^c, t&c, t|c}.
-fn r4_fdp_fuse() -> bool { env_bool("R4_FDP_FUSE", false) }
+fn r4_fdp_fuse() -> bool {
+    env_bool("R4_FDP_FUSE", false)
+}
 
-fn r4_fdp_ladder(c: &mut Builder, del: &[QubitId], t: QubitId, ctl: QubitId, a: QubitId, negative: bool) {
+fn r4_fdp_ladder(
+    c: &mut Builder,
+    del: &[QubitId],
+    t: QubitId,
+    ctl: QubitId,
+    a: QubitId,
+    negative: bool,
+) {
     let w = super::super::modular::go_fs("GO_FG_P");
     let fp: U256 = (f() - U256::from(1u64)) >> 1usize;
-    let sel = |p: usize| -> (bool, bool) { let j = p - 1; (fp.bit(j), j >= 1 && fp.bit(j - 1)) };
-    for p in 1..4 { assert_eq!(sel(p), (false, false), "R4_FDP_FUSE: constant must start at bit 4"); }
-    for p in w..N { assert_eq!(sel(p), (false, false), "R4_FDP_FUSE: constant must fit the window"); }
-    let map: Vec<Vec<QubitId>> = (4..w).map(|p| match sel(p) {
-        (false, false) => vec![],
-        (true, false) => vec![t, ctl],
-        (false, true) => vec![a],
-        (true, true) => vec![t, ctl, a],
-    }).collect();
+    let sel = |p: usize| -> (bool, bool) {
+        let j = p - 1;
+        (fp.bit(j), j >= 1 && fp.bit(j - 1))
+    };
+    for p in 1..4 {
+        assert_eq!(
+            sel(p),
+            (false, false),
+            "R4_FDP_FUSE: constant must start at bit 4"
+        );
+    }
+    for p in w..N {
+        assert_eq!(
+            sel(p),
+            (false, false),
+            "R4_FDP_FUSE: constant must fit the window"
+        );
+    }
+    let map: Vec<Vec<QubitId>> = (4..w)
+        .map(|p| match sel(p) {
+            (false, false) => vec![],
+            (true, false) => vec![t, ctl],
+            (false, true) => vec![a],
+            (true, true) => vec![t, ctl, a],
+        })
+        .collect();
     let target = &del[4..w];
     let zero = c.alloc_qubit();
     let room = h7::cap().saturating_sub(c.active_qubits() as usize);
-    let plan = (room..=map.len().max(room)).find_map(|r| super::super::width_composition::direct_plan(map.len(), r)).unwrap();
-    if negative { c.x_all(target); }
+    let plan = (room..=map.len().max(room))
+        .find_map(|r| super::super::width_composition::direct_plan(map.len(), r))
+        .unwrap();
+    if negative {
+        c.x_all(target);
+    }
     super::super::width_composition::direct_add(c, &map, target, zero, &plan);
-    if negative { c.x_all(target); }
+    if negative {
+        c.x_all(target);
+    }
     c.release_clean(zero);
 }
 
@@ -1289,7 +1628,9 @@ fn r4_fdp_double_neg(c: &mut Builder, del: &[QubitId], ctl: QubitId, inverse: bo
         r4_fdp_ladder(c, del, out, ctl, a, true);
         h7::and_uncompute(c, a, out, ctl);
         c.cx(out, del[0]);
-        for i in 0..del.len() - 1 { c.swap(del[i], del[i + 1]); }
+        for i in 0..del.len() - 1 {
+            c.swap(del[i], del[i + 1]);
+        }
         c.swap(del[N - 1], out);
         c.free(out);
     }
@@ -1297,15 +1638,19 @@ fn r4_fdp_double_neg(c: &mut Builder, del: &[QubitId], ctl: QubitId, inverse: bo
 
 /// `m = A & o0n` with `A = NOT(xs ^ ys)`; `o0n` holds NOT o_0.
 fn r4_fdp_m(c: &mut Builder, xs: QubitId, ys: QubitId, o0n: QubitId) -> QubitId {
-    c.cx(xs, ys); c.x(ys);
+    c.cx(xs, ys);
+    c.x(ys);
     let m = h7::and_clean(c, ys, o0n);
-    c.x(ys); c.cx(xs, ys);
+    c.x(ys);
+    c.cx(xs, ys);
     m
 }
 fn r4_fdp_m_undo(c: &mut Builder, m: QubitId, xs: QubitId, ys: QubitId, o0n: QubitId) {
-    c.cx(xs, ys); c.x(ys);
+    c.cx(xs, ys);
+    c.x(ys);
     h7::and_uncompute(c, m, ys, o0n);
-    c.x(ys); c.cx(xs, ys);
+    c.x(ys);
+    c.cx(xs, ys);
 }
 /// Sig <- neg_{cS}(Sig), cS = ys ^ (A & NOT o_0); `o0n` holds NOT o_0.
 fn r4_fdp_neg_sig(c: &mut Builder, sig: &[QubitId], xs: QubitId, ys: QubitId, o0n: QubitId) {
@@ -1316,12 +1661,22 @@ fn r4_fdp_neg_sig(c: &mut Builder, sig: &[QubitId], xs: QubitId, ys: QubitId, o0
     r4_fdp_m_undo(c, m, xs, ys, o0n);
 }
 
-fn fd_payload_div_r4(c: &mut Builder, sig: &[QubitId], xs: QubitId, ys: QubitId, o0: QubitId) -> Vec<QubitId> {
+fn fd_payload_div_r4(
+    c: &mut Builder,
+    sig: &[QubitId],
+    xs: QubitId,
+    ys: QubitId,
+    o0: QubitId,
+) -> Vec<QubitId> {
     c.x(o0);
-    if !r4_ysub_fuse() { r4_fdp_neg_sig(c, sig, xs, ys, o0); }
+    if !r4_ysub_fuse() {
+        r4_fdp_neg_sig(c, sig, xs, ys, o0);
+    }
     let del = c.alloc_qubits(N);
     c.cx_pairs(sig, &del);
-    book(c, "g1b", "fdp dblneg", 0, |c| r4_fdp_double_neg(c, &del, o0, false));
+    book(c, "g1b", "fdp dblneg", 0, |c| {
+        r4_fdp_double_neg(c, &del, o0, false)
+    });
     c.x(o0);
     c.cx(xs, ys);
     c.x(ys);
@@ -1331,7 +1686,14 @@ fn fd_payload_div_r4(c: &mut Builder, sig: &[QubitId], xs: QubitId, ys: QubitId,
     del
 }
 
-fn fd_payload_div_inv_r4(c: &mut Builder, sig: &[QubitId], del: &[QubitId], xs: QubitId, ys: QubitId, o0: QubitId) {
+fn fd_payload_div_inv_r4(
+    c: &mut Builder,
+    sig: &[QubitId],
+    del: &[QubitId],
+    xs: QubitId,
+    ys: QubitId,
+    o0: QubitId,
+) {
     c.cx(xs, ys);
     c.x(ys);
     route(c, ys, sig, del);
@@ -1340,7 +1702,11 @@ fn fd_payload_div_inv_r4(c: &mut Builder, sig: &[QubitId], del: &[QubitId], xs: 
     c.x(o0);
     r4_fdp_double_neg(c, del, o0, true);
     c.cx_pairs(sig, del);
-    if r4_yfin_fuse() { r4_yfin_tail(c, sig, del, xs, ys, o0); } else { r4_fdp_neg_sig(c, sig, xs, ys, o0); }
+    if r4_yfin_fuse() {
+        r4_yfin_tail(c, sig, del, xs, ys, o0);
+    } else {
+        r4_fdp_neg_sig(c, sig, xs, ys, o0);
+    }
     c.x(o0);
 }
 
@@ -1354,69 +1720,130 @@ fn fd_payload_div_inv_r4(c: &mut Builder, sig: &[QubitId], del: &[QubitId], xs: 
 thread_local! {
     static R4_YFIN: std::cell::RefCell<Option<Vec<BitId>>> = const { std::cell::RefCell::new(None) };
 }
-pub fn r4_yfin_fuse() -> bool { env_bool("R4_YFIN_FUSE", false) }
+pub fn r4_yfin_fuse() -> bool {
+    env_bool("R4_YFIN_FUSE", false)
+}
 pub fn r4_yfin_stash(oy: &[BitId]) {
     assert!(r4_fdp_fuse(), "R4_YFIN_FUSE needs R4_FDP_FUSE");
     assert_eq!(oy.len(), N);
-    R4_YFIN.with(|s| { assert!(s.borrow().is_none()); *s.borrow_mut() = Some(oy.to_vec()); });
+    R4_YFIN.with(|s| {
+        assert!(s.borrow().is_none());
+        *s.borrow_mut() = Some(oy.to_vec());
+    });
 }
-pub fn r4_yfin_consumed() -> bool { R4_YFIN.with(|s| s.borrow().is_none()) }
+pub fn r4_yfin_consumed() -> bool {
+    R4_YFIN.with(|s| s.borrow().is_none())
+}
 
 // R5_YFIN2 (sky-PM Round 5): R4_YFIN_FUSE without the chunked add. Del is zero here (after cx_pairs), so it
 // is released first, and oy is added as a classical operand (no temp register): the plain vented ladder's
 // 255 carries fit in the room Del leaves (68 + 256). The caller then skips its own free of Del.
-pub fn r5_yfin2() -> bool { env_bool("R5_YFIN2", false) }
+pub fn r5_yfin2() -> bool {
+    env_bool("R5_YFIN2", false)
+}
 thread_local! { static R5_DEL_FREED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
-pub fn r5_take_del_freed() -> bool { R5_DEL_FREED.with(|f| f.replace(false)) }
+pub fn r5_take_del_freed() -> bool {
+    R5_DEL_FREED.with(|f| f.replace(false))
+}
 
 /// Body inside the XOR_{NOT cS} frame: `sig += oy`, one ladder K = ov f + cS (f - 1), erase ov.
-fn r5_yfin2_body(c: &mut Builder, sig: &[QubitId], del: &[QubitId], oy: &[BitId], m: QubitId, fs: usize, k: usize) {
+fn r5_yfin2_body(
+    c: &mut Builder,
+    sig: &[QubitId],
+    del: &[QubitId],
+    oy: &[BitId],
+    m: QubitId,
+    fs: usize,
+    k: usize,
+) {
     c.free_vec(del);
     R5_DEL_FREED.with(|f| assert!(!f.replace(true)));
     let ov = c.alloc_qubit();
-    book(c, "g1b", "yfin add", 0, |c| super::super::modular::r5_ripple_add_cbits(c, oy, sig, ov));
+    book(c, "g1b", "yfin add", 0, |c| {
+        super::super::modular::r5_ripple_add_cbits(c, oy, sig, ov)
+    });
     let a = h7::and_clean(c, ov, m);
     let one = U256::from(1u64);
     let mask = (one << fs) - one;
     let (k10, k01, k11) = (f() & mask, (f() - one) & mask, (f() + f() - one) & mask);
-    let map: Vec<Vec<QubitId>> = (0..fs).map(|j| {
-        let (g10, g01, g11) = (k10.bit(j), k01.bit(j), k11.bit(j));
-        let mut v = Vec::new();
-        if g10 { v.push(ov); }
-        if g01 { v.push(m); }
-        if g11 ^ g10 ^ g01 { v.push(a); }
-        v
-    }).collect();
+    let map: Vec<Vec<QubitId>> = (0..fs)
+        .map(|j| {
+            let (g10, g01, g11) = (k10.bit(j), k01.bit(j), k11.bit(j));
+            let mut v = Vec::new();
+            if g10 {
+                v.push(ov);
+            }
+            if g01 {
+                v.push(m);
+            }
+            if g11 ^ g10 ^ g01 {
+                v.push(a);
+            }
+            v
+        })
+        .collect();
     let target = &sig[..fs];
     let zero = c.alloc_qubit();
     let room = h7::cap().saturating_sub(c.active_qubits() as usize);
-    let plan = (room..=map.len().max(room)).find_map(|r| super::super::width_composition::direct_plan(map.len(), r)).unwrap();
-    book(c, "g1b", "yfin ladder", 0, |c| super::super::width_composition::direct_add(c, &map, target, zero, &plan));
+    let plan = (room..=map.len().max(room))
+        .find_map(|r| super::super::width_composition::direct_plan(map.len(), r))
+        .unwrap();
+    book(c, "g1b", "yfin ladder", 0, |c| {
+        super::super::width_composition::direct_add(c, &map, target, zero, &plan)
+    });
     c.release_clean(zero);
     h7::and_uncompute(c, a, ov, m);
     let tv = c.alloc_qubits(k);
-    for (&q, &b) in tv.iter().zip(&oy[N - k..]) { c.x_if_bit(q, b); }
-    if super::super::modular::r5_ccmp(16) {
-        book(c, "g1b", "yfin erase", 0, |c| super::super::compare::erase_with_compare_v0(c, ov, &sig[N - k..], &tv, oy[N - k]));
-    } else {
-    book(c, "g1b", "yfin erase", 0, |c| erase_with_compare(c, ov, &sig[N - k..], &tv, None));
+    for (&q, &b) in tv.iter().zip(&oy[N - k..]) {
+        c.x_if_bit(q, b);
     }
-    for (&q, &b) in tv.iter().zip(&oy[N - k..]) { c.x_if_bit(q, b); }
+    if super::super::modular::r5_ccmp(16) {
+        book(c, "g1b", "yfin erase", 0, |c| {
+            super::super::compare::erase_with_compare_v0(c, ov, &sig[N - k..], &tv, oy[N - k])
+        });
+    } else {
+        book(c, "g1b", "yfin erase", 0, |c| {
+            erase_with_compare(c, ov, &sig[N - k..], &tv, None)
+        });
+    }
+    for (&q, &b) in tv.iter().zip(&oy[N - k..]) {
+        c.x_if_bit(q, b);
+    }
     c.free_vec(&tv);
     c.free(ov);
 }
 
 /// `sig <- neg_{cS}(sig) - oy (mod p)`, cS = ys ^ (A & NOT o_0); `o0n` holds NOT o_0.
-fn r4_yfin_tail(c: &mut Builder, sig: &[QubitId], del: &[QubitId], xs: QubitId, ys: QubitId, o0n: QubitId) {
-    let oy = R4_YFIN.with(|s| s.borrow_mut().take()).expect("R4_YFIN_FUSE: oy not stashed");
-    let (fs, k) = (super::super::modular::go_fs("GO_FG_M"), super::super::modular::erase_compare());
+fn r4_yfin_tail(
+    c: &mut Builder,
+    sig: &[QubitId],
+    del: &[QubitId],
+    xs: QubitId,
+    ys: QubitId,
+    o0n: QubitId,
+) {
+    let oy = R4_YFIN
+        .with(|s| s.borrow_mut().take())
+        .expect("R4_YFIN_FUSE: oy not stashed");
+    let (fs, k) = (
+        super::super::modular::go_fs("GO_FG_M"),
+        super::super::modular::erase_compare(),
+    );
     let m = r4_fdp_m(c, xs, ys, o0n);
     c.cx(ys, m);
     c.x_all(sig);
     c.cx_all(m, sig);
-    if r5_yfin2() { r5_yfin2_body(c, sig, del, &oy, m, fs, k); c.x_all(sig); c.cx(ys, m); r4_fdp_m_undo(c, m, xs, ys, o0n); return; }
+    if r5_yfin2() {
+        r5_yfin2_body(c, sig, del, &oy, m, fs, k);
+        c.x_all(sig);
+        c.cx(ys, m);
+        r4_fdp_m_undo(c, m, xs, ys, o0n);
+        return;
+    }
     let temp = del;
-    for (&q, &b) in temp.iter().zip(&oy) { c.x_if_bit(q, b); }
+    for (&q, &b) in temp.iter().zip(&oy) {
+        c.x_if_bit(q, b);
+    }
     let ov = book(c, "g1b", "yfin add", 0, |c| {
         super::super::modular::heo_fitted_vented_add(c, &temp, sig).unwrap_or_else(|| {
             let o = c.alloc_qubit();
@@ -1424,30 +1851,50 @@ fn r4_yfin_tail(c: &mut Builder, sig: &[QubitId], del: &[QubitId], xs: QubitId, 
             o
         })
     });
-    for (&q, &b) in temp.iter().zip(&oy) { c.x_if_bit(q, b); }
+    for (&q, &b) in temp.iter().zip(&oy) {
+        c.x_if_bit(q, b);
+    }
     let a = h7::and_clean(c, ov, m);
     let one = U256::from(1u64);
     let mask = (one << fs) - one;
     let (k10, k01, k11) = (f() & mask, (f() - one) & mask, (f() + f() - one) & mask);
-    let map: Vec<Vec<QubitId>> = (0..fs).map(|j| {
-        let (g10, g01, g11) = (k10.bit(j), k01.bit(j), k11.bit(j));
-        let mut v = Vec::new();
-        if g10 { v.push(ov); }
-        if g01 { v.push(m); }
-        if g11 ^ g10 ^ g01 { v.push(a); }
-        v
-    }).collect();
+    let map: Vec<Vec<QubitId>> = (0..fs)
+        .map(|j| {
+            let (g10, g01, g11) = (k10.bit(j), k01.bit(j), k11.bit(j));
+            let mut v = Vec::new();
+            if g10 {
+                v.push(ov);
+            }
+            if g01 {
+                v.push(m);
+            }
+            if g11 ^ g10 ^ g01 {
+                v.push(a);
+            }
+            v
+        })
+        .collect();
     let target = &sig[..fs];
     let zero = c.alloc_qubit();
     let room = h7::cap().saturating_sub(c.active_qubits() as usize);
-    let plan = (room..=map.len().max(room)).find_map(|r| super::super::width_composition::direct_plan(map.len(), r)).unwrap();
-    book(c, "g1b", "yfin ladder", 0, |c| super::super::width_composition::direct_add(c, &map, target, zero, &plan));
+    let plan = (room..=map.len().max(room))
+        .find_map(|r| super::super::width_composition::direct_plan(map.len(), r))
+        .unwrap();
+    book(c, "g1b", "yfin ladder", 0, |c| {
+        super::super::width_composition::direct_add(c, &map, target, zero, &plan)
+    });
     c.release_clean(zero);
     h7::and_uncompute(c, a, ov, m);
     let tv = &del[..k];
-    for (&q, &b) in tv.iter().zip(&oy[N - k..]) { c.x_if_bit(q, b); }
-    book(c, "g1b", "yfin erase", 0, |c| erase_with_compare(c, ov, &sig[N - k..], tv, None));
-    for (&q, &b) in tv.iter().zip(&oy[N - k..]) { c.x_if_bit(q, b); }
+    for (&q, &b) in tv.iter().zip(&oy[N - k..]) {
+        c.x_if_bit(q, b);
+    }
+    book(c, "g1b", "yfin erase", 0, |c| {
+        erase_with_compare(c, ov, &sig[N - k..], tv, None)
+    });
+    for (&q, &b) in tv.iter().zip(&oy[N - k..]) {
+        c.x_if_bit(q, b);
+    }
     c.free(ov);
     c.x_all(sig);
     c.cx(ys, m);
@@ -1463,7 +1910,9 @@ fn r4_yfin_tail(c: &mut Builder, sig: &[QubitId], del: &[QubitId], xs: QubitId, 
 thread_local! {
     static R4_YSUB: std::cell::RefCell<Option<(Vec<BitId>, QubitId, usize, usize)>> = const { std::cell::RefCell::new(None) };
 }
-pub fn r4_ysub_fuse() -> bool { env_bool("R4_YSUB_FUSE", false) }
+pub fn r4_ysub_fuse() -> bool {
+    env_bool("R4_YSUB_FUSE", false)
+}
 
 /// coord_y_sub head under R4_YSUB_FUSE: `y <- ~y + oy` (wrapped); the overflow stays live for [`r4_ysub_tail`].
 pub fn r4_ysub_head(c: &mut Builder, y: &[QubitId], oy: &[BitId]) {
@@ -1473,23 +1922,39 @@ pub fn r4_ysub_head(c: &mut Builder, y: &[QubitId], oy: &[BitId]) {
     let ov = if super::super::modular::r5_cbits(2) {
         c.x_all(y);
         let ov = c.alloc_qubit();
-        book(c, "g1b", "ysub add", 0, |c| super::super::modular::r5_ripple_add_cbits(c, oy, y, ov));
+        book(c, "g1b", "ysub add", 0, |c| {
+            super::super::modular::r5_ripple_add_cbits(c, oy, y, ov)
+        });
         ov
     } else {
         let temp = c.alloc_qubits(N);
-        for (&q, &b) in temp.iter().zip(oy) { c.x_if_bit(q, b); }
+        for (&q, &b) in temp.iter().zip(oy) {
+            c.x_if_bit(q, b);
+        }
         let ov = super::super::modular::r4_addsub_head(c, &temp, y);
-        for (&q, &b) in temp.iter().zip(oy) { c.x_if_bit(q, b); }
-        for q in temp { c.free(q); }
+        for (&q, &b) in temp.iter().zip(oy) {
+            c.x_if_bit(q, b);
+        }
+        for q in temp {
+            c.free(q);
+        }
         ov
     };
-    let (fs, k) = (super::super::modular::go_fs("GO_FG_M"), super::super::modular::erase_compare());
-    R4_YSUB.with(|s| { assert!(s.borrow().is_none()); *s.borrow_mut() = Some((oy.to_vec(), ov, fs, k)); });
+    let (fs, k) = (
+        super::super::modular::go_fs("GO_FG_M"),
+        super::super::modular::erase_compare(),
+    );
+    R4_YSUB.with(|s| {
+        assert!(s.borrow().is_none());
+        *s.borrow_mut() = Some((oy.to_vec(), ov, fs, k));
+    });
 }
 
 /// coord_y_sub tail fused with the payload's Sig negation: `sig <- cS ? oy - y : y - oy (mod p)`.
 fn r4_ysub_tail(c: &mut Builder, sig: &[QubitId], xs: QubitId, ys: QubitId, o0: QubitId) {
-    let (oy, ov, fs, k) = R4_YSUB.with(|s| s.borrow_mut().take()).expect("R4_YSUB_FUSE: head not run");
+    let (oy, ov, fs, k) = R4_YSUB
+        .with(|s| s.borrow_mut().take())
+        .expect("R4_YSUB_FUSE: head not run");
     c.x(o0);
     let m = r4_fdp_m(c, xs, ys, o0);
     c.cx(ys, m);
@@ -1497,30 +1962,52 @@ fn r4_ysub_tail(c: &mut Builder, sig: &[QubitId], xs: QubitId, ys: QubitId, o0: 
     let one = U256::from(1u64);
     let mask = (one << fs) - one;
     let (k10, k01, k11) = (f() & mask, U256::ZERO.wrapping_sub(f() - one) & mask, one);
-    let map: Vec<Vec<QubitId>> = (0..fs).map(|j| {
-        let (g10, g01, g11) = (k10.bit(j), k01.bit(j), k11.bit(j));
-        let mut v = Vec::new();
-        if g10 { v.push(ov); }
-        if g01 { v.push(m); }
-        if g11 ^ g10 ^ g01 { v.push(a); }
-        v
-    }).collect();
+    let map: Vec<Vec<QubitId>> = (0..fs)
+        .map(|j| {
+            let (g10, g01, g11) = (k10.bit(j), k01.bit(j), k11.bit(j));
+            let mut v = Vec::new();
+            if g10 {
+                v.push(ov);
+            }
+            if g01 {
+                v.push(m);
+            }
+            if g11 ^ g10 ^ g01 {
+                v.push(a);
+            }
+            v
+        })
+        .collect();
     let target = &sig[..fs];
     let zero = c.alloc_qubit();
     let room = h7::cap().saturating_sub(c.active_qubits() as usize);
-    let plan = (room..=map.len().max(room)).find_map(|r| super::super::width_composition::direct_plan(map.len(), r)).unwrap();
-    book(c, "g1b", "ysub ladder", 0, |c| super::super::width_composition::direct_add(c, &map, target, zero, &plan));
+    let plan = (room..=map.len().max(room))
+        .find_map(|r| super::super::width_composition::direct_plan(map.len(), r))
+        .unwrap();
+    book(c, "g1b", "ysub ladder", 0, |c| {
+        super::super::width_composition::direct_add(c, &map, target, zero, &plan)
+    });
     c.release_clean(zero);
     h7::and_uncompute(c, a, ov, m);
     let tv = c.alloc_qubits(k);
-    for (&q, &b) in tv.iter().zip(&oy[N - k..]) { c.x_if_bit(q, b); }
-    if super::super::modular::r5_ccmp(2) {
-        book(c, "g1b", "ysub erase", 0, |c| super::super::compare::erase_with_compare_v0(c, ov, &sig[N - k..], &tv, oy[N - k]));
-    } else {
-    book(c, "g1b", "ysub erase", 0, |c| erase_with_compare(c, ov, &sig[N - k..], &tv, None));
+    for (&q, &b) in tv.iter().zip(&oy[N - k..]) {
+        c.x_if_bit(q, b);
     }
-    for (&q, &b) in tv.iter().zip(&oy[N - k..]) { c.x_if_bit(q, b); }
-    for q in tv { c.free(q); }
+    if super::super::modular::r5_ccmp(2) {
+        book(c, "g1b", "ysub erase", 0, |c| {
+            super::super::compare::erase_with_compare_v0(c, ov, &sig[N - k..], &tv, oy[N - k])
+        });
+    } else {
+        book(c, "g1b", "ysub erase", 0, |c| {
+            erase_with_compare(c, ov, &sig[N - k..], &tv, None)
+        });
+    }
+    for (&q, &b) in tv.iter().zip(&oy[N - k..]) {
+        c.x_if_bit(q, b);
+    }
+    for q in tv {
+        c.free(q);
+    }
     c.free(ov);
     c.x_all(sig);
     c.cx_all(m, sig);
@@ -1532,8 +2019,16 @@ fn r4_ysub_tail(c: &mut Builder, sig: &[QubitId], xs: QubitId, ys: QubitId, o0: 
 /// FD payload seed (division), rails at the post-seed state. On entry `Sig = N`; allocates `Del`.
 /// Classes (`B4/fd_scalar.py`, CHECK c11): from (N, 2N), swap iff A = NOT(xs ^ ys), negate Sig iff ys,
 /// negate Del iff NOT(ys ^ o_0).
-fn fd_payload_div(c: &mut Builder, sig: &[QubitId], xs: QubitId, ys: QubitId, o0: QubitId) -> Vec<QubitId> {
-    if r4_fdp_fuse() { return fd_payload_div_r4(c, sig, xs, ys, o0); }
+fn fd_payload_div(
+    c: &mut Builder,
+    sig: &[QubitId],
+    xs: QubitId,
+    ys: QubitId,
+    o0: QubitId,
+) -> Vec<QubitId> {
+    if r4_fdp_fuse() {
+        return fd_payload_div_r4(c, sig, xs, ys, o0);
+    }
     let del = c.alloc_qubits(N);
     c.cx_pairs(sig, &del);
     book(c, "g1b", "fdp dbl", 0, |c| h7::mod_double(c, &del));
@@ -1552,8 +2047,17 @@ fn fd_payload_div(c: &mut Builder, sig: &[QubitId], xs: QubitId, ys: QubitId, o0
 }
 
 /// RB-1: exact inverse of [`fd_payload_div`] given the class wires (X_sign, Y_sign, o_0); clears `del` to 0.
-fn fd_payload_div_inv(c: &mut Builder, sig: &[QubitId], del: &[QubitId], xs: QubitId, ys: QubitId, o0: QubitId) {
-    if r4_fdp_fuse() { return fd_payload_div_inv_r4(c, sig, del, xs, ys, o0); }
+fn fd_payload_div_inv(
+    c: &mut Builder,
+    sig: &[QubitId],
+    del: &[QubitId],
+    xs: QubitId,
+    ys: QubitId,
+    o0: QubitId,
+) {
+    if r4_fdp_fuse() {
+        return fd_payload_div_inv_r4(c, sig, del, xs, ys, o0);
+    }
     c.cx(o0, ys);
     c.x(ys);
     c.fold_trace("fd-neg-del", |c| h7::cond_negate(c, ys, del));
@@ -1571,8 +2075,18 @@ fn fd_payload_div_inv(c: &mut Builder, sig: &[QubitId], del: &[QubitId], xs: Qub
 
 /// Inverse of [`fd_payload_div`] at the end of the multiply head batch; the class is decoded from the tape
 /// pseudo-letter `(o_0, s_0)` and the carried sign wire `bw` = X_sign: `ys = o_0 ? NOT bw : s_0`.
-fn fd_payload_mul_inv(c: &mut Builder, sig: &[QubitId], del: &[QubitId], o0: QubitId, s0: QubitId, bw: QubitId) {
-    assert!(!r4_fdp_fuse(), "R4_FDP_FUSE: fd_payload_mul_inv path not ported");
+fn fd_payload_mul_inv(
+    c: &mut Builder,
+    sig: &[QubitId],
+    del: &[QubitId],
+    o0: QubitId,
+    s0: QubitId,
+    bw: QubitId,
+) {
+    assert!(
+        !r4_fdp_fuse(),
+        "R4_FDP_FUSE: fd_payload_mul_inv path not ported"
+    );
     // s_0 = 0 whenever o_0 = 1, so ys = s_0 ^ (o_0 & NOT bw): one Toffoli each way.
     let ys = c.alloc_qubit();
     let dec = |c: &mut Builder| {
@@ -1655,32 +2169,71 @@ fn g1b_inverse(c: &mut Builder, sig: &[QubitId], del: &[QubitId], s0: QubitId, t
 
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Multiply-zone cell: B1 double_add_nc on the head's adder Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
-fn block_selectors(u: U256, width: usize, m1f: QubitId, p2f: QubitId, e: QubitId) -> Vec<Vec<QubitId>> {
+fn block_selectors(
+    u: U256,
+    width: usize,
+    m1f: QubitId,
+    p2f: QubitId,
+    e: QubitId,
+) -> Vec<Vec<QubitId>> {
     let nu = h7::twos_complement_bits(u, width);
-    (0..width).map(|i| {
-        let pu = i < 256 && u.bit(i);
-        let p2u = i >= 1 && i - 1 < 256 && u.bit(i - 1);
-        let mut out = Vec::new();
-        if pu ^ nu[i] { out.push(m1f); }
-        if p2u { out.push(p2f); }
-        if pu { out.push(e); }
-        out
-    }).collect()
+    (0..width)
+        .map(|i| {
+            let pu = i < 256 && u.bit(i);
+            let p2u = i >= 1 && i - 1 < 256 && u.bit(i - 1);
+            let mut out = Vec::new();
+            if pu ^ nu[i] {
+                out.push(m1f);
+            }
+            if p2u {
+                out.push(p2f);
+            }
+            if pu {
+                out.push(e);
+            }
+            out
+        })
+        .collect()
 }
 
-fn fold_generic_single(c: &mut Builder, acc: &[QubitId], sel: &[Vec<QubitId>], first_carry: QubitId) {
+fn fold_generic_single(
+    c: &mut Builder,
+    acc: &[QubitId],
+    sel: &[Vec<QubitId>],
+    first_carry: QubitId,
+) {
     let width = acc.len();
     assert!(width >= 3);
     for &q in &sel[0] {
         c.cx(q, acc[0]);
     }
     let carries = c.alloc_qubits(width - 3);
-    let prev = |off: usize| if off == 0 { first_carry } else { carries[off - 1] };
+    let prev = |off: usize| {
+        if off == 0 {
+            first_carry
+        } else {
+            carries[off - 1]
+        }
+    };
     for off in 0..carries.len() {
-        fold_step(c, acc[off + 1], prev(off), carries[off], &sel[off + 1], false);
+        fold_step(
+            c,
+            acc[off + 1],
+            prev(off),
+            carries[off],
+            &sel[off + 1],
+            false,
+        );
     }
     let i = width - 2;
-    fold_step(c, acc[i], prev(carries.len()), acc[width - 1], &sel[i], true);
+    fold_step(
+        c,
+        acc[i],
+        prev(carries.len()),
+        acc[width - 1],
+        &sel[i],
+        true,
+    );
     for &q in &sel[width - 1] {
         c.cx(q, acc[width - 1]);
     }
@@ -1690,7 +2243,14 @@ fn fold_generic_single(c: &mut Builder, acc: &[QubitId], sel: &[Vec<QubitId>], f
     c.free_vec(&carries);
 }
 
-fn fold_generic(c: &mut Builder, acc: &[QubitId], m1f: QubitId, p2f: QubitId, e: QubitId, first_carry: QubitId) {
+fn fold_generic(
+    c: &mut Builder,
+    acc: &[QubitId],
+    m1f: QubitId,
+    p2f: QubitId,
+    e: QubitId,
+    first_carry: QubitId,
+) {
     let fw = acc.len();
     if c.active_qubits() as usize + fw - 3 <= h7::cap() {
         let sel = block_selectors(f(), fw, m1f, p2f, e);
@@ -1699,10 +2259,20 @@ fn fold_generic(c: &mut Builder, acc: &[QubitId], m1f: QubitId, p2f: QubitId, e:
     }
     let sb = h7::FOLD_SPLIT_BIT;
     let f_low = f() & ((U256::from(1) << sb) - U256::from(1));
-    fold_generic_single(c, &acc[..sb], &block_selectors(f_low, sb, m1f, p2f, e), first_carry);
+    fold_generic_single(
+        c,
+        &acc[..sb],
+        &block_selectors(f_low, sb, m1f, p2f, e),
+        first_carry,
+    );
     let boundary = c.alloc_qubit();
     c.ccx(acc[sb], e, boundary);
-    fold_generic_single(c, &acc[sb..], &block_selectors(U256::from(1), fw - sb, m1f, p2f, e), boundary);
+    fold_generic_single(
+        c,
+        &acc[sb..],
+        &block_selectors(U256::from(1), fw - sb, m1f, p2f, e),
+        boundary,
+    );
     c.cx(e, acc[sb]);
     h7::and_uncompute(c, boundary, acc[sb], e);
     c.cx(e, acc[sb]);
@@ -1710,7 +2280,14 @@ fn fold_generic(c: &mut Builder, acc: &[QubitId], m1f: QubitId, p2f: QubitId, e:
 
 /// `target <- 2 target + (-1)^sign source (mod p)`; degenerate inverses (output 0)
 /// always land on the representative p (B1 `double_add_nc`).
-fn double_add_nc(c: &mut Builder, sign: QubitId, source: &[QubitId], target: &[QubitId], fw: usize, proxy: usize) {
+fn double_add_nc(
+    c: &mut Builder,
+    sign: QubitId,
+    source: &[QubitId],
+    target: &[QubitId],
+    fw: usize,
+    proxy: usize,
+) {
     let od = h7::start_doubling(c, target);
     c.cx_all(sign, source);
     let o = h7::chunked_add(c, source, target, proxy, true);
@@ -1783,7 +2360,9 @@ fn route(c: &mut Builder, s: QubitId, sig: &[QubitId], del: &[QubitId]) {
 /// The esw[t] the cells key their proxy round on: the row's own, or the pinned `HEO_PROXY_ENVELOPE` (INTEGRATE-R3).
 fn cell_proxy_w(cfg: &HeoConfig, t: usize) -> usize {
     match &carry_cfg().proxy_esw {
-        Some(v) => *v.get(t).unwrap_or_else(|| panic!("HEO_PROXY_ENVELOPE has {} ticks, needs tick {t}", v.len())),
+        Some(v) => *v
+            .get(t)
+            .unwrap_or_else(|| panic!("HEO_PROXY_ENVELOPE has {} ticks, needs tick {t}", v.len())),
         None => cfg.esw[t],
     }
 }
@@ -1816,7 +2395,11 @@ fn k2_cell_loan(c: &mut Builder, r1: &[QubitId], esw_t: usize, body: impl FnOnce
 fn r3_s1_ticks() -> &'static Vec<usize> {
     static V: OnceLock<Vec<usize>> = OnceLock::new();
     V.get_or_init(|| match std::env::var("R3_S1_TICKS") {
-        Ok(s) => s.split(',').filter(|x| !x.trim().is_empty()).map(|x| x.trim().parse().unwrap()).collect(),
+        Ok(s) => s
+            .split(',')
+            .filter(|x| !x.trim().is_empty())
+            .map(|x| x.trim().parse().unwrap())
+            .collect(),
         Err(_) => vec![5, 7, 8, 260, 272],
     })
 }
@@ -1830,14 +2413,17 @@ fn r3_sgn_map() -> &'static Option<std::collections::HashMap<usize, isize>> {
     static M: OnceLock<Option<std::collections::HashMap<usize, isize>>> = OnceLock::new();
     M.get_or_init(|| {
         std::env::var("R3_SGN_FILE").ok().map(|p| {
-            std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("R3_SGN_FILE {p}: {e}")).lines()
+            std::fs::read_to_string(&p)
+                .unwrap_or_else(|e| panic!("R3_SGN_FILE {p}: {e}"))
+                .lines()
                 .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
                 .map(|l| {
                     let mut it = l.split_whitespace();
                     let i: usize = it.next().unwrap().parse().unwrap();
                     let d: isize = it.next().map_or(0, |v| v.parse().unwrap());
                     (i, d)
-                }).collect()
+                })
+                .collect()
         })
     })
 }
@@ -1874,56 +2460,55 @@ fn r3_sgn_restore(c: &mut Builder, x20: QubitId, typ: QubitId) -> QubitId {
 /// K3b per-cell oracle harness. `K3B_CELL_PINS_ALL="N=V;N=V"` pins every payload cell; `K3B_CELL_OVR=path` holds
 /// lines `idx N=V N=V ...` for single cells (cell index = order of cell calls in the build); `K3B_CELL_TRACE=1`
 /// prints `K3B_CELL idx dir t proxy live room cost nB lB nF lF` (cost = expected T of the cell, from the phase report).
-fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl FnOnce(&mut Builder) -> R) -> R {
+fn k3b_cell<R>(
+    c: &mut Builder,
+    dir: &str,
+    t: usize,
+    proxy: usize,
+    body: impl FnOnce(&mut Builder) -> R,
+) -> R {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     static ALL: OnceLock<Vec<(String, String)>> = OnceLock::new();
     static OVR: OnceLock<HashMap<usize, Vec<(String, String)>>> = OnceLock::new();
     static TRACE: OnceLock<bool> = OnceLock::new();
     let kv = |s: &str| -> Vec<(String, String)> {
-        s.split([';', ' ']).filter(|x| !x.trim().is_empty()).map(|x| {
-            let (k, v) = x.split_once('=').expect("N=V");
-            (k.trim().to_string(), v.trim().to_string())
-        }).collect()
+        s.split([';', ' '])
+            .filter(|x| !x.trim().is_empty())
+            .map(|x| {
+                let (k, v) = x.split_once('=').expect("N=V");
+                (k.trim().to_string(), v.trim().to_string())
+            })
+            .collect()
     };
-    let all = ALL.get_or_init(|| std::env::var("K3B_CELL_PINS_ALL").map(|s| kv(&s)).unwrap_or_default());
-    let ovr = OVR.get_or_init(|| std::env::var("K3B_CELL_OVR").ok().map(|p| {
-        include_str!("skywalk_data/ovr_v025_lamneutral.txt").to_owned().lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#')).map(|l| {
-            let (i, rest) = l.trim().split_once(char::is_whitespace).unwrap_or((l.trim(), ""));
-            (i.parse::<usize>().unwrap(), kv(rest))
-        }).collect()
-    }).unwrap_or_default());
+    let all = ALL.get_or_init(|| {
+        std::env::var("K3B_CELL_PINS_ALL")
+            .map(|s| kv(&s))
+            .unwrap_or_default()
+    });
+    let ovr = OVR.get_or_init(|| {
+        std::env::var("K3B_CELL_OVR")
+            .ok()
+            .map(|p| {
+                include_str!("skywalk_data/ovr_v025_lamneutral.txt")
+                    .to_owned()
+                    .lines()
+                    .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+                    .map(|l| {
+                        let (i, rest) = l
+                            .trim()
+                            .split_once(char::is_whitespace)
+                            .unwrap_or((l.trim(), ""));
+                        (i.parse::<usize>().unwrap(), kv(rest))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
     let idx = R3_CELL_IDX.fetch_add(1, Ordering::Relaxed);
     let mut pins: HashMap<String, String> = all.iter().cloned().collect();
     if let Some(v) = ovr.get(&idx) {
         pins.extend(v.iter().cloned());
-    }
-    // SKYX_K3B_RETUNE (sky-x4 research hook): per-cell K3B_BRIDGE / K3B_EXTRA_ROOM retune file, lines
-    // `idx bridge room tick dir` (format of jackylee0424's cap1173_bridge_room_profile_v2.txt, 3161bd20). Unset = no change.
-    static RETUNE: OnceLock<HashMap<usize,(String,isize,usize,String)>> = OnceLock::new();
-    let retune = RETUNE.get_or_init(|| {
-        let mut map = HashMap::new();
-        if std::env::var("SKYX_K3B_RETUNE").is_ok() {
-            let text = include_str!("skywalk_data/cap1172_bridge_room_profile_probe.txt");
-            for line in text.lines().filter(|l| !l.trim().is_empty()) {
-                let f: Vec<&str> = line.split_whitespace().collect();
-                assert_eq!(f.len(),5);
-                let id: usize = f[0].parse().unwrap();
-                let bridge = f[1].to_string();
-                let room: isize = f[2].parse().unwrap();
-                let tick: usize = f[3].parse().unwrap();
-                assert!(["+0","+1","+2","+3","-1","-2","0"].contains(&bridge.as_str()));
-                assert!((-16..=16).contains(&room)); // widened for the extended negative-room grid (cap-probe regridx)
-                assert!(map.insert(id,(bridge,room,tick,f[4].to_string())).is_none());
-            }
-        }
-        map
-    });
-    if let Some((bridge,room,tick,direction)) = retune.get(&idx) {
-        assert_eq!(*tick,t); assert_eq!(direction,dir);
-        pins.insert("K3B_BRIDGE".into(),bridge.clone());
-        let current: isize = pins.get("K3B_EXTRA_ROOM").map_or(0,|v|v.parse().unwrap());
-        pins.insert("K3B_EXTRA_ROOM".into(),(current+room).to_string());
     }
     // R3 sign loan: per-cell room pin delta from R3_SGN_FILE (`idx delta` lines).
     if let Some(d) = r3_sgn_map().as_ref().and_then(|m| m.get(&idx)).copied() {
@@ -1936,7 +2521,10 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
     if let Ok(spec) = std::env::var("R3_ROOM_ALL") {
         for it in spec.split(',') {
             let (k, rng) = it.split_once(':').map_or((it, None), |(a, b)| (a, Some(b)));
-            let hit = rng.map_or(true, |r| { let (lo, hi) = r.split_once('-').unwrap(); idx >= lo.parse::<usize>().unwrap() && idx <= hi.parse::<usize>().unwrap() });
+            let hit = rng.map_or(true, |r| {
+                let (lo, hi) = r.split_once('-').unwrap();
+                idx >= lo.parse::<usize>().unwrap() && idx <= hi.parse::<usize>().unwrap()
+            });
             if hit {
                 let k: isize = k.parse().unwrap();
                 let cur: isize = pins.get("K3B_EXTRA_ROOM").map_or(0, |v| v.parse().unwrap());
@@ -1953,63 +2541,106 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
     let room = h7::cap().saturating_sub(live as usize);
     let before = c.report_totals();
     let s0 = c.k3b_sites;
-    let op0 = c.op_count();
     let (out, cpeak) = c.r3_peak(body);
-    if std::env::var_os("R3_PEAK").is_some() { eprintln!("R3_PEAK {idx} {cpeak}"); }
-    // K3B_OPS=1: builder op range of this cell (pre-simplifier; maps phcen error sites to cells).
-    if std::env::var_os("K3B_OPS").is_some() { eprintln!("K3B_OPS {idx} {dir} {t} {op0} {}", c.op_count()); }
+    if std::env::var_os("R3_PEAK").is_some() {
+        eprintln!("R3_PEAK {idx} {cpeak}");
+    }
     let after = c.report_totals();
     let s1 = c.k3b_sites;
     if set {
         super::CELL_PINS.with(|m| *m.borrow_mut() = None);
     }
     if *TRACE.get_or_init(|| env_bool("K3B_CELL_TRACE", false)) {
-        let cost = match (before, after) { (Some(b), Some(a)) => a.1 - b.1, _ => f64::NAN };
-        eprintln!("K3B_CELL {idx} {dir} {t} {proxy} {live} {room} {cost:.1} {} {:.3e} {} {:.3e}", s1.0 - s0.0,
-            s1.1 - s0.1, s1.2 - s0.2, s1.3 - s0.3);
+        let cost = match (before, after) {
+            (Some(b), Some(a)) => a.1 - b.1,
+            _ => f64::NAN,
+        };
+        eprintln!(
+            "K3B_CELL {idx} {dir} {t} {proxy} {live} {room} {cost:.1} {} {:.3e} {} {:.3e}",
+            s1.0 - s0.0,
+            s1.1 - s0.1,
+            s1.2 - s0.2,
+            s1.3 - s0.3
+        );
     }
     out
 }
 
 /// Division cell t: `Sig <- (Sig - (-1)^g Del)/2`.
-fn cell_div(c: &mut Builder, cfg: &HeoConfig, t: usize, typ: QubitId, sig: &[QubitId], del: &[QubitId]) {
+fn cell_div(
+    c: &mut Builder,
+    cfg: &HeoConfig,
+    t: usize,
+    typ: QubitId,
+    sig: &[QubitId],
+    del: &[QubitId],
+) {
     let proxy = h7::proxy_round(cell_proxy_w(cfg, t));
     let (db, df, dx) = cell_shift(false, t);
-    let fw = h7::fold_window(proxy, false).checked_add_signed(dx).expect("HEO_CELL_WINDOWS: fold window positive");
+    let fw = h7::fold_window(proxy, false)
+        .checked_add_signed(dx)
+        .expect("HEO_CELL_WINDOWS: fold window positive");
 
     if truthy("HEO_CELL_TRACE") {
-        eprintln!("HEO_CELL div t={t} esw={} proxy={proxy} fw={fw} live={} room={}", cfg.esw[t], c.active_qubits(),
-            h7::cap().saturating_sub(c.active_qubits() as usize));
+        eprintln!(
+            "HEO_CELL div t={t} esw={} proxy={proxy} fw={fw} live={} room={}",
+            cfg.esw[t],
+            c.active_qubits(),
+            h7::cap().saturating_sub(c.active_qubits() as usize)
+        );
     }
     k3b_cell(c, "div", t, proxy, |c| {
-        if std::env::var_os("TERMINAL_PAIR").is_some() && t+1==cfg.rounds() {
-            let fw=std::env::var("TERMINAL_FW").ok().map(|x|x.parse().unwrap()).unwrap_or(50);
-            eprintln!("TERMINAL_SITE {} {} {} {}","div",t,c.active_qubits(),fw);
-            super::super::pingpong::terminal_pair(c,typ,sig,del,fw,true);return;
+        if std::env::var_os("TERMINAL_PAIR").is_some() && t + 1 == cfg.rounds() {
+            let fw = std::env::var("TERMINAL_FW")
+                .ok()
+                .map(|x| x.parse().unwrap())
+                .unwrap_or(50);
+            eprintln!("TERMINAL_SITE {} {} {} {}", "div", t, c.active_qubits(), fw);
+            super::super::pingpong::terminal_pair(c, typ, sig, del, fw, true);
+            return;
         }
 
         c.x(typ);
         let tie = (t < carry_cfg().zone).then_some(typ);
-        h7::with_cmp_shift((db, df), || h7::with_tie(tie, || h7::add_halve(c, typ, del, sig, fw, proxy)));
+        h7::with_cmp_shift((db, df), || {
+            h7::with_tie(tie, || h7::add_halve(c, typ, del, sig, fw, proxy))
+        });
         c.x(typ);
     });
 }
 
 /// Multiply cell t: `Sig <- 2 Sig + (-1)^g Del`.
-fn cell_mul(c: &mut Builder, cfg: &HeoConfig, t: usize, typ: QubitId, sig: &[QubitId], del: &[QubitId]) {
+fn cell_mul(
+    c: &mut Builder,
+    cfg: &HeoConfig,
+    t: usize,
+    typ: QubitId,
+    sig: &[QubitId],
+    del: &[QubitId],
+) {
     let proxy = h7::proxy_round(cell_proxy_w(cfg, t));
     let (db, df, dx) = cell_shift(true, t);
-    let fw = h7::fold_window(proxy, true).checked_add_signed(dx).expect("HEO_CELL_WINDOWS: fold window positive");
+    let fw = h7::fold_window(proxy, true)
+        .checked_add_signed(dx)
+        .expect("HEO_CELL_WINDOWS: fold window positive");
 
     if truthy("HEO_CELL_TRACE") {
-        eprintln!("HEO_CELL mul t={t} esw={} proxy={proxy} fw={fw} live={} room={}", cfg.esw[t], c.active_qubits(),
-            h7::cap().saturating_sub(c.active_qubits() as usize));
+        eprintln!(
+            "HEO_CELL mul t={t} esw={} proxy={proxy} fw={fw} live={} room={}",
+            cfg.esw[t],
+            c.active_qubits(),
+            h7::cap().saturating_sub(c.active_qubits() as usize)
+        );
     }
     k3b_cell(c, "mul", t, proxy, |c| {
-        if std::env::var_os("TERMINAL_PAIR").is_some() && t+1==cfg.rounds() {
-            let fw=std::env::var("TERMINAL_FW").ok().map(|x|x.parse().unwrap()).unwrap_or(50);
-            eprintln!("TERMINAL_SITE {} {} {} {}","mul",t,c.active_qubits(),fw);
-            super::super::pingpong::terminal_pair(c,typ,sig,del,fw,false);return;
+        if std::env::var_os("TERMINAL_PAIR").is_some() && t + 1 == cfg.rounds() {
+            let fw = std::env::var("TERMINAL_FW")
+                .ok()
+                .map(|x| x.parse().unwrap())
+                .unwrap_or(50);
+            eprintln!("TERMINAL_SITE {} {} {} {}", "mul", t, c.active_qubits(), fw);
+            super::super::pingpong::terminal_pair(c, typ, sig, del, fw, false);
+            return;
         }
 
         h7::with_cmp_shift((db, df), || {
@@ -2024,6 +2655,8 @@ fn cell_mul(c: &mut Builder, cfg: &HeoConfig, t: usize, typ: QubitId, sig: &[Qub
 
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ C10 record codec (B1 b1heo) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
+#[path = "chain_codec.rs"]
+pub mod chain_codec;
 #[path = "codec_probe.rs"]
 pub mod codec_probe;
 #[path = "codec_synth.rs"]
@@ -2034,6 +2667,10 @@ enum GState {
     Raw,
     P3,
     P5,
+    /// A2: first group of a chain; its wires hold the chain state (see `chain_codec`).
+    ChainBase,
+    /// A2: pushed into a chain; its 8 wires hold one byte of the chained number.
+    Chained,
 }
 
 #[derive(Clone)]
@@ -2049,39 +2686,90 @@ struct Group {
     b1: QubitId,
     b0: QubitId,
     m_g: Option<BitId>,
-    m_pair: Option<BitId>,
 }
 
 struct Tape {
     /// v025 A-2: per group, the shared product `h2 * typ3` waiting for that group's pack3.
     shared: Vec<Option<QubitId>>,
-    outer_shared: Vec<Option<QubitId>>,
     raw: Vec<Option<(QubitId, QubitId)>>,
     groups: Vec<Option<Group>>,
     /// RB-1 L-T0: the codec starts at letter `off` (group g = letters 5g+off..5g+off+4); letters below `off`
     /// are held outside the tape.
     off: usize,
+    /// A2: chained base-243 blocks of idle P5 groups (`chain_codec`), one slot per chain.
+    chains: Vec<Option<chain_codec::Chain>>,
 }
 
 /// A packed record from a different group is idle for the entire field cell.
 /// Its arbitrary quantum value and any deferred codec phase remain untouched.
-fn dirty_cell(c:&mut Builder,tape:&Tape,t:usize,body:impl FnOnce(&mut Builder)){
+fn dirty_cell(c: &mut Builder, tape: &Tape, t: usize, body: impl FnOnce(&mut Builder)) {
     if std::env::var_os("R3_CENSUS").is_some() {
         let raw = tape.raw.iter().filter(|x| x.is_some()).count();
-        let p3 = tape.groups.iter().filter(|g| g.as_ref().is_some_and(|g| g.state == GState::P3)).count();
-        let p5 = tape.groups.iter().filter(|g| g.as_ref().is_some_and(|g| g.state == GState::P5)).count();
-        let sh = tape.shared.iter().filter(|x| x.is_some()).count() + tape.outer_shared.iter().filter(|x|x.is_some()).count();
+        let p3 = tape
+            .groups
+            .iter()
+            .filter(|g| g.as_ref().is_some_and(|g| g.state == GState::P3))
+            .count();
+        let p5 = tape
+            .groups
+            .iter()
+            .filter(|g| g.as_ref().is_some_and(|g| g.state == GState::P5))
+            .count();
+        let sh = tape.shared.iter().filter(|x| x.is_some()).count();
         let tw = 2 * raw + 5 * p3 + 8 * p5 + sh;
-        eprintln!("R3_CENSUS t={t} live={} raw={raw} p3={p3} p5={p5} shared={sh} tape_wires={tw} rest={}", c.active_qubits(), c.active_qubits() as usize - tw - 512);
+        eprintln!(
+            "R3_CENSUS t={t} live={} raw={raw} p3={p3} p5={p5} shared={sh} tape_wires={tw} rest={}",
+            c.active_qubits(),
+            c.active_qubits() as usize - tw - 512
+        );
     }
-    let current=t.checked_sub(tape.off).map(|x|x/5);
-    let loan=tape.groups.iter().enumerate().find_map(|(g,p)|{
-        if Some(g)==current{return None;}p.as_ref().map(|p|(g,p.a1))
+    let current = t.checked_sub(tape.off).map(|x| x / 5);
+    let loan = tape.groups.iter().enumerate().find_map(|(g, p)| {
+        if Some(g) == current {
+            return None;
+        }
+        p.as_ref()
+            .filter(|p| p.state != GState::ChainBase)
+            .map(|p| (g, p.a1))
     });
-    if std::env::var("DIRTY_BOUNDARY_MODE").is_ok(){
-        eprintln!("DIRTY_POOL\t{}\t{}\t{}\t{}",t,c.op_count(),loan.map_or(usize::MAX,|x|x.0),loan.map_or(u64::MAX,|x|x.1.0));
+    if std::env::var("DIRTY_BOUNDARY_MODE").is_ok() {
+        eprintln!(
+            "DIRTY_POOL\t{}\t{}\t{}\t{}",
+            t,
+            c.op_count(),
+            loan.map_or(usize::MAX, |x| x.0),
+            loan.map_or(u64::MAX, |x| x.1 .0)
+        );
     }
-    super::super::dirty_boundary_probe::with_tape(c,loan.map(|x|x.1),body);
+    if super::super::lowroom::enabled() {
+        // SQ_LOWROOM: every packed P5 group other than the current letter's is idle for the whole cell.
+        let pool: Vec<QubitId> = tape
+            .groups
+            .iter()
+            .enumerate()
+            .filter(|(g, _)| Some(*g) != current)
+            .filter_map(|(_, p)| p.as_ref())
+            .filter(|p| p.state == GState::P5 || p.state == GState::Chained)
+            .flat_map(|p| [p.a2, p.a1, p.a0, p.h3, p.l3, p.b2, p.b1, p.b0])
+            .chain(
+                tape.chains
+                    .iter()
+                    .flatten()
+                    .flat_map(|ch| ch.state.iter().copied()),
+            )
+            .collect();
+        let mut out = None;
+        let mut body = Some(body);
+        super::super::lowroom::with_pool(pool, || {
+            out = Some(super::super::dirty_boundary_probe::with_tape(
+                c,
+                loan.map(|x| x.1),
+                body.take().unwrap(),
+            ));
+        });
+        return out.unwrap();
+    }
+    super::super::dirty_boundary_probe::with_tape(c, loan.map(|x| x.1), body);
 }
 
 fn to_hl(c: &mut Builder, (typ, s): (QubitId, QubitId)) -> (QubitId, QubitId) {
@@ -2107,21 +2795,9 @@ fn pair_pack(c: &mut Builder, h1: QubitId, l1: QubitId, h2: QubitId, l2: QubitId
     c.free_bit(m);
     c.free(anc);
 }
-/// Exact shared pair compressor (bdff8c8 exact-arithmetic-v2). Outputs match ordinary pair_pack on all 9.
-/// The product measurement is repaired on pair_unpack's already computed AND.
-fn pair_pack_shared(c: &mut Builder, a: QubitId, b: QubitId, cc: QubitId, d: QubitId, p: QubitId) -> (QubitId, BitId) {
-    let h=c.alloc_qubit(); c.ccx(a,cc,h);
-    c.cx(p,b); c.cx(a,b); c.cx(h,b);
-    c.cx(a,cc); c.cx(p,d);
-    let m=c.alloc_bit(); c.hmr(a,m); c.z_if(h,m); c.cz_if(cc,d,m); c.free_bit(m); c.free(a);
-    let deferred=c.alloc_bit(); c.hmr(p,deferred); c.free(p);
-    (h,deferred)
-}
-
-fn pair_unpack(c: &mut Builder, h1: QubitId, l1: QubitId, h2: QubitId, l2: QubitId, m_pair: Option<BitId>) {
+fn pair_unpack(c: &mut Builder, h1: QubitId, l1: QubitId, h2: QubitId, l2: QubitId) {
     let anc = c.alloc_qubit();
     c.ccx(h2, l2, anc);
-    if let Some(m)=m_pair { c.z_if(anc,m); c.cz_if(anc,l1,m); c.free_bit(m); }
     c.cx(anc, h1);
     c.cx(anc, l2);
     fredkin(c, anc, l1, l2);
@@ -2138,7 +2814,14 @@ impl Tape {
         Self::with_offset(r, 0)
     }
     fn with_offset(r: usize, off: usize) -> Self {
-        Tape { outer_shared: vec![None; (r - off).div_ceil(5)], shared: vec![None; (r - off).div_ceil(5)], raw: vec![None; r], groups: vec![None; (r - off).div_ceil(5)], off }
+        let ng = (r - off).div_ceil(5);
+        Tape {
+            shared: vec![None; ng],
+            raw: vec![None; r],
+            groups: vec![None; ng],
+            off,
+            chains: (0..ng).map(|_| None).collect(),
+        }
     }
     /// Group of letter `u` (u >= off).
     fn gid(&self, u: usize) -> usize {
@@ -2153,11 +2836,30 @@ impl Tape {
         let (h2, l2) = to_hl(c, self.raw[t0 + 1].take().unwrap());
         let (h3, l3) = to_hl(c, self.raw[t0 + 2].take().unwrap());
         if truthy("HEO_CODEC_SYNTH") {
-            let [a2,a1,a0,h3,l3]=codec_synth::pack_compatible_shared(c,[h1,l1,h2,l2,h3,l3],self.shared[g].take());
-            self.groups[g]=Some(Group{state:GState::P3,synth:true,a2,a1,a0,h3,l3,b2:a2,b1:a2,b0:a2,m_g:None,m_pair:None});
+            let [a2, a1, a0, h3, l3] = codec_synth::pack_compatible_shared(
+                c,
+                [h1, l1, h2, l2, h3, l3],
+                self.shared[g].take(),
+            );
+            self.groups[g] = Some(Group {
+                state: GState::P3,
+                synth: true,
+                a2,
+                a1,
+                a0,
+                h3,
+                l3,
+                b2: a2,
+                b1: a2,
+                b0: a2,
+                m_g: None,
+            });
             return;
         }
-        assert!(self.shared[g].is_none(), "shared product needs the synthesized codec");
+        assert!(
+            self.shared[g].is_none(),
+            "shared product needs the synthesized codec"
+        );
         pair_pack(c, h1, l1, h2, l2);
         let (fwire, a2, a1, a0) = (h1, l1, h2, l2);
         fredkin(c, fwire, a1, h3);
@@ -2169,7 +2871,19 @@ impl Tape {
         c.cz_if(h3, l3, m);
         c.free_bit(m);
         c.free(fwire);
-        self.groups[g] = Some(Group { state: GState::P3, synth: false, a2, a1, a0, h3, l3, b2: a2, b1: a2, b0: a2, m_g: None, m_pair: None });
+        self.groups[g] = Some(Group {
+            state: GState::P3,
+            synth: false,
+            a2,
+            a1,
+            a0,
+            h3,
+            l3,
+            b2: a2,
+            b1: a2,
+            b0: a2,
+            m_g: None,
+        });
     }
     fn pack5(&mut self, c: &mut Builder, g: usize) {
         let t0 = 5 * g + self.off;
@@ -2177,12 +2891,7 @@ impl Tape {
         let (h5, l5) = to_hl(c, self.raw[t0 + 4].take().unwrap());
         let mut grp = self.groups[g].take().unwrap();
         assert_eq!(grp.state, GState::P3);
-        let h4=if let Some(p)=self.outer_shared[g].take() {
-            assert!(grp.m_pair.is_none());
-            let (h,m)=pair_pack_shared(c,h4,l4,h5,l5,p); grp.m_pair=Some(m);
-            eprintln!("PAIR_CARRY_PACK group={g} t0={t0} op={}",c.op_count());
-            h
-        } else { pair_pack(c,h4,l4,h5,l5); h4 };
+        pair_pack(c, h4, l4, h5, l5);
         let (gw, b2, b1, b0) = (h4, l4, h5, l5);
         for (x, y) in [(grp.a2, b2), (grp.h3, b1), (grp.l3, b0)] {
             fredkin(c, gw, x, y);
@@ -2234,7 +2943,7 @@ impl Tape {
             fredkin(c, gw, x, y);
         }
         let (h4, l4, h5, l5) = (gw, grp.b2, grp.b1, grp.b0);
-        pair_unpack(c, h4, l4, h5, l5, grp.m_pair.take());
+        pair_unpack(c, h4, l4, h5, l5);
         self.raw[t0 + 3] = Some(from_hl(c, h4, l4));
         self.raw[t0 + 4] = Some(from_hl(c, h5, l5));
         grp.state = GState::P3;
@@ -2244,14 +2953,20 @@ impl Tape {
         let t0 = 5 * g + self.off;
         let grp = self.groups[g].take().unwrap();
         assert_eq!(grp.state, GState::P3);
-        assert!(grp.m_pair.is_none());
         if grp.synth {
-            let ([h1,l1,h2,l2,h3,l3],q)=codec_synth::unpack_compatible_retained(c,[grp.a2,grp.a1,grp.a0,grp.h3,grp.l3],REVERSE_CODEC_CAPTURE.with(|v|v.get()));
-            assert!(self.shared[g].is_none());self.shared[g]=q;
-            if q.is_some(){eprintln!("REVERSE_CODEC_CAPTURE group={g} t0={t0}");}
-            self.raw[t0]=Some(from_hl(c,h1,l1));
-            self.raw[t0+1]=Some(from_hl(c,h2,l2));
-            self.raw[t0+2]=Some(from_hl(c,h3,l3));
+            let ([h1, l1, h2, l2, h3, l3], q) = codec_synth::unpack_compatible_retained(
+                c,
+                [grp.a2, grp.a1, grp.a0, grp.h3, grp.l3],
+                REVERSE_CODEC_CAPTURE.with(|v| v.get()),
+            );
+            assert!(self.shared[g].is_none());
+            self.shared[g] = q;
+            if q.is_some() {
+                eprintln!("REVERSE_CODEC_CAPTURE group={g} t0={t0}");
+            }
+            self.raw[t0] = Some(from_hl(c, h1, l1));
+            self.raw[t0 + 1] = Some(from_hl(c, h2, l2));
+            self.raw[t0 + 2] = Some(from_hl(c, h3, l3));
             return;
         }
         let fwire = c.alloc_qubit();
@@ -2260,11 +2975,30 @@ impl Tape {
         c.cx(fwire, grp.l3);
         fredkin(c, fwire, grp.a1, grp.h3);
         fredkin(c, fwire, grp.a0, grp.l3);
-        assert!(grp.m_pair.is_none());
-        pair_unpack(c, fwire, grp.a2, grp.a1, grp.a0, None);
+        pair_unpack(c, fwire, grp.a2, grp.a1, grp.a0);
         self.raw[t0] = Some(from_hl(c, fwire, grp.a2));
         self.raw[t0 + 1] = Some(from_hl(c, grp.a1, grp.a0));
         self.raw[t0 + 2] = Some(from_hl(c, grp.h3, grp.l3));
+    }
+    /// Live wires held by the tape (raw letters 2 each, P3 groups 5, P5 groups 8, shared products 1).
+    fn wires(&self) -> usize {
+        2 * self.raw.iter().filter(|r| r.is_some()).count()
+            + self
+                .groups
+                .iter()
+                .map(|g| match g.as_ref().map(|g| g.state) {
+                    Some(GState::P3) => 5,
+                    Some(GState::P5) | Some(GState::Chained) => 8,
+                    _ => 0,
+                })
+                .sum::<usize>()
+            + self.shared.iter().filter(|q| q.is_some()).count()
+            + self
+                .chains
+                .iter()
+                .flatten()
+                .map(|ch| ch.state.len())
+                .sum::<usize>()
     }
     fn state(&self, g: usize) -> GState {
         self.groups[g].as_ref().map_or(GState::Raw, |x| x.state)
@@ -2274,6 +3008,9 @@ impl Tape {
             return;
         }
         let g = self.gid(u);
+        if matches!(self.state(g), GState::ChainBase | GState::Chained) {
+            self.unchain(c, g);
+        }
         if self.state(g) == GState::P5 {
             self.unpack5(c, g);
         }
@@ -2298,6 +3035,7 @@ impl Tape {
         }
         if u % 5 == 0 && u > 0 && self.state(g - 1) == GState::P3 {
             self.pack5(c, g - 1);
+            self.chain_push(c, g - 1);
         }
     }
     /// B1 `repack`.
@@ -2306,12 +3044,22 @@ impl Tape {
         if t0 + 2 < r && self.state(g) == GState::Raw && self.raw[t0].is_some() {
             self.pack3(c, g);
         }
-        if t0 + 4 < r && self.state(g) == GState::P3 && self.raw[t0 + 3].is_some() && self.raw[t0 + 4].is_some() {
+        if t0 + 4 < r
+            && self.state(g) == GState::P3
+            && self.raw[t0 + 3].is_some()
+            && self.raw[t0 + 4].is_some()
+        {
             self.pack5(c, g);
         }
     }
     fn all_consumed(&self) -> bool {
-        self.outer_shared.iter().all(Option::is_none) && self.shared.iter().all(Option::is_none) && self.raw.iter().all(Option::is_none) && self.groups.iter().all(|g| g.is_none() || g.as_ref().unwrap().state == GState::Raw)
+        self.chains.iter().all(Option::is_none)
+            && self.shared.iter().all(Option::is_none)
+            && self.raw.iter().all(Option::is_none)
+            && self
+                .groups
+                .iter()
+                .all(|g| g.is_none() || g.as_ref().unwrap().state == GState::Raw)
     }
 }
 
@@ -2371,7 +3119,11 @@ fn unloan(c: &mut Builder, o: QubitId, widths: (usize, usize)) -> Rails {
 
 /// RB-1 FB-RB1-3: swap the rails iff NOT o (o = o_{R-1}; o = 0 means the (+-1, 0) first-park state). Self-inverse.
 fn park_orient(c: &mut Builder, rails: &Rails, o: QubitId) {
-    assert_eq!(rails.r1.len(), rails.r2.len(), "park_orient: rails at one width");
+    assert_eq!(
+        rails.r1.len(),
+        rails.r2.len(),
+        "park_orient: rails at one width"
+    );
     c.x(o);
     for i in 0..rails.r1.len() {
         fredkin(c, o, rails.r1[i], rails.r2[i]);
@@ -2405,14 +3157,22 @@ fn rw(w: usize) -> usize {
     w.min(carry_cfg().rail_max)
 }
 fn wpost(cfg: &HeoConfig, t: usize) -> usize {
-    rw(if t + 1 < cfg.rounds() { cfg.ead[t].min(cfg.esw[t + 1]) } else { cfg.ead[t] })
+    rw(if t + 1 < cfg.rounds() {
+        cfg.ead[t].min(cfg.esw[t + 1])
+    } else {
+        cfg.ead[t]
+    })
 }
 /// B6 L-R1: R1's width after forward tick t (t >= 1): the halved rail needs at most rw(esw[t]) - 1 wires.
 fn lr1_width(cfg: &HeoConfig, t: usize) -> usize {
     wpost(cfg, t).min(rw(cfg.esw[t]) - 1)
 }
 fn wbefore(cfg: &HeoConfig, t: usize) -> usize {
-    if t == 0 { cfg.esw[0].max(N + 2) } else { wpost(cfg, t - 1) }
+    if t == 0 {
+        cfg.esw[0].max(N + 2)
+    } else {
+        wpost(cfg, t - 1)
+    }
 }
 
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Effort 11 FAMILY A (`HEO_FAMA=1`): C1 MAG-SLOT + S5 VENT-MBU + S1 half-empty Fredkin Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -2477,14 +3237,21 @@ fn a_from_heo(c: &mut Builder, rails: Rails) -> AState {
 
 /// Family A -> parked HEO rails, R1 at `w1` wires, R2 at `w2` (parked: w2 - 1 wires); 0 T. Registers are zero-extended.
 fn a_to_heo(c: &mut Builder, st: AState, w1: usize, w2: usize) -> Rails {
-    let AState { c: cw, mut x1, mut x2 } = st;
+    let AState {
+        c: cw,
+        mut x1,
+        mut x2,
+    } = st;
     while x1.len() < w1 - 1 {
         x1.push(c.alloc_qubit());
     }
     while x2.len() < w2 - 1 {
         x2.push(c.alloc_qubit());
     }
-    assert!(x1.len() == w1 - 1 && x2.len() == w2 - 1, "a_to_heo: family A register wider than the HEO target");
+    assert!(
+        x1.len() == w1 - 1 && x2.len() == w2 - 1,
+        "a_to_heo: family A register wider than the HEO target"
+    );
     let (s1w, s2w) = (x1[0], x2[0]);
     c.cx(cw, s1w);
     c.x(s2w);
@@ -2521,15 +3288,49 @@ fn a_mbu(c: &mut Builder, q: QubitId, x: QubitId, y: QubitId) {
 /// Family A ripple `b += a + cin` over w = b.len() bits, w - 1 owned carries. The top carry is vented into the fresh
 /// wire `cout` (Vent) or is the content of `cout` and is MBU-erased (Erase: S5). `a` may be one bit short: its top
 /// source bit is then the constant 1 (C1-SS, no pad wire).
-fn a_ripple(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>, cout: QubitId, top: ATop,
-            deferred: &mut Vec<(usize, BitId)>, top_release: bool) {
+thread_local! {
+    /// SQ_RAILBRIDGE: number of TOP carry stages of the next a_ripple done in place (Cuccaro MAJ/UMA,
+    /// carry parked in a[i], +1 CCX each, no wire). Set by fama_add when an exact split is infeasible.
+    static A_BRIDGE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+fn a_ripple(
+    c: &mut Builder,
+    a: &[QubitId],
+    b: &[QubitId],
+    cin: Option<QubitId>,
+    cout: QubitId,
+    top: ATop,
+    deferred: &mut Vec<(usize, BitId)>,
+    top_release: bool,
+) {
     let w = b.len();
     let short = a.len() + 1 == w;
     assert!(w >= 1 && (a.len() == w || short));
-    let carries = if REVERSE_LOW.with(|v|v.borrow().is_some()) {reverse_carries(c,w-1,a[0],b[0],cin)}else{c.alloc_qubits(w-1)};
+    let kb = A_BRIDGE.with(|x| x.replace(0)).min(w.saturating_sub(1));
+    let first = w.saturating_sub(1) - kb;
+    // Only the ripple whose low stage is the captured one (a[0], b[0], cin) takes the shared reverse carry;
+    // another ripple that runs while the capture is pending allocates normally (carry_step re-checks the full match).
+    let mut carries = if first > 0
+        && REVERSE_LOW.with(|v| {
+            v.borrow()
+                .as_ref()
+                .is_some_and(|&(aa, bb, p, _)| (a[0], b[0], cin) == (aa, bb, Some(p)))
+        }) {
+        reverse_carries(c, first, a[0], b[0], cin)
+    } else {
+        c.alloc_qubits(first)
+    };
+    carries.extend((first..w.saturating_sub(1)).map(|i| a[i]));
     let prev = |i: usize, cs: &[QubitId]| if i == 0 { cin } else { Some(cs[i - 1]) };
     for i in 0..w - 1 {
-        carry_step(c, a[i], b[i], prev(i, &carries), carries[i]);
+        if i >= first {
+            let p = prev(i, &carries).expect("bridged stage needs a live carry-in");
+            c.cx(a[i], b[i]);
+            c.cx(a[i], p);
+            c.ccx(b[i], p, a[i]);
+        } else {
+            carry_step(c, a[i], b[i], prev(i, &carries), carries[i]);
+        }
     }
     let t = w - 1;
     let p = prev(t, &carries);
@@ -2539,20 +3340,30 @@ fn a_ripple(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>,
             c.cx(p, b[t]);
         }
         match top {
-            ATop::Sum => {},
+            ATop::Sum => {}
             ATop::Vent => {
                 if top_release {
                     // Existing released folded top: sum_top = !carry_out.
-                    c.x(cout); c.cx(a[t], cout); c.cx(b[t], cout);
-                } else { c.ccx(a[t], b[t], cout); }
-                if let Some(p) = p { c.cx(p, cout); }
+                    c.x(cout);
+                    c.cx(a[t], cout);
+                    c.cx(b[t], cout);
+                } else {
+                    c.ccx(a[t], b[t], cout);
+                }
+                if let Some(p) = p {
+                    c.cx(p, cout);
+                }
             }
             ATop::Erase => {
                 if let Some(p) = p {
                     c.cx(p, cout);
                 }
-                if top_release { c.cx(b[t], cout); c.free(cout); }
-                else { a_mbu(c, cout, a[t], b[t]); }
+                if top_release {
+                    c.cx(b[t], cout);
+                    c.free(cout);
+                } else {
+                    a_mbu(c, cout, a[t], b[t]);
+                }
             }
         }
         if let Some(p) = p {
@@ -2564,20 +3375,34 @@ fn a_ripple(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>,
             Some(p) => {
                 c.cx(p, b[t]);
                 match top {
-                    ATop::Sum => {},
+                    ATop::Sum => {}
                     ATop::Vent => {
-                        if top_release { c.cx(b[t], cout); }
-                        else { c.x(p); c.ccx(p, b[t], cout); c.x(p); c.cx(p, cout); }
+                        if top_release {
+                            c.cx(b[t], cout);
+                        } else {
+                            c.x(p);
+                            c.ccx(p, b[t], cout);
+                            c.x(p);
+                            c.cx(p, cout);
+                        }
                     }
                     ATop::Erase => {
                         c.cx(p, cout);
-                        if top_release { c.cx(b[t], cout); c.free(cout); }
-                        else { c.x(p); a_mbu(c, cout, p, b[t]); c.x(p); }
+                        if top_release {
+                            c.cx(b[t], cout);
+                            c.free(cout);
+                        } else {
+                            c.x(p);
+                            a_mbu(c, cout, p, b[t]);
+                            c.x(p);
+                        }
                     }
                 }
             }
             None => {
-                if top != ATop::Sum { c.cx(b[t], cout); }
+                if top != ATop::Sum {
+                    c.cx(b[t], cout);
+                }
                 if top == ATop::Erase {
                     c.free(cout);
                 }
@@ -2586,6 +3411,17 @@ fn a_ripple(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>,
         c.x(b[t]);
     }
     for i in (0..w - 1).rev() {
+        if i >= first {
+            assert!(
+                !deferred.iter().any(|&(k, _)| k == i),
+                "deferred phase on a bridged stage"
+            );
+            let p = prev(i, &carries).unwrap();
+            c.ccx(b[i], p, a[i]);
+            c.cx(a[i], p);
+            c.cx(p, b[i]);
+            continue;
+        }
         if let Some(pos) = deferred.iter().position(|&(k, _)| k == i) {
             let (_, m) = deferred.remove(pos);
             c.z_if(carries[i], m);
@@ -2593,6 +3429,11 @@ fn a_ripple(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>,
         }
         unwind_carry_step(c, a[i], b[i], prev(i, &carries), carries[i]);
     }
+}
+
+fn sq_railbridge() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("SQ_RAILBRIDGE").is_some())
 }
 
 /// `split_sizes` for family A's add shape (w - 1 owned carries; the last chunk's top carry lives in `cout`, already
@@ -2633,12 +3474,29 @@ fn split_sizes_a(w: usize, room: usize, exact: bool) -> Result<Option<Vec<usize>
 
 /// Servoed family A add (see [`rail_add_inner`]; same split modes, same boundary erasures).
 #[allow(clippy::too_many_arguments)]
-fn fama_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, cout: QubitId, top: ATop, mode: SplitMode,
-            tick_def: &mut Vec<(usize, BitId)>, label: &'static str, top_release: bool) {
+fn fama_add(
+    c: &mut Builder,
+    a: &[QubitId],
+    b: &[QubitId],
+    cin: QubitId,
+    cout: QubitId,
+    top: ATop,
+    mode: SplitMode,
+    tick_def: &mut Vec<(usize, BitId)>,
+    label: &'static str,
+    top_release: bool,
+) {
     let w = b.len();
-    let room = h7::cap().saturating_sub(c.active_qubits() as usize).saturating_sub(usize::from(env_bool("GO_SHARE_ROOMFIX", false) && SHARED_LOW.with(|x| x.borrow().is_some())));
+    let room = h7::cap()
+        .saturating_sub(c.active_qubits() as usize)
+        .saturating_sub(usize::from(
+            env_bool("GO_SHARE_ROOMFIX", false) && SHARED_LOW.with(|x| x.borrow().is_some()),
+        ));
     if env_bool("K3B_RAIL_TRACE", false) {
-        eprintln!("K3B_RAIL {label} w={w} room={room} mode={mode:?} def={} fama={top:?}", tick_def.len());
+        eprintln!(
+            "K3B_RAIL {label} w={w} room={room} mode={mode:?} def={} fama={top:?}",
+            tick_def.len()
+        );
     }
     if !tick_def.is_empty() || mode == SplitMode::Apply {
         if w > room + 1 {
@@ -2648,7 +3506,10 @@ fn fama_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, cout: Q
             });
         }
         a_ripple(c, a, b, Some(cin), cout, top, tick_def, top_release);
-        assert!(tick_def.is_empty(), "deferred phase did not name an owned carry");
+        assert!(
+            tick_def.is_empty(),
+            "deferred phase did not name an owned carry"
+        );
         return;
     }
     let sizes = match split_sizes_a(w, room, mode == SplitMode::Exact) {
@@ -2658,12 +3519,43 @@ fn fama_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, cout: Q
         }
         Err(()) => {
             ledger(|l| l.infeasible += 1);
+            if sq_railbridge() && w >= 2 {
+                // Exact bridged ripple: allocate only `room` carries, the top (w-1-room) stages in place.
+                let low_pending = REVERSE_LOW.with(|v| v.borrow().is_some())
+                    || SHARED_LOW.with(|v| v.borrow().is_some());
+                let keep = room.min(w - 1).max(if low_pending { 1 } else { 0 });
+                A_BRIDGE.with(|x| x.set(w - 1 - keep));
+                eprintln!(
+                    "SQ_RAILBRIDGE fama {label} w={w} room={room} bridged={}",
+                    w - 1 - keep
+                );
+                ledger(|l| *l.splits.entry("SQ bridged fama stages").or_insert(0) += w - 1 - keep);
+            }
             a_ripple(c, a, b, Some(cin), cout, top, &mut Vec::new(), top_release);
             return;
         }
         Ok(Some(s)) => s,
     };
     ledger(|l| *l.splits.entry(label).or_insert(0) += sizes.len() - 1);
+    // A split rail add runs its low chunk through rail_ripple, which cannot take the codec's shared reverse
+    // carry. Un-compute that product here (q = (a0^p)(b0^p), exactly what the low stage would have produced) and free it.
+    let pending = REVERSE_LOW.with(|v| *v.borrow());
+    if let Some((aa, bb, p, q)) = pending {
+        if (aa, bb, p) == (a[0], b[0], cin) {
+            REVERSE_LOW.with(|v| v.borrow_mut().take());
+            c.cx(p, aa);
+            c.cx(p, bb);
+            c.ccx(aa, bb, q);
+            c.cx(p, aa);
+            c.cx(p, bb);
+            c.free(q);
+            ledger(|l| {
+                *l.splits
+                    .entry("SQ reverse share unshared (split)")
+                    .or_insert(0) += 1
+            });
+        }
+    }
     let mut bounds = Vec::with_capacity(sizes.len());
     let mut lo = 0;
     for &s in &sizes {
@@ -2678,7 +3570,16 @@ fn fama_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, cout: Q
         let last = j + 1 == bounds.len();
         let out = if last { None } else { Some(c.alloc_qubit()) };
         if last {
-            a_ripple(c, &a[lo..a.len().min(hi)], &b[lo..hi], carry_in, cout, top, &mut Vec::new(), top_release);
+            a_ripple(
+                c,
+                &a[lo..a.len().min(hi)],
+                &b[lo..hi],
+                carry_in,
+                cout,
+                top,
+                &mut Vec::new(),
+                top_release,
+            );
         } else {
             rail_ripple(c, &a[lo..hi], &b[lo..hi], carry_in, out, &mut Vec::new());
         }
@@ -2732,46 +3633,165 @@ fn fama_w1(cfg: &HeoConfig, t: usize) -> usize {
         return N - 1;
     }
     let tp = t - 1;
-    let w = if k.lr1 && tp > 0 && tp + 1 < cfg.rounds() { lr1_width(cfg, tp) } else { wpost(cfg, tp) };
+    let w = if k.lr1 && tp > 0 && tp + 1 < cfg.rounds() {
+        lr1_width(cfg, tp)
+    } else {
+        wpost(cfg, tp)
+    };
     w - 1
 }
 
-
 /// Literal exporter for public ecdsa.fail resource research, no real-world key target.
 pub fn rail_top_probe() {
- let args:Vec<String>=std::env::args().collect();let w:usize=args[1].parse().unwrap();let room:usize=args[2].parse().unwrap();let short=args[3]=="1";let inverse=args[4]=="1";let fixed=args[5]=="1";let path=&args[6];
- let mut c=Builder::new();let a=c.alloc_qubits(w-usize::from(short));let b=c.alloc_qubits(w);let cin=c.alloc_qubit();let cout=c.alloc_qubit();let base=c.active_qubits();
- std::env::set_var("HEO_PIN_PP_WALK_MAX_QUBITS",(base as usize+room).to_string());
- let start=c.op_count();let top=if inverse{ATop::Erase}else{ATop::Vent};
- if inverse { for &q in &b {c.x(q);} }
- fama_add(&mut c,&a,&b,cin,cout,top,SplitMode::Exact,&mut Vec::new(),"top_probe",fixed);
- if inverse { for &q in &b {c.x(q);} }
- let t=c.report_totals().unwrap().1;let peak=c.peak_total();let(nq,nb)=c.i13_dims();let ops=c.take_ops();let data=ops[start..].iter().map(|o|format!("[{},{},{},{},{},{}]",o.kind as u8,o.q_target.0,o.q_control1.0,o.q_control2.0,o.c_target.0,o.c_condition.0)).collect::<Vec<_>>().join(",");
- let ai=a.iter().map(|q|q.0).collect::<Vec<_>>();let bi=b.iter().map(|q|q.0).collect::<Vec<_>>();
- std::fs::write(path,format!("{{\"w\":{w},\"room\":{room},\"short\":{short},\"inverse\":{inverse},\"fixed\":{fixed},\"nq\":{nq},\"nb\":{nb},\"base\":{base},\"Q\":{peak},\"T\":{t},\"regs\":{{\"a\":{:?},\"b\":{:?},\"cin\":[{}],\"cout\":[{}]}},\"ops\":[{data}]}}",ai,bi,cin.0,cout.0)).unwrap();
- println!("{{\"artifact\":\"{path}\",\"w\":{w},\"room\":{room},\"short\":{short},\"inverse\":{inverse},\"fixed\":{fixed},\"Q\":{peak},\"base\":{base},\"T\":{t}}}");
+    let args: Vec<String> = std::env::args().collect();
+    let w: usize = args[1].parse().unwrap();
+    let room: usize = args[2].parse().unwrap();
+    let short = args[3] == "1";
+    let inverse = args[4] == "1";
+    let fixed = args[5] == "1";
+    let path = &args[6];
+    let mut c = Builder::new();
+    let a = c.alloc_qubits(w - usize::from(short));
+    let b = c.alloc_qubits(w);
+    let cin = c.alloc_qubit();
+    let cout = c.alloc_qubit();
+    let base = c.active_qubits();
+    std::env::set_var(
+        "HEO_PIN_PP_WALK_MAX_QUBITS",
+        (base as usize + room).to_string(),
+    );
+    let start = c.op_count();
+    let top = if inverse { ATop::Erase } else { ATop::Vent };
+    if inverse {
+        for &q in &b {
+            c.x(q);
+        }
+    }
+    fama_add(
+        &mut c,
+        &a,
+        &b,
+        cin,
+        cout,
+        top,
+        SplitMode::Exact,
+        &mut Vec::new(),
+        "top_probe",
+        fixed,
+    );
+    if inverse {
+        for &q in &b {
+            c.x(q);
+        }
+    }
+    let t = c.report_totals().unwrap().1;
+    let peak = c.peak_total();
+    let (nq, nb) = c.i13_dims();
+    let ops = c.take_ops();
+    let data = ops[start..]
+        .iter()
+        .map(|o| {
+            format!(
+                "[{},{},{},{},{},{}]",
+                o.kind as u8,
+                o.q_target.0,
+                o.q_control1.0,
+                o.q_control2.0,
+                o.c_target.0,
+                o.c_condition.0
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let ai = a.iter().map(|q| q.0).collect::<Vec<_>>();
+    let bi = b.iter().map(|q| q.0).collect::<Vec<_>>();
+    std::fs::write(path,format!("{{\"w\":{w},\"room\":{room},\"short\":{short},\"inverse\":{inverse},\"fixed\":{fixed},\"nq\":{nq},\"nb\":{nb},\"base\":{base},\"Q\":{peak},\"T\":{t},\"regs\":{{\"a\":{:?},\"b\":{:?},\"cin\":[{}],\"cout\":[{}]}},\"ops\":[{data}]}}",ai,bi,cin.0,cout.0)).unwrap();
+    println!("{{\"artifact\":\"{path}\",\"w\":{w},\"room\":{room},\"short\":{short},\"inverse\":{inverse},\"fixed\":{fixed},\"Q\":{peak},\"base\":{base},\"T\":{t}}}");
 }
 
 pub fn rail_alias_probe() {
- let args:Vec<String>=std::env::args().collect();let w:usize=args[1].parse().unwrap();let room:usize=args[2].parse().unwrap();let short=args[3]=="1";let inverse=args[4]=="1";let fixed=args[5]=="1";let path=&args[6];
- let mut c=Builder::new();let a=c.alloc_qubits(w-usize::from(short));let b=c.alloc_qubits(w);let cin=c.alloc_qubit();let cout=b[w-1];let base=c.active_qubits();
- std::env::set_var("HEO_PIN_PP_WALK_MAX_QUBITS",(base as usize+room).to_string());
- let start=c.op_count();let top=ATop::Sum;
- if inverse { for &q in &b {c.x(q);} }
- fama_add(&mut c,&a,&b,cin,cout,top,SplitMode::Exact,&mut Vec::new(),"top_probe",fixed);
- if inverse { for &q in &b {c.x(q);} }
- let t=c.report_totals().unwrap().1;let peak=c.peak_total();let(nq,nb)=c.i13_dims();let ops=c.take_ops();let data=ops[start..].iter().map(|o|format!("[{},{},{},{},{},{}]",o.kind as u8,o.q_target.0,o.q_control1.0,o.q_control2.0,o.c_target.0,o.c_condition.0)).collect::<Vec<_>>().join(",");
- let ai=a.iter().map(|q|q.0).collect::<Vec<_>>();let bi=b.iter().map(|q|q.0).collect::<Vec<_>>();
- std::fs::write(path,format!("{{\"w\":{w},\"room\":{room},\"short\":{short},\"inverse\":{inverse},\"fixed\":{fixed},\"nq\":{nq},\"nb\":{nb},\"base\":{base},\"Q\":{peak},\"T\":{t},\"alias\":true,\"regs\":{{\"a\":{:?},\"b\":{:?},\"cin\":[{}]}},\"ops\":[{data}]}}",ai,bi,cin.0)).unwrap();
- println!("{{\"artifact\":\"{path}\",\"w\":{w},\"room\":{room},\"short\":{short},\"inverse\":{inverse},\"fixed\":{fixed},\"Q\":{peak},\"base\":{base},\"T\":{t}}}");
+    let args: Vec<String> = std::env::args().collect();
+    let w: usize = args[1].parse().unwrap();
+    let room: usize = args[2].parse().unwrap();
+    let short = args[3] == "1";
+    let inverse = args[4] == "1";
+    let fixed = args[5] == "1";
+    let path = &args[6];
+    let mut c = Builder::new();
+    let a = c.alloc_qubits(w - usize::from(short));
+    let b = c.alloc_qubits(w);
+    let cin = c.alloc_qubit();
+    let cout = b[w - 1];
+    let base = c.active_qubits();
+    std::env::set_var(
+        "HEO_PIN_PP_WALK_MAX_QUBITS",
+        (base as usize + room).to_string(),
+    );
+    let start = c.op_count();
+    let top = ATop::Sum;
+    if inverse {
+        for &q in &b {
+            c.x(q);
+        }
+    }
+    fama_add(
+        &mut c,
+        &a,
+        &b,
+        cin,
+        cout,
+        top,
+        SplitMode::Exact,
+        &mut Vec::new(),
+        "top_probe",
+        fixed,
+    );
+    if inverse {
+        for &q in &b {
+            c.x(q);
+        }
+    }
+    let t = c.report_totals().unwrap().1;
+    let peak = c.peak_total();
+    let (nq, nb) = c.i13_dims();
+    let ops = c.take_ops();
+    let data = ops[start..]
+        .iter()
+        .map(|o| {
+            format!(
+                "[{},{},{},{},{},{}]",
+                o.kind as u8,
+                o.q_target.0,
+                o.q_control1.0,
+                o.q_control2.0,
+                o.c_target.0,
+                o.c_condition.0
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let ai = a.iter().map(|q| q.0).collect::<Vec<_>>();
+    let bi = b.iter().map(|q| q.0).collect::<Vec<_>>();
+    std::fs::write(path,format!("{{\"w\":{w},\"room\":{room},\"short\":{short},\"inverse\":{inverse},\"fixed\":{fixed},\"nq\":{nq},\"nb\":{nb},\"base\":{base},\"Q\":{peak},\"T\":{t},\"alias\":true,\"regs\":{{\"a\":{:?},\"b\":{:?},\"cin\":[{}]}},\"ops\":[{data}]}}",ai,bi,cin.0)).unwrap();
+    println!("{{\"artifact\":\"{path}\",\"w\":{w},\"room\":{room},\"short\":{short},\"inverse\":{inverse},\"fixed\":{fixed},\"Q\":{peak},\"base\":{base},\"T\":{t}}}");
 }
 
 /// Family A forward tick t >= 1 on parked HEO rails; returns the parked post-tick rails and the tape pair (typ_t, s_t).
 #[allow(clippy::too_many_arguments)]
-fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<QubitId>, t: usize, o0_erase: bool,
-            mode: SplitMode, def: &mut Vec<(usize, BitId)>, label: &'static str,
-            mut mid: Option<&mut dyn FnMut(&mut Builder, QubitId)>,
-            keep_low: bool, prior: Option<(QubitId, QubitId)>) -> (Rails, QubitId, QubitId, Option<QubitId>, Option<QubitId>) {
+fn fama_fwd(
+    c: &mut Builder,
+    cfg: &HeoConfig,
+    rails: Rails,
+    typ_prev: Option<QubitId>,
+    t: usize,
+    o0_erase: bool,
+    mode: SplitMode,
+    def: &mut Vec<(usize, BitId)>,
+    label: &'static str,
+    mut mid: Option<&mut dyn FnMut(&mut Builder, QubitId)>,
+    keep_low: bool,
+    prior: Option<(QubitId, QubitId)>,
+) -> (Rails, QubitId, QubitId, Option<QubitId>, Option<QubitId>) {
     // v025 I-3 (HEO_CELL_INSIDE): `mid` runs the payload cell after the parity route and the
     // previous-letter fix (typ = o_t is final) but BEFORE the add widens the rails and allocates
     // the tape sign wire s_t, so the cell sees fewer live wires than it does after the tick.
@@ -2789,25 +3809,33 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
     }
     let cw = st.c;
     let mpost = st.x2.len();
-    assert!(st.x1.len() == w1 && w1 <= mpost && mpost <= msw, "fama_fwd t={t}: w1={} mpost={mpost} msw={msw}", st.x1.len());
+    assert!(
+        st.x1.len() == w1 && w1 <= mpost && mpost <= msw,
+        "fama_fwd t={t}: w1={} mpost={mpost} msw={msw}",
+        st.x1.len()
+    );
     // v025 I-3b (HEO_CELL_INSIDE=2): defer the S1 half-empty ANDs (fresh z wires) until after the
     // mid-tick cell, so the cell also sees those wires free. Not at the O0-erase tick (t = 1).
     // Only defer S1 when its original source survives the normal pre-cell trim.
     // Then each deferred AND is one genuinely absent live helper at the hook;
     // crossing an ead shrink would instead keep the original source alive.
-    let defer_s1 = mid.is_some() && !o0_erase && (env_usize("HEO_CELL_INSIDE", 0) >= 2
-        || (env_bool("HEO_CELL_HELPER_S1", false) && label=="divfwd" && mpost <= mad
+    let defer_s1 = mid.is_some()
+        && !o0_erase
+        && (env_usize("HEO_CELL_INSIDE", 0) >= 2
+            || (env_bool("HEO_CELL_HELPER_S1", false) && label=="divfwd" && mpost <= mad
             && r3_s1_ticks().contains(&t)
             // The mid callback packs old letters at u%5=0 or3. It may change
             // typ_prev's physical wire there, so it must not be reread afterward.
             && t>=usize::from(k.lt0) && ![0usize,3].contains(&((t-usize::from(k.lt0))%5))));
-    if mid.is_some() && env_bool("HEO_CELL_HELPER_TRACE",false) {eprintln!("CELL_HELPER_FRAME tick={t} w1={w1} mpost={mpost} mad={mad} defer={defer_s1} saved={} entry={}", if defer_s1{mpost-w1}else{0},c.active_qubits());}
+    if mid.is_some() && env_bool("HEO_CELL_HELPER_TRACE", false) {
+        eprintln!("CELL_HELPER_FRAME tick={t} w1={w1} mpost={mpost} mad={mad} defer={defer_s1} saved={} entry={}", if defer_s1{mpost-w1}else{0},c.active_qubits());
+    }
     // The existing pre-add zero-free requires (1-cw)*x2[mad] = 0.
     // On that same domain x2[mad] already equals cw*x2[mad], so transfer its
     // physical wire to slot 1. The ordinary independent inverse still restores
     // slot 2 via CX and pays the standard AND measurement phase correction.
-    let output_alias = env_bool("HEO_S1_OUTPUT_ALIAS", false) && !defer_s1
-        && w1 <= mad && mpost == mad + 1;
+    let output_alias =
+        env_bool("HEO_S1_OUTPUT_ALIAS", false) && !defer_s1 && w1 <= mad && mpost == mad + 1;
     if !defer_s1 {
         for j in w1..mpost {
             if output_alias && j == mad {
@@ -2825,28 +3853,43 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
     let shared = prior.map(|(u, s_prev)| {
         // u = c * D_old; sigma_prev converts it to the current sign
         // difference, and magnitude bit0 routing contributes the extra c.
-        let q = c.alloc_qubit(); c.ccx(cw, s_prev, q);
-        c.cx(q, u); c.cx(cw, u);
-        c.cx(u, st.x1[0]); c.cx(u, st.x2[0]);
-        c.cx(st.x2[0], st.x1[0]); a_mbu(c, u, cw, st.x1[0]); c.cx(st.x2[0], st.x1[0]);
+        let q = c.alloc_qubit();
+        c.ccx(cw, s_prev, q);
+        c.cx(q, u);
+        c.cx(cw, u);
+        c.cx(u, st.x1[0]);
+        c.cx(u, st.x2[0]);
+        c.cx(st.x2[0], st.x1[0]);
+        a_mbu(c, u, cw, st.x1[0]);
+        c.cx(st.x2[0], st.x1[0]);
         q
     });
     for j in usize::from(shared.is_some())..w1 {
-        if env_bool("HEO_FREDKIN_OUTPUT_ALIAS", false) && !defer_s1
-            && w1 == mpost && mpost == mad + 1 && j == mad {
+        if env_bool("HEO_FREDKIN_OUTPUT_ALIAS", false)
+            && !defer_s1
+            && w1 == mpost
+            && mpost == mad + 1
+            && j == mad
+        {
             // On the existing zero-output domain the surviving route is a XOR b.
             // The old first wire is (1-cw) times that survivor; erase it with its
             // literal HMR correction before the type and payload callback change.
             let old_first = st.x1[j];
             let survivor = st.x2.pop().unwrap();
             c.cx(old_first, survivor);
-            c.x(cw); a_mbu(c, old_first, cw, survivor); c.x(cw);
+            c.x(cw);
+            a_mbu(c, old_first, cw, survivor);
+            c.x(cw);
             st.x1[j] = survivor;
         } else {
             fredkin(c, cw, st.x1[j], st.x2[j]);
         }
     }
-    let AState { c: _, mut x1, mut x2 } = st;
+    let AState {
+        c: _,
+        mut x1,
+        mut x2,
+    } = st;
     if o0_erase {
         // B7 O0, ported: linear part r2[1]^r2[2]^e2[0]^e2[1] == x2[1]^x2[2]^x1[1]^x1[2] (pends cancel); the AND's CZ
         // runs on r2[1] = x2[1]^!x2[0] and e2[0] = x1[1]^x1[0], conjugated in and out.
@@ -2876,14 +3919,18 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
         if let Some(m) = mid.as_mut() {
             m(c, cw);
         }
-        if let Some(tp) = typ_prev { c.cx(tp, cw); }
+        if let Some(tp) = typ_prev {
+            c.cx(tp, cw);
+        }
         for j in w1..mpost {
             let z = c.alloc_qubit();
             c.ccx(cw, x2[j], z);
             c.cx(z, x2[j]);
             x1.push(z);
         }
-        if let Some(tp) = typ_prev { c.cx(tp, cw); }
+        if let Some(tp) = typ_prev {
+            c.cx(tp, cw);
+        }
     }
     let mut p1 = x1[0];
     let mut hs: Vec<QubitId> = x1[1..].to_vec();
@@ -2898,12 +3945,23 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
     if !defer_s1 {
         if let Some(m) = mid.as_mut() {
             let loan = !o0_erase && r3_sgn_hit();
-            if loan { p1 = r3_sgn_lend(c, p1, x2[0], cw); }
+            if loan {
+                p1 = r3_sgn_lend(c, p1, x2[0], cw);
+            }
             m(c, cw);
-            if loan { p1 = r3_sgn_restore(c, x2[0], cw); }
+            if loan {
+                p1 = r3_sgn_restore(c, x2[0], cw);
+            }
         }
     }
-    if env_bool("R4_RAIL_TRACE", false) { eprintln!("R4F {label} {t} w1={w1} mpost={mpost} mad={mad} x2r={} hsr={} msw={msw} wp={}", x2.len(), hs.len(), wpost(cfg, t)); }
+    if env_bool("R4_RAIL_TRACE", false) {
+        eprintln!(
+            "R4F {label} {t} w1={w1} mpost={mpost} mad={mad} x2r={} hsr={} msw={msw} wp={}",
+            x2.len(),
+            hs.len(),
+            wpost(cfg, t)
+        );
+    }
     while x2.len() < mad {
         x2.push(c.alloc_qubit());
     }
@@ -2913,18 +3971,47 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
         pads += 1;
     }
     let top_alias = env_bool("HEO_RAIL_TOP_ALIAS", false) && mad > wpost(cfg, t) - 1;
-    let cout = if top_alias { x2[mad-1] } else { c.alloc_qubit() };
+    let cout = if top_alias {
+        x2[mad - 1]
+    } else {
+        c.alloc_qubit()
+    };
     c.x_all(&hs);
     c.x(p1);
     let top_release = env_bool("HEO_RAIL_TOP_RELEASE", false) && mad > wpost(cfg, t) - 1;
-    if top_release { eprintln!("RAIL_TOP_RELEASE {label} direction=forward tick={t} w={mad} wp={} short={}", wpost(cfg,t), hs.len()+1==x2.len()); }
-    if keep_low { shared_low_start(hs[0], x2[0], p1); }
-    fama_add(c, &hs, &x2, p1, cout, if top_alias {ATop::Sum} else {ATop::Vent}, mode, def, label, top_release);
+    if top_release {
+        eprintln!(
+            "RAIL_TOP_RELEASE {label} direction=forward tick={t} w={mad} wp={} short={}",
+            wpost(cfg, t),
+            hs.len() + 1 == x2.len()
+        );
+    }
+    if keep_low {
+        shared_low_start(hs[0], x2[0], p1);
+    }
+    fama_add(
+        c,
+        &hs,
+        &x2,
+        p1,
+        cout,
+        if top_alias { ATop::Sum } else { ATop::Vent },
+        mode,
+        def,
+        label,
+        top_release,
+    );
     let retained = keep_low.then(shared_low_finish);
     c.x(p1);
     c.x_all(&hs);
-    if !top_alias { c.x(cout); } // s_t = sum_top = NOT carry on released-top promise.
-    for &q in &x2 { if q != cout { c.cx(cout, q); } }
+    if !top_alias {
+        c.x(cout);
+    } // s_t = sum_top = NOT carry on released-top promise.
+    for &q in &x2 {
+        if q != cout {
+            c.cx(cout, q);
+        }
+    }
     if let Some(&h0) = hs.first() {
         c.cx(h0, p1); // p1's wire becomes C_{t+1}
     }
@@ -2933,14 +4020,20 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
         c.free(q);
     }
     let wp = wpost(cfg, t);
-    let w1a = if k.lr1 && t > 0 && t + 1 < r { lr1_width(cfg, t) } else { wp };
+    let w1a = if k.lr1 && t > 0 && t + 1 < r {
+        lr1_width(cfg, t)
+    } else {
+        wp
+    };
     while hs.len() > w1a - 1 {
         let q = hs.pop().unwrap();
         c.free(q);
     }
     while x2.len() > wp - 1 {
         let q = x2.pop().unwrap();
-        if !top_alias || q != cout { c.free(q); }
+        if !top_alias || q != cout {
+            c.free(q);
+        }
     }
     let rails = a_to_heo(c, AState { c: p1, x1: hs, x2 }, w1a, wp);
     (rails, cw, cout, retained, shared)
@@ -2949,9 +4042,22 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
 /// Family A reverse tick t >= 1: exact mirror of [`fama_fwd`]; consumes the tape pair. Returns parked rails at
 /// wbefore(t) and the rebuilt o_0 wire (div O0 at t = 1).
 #[allow(clippy::too_many_arguments)]
-fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: QubitId, typ_prev: Option<QubitId>, t: usize,
-            o0_rebuild: bool, mode: SplitMode, def: &mut Vec<(usize, BitId)>, label: &'static str,
-            mut mid: Option<&mut dyn FnMut(&mut Builder, QubitId)>, incoming:Option<QubitId>, codec:Option<(QubitId,QubitId)>) -> (Rails, Option<QubitId>, Option<QubitId>) {
+fn fama_rev(
+    c: &mut Builder,
+    cfg: &HeoConfig,
+    rails: Rails,
+    typ: QubitId,
+    s: QubitId,
+    typ_prev: Option<QubitId>,
+    t: usize,
+    o0_rebuild: bool,
+    mode: SplitMode,
+    def: &mut Vec<(usize, BitId)>,
+    label: &'static str,
+    mut mid: Option<&mut dyn FnMut(&mut Builder, QubitId)>,
+    incoming: Option<QubitId>,
+    codec: Option<(QubitId, QubitId)>,
+) -> (Rails, Option<QubitId>, Option<QubitId>) {
     // v025 I-3 (HEO_CELL_INSIDE): `mid` runs the payload cell after the inverse add has consumed the
     // tape sign wire s and the pads are freed, but before the rails regrow and before typ is folded
     // into the parity wire (typ = o_t still holds the letter the cell reads).
@@ -2962,7 +4068,11 @@ fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: Qub
     let hs_fwd = (mpost - 1).min(mad);
     let pads = (mad - 1).saturating_sub(hs_fwd);
     let hs_len = hs_fwd + pads;
-    let AState { c: mut p1, x1: mut hs, mut x2 } = a_from_heo(c, rails);
+    let AState {
+        c: mut p1,
+        x1: mut hs,
+        mut x2,
+    } = a_from_heo(c, rails);
     while hs.len() > hs_len {
         let q = hs.pop().unwrap();
         c.free(q);
@@ -2972,22 +4082,60 @@ fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: Qub
     }
     assert!(x2.len() <= mad, "fama_rev t={t}: slot 2 wider than the add");
     let top_alias = env_bool("HEO_RAIL_TOP_ALIAS", false) && mad > wpost(cfg, t) - 1;
-    if env_bool("R4_RAIL_TRACE", false) { eprintln!("R4R {label} {t} w1={w1} mpost={mpost} mad={mad} x2r={} hsr={} hs_fwd={hs_fwd} pads={pads} msw={msw}", x2.len(), hs.len()); }
-    while x2.len() < mad - usize::from(top_alias) { x2.push(c.alloc_qubit()); }
-    if top_alias { x2.push(s); }
+    if env_bool("R4_RAIL_TRACE", false) {
+        eprintln!("R4R {label} {t} w1={w1} mpost={mpost} mad={mad} x2r={} hsr={} hs_fwd={hs_fwd} pads={pads} msw={msw}", x2.len(), hs.len());
+    }
+    while x2.len() < mad - usize::from(top_alias) {
+        x2.push(c.alloc_qubit());
+    }
+    if top_alias {
+        x2.push(s);
+    }
     if let Some(&h0) = hs.first() {
         c.cx(h0, p1);
     }
-    for &q in &x2 { if q != s { c.cx(s, q); } }
-    if !top_alias { c.x(s); } // alias becomes carry upon target complement below.
+    for &q in &x2 {
+        if q != s {
+            c.cx(s, q);
+        }
+    }
+    if !top_alias {
+        c.x(s);
+    } // alias becomes carry upon target complement below.
     c.x_all(&hs);
     c.x(p1);
     c.x_all(&x2);
     let top_release = env_bool("HEO_RAIL_TOP_RELEASE", false) && mad > wpost(cfg, t) - 1;
-    if top_release { eprintln!("RAIL_TOP_RELEASE {label} direction=reverse tick={t} w={mad} wp={} short={}", wpost(cfg,t), hs.len()+1==x2.len()); }
-    if let Some(q)=incoming {assert!((mode==SplitMode::Apply || mode==SplitMode::Exact) && mid.is_none());REVERSE_LOW.with(|v|{assert!(v.borrow().is_none());*v.borrow_mut()=Some((hs[0],x2[0],p1,q));});}
-    fama_add(c, &hs, &x2, p1, s, if top_alias {ATop::Sum} else {ATop::Erase}, mode, def, label, top_release); // S5: the tape letter is MBU-erased at the top
-    assert!(REVERSE_LOW.with(|v|v.borrow().is_none()),"shared reverse carry was not consumed");
+    if top_release {
+        eprintln!(
+            "RAIL_TOP_RELEASE {label} direction=reverse tick={t} w={mad} wp={} short={}",
+            wpost(cfg, t),
+            hs.len() + 1 == x2.len()
+        );
+    }
+    if let Some(q) = incoming {
+        assert!((mode == SplitMode::Apply || mode == SplitMode::Exact) && mid.is_none());
+        REVERSE_LOW.with(|v| {
+            assert!(v.borrow().is_none());
+            *v.borrow_mut() = Some((hs[0], x2[0], p1, q));
+        });
+    }
+    fama_add(
+        c,
+        &hs,
+        &x2,
+        p1,
+        s,
+        if top_alias { ATop::Sum } else { ATop::Erase },
+        mode,
+        def,
+        label,
+        top_release,
+    ); // S5: the tape letter is MBU-erased at the top
+    assert!(
+        REVERSE_LOW.with(|v| v.borrow().is_none()),
+        "shared reverse carry was not consumed"
+    );
     c.x_all(&x2);
     c.x(p1);
     c.x_all(&hs);
@@ -3023,9 +4171,13 @@ fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: Qub
     }
     if let Some(m) = mid.as_mut() {
         let loan = !o0_rebuild && r3_sgn_hit();
-        if loan { p1 = r3_sgn_lend(c, p1, x2[0], typ); }
+        if loan {
+            p1 = r3_sgn_lend(c, p1, x2[0], typ);
+        }
         m(c, typ);
-        if loan { p1 = r3_sgn_restore(c, x2[0], typ); }
+        if loan {
+            p1 = r3_sgn_restore(c, x2[0], typ);
+        }
     }
     while hs.len() < mpost - 1 {
         hs.push(c.alloc_qubit());
@@ -3039,29 +4191,45 @@ fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: Qub
     let cw = typ;
     let mut x1 = vec![p1];
     x1.extend(hs);
-    let retained=codec.map(|(q,sign_prev)| {
-        assert!(mid.is_none());let u=c.alloc_qubit();
-        c.cx(x2[0],x1[0]);c.ccx(cw,x1[0],u);c.cx(x2[0],x1[0]);
-        c.cx(u,x1[0]);c.cx(u,x2[0]);
-        c.cx(q,u);c.cx(cw,u);
+    let retained = codec.map(|(q, sign_prev)| {
+        assert!(mid.is_none());
+        let u = c.alloc_qubit();
+        c.cx(x2[0], x1[0]);
+        c.ccx(cw, x1[0], u);
+        c.cx(x2[0], x1[0]);
+        c.cx(u, x1[0]);
+        c.cx(u, x2[0]);
+        c.cx(q, u);
+        c.cx(cw, u);
         // q=h2*typ3=cw*sign_prev, since typ_prev*sign_prev=0.
-        a_mbu(c,q,cw,sign_prev);u
+        a_mbu(c, q, cw, sign_prev);
+        u
     });
-    for j in usize::from(retained.is_some())..w1 {fredkin(c,cw,x1[j],x2[j]);}
+    for j in usize::from(retained.is_some())..w1 {
+        fredkin(c, cw, x1[j], x2[j]);
+    }
     for j in (w1..mpost).rev() {
         c.cx(x1[j], x2[j]);
         a_mbu(c, x1[j], cw, x2[j]); // S1: the half bit is the persistent AND C & X2[j]
     }
     x1.truncate(w1);
     let wb = wbefore(cfg, t);
-    (a_to_heo(c, AState { c: cw, x1, x2 }, wb, wb), rebuilt, retained)
+    (
+        a_to_heo(c, AState { c: cw, x1, x2 }, wb, wb),
+        rebuilt,
+        retained,
+    )
 }
 
 /// HEO_PARK_MBU loan orient: at park the rails are (0, +-1) with o = 1 or (+-1, 0) with o = 0. r2 ^= r1 makes r2 = +-1,
 /// and r1 == NOT o AND r2 bitwise is MBU-erased (0 T); clean wires are re-issued for loan_signed. Accepts exactly the
 /// shots park_orient accepts.
 fn park_mbu_loan(c: &mut Builder, rails: &mut Rails, o: QubitId) {
-    assert_eq!(rails.r1.len(), rails.r2.len(), "park_mbu_loan: rails at one width");
+    assert_eq!(
+        rails.r1.len(),
+        rails.r2.len(),
+        "park_mbu_loan: rails at one width"
+    );
     for i in 0..rails.r1.len() {
         c.cx(rails.r1[i], rails.r2[i]);
     }
@@ -3113,16 +4281,33 @@ struct Walk {
 impl Walk {
     /// typ of letter `u` (the raw o_0 wire under L-T0 for u = 0).
     fn typ_of(&self, u: usize) -> QubitId {
-        if u == 0 && self.lt0 { self.o0.unwrap() } else { self.tape.get(u).0 }
+        if u == 0 && self.lt0 {
+            self.o0.unwrap()
+        } else {
+            self.tape.get(u).0
+        }
     }
 }
 
-fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x: &[QubitId], t: usize,
-                label: &'static str, mid: Option<&mut dyn FnMut(&mut Builder, &mut Tape, QubitId)>) -> (QubitId, QubitId) {
-    assert!(mid.is_none() || t > 0, "HEO_CELL_INSIDE: no mid-tick cell at the seed tick");
+fn forward_tick(
+    c: &mut Builder,
+    cfg: &HeoConfig,
+    k: &CarryCfg,
+    w: &mut Walk,
+    x: &[QubitId],
+    t: usize,
+    label: &'static str,
+    mid: Option<&mut dyn FnMut(&mut Builder, &mut Tape, QubitId)>,
+) -> (QubitId, QubitId) {
+    assert!(
+        mid.is_none() || t > 0,
+        "HEO_CELL_INSIDE: no mid-tick cell at the seed tick"
+    );
     let (typ, s) = if t == 0 && k.fd {
         let lt0 = w.lt0;
-        let (mut rails, typ, s) = book(c, "seeds", "fd seed", 0, |c| fd_seed(c, x, wpost(cfg, 0), !lt0));
+        let (mut rails, typ, s) = book(c, "seeds", "fd seed", 0, |c| {
+            fd_seed(c, x, wpost(cfg, 0), !lt0)
+        });
         park_par(c, k, &mut rails);
         w.rails = Some(rails);
         if lt0 {
@@ -3156,11 +4341,17 @@ fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x:
             // v025 A-2: shared sign/carry/codec product, multiply forward pass only (rails-only pass,
             // room ~287: the retained carry wire crosses no field cell). Retain at letter u%5==1,
             // consume at u%5==2, erase at that group's pack3.
-            let mul_leg = label == "mulfwd" || (label == "divfwd" && env_bool("GO_DIVFWD_SHARE", false) && std::env::var("GO_DIVFWD_SHARE_T").map_or(true, |v| v.split(',').any(|x| x.trim().parse::<usize>().ok() == Some(t))));
-            let shared_on = mul_leg && env_bool("HEO_CARRY_CODEC", false) && truthy("HEO_CODEC_SYNTH");
+            let mul_leg = label == "mulfwd"
+                || (label == "divfwd"
+                    && env_bool("GO_DIVFWD_SHARE", false)
+                    && std::env::var("GO_DIVFWD_SHARE_T").map_or(true, |v| {
+                        v.split(',')
+                            .any(|x| x.trim().parse::<usize>().ok() == Some(t))
+                    }));
+            let shared_on =
+                mul_leg && env_bool("HEO_CARRY_CODEC", false) && truthy("HEO_CODEC_SYNTH");
             let u = t.checked_sub(w.tape.off);
-            let pair_share = env_bool("EXACT_PAIR_CARRY",false) && label=="mulfwd";
-            let keep_low = shared_on && u.is_some_and(|u| u % 5 == 1 || (pair_share && u % 5 == 3)) && t + 2 < cfg.rounds();
+            let keep_low = shared_on && u.is_some_and(|u| u % 5 == 1) && t + 2 < cfg.rounds();
             let pl = w.pending_low.take();
             let prior = pl.map(|q| (q, w.tape.get(t - 1).1));
             let (nr, typ, s, retained, shared) = {
@@ -3170,18 +4361,29 @@ fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x:
                     Some(f) => Some(f),
                     None => None,
                 };
-                fama_fwd(c, cfg, taken, prev, t, o0e, k.fwd_split, &mut def, label, hook, keep_low, prior)
+                fama_fwd(
+                    c,
+                    cfg,
+                    taken,
+                    prev,
+                    t,
+                    o0e,
+                    k.fwd_split,
+                    &mut def,
+                    label,
+                    hook,
+                    keep_low,
+                    prior,
+                )
             };
             w.pending_low = retained;
             if let Some(q) = shared {
                 let g = w.tape.gid(t);
-                if pair_share && u.is_some_and(|u|u%5==4) {
-                    assert!(w.tape.outer_shared[g].is_none(),"outer shared product already pending {g}");
-                    w.tape.outer_shared[g]=Some(q);
-                } else {
-                    assert!(w.tape.shared[g].is_none(), "shared product already pending for group {g}");
-                    w.tape.shared[g] = Some(q);
-                }
+                assert!(
+                    w.tape.shared[g].is_none(),
+                    "shared product already pending for group {g}"
+                );
+                w.tape.shared[g] = Some(q);
             }
             w.rails = Some(nr);
             if o0e {
@@ -3194,7 +4396,17 @@ fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x:
         let rails = w.rails.as_mut().unwrap();
         unpark_par(c, k, rails);
         let mut def = Vec::new();
-        let pair = fwd_tick_c(c, rails, prev, rw(cfg.esw[t]), rw(cfg.ead[t]), k.fwd_split, &mut def, label, o0e);
+        let pair = fwd_tick_c(
+            c,
+            rails,
+            prev,
+            rw(cfg.esw[t]),
+            rw(cfg.ead[t]),
+            k.fwd_split,
+            &mut def,
+            label,
+            o0e,
+        );
         if let Some(m) = mid {
             // Non-FAMA rails: no mid-tick hook exists; run the cell after the tick as before.
             m(c, &mut w.tape, pair.0);
@@ -3217,18 +4429,33 @@ fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x:
 }
 
 /// Reverse tick t (pops the trit). Returns the denominator wires at t == 0.
-fn reverse_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, t: usize, mode: SplitMode,
-                label: &'static str, mid: Option<&mut dyn FnMut(&mut Builder, &Tape, QubitId)>) -> Option<Vec<QubitId>> {
-    assert!(mid.is_none() || t > 0, "HEO_CELL_INSIDE: no mid-tick cell at the unseed tick");
-    let share=(label=="divrev" || (label=="mulrev2" && env_bool("GO_MULREV2_SHARE",false)) || (label=="mulrev" && env_bool("GO_MULREV_SHARE",false))) && env_bool("HEO_REVERSE_CARRY_CODEC",false) && truthy("HEO_CODEC_SYNTH");
-    REVERSE_CODEC_CAPTURE.with(|v|v.set(share));
+fn reverse_tick(
+    c: &mut Builder,
+    cfg: &HeoConfig,
+    k: &CarryCfg,
+    w: &mut Walk,
+    t: usize,
+    mode: SplitMode,
+    label: &'static str,
+    mid: Option<&mut dyn FnMut(&mut Builder, &Tape, QubitId)>,
+) -> Option<Vec<QubitId>> {
+    assert!(
+        mid.is_none() || t > 0,
+        "HEO_CELL_INSIDE: no mid-tick cell at the unseed tick"
+    );
+    let share = (label == "divrev"
+        || (label == "mulrev2" && env_bool("GO_MULREV2_SHARE", false))
+        || (label == "mulrev" && env_bool("GO_MULREV_SHARE", false)))
+        && env_bool("HEO_REVERSE_CARRY_CODEC", false)
+        && truthy("HEO_CODEC_SYNTH");
+    REVERSE_CODEC_CAPTURE.with(|v| v.set(share));
     book(c, "codec", "rev codec", t, |c| {
         w.tape.ensure_raw(c, t);
         if t > 0 {
             w.tape.ensure_raw(c, t - 1);
         }
     });
-    REVERSE_CODEC_CAPTURE.with(|v|v.set(false));
+    REVERSE_CODEC_CAPTURE.with(|v| v.set(false));
     if t == 0 && w.lt0 {
         let typ = w.o0.take().unwrap();
         let mut rails = w.rails.take().unwrap();
@@ -3241,14 +4468,22 @@ fn reverse_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, t:
             c.cx(*rails.r2.last().unwrap(), yw);
             c.free(yw);
         }
-        let leg = if label.starts_with("mul") { super::super::back_seam::Leg::Mul } else { super::super::back_seam::Leg::Div };
-        return Some(book(c, "seeds", "fd unseed", 0, |c| fd_unseed(c, rails, typ, None, leg)));
+        let leg = if label.starts_with("mul") {
+            super::super::back_seam::Leg::Mul
+        } else {
+            super::super::back_seam::Leg::Div
+        };
+        return Some(book(c, "seeds", "fd unseed", 0, |c| {
+            fd_unseed(c, rails, typ, None, leg)
+        }));
     }
     let (typ, s) = w.tape.raw[t].take().unwrap();
     if t == 0 && k.h0 {
         let mut rails = w.rails.take().unwrap();
         unpark_par(c, k, &mut rails);
-        return Some(book(c, "seeds", "h0 unseed", 0, |c| h0_unseed(c, rails, typ, s)));
+        return Some(book(c, "seeds", "h0 unseed", 0, |c| {
+            h0_unseed(c, rails, typ, s)
+        }));
     }
     if t == 0 && k.fd {
         let mut rails = w.rails.take().unwrap();
@@ -3257,24 +4492,39 @@ fn reverse_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, t:
             c.cx(*rails.r1.last().unwrap(), bw);
             c.free(bw);
         }
-        let leg = if label.starts_with("mul") { super::super::back_seam::Leg::Mul } else { super::super::back_seam::Leg::Div };
-        return Some(book(c, "seeds", "fd unseed", 0, |c| fd_unseed(c, rails, typ, Some(s), leg)));
+        let leg = if label.starts_with("mul") {
+            super::super::back_seam::Leg::Mul
+        } else {
+            super::super::back_seam::Leg::Div
+        };
+        return Some(book(c, "seeds", "fd unseed", 0, |c| {
+            fd_unseed(c, rails, typ, Some(s), leg)
+        }));
     }
     if t == 0 && k.g3 {
         let mut rails = w.rails.take().unwrap();
         unpark_par(c, k, &mut rails);
-        return Some(book(c, "seeds", "g3 unseed", 0, |c| g3_unseed(c, rails, typ, s)));
+        return Some(book(c, "seeds", "g3 unseed", 0, |c| {
+            g3_unseed(c, rails, typ, s)
+        }));
     }
     let o0r = t == 1 && w.lt0 && w.o0_rebuild && w.o0.is_none();
-    let tp = if t > 0 && !o0r { Some(w.typ_of(t - 1)) } else { None };
+    let tp = if t > 0 && !o0r {
+        Some(w.typ_of(t - 1))
+    } else {
+        None
+    };
     if fama_on() && t > 0 {
         assert!(k.park_parity, "HEO_FAMA needs L-PAR (HEO_PARK_PARITY on)");
         let taken = w.rails.take().unwrap();
         let mut def = std::mem::take(&mut w.deferred[t]);
-        let incoming=if share{w.pending_low.take()}else{None};
-        let codec=if share && t>=w.tape.off && (t-w.tape.off)%5==2 {
-            let g=w.tape.gid(t);w.tape.shared[g].take().map(|q|(q,w.tape.get(t-1).1))
-        }else{None};
+        let incoming = if share { w.pending_low.take() } else { None };
+        let codec = if share && t >= w.tape.off && (t - w.tape.off) % 5 == 2 {
+            let g = w.tape.gid(t);
+            w.tape.shared[g].take().map(|q| (q, w.tape.get(t - 1).1))
+        } else {
+            None
+        };
         let (nr, rebuilt, retained) = {
             let tape = &w.tape;
             let mut adapter = mid.map(|m| move |c: &mut Builder, typ: QubitId| m(c, tape, typ));
@@ -3282,10 +4532,13 @@ fn reverse_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, t:
                 Some(f) => Some(f),
                 None => None,
             };
-            fama_rev(c, cfg, taken, typ, s, tp, t, o0r, mode, &mut def, label, hook, incoming, codec)
+            fama_rev(
+                c, cfg, taken, typ, s, tp, t, o0r, mode, &mut def, label, hook, incoming, codec,
+            )
         };
         assert!(def.is_empty(), "fama_rev: deferred phases left over");
-        assert!(w.pending_low.is_none());w.pending_low=retained;
+        assert!(w.pending_low.is_none());
+        w.pending_low = retained;
         w.rails = Some(nr);
         if o0r {
             w.o0 = rebuilt;
@@ -3304,7 +4557,20 @@ fn reverse_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, t:
     // K3b: R1 = X >> 1 fits rw(esw[t]) - 1 bits, so its top wire is a sign copy when the add width reaches esw[t],
     // or when the regrow wpost(t) -> ead[t] above created it (L-R1's trim only lowers the start of that regrow).
     let top_copy = rw(cfg.ead[t]) >= rw(cfg.esw[t]) || rw(cfg.ead[t]) > wpost(cfg, t);
-    let rebuilt = rev_tick_c(c, rails, typ, s, tp, rw(cfg.esw[t]), wbefore(cfg, t), mode, &mut def, label, o0r, top_copy);
+    let rebuilt = rev_tick_c(
+        c,
+        rails,
+        typ,
+        s,
+        tp,
+        rw(cfg.esw[t]),
+        wbefore(cfg, t),
+        mode,
+        &mut def,
+        label,
+        o0r,
+        top_copy,
+    );
     if o0r {
         w.o0 = rebuilt;
     }
@@ -3320,15 +4586,30 @@ fn reverse_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, t:
 pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
     let cfg = config();
     let k = carry_cfg();
-    assert_eq!(cfg.seed, super::Seed::Base, "carry schedule: base seed only (F-B3b-1)");
+    assert_eq!(
+        cfg.seed,
+        super::Seed::Base,
+        "carry schedule: base seed only (F-B3b-1)"
+    );
     let r = cfg.rounds();
     let sig = numerator;
     let mut del: Option<Vec<QubitId>> = None;
     let off = usize::from(k.lt0);
-    let mut w = Walk { pending_low: None, rails: None, tape: Tape::with_offset(r, off), deferred: vec![Vec::new(); r], bwire: None,
-                       o0: None, lt0: k.lt0, ywire: None, o0_erase: k.o0_dec && k.lt0, o0_rebuild: k.o0_dec && k.lt0 };
+    let mut w = Walk {
+        pending_low: None,
+        rails: None,
+        tape: Tape::with_offset(r, off),
+        deferred: vec![Vec::new(); r],
+        bwire: None,
+        o0: None,
+        lt0: k.lt0,
+        ywire: None,
+        o0_erase: k.o0_dec && k.lt0,
+        o0_rebuild: k.o0_dec && k.lt0,
+    };
     c.set_phase("heo_div_fwd");
     for t in 0..r {
+        sem_walk(&w, N + del.as_ref().map_or(0, |d| d.len()), 0);
         if env_bool("SKYWALK_CUT_MAP", false) && [200, 254].contains(&t) {
             let rails = w.rails.as_ref().unwrap();
             let r1: Vec<u64> = rails.r1.iter().map(|q| q.0).collect();
@@ -3336,44 +4617,75 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
             let sig_ids: Vec<u64> = sig.iter().map(|q| q.0).collect();
             let del_ids: Vec<u64> = del.as_ref().unwrap().iter().map(|q| q.0).collect();
             let prev = w.typ_of(t - 1).0;
-            let extra: Vec<u64> = [w.bwire, w.o0, w.ywire].iter().filter_map(|q| q.map(|x| x.0)).collect();
+            let extra: Vec<u64> = [w.bwire, w.o0, w.ywire]
+                .iter()
+                .filter_map(|q| q.map(|x| x.0))
+                .collect();
             eprintln!("SKYWALK_CUT_MAP {{\"cut\":{},\"live\":{},\"op\":{},\"r1\":{:?},\"r2\":{:?},\"sig\":{:?},\"del\":{:?},\"previous_typ\":{},\"extra\":{:?},\"entry_common_width\":{},\"current_esw\":{},\"current_ead\":{},\"previous_lr1_width\":{},\"park_parity\":{},\"r2d\":{}}}", t, c.active_qubits(), c.op_count(), r1, r2, sig_ids, del_ids, prev, extra, wbefore(cfg, t), rw(cfg.esw[t]), rw(cfg.ead[t]), lr1_width(cfg,t-1), k.park_parity, k.r2d);
         }
         // v025 I-3: with HEO_CELL_INSIDE the ordinary fused cell (and the codec pack due at this
         // tick, which only needs letters < t) run inside the rail tick, before the add.
-        let inside_cell = env_bool("HEO_CELL_INSIDE", false) && t > 0 && t < k.r2d
-            && !(t == 1 && k.h0) && !(t == 1 && k.g1b && !k.fd);
+        let inside_cell = env_bool("HEO_CELL_INSIDE", false)
+            && t > 0
+            && t < k.r2d
+            && !(t == 1 && k.h0)
+            && !(t == 1 && k.g1b && !k.fd);
         let (typ, s) = if inside_cell {
             let d: Vec<QubitId> = del.as_ref().unwrap().clone();
             let mut mid = |c: &mut Builder, tape: &mut Tape, typ: QubitId| {
-                book(c, "codec", "div codec", t, |c| tape.pack_due(c, t, r, false));
-                book(c, "cells", "div fused cell", t, |c| dirty_cell(c, tape, t, |c| cell_div(c, cfg, t, typ, sig, &d)));
+                book(c, "codec", "div codec", t, |c| {
+                    tape.pack_due(c, t, r, false)
+                });
+                book(c, "cells", "div fused cell", t, |c| {
+                    dirty_cell(c, tape, t, |c| cell_div(c, cfg, t, typ, sig, &d))
+                });
             };
-            book(c, "rails", "div fwd rail", t, |c| forward_tick(c, cfg, k, &mut w, denominator, t, "divfwd", Some(&mut mid)))
+            book(c, "rails", "div fwd rail", t, |c| {
+                forward_tick(c, cfg, k, &mut w, denominator, t, "divfwd", Some(&mut mid))
+            })
         } else {
-            book(c, "rails", "div fwd rail", t, |c| forward_tick(c, cfg, k, &mut w, denominator, t, "divfwd", None))
+            book(c, "rails", "div fwd rail", t, |c| {
+                forward_tick(c, cfg, k, &mut w, denominator, t, "divfwd", None)
+            })
         };
         if !inside_cell {
-            book(c, "codec", "div codec", t, |c| w.tape.pack_due(c, t, r, false));
+            book(c, "codec", "div codec", t, |c| {
+                w.tape.pack_due(c, t, r, false)
+            });
         }
         if t < k.r2d {
             if t == 0 && k.fd {
                 let rails = w.rails.as_ref().unwrap();
                 let (xs, ys) = (*rails.r1.last().unwrap(), *rails.r2.last().unwrap());
-                if r4_ysub_fuse() { r4_ysub_tail(c, sig, xs, ys, typ); }
-                del = Some(book(c, "g1b", "div fd payload", t, |c| fd_payload_div(c, sig, xs, ys, typ)));
+                if r4_ysub_fuse() {
+                    r4_ysub_tail(c, sig, xs, ys, typ);
+                }
+                del = Some(book(c, "g1b", "div fd payload", t, |c| {
+                    fd_payload_div(c, sig, xs, ys, typ)
+                }));
             } else if t == 0 {
-                assert!(k.g1b || k.h0, "carry schedule: G1b or H0 required (cell 0 skipped)");
+                assert!(
+                    k.g1b || k.h0,
+                    "carry schedule: G1b or H0 required (cell 0 skipped)"
+                );
             } else if t == 1 && k.h0 {
                 let om1 = w.tape.get(0).0;
-                del = Some(book(c, "g1b", "div h0 payload", t, |c| h0_payload_div(c, sig, om1, typ)));
+                del = Some(book(c, "g1b", "div h0 payload", t, |c| {
+                    h0_payload_div(c, sig, om1, typ)
+                }));
             } else if t == 1 && k.g1b && !k.fd {
                 let s0 = w.tape.get(0).1;
-                del = Some(book(c, "g1b", "div g1b", t, |c| g1b_forward(c, sig, s0, typ)));
+                del = Some(book(c, "g1b", "div g1b", t, |c| {
+                    g1b_forward(c, sig, s0, typ)
+                }));
             } else if !inside_cell {
                 let d = del.as_ref().unwrap();
                 let r1 = w.rails.as_ref().unwrap().r1.clone();
-                book(c, "cells", "div fused cell", t, |c| k2_cell_loan(c, &r1, rw(cfg.esw[t]), |c| dirty_cell(c, &w.tape, t, |c| cell_div(c, cfg, t, typ, sig, d))));
+                book(c, "cells", "div fused cell", t, |c| {
+                    k2_cell_loan(c, &r1, rw(cfg.esw[t]), |c| {
+                        dirty_cell(c, &w.tape, t, |c| cell_div(c, cfg, t, typ, sig, d))
+                    })
+                });
             }
             if t > 0 {
                 let d = del.as_ref().unwrap();
@@ -3385,25 +4697,40 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
     let mut rails = w.rails.take().unwrap();
     unpark_par(c, k, &mut rails);
     if k.loan_both {
-        book(c, "codec", "div batch codec", r - 1, |c| w.tape.ensure_raw(c, r - 1));
+        book(c, "codec", "div batch codec", r - 1, |c| {
+            w.tape.ensure_raw(c, r - 1)
+        });
         let ol = w.tape.get(r - 1).0;
-        book(c, "seeds", "loan orient", r - 1, |c| if park_mbu_on() { park_mbu_loan(c, &mut rails, ol) } else { park_orient(c, &rails, ol) });
+        book(c, "seeds", "loan orient", r - 1, |c| {
+            if park_mbu_on() {
+                park_mbu_loan(c, &mut rails, ol)
+            } else {
+                park_orient(c, &rails, ol)
+            }
+        });
     }
     let (o, wid) = loan(c, rails);
     let last_g = w.tape.gid(r - 1);
     let d = del.take().unwrap();
     let mut early_g: Option<usize> = None;
     for t in k.r2d..r {
+        sem_walk(&w, 2 * N, 1);
         let g = w.tape.gid(t);
         if k.div_partial || early_g == Some(g) {
             // B7 V-P9: unpack only what letter t needs (the first batch group keeps its P3 part packed); also every
             // letter of a group the LAZY_BATCH rule already packed early (a group unpack would undo the pack3)
-            book(c, "codec", "div batch codec", t, |c| w.tape.ensure_raw(c, t));
+            book(c, "codec", "div batch codec", t, |c| {
+                w.tape.ensure_raw(c, t)
+            });
         } else {
-            book(c, "codec", "div batch codec", t, |c| w.tape.ensure_group_raw(c, g, r));
+            book(c, "codec", "div batch codec", t, |c| {
+                w.tape.ensure_group_raw(c, g, r)
+            });
         }
         let (typ, s) = w.tape.get(t);
-        book(c, "cells", "div batch cell", t, |c| dirty_cell(c, &w.tape, t, |c| cell_div(c, cfg, t, typ, sig, &d)));
+        book(c, "cells", "div batch cell", t, |c| {
+            dirty_cell(c, &w.tape, t, |c| cell_div(c, cfg, t, typ, sig, &d))
+        });
         if !(k.db_skip && t + 1 == r) && !(k.db_skip2 && t + 2 == r) {
             book(c, "routing", "div batch route", t, |c| route(c, s, sig, &d));
         }
@@ -3412,7 +4739,10 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
         if k.div_early_p3 && (t - off) % 5 == 2 && !lifo_keep {
             // B7 LAZY_BATCH (div): letters 0..2 of the group are consumed; pack them now (repack then does pack5 only)
             let t0 = 5 * g + off;
-            if t0 + 2 < r && w.tape.state(g) == GState::Raw && (t0..t0 + 3).all(|u| w.tape.raw[u].is_some()) {
+            if t0 + 2 < r
+                && w.tape.state(g) == GState::Raw
+                && (t0..t0 + 3).all(|u| w.tape.raw[u].is_some())
+            {
                 book(c, "codec", "div batch codec", t, |c| w.tape.pack3(c, g));
                 early_g = Some(g);
             }
@@ -3426,16 +4756,27 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
     c.free_vec(&d);
     let mut rails = unloan(c, o, wid);
     if k.loan_both {
-        book(c, "codec", "div batch codec", r - 1, |c| w.tape.ensure_raw(c, r - 1));
+        book(c, "codec", "div batch codec", r - 1, |c| {
+            w.tape.ensure_raw(c, r - 1)
+        });
         let ol = w.tape.get(r - 1).0;
-        book(c, "seeds", "loan orient", r - 1, |c| if park_mbu_on() { park_mbu_unloan(c, &mut rails, ol) } else { park_orient(c, &rails, ol) });
+        book(c, "seeds", "loan orient", r - 1, |c| {
+            if park_mbu_on() {
+                park_mbu_unloan(c, &mut rails, ol)
+            } else {
+                park_orient(c, &rails, ol)
+            }
+        });
     }
     park_par(c, k, &mut rails);
     w.rails = Some(rails);
     c.set_phase("heo_div_walkback");
     let mut x_out = None;
     for t in (0..r).rev() {
-        let out = book(c, "rails", "div rev rail", t, |c| reverse_tick(c, cfg, k, &mut w, t, SplitMode::Apply, "divrev", None));
+        sem_walk(&w, N, 0);
+        let out = book(c, "rails", "div rev rail", t, |c| {
+            reverse_tick(c, cfg, k, &mut w, t, SplitMode::Apply, "divrev", None)
+        });
         if out.is_some() {
             x_out = out;
         }
@@ -3448,46 +4789,82 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
 pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
     let cfg = super::config_mul();
     let k = carry_cfg();
-    assert_eq!(cfg.seed, super::Seed::Base, "carry schedule: base seed only (F-B3b-1)");
+    assert_eq!(
+        cfg.seed,
+        super::Seed::Base,
+        "carry schedule: base seed only (F-B3b-1)"
+    );
     let r = cfg.rounds();
     let sig = numerator;
     let lt0m = k.lt0_mul;
     let off = usize::from(lt0m);
-    let mut w = Walk { pending_low: None, rails: None, tape: Tape::with_offset(r, off), deferred: vec![Vec::new(); r], bwire: None, o0: None,
-                       lt0: lt0m, ywire: None, o0_erase: k.o0m && lt0m, o0_rebuild: false };
+    let mut w = Walk {
+        pending_low: None,
+        rails: None,
+        tape: Tape::with_offset(r, off),
+        deferred: vec![Vec::new(); r],
+        bwire: None,
+        o0: None,
+        lt0: lt0m,
+        ywire: None,
+        o0_erase: k.o0m && lt0m,
+        o0_rebuild: false,
+    };
     c.set_phase("heo_mul_fwd");
     for t in 0..r {
-        book(c, "rails", "mul fwd rail", t, |c| forward_tick(c, cfg, k, &mut w, denominator, t, "mulfwd", None));
+        sem_walk(&w, N, 0);
+        book(c, "rails", "mul fwd rail", t, |c| {
+            forward_tick(c, cfg, k, &mut w, denominator, t, "mulfwd", None)
+        });
         if t == 0 && k.fd && !k.bw_inv {
             let bw = c.alloc_qubit();
             c.cx(*w.rails.as_ref().unwrap().r1.last().unwrap(), bw);
             w.bwire = Some(bw);
         }
-        book(c, "codec", "mul codec", t, |c| w.tape.pack_due(c, t, r, k.lifo));
+        book(c, "codec", "mul codec", t, |c| {
+            w.tape.pack_due(c, t, r, k.lifo)
+        });
     }
     c.set_phase("heo_mul_batch");
     let mut rails = w.rails.take().unwrap();
     unpark_par(c, k, &mut rails);
     if k.loan_both {
-        book(c, "codec", "mul batch codec", r - 1, |c| w.tape.ensure_raw(c, r - 1));
+        book(c, "codec", "mul batch codec", r - 1, |c| {
+            w.tape.ensure_raw(c, r - 1)
+        });
         let ol = w.tape.get(r - 1).0;
-        book(c, "seeds", "loan orient", r - 1, |c| if park_mbu_on() { park_mbu_loan(c, &mut rails, ol) } else { park_orient(c, &rails, ol) });
+        book(c, "seeds", "loan orient", r - 1, |c| {
+            if park_mbu_on() {
+                park_mbu_loan(c, &mut rails, ol)
+            } else {
+                park_orient(c, &rails, ol)
+            }
+        });
     }
     let (o, wid) = loan(c, rails);
     let del = c.alloc_qubits(N);
     c.cx_pairs(sig, &del);
     for t in (k.r2m..r).rev() {
+        sem_walk(&w, 2 * N, 1);
         let g = w.tape.gid(t);
         if k.mulb_partial {
-            book(c, "codec", "mul batch codec", t, |c| w.tape.ensure_raw(c, t)); // B7 V-P9
+            book(c, "codec", "mul batch codec", t, |c| {
+                w.tape.ensure_raw(c, t)
+            }); // B7 V-P9
         } else {
-            book(c, "codec", "mul batch codec", t, |c| w.tape.ensure_group_raw(c, g, r));
+            book(c, "codec", "mul batch codec", t, |c| {
+                w.tape.ensure_group_raw(c, g, r)
+            });
         }
         let (typ, s) = w.tape.get(t);
         if !(k.mb_skip2 && t + 2 == r) {
-            book(c, "routing", "mul batch route", t, |c| route(c, s, sig, &del));
+            book(c, "routing", "mul batch route", t, |c| {
+                route(c, s, sig, &del)
+            });
         }
-        book(c, "cells", "mul batch cell", t, |c| dirty_cell(c, &w.tape, t, |c| cell_mul(c, cfg, t, typ, sig, &del)));
+        book(c, "cells", "mul batch cell", t, |c| {
+            dirty_cell(c, &w.tape, t, |c| cell_mul(c, cfg, t, typ, sig, &del))
+        });
         // B7 V-P7: railsrev reads the batch's last groups soon after; HEO_MULB_LIFO_N = n leaves n of them raw
         if (t - off) % 5 == 0 && g >= w.tape.gid(k.r2m) + k.mulb_lifo_n {
             book(c, "codec", "mul batch codec", t, |c| w.tape.repack(c, g, r));
@@ -3495,37 +4872,74 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
     }
     let mut rails = unloan(c, o, wid);
     if k.loan_both {
-        book(c, "codec", "mul batch codec", r - 1, |c| w.tape.ensure_raw(c, r - 1));
+        book(c, "codec", "mul batch codec", r - 1, |c| {
+            w.tape.ensure_raw(c, r - 1)
+        });
         let ol = w.tape.get(r - 1).0;
-        book(c, "seeds", "loan orient", r - 1, |c| if park_mbu_on() { park_mbu_unloan(c, &mut rails, ol) } else { park_orient(c, &rails, ol) });
+        book(c, "seeds", "loan orient", r - 1, |c| {
+            if park_mbu_on() {
+                park_mbu_unloan(c, &mut rails, ol)
+            } else {
+                park_orient(c, &rails, ol)
+            }
+        });
     }
     park_par(c, k, &mut rails);
     w.rails = Some(rails);
     c.set_phase("heo_mul_railsrev");
     for t in (k.r2m..r).rev() {
-        book(c, "rails", "mul rev rail", t, |c| reverse_tick(c, cfg, k, &mut w, t, SplitMode::Exact, "mulrev", None));
+        sem_walk(&w, 2 * N, 0);
+        book(c, "rails", "mul rev rail", t, |c| {
+            reverse_tick(c, cfg, k, &mut w, t, SplitMode::Exact, "mulrev", None)
+        });
     }
     c.set_phase("heo_mul_fused");
     for t in (k.r1m..k.r2m).rev() {
+        sem_walk(&w, 2 * N, 0);
         if k.lr1 && t > 0 {
             // B6 L-R1: the rails hold the post-tick-t state; the reverse tick's resize to ead[t] re-extends R1.
             let rails = w.rails.as_mut().unwrap();
-            book(c, "rails", "mul fused lr1", t, |c| resize(c, &mut rails.r1, lr1_width(cfg, t)));
+            book(c, "rails", "mul fused lr1", t, |c| {
+                resize(c, &mut rails.r1, lr1_width(cfg, t))
+            });
         }
-        book(c, "codec", "mul fused codec", t, |c| w.tape.ensure_raw(c, t));
+        book(c, "codec", "mul fused codec", t, |c| {
+            w.tape.ensure_raw(c, t)
+        });
         let (typ, s) = w.tape.get(t);
-        book(c, "routing", "mul fused route", t, |c| route(c, s, sig, &del));
+        book(c, "routing", "mul fused route", t, |c| {
+            route(c, s, sig, &del)
+        });
         if env_bool("HEO_CELL_INSIDE", false) {
             // v025 I-3: the inverse cell runs inside the reverse tick, after the inverse add has
             // consumed the tape sign wire s and before the rails regrow.
             let mut mid = |c: &mut Builder, tape: &Tape, typ: QubitId| {
-                book(c, "cells", "mul fused cell", t, |c| dirty_cell(c, tape, t, |c| cell_mul(c, cfg, t, typ, sig, &del)));
+                book(c, "cells", "mul fused cell", t, |c| {
+                    dirty_cell(c, tape, t, |c| cell_mul(c, cfg, t, typ, sig, &del))
+                });
             };
-            book(c, "rails", "mul fused rail", t, |c| reverse_tick(c, cfg, k, &mut w, t, k.split_mul, "mulfused", Some(&mut mid)));
+            book(c, "rails", "mul fused rail", t, |c| {
+                reverse_tick(
+                    c,
+                    cfg,
+                    k,
+                    &mut w,
+                    t,
+                    k.split_mul,
+                    "mulfused",
+                    Some(&mut mid),
+                )
+            });
         } else {
             let r1 = w.rails.as_ref().unwrap().r1.clone();
-            book(c, "cells", "mul fused cell", t, |c| k2_cell_loan(c, &r1, rw(cfg.esw[t]), |c| dirty_cell(c, &w.tape, t, |c| cell_mul(c, cfg, t, typ, sig, &del))));
-            book(c, "rails", "mul fused rail", t, |c| reverse_tick(c, cfg, k, &mut w, t, k.split_mul, "mulfused", None));
+            book(c, "cells", "mul fused cell", t, |c| {
+                k2_cell_loan(c, &r1, rw(cfg.esw[t]), |c| {
+                    dirty_cell(c, &w.tape, t, |c| cell_mul(c, cfg, t, typ, sig, &del))
+                })
+            });
+            book(c, "rails", "mul fused rail", t, |c| {
+                reverse_tick(c, cfg, k, &mut w, t, k.split_mul, "mulfused", None)
+            });
         }
     }
     if lt0m {
@@ -3537,10 +4951,14 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
         };
         let mut yw: Option<QubitId> = None;
         for t in (1..k.r1m).rev() {
+            sem_walk(&w, 2 * N, 0);
             let g = w.tape.gid(t);
             book(c, "codec", "mul head codec", t, |c| {
-                if truthy("HEO_HEAD_PARTIAL") { w.tape.ensure_raw(c, t); }
-                else { w.tape.ensure_group_raw(c, g, r); }
+                if truthy("HEO_HEAD_PARTIAL") {
+                    w.tape.ensure_raw(c, t);
+                } else {
+                    w.tape.ensure_group_raw(c, g, r);
+                }
             });
             let (typ, s) = w.tape.get(t);
             if t + 1 == k.r1m {
@@ -3555,8 +4973,12 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
                 yw = Some(b);
             }
             c.cx(s, yw.unwrap()); // b_{t-1} = b_t ^ f_t
-            book(c, "routing", "mul head route", t, |c| route(c, s, sig, &del));
-            book(c, "cells", "mul head cell", t, |c| dirty_cell(c, &w.tape, t, |c| cell_mul(c, cfg, t, typ, sig, &del)));
+            book(c, "routing", "mul head route", t, |c| {
+                route(c, s, sig, &del)
+            });
+            book(c, "cells", "mul head cell", t, |c| {
+                dirty_cell(c, &w.tape, t, |c| cell_mul(c, cfg, t, typ, sig, &del))
+            });
             // B7 V-P5 / V-P8: groups 0..n-1 are the last ones railsrev2 reads; leave them raw
             if (t - off) % 5 == 0 && g >= k.head_lifo_n {
                 book(c, "codec", "mul head codec", t, |c| w.tape.repack(c, g, r));
@@ -3565,7 +4987,9 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
         // a = larger-rail sign = o_{r1m-1} ? sign R2 : sign R1, computed now so it is live for the payload only.
         let top = k.r1m - 1;
         let gtop = w.tape.gid(top);
-        book(c, "codec", "mul head codec", top, |c| w.tape.ensure_raw(c, top));
+        book(c, "codec", "mul head codec", top, |c| {
+            w.tape.ensure_raw(c, top)
+        });
         let o_top = w.tape.get(top).0;
         let a = c.alloc_qubit();
         book(c, "g1b", "mul fd signs", top, |c| {
@@ -3576,7 +5000,9 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
         });
         if k.head_lifo_n == 0 {
             // B7 V-P5 (n >= 1): railsrev2 starts at t = top and would unpack gtop again at once: keep it raw
-            book(c, "codec", "mul head codec", top, |c| w.tape.repack(c, gtop, r));
+            book(c, "codec", "mul head codec", top, |c| {
+                w.tape.repack(c, gtop, r)
+            });
         }
         let b = yw.unwrap();
         if w.o0.is_none() {
@@ -3599,15 +5025,26 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
         let o0 = w.o0.unwrap();
         book(c, "g1b", "mul fd payload", 0, |c| {
             fredkin(c, o0, a, b); // (a, b) = (X_sign, Y_sign)
-            if std::env::var_os("FOLD_FD_TRANSPORT").is_some(){super::super::dirty_boundary_probe::with_tape(c,Some(o0),|c| fd_payload_div_inv(c,sig,&del,a,b,o0));}else{fd_payload_div_inv(c, sig, &del, a, b, o0);}
+            if std::env::var_os("FOLD_FD_TRANSPORT").is_some() {
+                super::super::dirty_boundary_probe::with_tape(c, Some(o0), |c| {
+                    fd_payload_div_inv(c, sig, &del, a, b, o0)
+                });
+            } else {
+                fd_payload_div_inv(c, sig, &del, a, b, o0);
+            }
         });
-        if !r5_take_del_freed() { c.free_vec(&del); }
+        if !r5_take_del_freed() {
+            c.free_vec(&del);
+        }
         w.bwire = Some(a);
         w.ywire = Some(b);
         c.set_phase("heo_mul_railsrev2");
         let mut x_out = None;
         for t in (0..k.r1m).rev() {
-            let out = book(c, "rails", "mul rev2 rail", t, |c| reverse_tick(c, cfg, k, &mut w, t, SplitMode::Exact, "mulrev2", None));
+            sem_walk(&w, N, 0);
+            let out = book(c, "rails", "mul rev2 rail", t, |c| {
+                reverse_tick(c, cfg, k, &mut w, t, SplitMode::Exact, "mulrev2", None)
+            });
             if out.is_some() {
                 x_out = out;
             }
@@ -3622,20 +5059,33 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
     // B4: optional STAGED head batch (B2 a2_headbatch_stages): `HEO_HB_STAGES=b1,b2,..` (descending multiples
     // of 5 below r1m). Each stage runs its cells at the current rail state, then the rails-only reverse down to the
     // stage boundary (consuming those letters) before the next stage. Empty = the single head batch.
-    let mut bounds: Vec<usize> = std::env::var("HEO_HB_STAGES").ok().map(|v| {
-        v.split(',').map(str::trim).filter(|x| !x.is_empty()).map(|x| x.parse::<usize>().expect("HEO_HB_STAGES")).collect()
-    }).unwrap_or_default();
+    let mut bounds: Vec<usize> = std::env::var("HEO_HB_STAGES")
+        .ok()
+        .map(|v| {
+            v.split(',')
+                .map(str::trim)
+                .filter(|x| !x.is_empty())
+                .map(|x| x.parse::<usize>().expect("HEO_HB_STAGES"))
+                .collect()
+        })
+        .unwrap_or_default();
     bounds.push(0);
     let mut cur = k.r1m;
     let mut x_out = None;
     for &b in &bounds {
-        assert!(b < cur && b % 5 == 0, "HEO_HB_STAGES must descend below r1m in multiples of 5");
+        assert!(
+            b < cur && b % 5 == 0,
+            "HEO_HB_STAGES must descend below r1m in multiples of 5"
+        );
         c.set_phase("heo_mul_headbatch");
         for t in (b..cur).rev() {
             let g = t / 5;
             book(c, "codec", "mul head codec", t, |c| {
-                if truthy("HEO_HEAD_PARTIAL") { w.tape.ensure_raw(c, t); }
-                else { w.tape.ensure_group_raw(c, g, r); }
+                if truthy("HEO_HEAD_PARTIAL") {
+                    w.tape.ensure_raw(c, t);
+                } else {
+                    w.tape.ensure_group_raw(c, g, r);
+                }
             });
             let (typ, s) = w.tape.get(t);
             if k.fd && k.bw_inv && t + 1 == k.r1m {
@@ -3652,22 +5102,32 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
                 w.bwire = Some(bw);
             }
             if t > 0 {
-                book(c, "routing", "mul head route", t, |c| route(c, s, sig, &del));
+                book(c, "routing", "mul head route", t, |c| {
+                    route(c, s, sig, &del)
+                });
             }
             if t == 1 && k.h0 {
                 let om1 = w.tape.get(0).0;
-                book(c, "g1b", "mul h0 payload", t, |c| h0_payload_mul_inv(c, sig, &del, om1, typ));
+                book(c, "g1b", "mul h0 payload", t, |c| {
+                    h0_payload_mul_inv(c, sig, &del, om1, typ)
+                });
             } else if t == 1 && !k.fd {
                 let s0 = w.tape.get(0).1;
-                book(c, "g1b", "mul g1b", t, |c| g1b_inverse(c, sig, &del, s0, typ));
+                book(c, "g1b", "mul g1b", t, |c| {
+                    g1b_inverse(c, sig, &del, s0, typ)
+                });
             } else if t >= 1 {
-                book(c, "cells", "mul head cell", t, |c| dirty_cell(c, &w.tape, t, |c| cell_mul(c, cfg, t, typ, sig, &del)));
+                book(c, "cells", "mul head cell", t, |c| {
+                    dirty_cell(c, &w.tape, t, |c| cell_mul(c, cfg, t, typ, sig, &del))
+                });
             } else if k.fd {
                 let bw = w.bwire.unwrap();
                 if k.bw_inv {
                     c.cx(typ, bw); // b = a ^ o_0
                 }
-                book(c, "g1b", "mul fd payload", t, |c| fd_payload_mul_inv(c, sig, &del, typ, s, bw));
+                book(c, "g1b", "mul fd payload", t, |c| {
+                    fd_payload_mul_inv(c, sig, &del, typ, s, bw)
+                });
             }
             if t % 5 == 0 {
                 book(c, "codec", "mul head codec", t, |c| w.tape.repack(c, g, r));
@@ -3678,7 +5138,9 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
         }
         c.set_phase("heo_mul_railsrev2");
         for t in (b..cur).rev() {
-            let out = book(c, "rails", "mul rev2 rail", t, |c| reverse_tick(c, cfg, k, &mut w, t, SplitMode::Exact, "mulrev2", None));
+            let out = book(c, "rails", "mul rev2 rail", t, |c| {
+                reverse_tick(c, cfg, k, &mut w, t, SplitMode::Exact, "mulrev2", None)
+            });
             if out.is_some() {
                 x_out = out;
             }
@@ -3696,9 +5158,25 @@ thread_local! {
  static REVERSE_CODEC_CAPTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
  static REVERSE_LOW: std::cell::RefCell<Option<(QubitId,QubitId,QubitId,QubitId)>> = const { std::cell::RefCell::new(None) };
 }
-fn reverse_carries(c:&mut Builder,n:usize,a:QubitId,b:QubitId,prev:Option<QubitId>)->Vec<QubitId>{
- let q=REVERSE_LOW.with(|r|r.borrow().as_ref().map(|&(aa,bb,p,q)|{assert_eq!((a,b,prev),(aa,bb,Some(p)));q}));
- if let Some(q)=q {assert!(n>0);let mut out=vec![q];out.extend(c.alloc_qubits(n-1));out}else{c.alloc_qubits(n)}
+fn reverse_carries(
+    c: &mut Builder,
+    n: usize,
+    a: QubitId,
+    b: QubitId,
+    prev: Option<QubitId>,
+) -> Vec<QubitId> {
+    let q = REVERSE_LOW.with(|r| {
+        r.borrow().as_ref().map(|&(aa, bb, p, q)| {
+            assert_eq!((a, b, prev), (aa, bb, Some(p)));
+            q
+        })
+    });
+    if let Some(q) = q {
+        assert!(n > 0);
+        let mut out = vec![q];
+        out.extend(c.alloc_qubits(n - 1));
+        out
+    } else {
+        c.alloc_qubits(n)
+    }
 }
-
-
