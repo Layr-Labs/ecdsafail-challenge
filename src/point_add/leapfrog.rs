@@ -57,18 +57,18 @@ pub(crate) fn install_recipe() {
         // ... also on the late ticks (split fold where room is short)
         ("LF_MERGED_LATE", "1"),
         // merged-op fold windows: standard 55 bits; late 58, capped by the standard window
-        ("LF_MERGED_WIN", "55"),
+        ("LF_MERGED_WIN", "54"),
         ("LF_MERGED_LATE_WIN", "58"),
         // ticks 0..77 of the payload-fused traversals split into a rails-only pass (one payload register live: no
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
-        ("LF_REORDER", "77"),
+        ("LF_REORDER", "76"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
         // with the coordinate seams
         ("LF_TIE_SEED", "1"),
         ("LF_SIGNWIRE", "1"),
         ("LF_SEAMS", "1"),
         // peak cap, tuned together with LF_REORDER
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1237"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1236"),
         // the merged step's shared core has 13 ANDs (the rank bound) where it had 14; every fit, split and plan rule
         // counts the wire it no longer holds
         ("LF_CORE_FREED", "all"),
