@@ -74,10 +74,10 @@ pub(crate) fn install_recipe() {
         // counts the wire it no longer holds
         ("LF_CORE_FREED", "all"),
         ("NATIVE_SFUSE_B", "1"),
-        // payload cells: fold window floored at 50 bits; from tick 120 the chunk-boundary compare is widened by one bit
+        // payload cells: fold window floored at 50 bits; from tick 130 the chunk-boundary compare is widened by one bit
         ("LF_CELL_FOLD_MIN", "50"),
         ("LF_CMP_SHIFT", "1,0"),
-        ("LF_CMP_FROM", "120"),
+        ("LF_CMP_FROM", "130"),
         // tie-safe cell mode off (LF_TIE_FROM past the last tick): Leapfrog rail steps never cancel to zero, so the
         // cells see no structural ties
         ("LF_TIE_FROM", "999"),
