@@ -26,7 +26,7 @@ pub fn enabled() -> bool {
 
 /// Submission recipe, installed by `build()` on top of the Skywalk recipe (which still configures the shared
 /// replay cells, coordinate ops and square): Leapfrog m = 2, sign2 + window choice, fast rails, seed-half, walk
-/// cap 1237;
+/// cap 1236;
 /// the square's B fold stays plain (NATIVE_SFUSE_B=1) and the Skywalk back seam is off (both fuse into its walk).
 pub(crate) fn install_recipe() {
     for (k, v) in [
@@ -37,14 +37,14 @@ pub(crate) fn install_recipe() {
         // window choice rule: in the equal-sign cases that the low bits do not settle, a compare of the two rails on a
         // window of their top bits decides between deep and flat
         ("LF_W1", "1"),
-        // ... in this form on every tick but the first and the last: a 21-bit window, deep or flat by the compare
+        // ... in this form on every tick but the first and the last: a 22-bit window, deep or flat by the compare
         // [|T| > 2|B|] and by what the second forced step did (added, subtracted, or subtracted with a sign flip);
         // computed inside that step's rail add, while its carries are on wires. It has its own 138-tick width table
         // and window anchors (see `steps`, `w1_anchor`)
-        ("LF_YP8", "21"),
-        // ... with a shorter window on the late ticks: 19 bits from tick 90, 17 from 100, 15 from 112, 13 from 118,
-        // 11 from 124
-        ("LF_YP8_LATE", "90:19,100:17,112:15,118:13,124:11"),
+        ("LF_YP8", "22"),
+        // ... with a shorter window on the late ticks: 20 bits from tick 90, 18 from 100, 16 from 112, 14 from 118,
+        // 12 from 124
+        ("LF_YP8_LATE", "90:20,100:18,112:16,118:14,124:12"),
         // tick 0's letter is not held on the tape while a walk sits at the cap: it is measured away after its last
         // read and derived again from the source rail at the walk's end, where the measurement's phase is fixed
         ("LF_T0_FREE", "1"),
@@ -57,9 +57,9 @@ pub(crate) fn install_recipe() {
         // ... also on the late ticks (split fold where room is short)
         ("LF_MERGED_LATE", "1"),
         // merged-op fold windows: standard 55 bits; late 58, capped by the standard window
-        ("LF_MERGED_WIN", "54"),
+        ("LF_MERGED_WIN", "55"),
         ("LF_MERGED_LATE_WIN", "58"),
-        // ticks 0..77 of the payload-fused traversals split into a rails-only pass (one payload register live: no
+        // ticks 0..76 of the payload-fused traversals split into a rails-only pass (one payload register live: no
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
         ("LF_REORDER", "76"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
@@ -443,7 +443,7 @@ fn steps() -> &'static Vec<[usize; 5]> {
         if yp8().is_some() {
             // 138 ticks, fitted for the pinned recipe: the LF_YP8 rule with its late window lengths, tick 0 on its
             // own rule (LF_T0_FREE) and a last tick without forced steps (LF_TAIL_FORCED=0)
-            include_str!("leapfrog_data/pack_t0hat_tail0_138_steps_k700_lw2.txt")
+            include_str!("leapfrog_data/pack_t0hat_tail0_138_steps_k770_lw2.txt")
         } else if seed_half() && lf_w1() && lf_peel() {
             include_str!("leapfrog_data/env_w1_peel139_steps.txt")
         } else if seed_half() && lf_w1() && w1_k() == 20 {
