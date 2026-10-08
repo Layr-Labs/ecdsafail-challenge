@@ -56,28 +56,28 @@ pub(crate) fn install_recipe() {
         ("LF_MERGED", "1"),
         // ... also on the late ticks (split fold where room is short)
         ("LF_MERGED_LATE", "1"),
-        // merged-op fold windows: standard 55 bits (one bit narrower than c2fb64c3: a precision trade); late 58, capped
+        // selected hunt package: standard merged window 54 bits; late 58, capped
         // by the standard window
-        ("LF_MERGED_WIN", "55"),
+        ("LF_MERGED_WIN", "54"),
         ("LF_MERGED_LATE_WIN", "58"),
-        // ticks 0..77 of the payload-fused traversals split into a rails-only pass (one payload register live: no
+        // ticks 0..76 of the payload-fused traversals split into a rails-only pass (one payload register live: no
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
-        ("LF_REORDER", "77"),
+        ("LF_REORDER", "76"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
         // with the coordinate seams
         ("LF_TIE_SEED", "1"),
         ("LF_SIGNWIRE", "1"),
         ("LF_SEAMS", "1"),
         // peak cap, tuned together with LF_REORDER
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1237"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1236"),
         // the merged step's shared core has 13 ANDs (the rank bound) where it had 14; every fit, split and plan rule
         // counts the wire it no longer holds
         ("LF_CORE_FREED", "all"),
         ("NATIVE_SFUSE_B", "1"),
-        // payload cells: fold window floored at 52 bits (54 in c2fb64c3; Skywalk's late-round profile narrows it to 49),
-        // chunk-boundary / flag compares not widened (0 / 0 bits)
-        ("LF_CELL_FOLD_MIN", "52"),
-        ("LF_CMP_SHIFT", "0,0"),
+        // payload cells: fold window floored at 50 bits; from tick 120 the chunk-boundary compare is widened by one bit
+        ("LF_CELL_FOLD_MIN", "50"),
+        ("LF_CMP_SHIFT", "1,0"),
+        ("LF_CMP_FROM", "120"),
         // tie-safe cell mode off (LF_TIE_FROM past the last tick): Leapfrog rail steps never cancel to zero, so the
         // cells see no structural ties
         ("LF_TIE_FROM", "999"),
