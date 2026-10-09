@@ -242,18 +242,6 @@ pub(crate) fn ripple_add_proved(
             circ.cx(prev, addend[i]);
             circ.cx(prev, acc[i]);
             circ.cx(prev, carries[i]);
-        } else if (i == 1 || i == 2) && c1 == Carry1::SquareLeaf && carry_in.is_none() && c0 == Carry0::IsAddend0 && i < k && i + 1 < width {
-            // carry_step with its Toffoli product written as CX gates (see `Carry1::SquareLeaf`)
-            let prev = previous(i).unwrap();
-            circ.cx(prev, addend[i]);
-            circ.cx(prev, acc[i]);
-            if i == 2 {
-                circ.cx(addend[2], carries[2]);
-                circ.cx(addend[1], carries[2]);
-            }
-            circ.cx(acc[i + 1], carries[i]);
-            circ.x(carries[i]);
-            circ.cx(prev, carries[i]);
         } else if i < k {
             carry_step(circ, addend[i], acc[i], previous(i), carries[i]);
         } else {
@@ -828,6 +816,14 @@ pub(crate) fn heo_fitted_vented_add(circ: &mut Builder, value: &[QubitId], acc: 
     if room >= width || width + 1 <= 2 * room.saturating_sub(1) {
         return None;
     }
+    if super::lowroom::enabled() && room == 1 && super::width_composition::plan(width, room).is_none() {
+        // SQ_LOWROOM: ancilla-free TTK add with the carry-out wire as its top (2w - 1 CCX, room 1),
+        // the same cost class as the slow in-place plan, which needs room 2.
+        let out = circ.alloc_qubit();
+        super::lowroom::ttk_add_cout(circ, value, acc, out);
+        eprintln!("SQ_LOWROOM_TTK w={width} room={room}");
+        return Some(out);
+    }
     let plan = (room..=width.max(room)).find_map(|r| super::width_composition::plan(width, r))?;
     Some(super::width_composition::add(circ, value, acc, &plan))
 }
@@ -1065,11 +1061,7 @@ pub fn mod_sub_vented(circ: &mut Builder, x: &[QubitId], y: &[QubitId]) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Carry0 { Full, IsAddend0, Zero, Known(QubitId) }
 #[derive(Clone, Copy, PartialEq, Eq)]
-/// `SquareLeaf` (y9-span): the add is the correction a square leaf's inverse starts with, `acc` holds x^2 - 2 and
-/// the addend's low bits are x (with `Carry0::IsAddend0`). Then the Toffoli products of positions 1 and 2 are affine
-/// in live wires: p1 = NOT acc[2] and p2 = NOT (addend[2] ^ addend[1] ^ acc[3]) on the folded operands (integer model
-/// `sq_leaf_model.py`: every x up to 10 bits; both read bits 0..3 only). Two CX chains replace two Toffoli.
-pub enum Carry1 { Full, CopiesCarry0, SquareLeaf }
+pub enum Carry1 { Full, CopiesCarry0 }
 /// Wrapped wide add on a subspace with a proved affine output word. This is
 /// NOT an unrestricted adder: incorrect output expressions violate its ABI.
 pub(crate) fn add_wide_known_output(circ:&mut Builder, value:&[QubitId], acc:&[QubitId], output:&[(bool,Vec<QubitId>)],borrowed:Option<&[QubitId]>) {

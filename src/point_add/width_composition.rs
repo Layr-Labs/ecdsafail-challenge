@@ -122,7 +122,20 @@ pub(crate) fn mapped_add(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incomin
     for q in buffer{c.release_clean(q);}assert_eq!(c.active_qubits(),base);
 }
 
+/// SQ_SOFT: when no plan fits `room`, log the shortfall and return the plan at the smallest room that fits
+/// (the build then overflows the cap at this site instead of panicking). Off = identical behaviour.
+#[track_caller]
 pub(crate) fn direct_plan(n:usize,room:usize)->Option<Plan>{
+    let p=direct_plan_inner(n,room);
+    if p.is_none() && std::env::var_os("SQ_SOFT").is_some() {
+        let loc=std::panic::Location::caller();
+        let (r,q)=(room+1..room+4*n+8).find_map(|r|direct_plan_inner(n,r).map(|q|(r,q))).expect("SQ_SOFT: no plan at any room");
+        eprintln!("SQ_SOFT site={}:{} kind=direct_plan n={n} room={room} need={r} short={}",loc.file(),loc.line(),r-room);
+        return Some(q);
+    }
+    p
+}
+pub(crate) fn direct_plan_inner(n:usize,room:usize)->Option<Plan>{
     let mut best:Option<Plan>=None;
     for k in 1..=n.min(room+1){
         let mut caps:Vec<_>=(0..k-1).map(|j|room-j).collect();caps.push(room-(k-1)+2);
@@ -137,7 +150,7 @@ pub(crate) fn direct_plan(n:usize,room:usize)->Option<Plan>{
     }best
 }
 
-fn mapped_compare(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId){
+pub(crate) fn mapped_compare(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId){
     let _dirty_trace=super::dirty_boundary_probe::Trace::new(c,"mapped_compare",b.len());
 
     use super::pingpong::{fold_step,with_selector_xor};
@@ -207,7 +220,7 @@ pub(crate) fn direct_add_phase_transport(c:&mut Builder,map:&[Vec<QubitId>],b:&[
 /// One chunk of the direct ripple, as in [`direct_add_phase_transport`]:
 /// carries chained from `prev`; a non-final chunk XORs its carry-out into
 /// `out`; the sum bits are finished in `b` and the ladder is unwound.
-fn direct_chunk(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],at:usize,w:usize,prev:QubitId,out:Option<QubitId>){
+pub(crate) fn direct_chunk(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],at:usize,w:usize,prev:QubitId,out:Option<QubitId>){
     use super::pingpong::{fold_step,unwind_fold_step};
     let end=at+w;
     let work=c.alloc_qubits(if out.is_none(){w.saturating_sub(2)}else{w-1});
