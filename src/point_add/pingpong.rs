@@ -100,8 +100,14 @@ pinned_env!(flag_widen_div, "PP_FLAG_WIDEN_DIV");
 // four, and its achieved peak this knob exactly.
 pinned_env!(pub(super) walk_max_qubits_base, "PP_WALK_MAX_QUBITS");
 /// K3b pricing instrument: `K3B_EXTRA_ROOM=k` as a CELL pin raises the cap by k inside that cell only.
+// y17 research price knob (default 0 = no effect): extra wires the cap is read with inside one payload op
+thread_local! { pub(super) static Y17_EXTRA: std::cell::Cell<isize> = const { std::cell::Cell::new(0) }; }
+/// y17: a fold reads the true cap (an op planned for a smaller room keeps its fold's own plan)
+pub(super) fn y17_fold_true_cap() {
+    Y17_EXTRA.with(|e| if e.get() < 0 { e.set(0) });
+}
 pub(super) fn walk_max_qubits() -> usize {
-    (walk_max_qubits_base() as isize + super::heo::cell_pin("K3B_EXTRA_ROOM").map_or(0, |v| v.parse::<isize>().unwrap())) as usize
+    (walk_max_qubits_base() as isize + super::heo::cell_pin("K3B_EXTRA_ROOM").map_or(0, |v| v.parse::<isize>().unwrap()) + Y17_EXTRA.with(|e| e.get())) as usize
 }
 
 /// Wires a footprint *model* counts that the allocator has already taken back:
@@ -4024,6 +4030,7 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
         eprintln!("REPLAY_PIN {} {} {} {}",round,multiply as u8,addend.len(),bounds.iter().map(|(a,b)|(b-a).to_string()).collect::<Vec<_>>().join(" "));
     }
 
+    super::leapfrog::y17_log(circ,||format!("chunked(r={round},n={},room={ladder},loans={loans},bridge={},bounds={:?})",addend.len(),super::bridge::budget(),bounds.iter().map(|&(a,b)|b-a).collect::<Vec<_>>()));
     let mut carry_in: Option<QubitId> = None;
     let mut previous: Option<(QubitId, usize, usize)> = None;
 
@@ -4750,6 +4757,7 @@ pub(crate) mod heo_hooks {
     pub(crate) fn add_consume_exact(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: usize, multiply: bool,
                                     split: usize, consumer: impl FnOnce(&mut Builder, QubitId)) {
         assert!(split >= 2 && split + 1 < N);
+        super::super::leapfrog::y17_log(circ,||format!("exact_split({split})"));
         let m = super::chunked_add(circ, &addend[..split], &acc[..split], round, multiply);
         let ov = circ.alloc_qubit();
         super::super::modular::ripple_add_consume(circ, &addend[split..], &acc[split..], Some(m), ov, |c, o, a, s, p| {
