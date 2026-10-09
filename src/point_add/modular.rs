@@ -66,18 +66,6 @@ pub fn ripple_add(
     carry_in: Option<QubitId>,
     carry_out: Option<QubitId>,
 ) {
-    // y16 trace (no effect on the gates)
-    let y16 = super::leapfrog::y16_enter(circ);
-    ripple_add_y16(circ, addend, acc, carry_in, carry_out);
-    super::leapfrog::y16_leave(circ, 0, y16);
-}
-fn ripple_add_y16(
-    circ: &mut Builder,
-    addend: &[QubitId],
-    acc: &[QubitId],
-    carry_in: Option<QubitId>,
-    carry_out: Option<QubitId>,
-) {
     if carry_out.is_none() && result_top_loan_enabled(acc) {ripple_add_result_top_loan(circ,addend,acc,carry_in,None,false);return;}
     let owned=if carry_out.is_some(){acc.len().saturating_sub(1)}else{acc.len().saturating_sub(2)};
     let missing=(circ.active_qubits()as usize+owned).saturating_sub(walk_max_qubits());
@@ -97,21 +85,6 @@ fn ripple_add_y16(
 /// disjoint operands. The lower positions in this slice remain folded until
 /// the unwind, so they are not yet readable as source or sum bits.
 pub(crate) fn ripple_add_consume(
-    circ: &mut Builder, addend: &[QubitId], acc: &[QubitId],
-    carry_in: Option<QubitId>, carry_out: QubitId,
-    consumer: impl FnOnce(&mut Builder, QubitId, QubitId, QubitId, Option<QubitId>),
-) {
-    // y16 trace (no effect on the gates): the consumer is counted apart from the ripple
-    let y16 = super::leapfrog::y16_enter(circ);
-    ripple_add_consume_y16(circ, addend, acc, carry_in, carry_out, |c, o, a, s, p| {
-        let y16c = super::leapfrog::y16_enter(c);
-        super::pingpong::y17_fold_true_cap();
-        consumer(c, o, a, s, p);
-        super::leapfrog::y16_leave(c, 2, y16c);
-    });
-    super::leapfrog::y16_leave(circ, 0, y16);
-}
-fn ripple_add_consume_y16(
     circ: &mut Builder, addend: &[QubitId], acc: &[QubitId],
     carry_in: Option<QubitId>, carry_out: QubitId,
     consumer: impl FnOnce(&mut Builder, QubitId, QubitId, QubitId, Option<QubitId>),
@@ -269,18 +242,6 @@ pub(crate) fn ripple_add_proved(
             circ.cx(prev, addend[i]);
             circ.cx(prev, acc[i]);
             circ.cx(prev, carries[i]);
-        } else if (i == 1 || i == 2) && c1 == Carry1::SquareLeaf && carry_in.is_none() && c0 == Carry0::IsAddend0 && i < k && i + 1 < width {
-            // carry_step with its Toffoli product written as CX gates (see `Carry1::SquareLeaf`)
-            let prev = previous(i).unwrap();
-            circ.cx(prev, addend[i]);
-            circ.cx(prev, acc[i]);
-            if i == 2 {
-                circ.cx(addend[2], carries[2]);
-                circ.cx(addend[1], carries[2]);
-            }
-            circ.cx(acc[i + 1], carries[i]);
-            circ.x(carries[i]);
-            circ.cx(prev, carries[i]);
         } else if i < k {
             carry_step(circ, addend[i], acc[i], previous(i), carries[i]);
         } else {
@@ -330,10 +291,26 @@ pub(crate) fn ripple_add_proved(
     assert!(deferred.is_none(), "deferred phase did not name an owned ripple carry");
 }
 
+thread_local! {
+    /// windowed boundary erasures in split ripples: (count, count narrower than the window, min width, sum 2^-width)
+    pub(crate) static WIN_STATS: std::cell::Cell<(usize, usize, usize, f64)> = const { std::cell::Cell::new((0, 0, usize::MAX, 0.0)) };
+}
 thread_local! { static HEO_SPLIT_GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 /// B3b: the chunked form of [`ripple_add_proved`] (see its HEO block). Returns false
 /// (nothing emitted) when no layout with every chunk inside the addend exists.
+/// Windowed boundary erasures keep the full `HEO_FIT_K` window when a chunk is narrower than it (SKY-COF: on;
+/// research override `SKYCOF_FULL_WINDOW_ERASE=0` restores the chunk-wide window).
+fn full_window_erase() -> bool {
+    crate::point_add::skycof::pointadd::knob("SKYCOF_FULL_WINDOW_ERASE").map_or(true, |v| v != "0")
+}
+
+/// The widened window may reach into the first chunk whatever its carry mode (its sum bits are final like any
+/// other chunk's). Research override `SKYCOF_WIN_FLOOR0=0` stops the window at the first chunk's top.
+fn win_floor0() -> bool {
+    crate::point_add::skycof::pointadd::knob("SKYCOF_WIN_FLOOR0").map_or(true, |v| v != "0")
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sky_trim_last() -> bool { std::env::var("SKY_SPLIT_TRIM_LAST").is_ok_and(|v| v == "1") }
 
@@ -413,8 +390,28 @@ fn heo_split_ripple(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], car
             if let Some((b, plo, phi, pcin)) = kept.pop() {
                 if plo == 0 && phi - plo <= win {
                     erase_with_compare(circ, b, &acc[plo..phi], &addend[plo..phi], pcin);
+                } else if phi - plo < win && full_window_erase() {
+                    // the chunk is narrower than the window: the window reaches down into the chunks below
+                    // (their sum bits are final), so every boundary keeps the full window; when the clean
+                    // ladder does not fit, the compare runs its top bits as an in-place ladder on the operands
+                    let floor = if (c0 == Carry0::Full && c1 == Carry1::Full) || win_floor0() { 0 } else { bounds[0].1 };
+                    let (wlo, seed) = if floor == 0 && phi <= win { (0, carry_in) } else { (phi - win.min(phi - floor), None) };
+                    let kw = phi - wlo;
+                    let room = walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
+                    WIN_STATS.with(|w| { let mut v = w.get(); v.0 += 1; if kw < win && seed.is_none() { v.1 += 1; v.3 += 0.5f64.powi(kw as i32); } v.2 = v.2.min(kw); w.set(v); });
+                    if kw - 1 <= room || room == 0 {
+                        erase_with_compare(circ, b, &acc[wlo..phi], &addend[wlo..phi], seed);
+                    } else {
+                        let bit = circ.alloc_bit();
+                        circ.hmr(b, bit);
+                        circ.push_condition(bit);
+                        super::cross_chunk_probe::phase(circ, &acc[wlo..phi], &addend[wlo..phi], seed, room);
+                        circ.pop_condition();
+                        circ.free_bit(bit);
+                    }
                 } else {
                     let kw = win.min(phi - plo);
+                    WIN_STATS.with(|w| { let mut v = w.get(); v.0 += 1; if kw < win { v.1 += 1; } v.2 = v.2.min(kw); v.3 += 0.5f64.powi(kw as i32); w.set(v); });
                     erase_with_compare(circ, b, &acc[phi - kw..phi], &addend[phi - kw..phi], None);
                 }
                 circ.free(b);
@@ -855,6 +852,14 @@ pub(crate) fn heo_fitted_vented_add(circ: &mut Builder, value: &[QubitId], acc: 
     if room >= width || width + 1 <= 2 * room.saturating_sub(1) {
         return None;
     }
+    if super::lowroom::enabled() && room == 1 && super::width_composition::plan(width, room).is_none() {
+        // SQ_LOWROOM: ancilla-free TTK add with the carry-out wire as its top (2w - 1 CCX, room 1),
+        // the same cost class as the slow in-place plan, which needs room 2.
+        let out = circ.alloc_qubit();
+        super::lowroom::ttk_add_cout(circ, value, acc, out);
+        eprintln!("SQ_LOWROOM_TTK w={width} room={room}");
+        return Some(out);
+    }
     let plan = (room..=width.max(room)).find_map(|r| super::width_composition::plan(width, r))?;
     Some(super::width_composition::add(circ, value, acc, &plan))
 }
@@ -1092,11 +1097,7 @@ pub fn mod_sub_vented(circ: &mut Builder, x: &[QubitId], y: &[QubitId]) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Carry0 { Full, IsAddend0, Zero, Known(QubitId) }
 #[derive(Clone, Copy, PartialEq, Eq)]
-/// `SquareLeaf` (y9-span): the add is the correction a square leaf's inverse starts with, `acc` holds x^2 - 2 and
-/// the addend's low bits are x (with `Carry0::IsAddend0`). Then the Toffoli products of positions 1 and 2 are affine
-/// in live wires: p1 = NOT acc[2] and p2 = NOT (addend[2] ^ addend[1] ^ acc[3]) on the folded operands (integer model
-/// `sq_leaf_model.py`: every x up to 10 bits; both read bits 0..3 only). Two CX chains replace two Toffoli.
-pub enum Carry1 { Full, CopiesCarry0, SquareLeaf }
+pub enum Carry1 { Full, CopiesCarry0 }
 /// Wrapped wide add on a subspace with a proved affine output word. This is
 /// NOT an unrestricted adder: incorrect output expressions violate its ABI.
 pub(crate) fn add_wide_known_output(circ:&mut Builder, value:&[QubitId], acc:&[QubitId], output:&[(bool,Vec<QubitId>)],borrowed:Option<&[QubitId]>) {
