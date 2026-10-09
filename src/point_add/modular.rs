@@ -66,6 +66,18 @@ pub fn ripple_add(
     carry_in: Option<QubitId>,
     carry_out: Option<QubitId>,
 ) {
+    // y16 trace (no effect on the gates)
+    let y16 = super::leapfrog::y16_enter(circ);
+    ripple_add_y16(circ, addend, acc, carry_in, carry_out);
+    super::leapfrog::y16_leave(circ, 0, y16);
+}
+fn ripple_add_y16(
+    circ: &mut Builder,
+    addend: &[QubitId],
+    acc: &[QubitId],
+    carry_in: Option<QubitId>,
+    carry_out: Option<QubitId>,
+) {
     if carry_out.is_none() && result_top_loan_enabled(acc) {ripple_add_result_top_loan(circ,addend,acc,carry_in,None,false);return;}
     let owned=if carry_out.is_some(){acc.len().saturating_sub(1)}else{acc.len().saturating_sub(2)};
     let missing=(circ.active_qubits()as usize+owned).saturating_sub(walk_max_qubits());
@@ -85,6 +97,21 @@ pub fn ripple_add(
 /// disjoint operands. The lower positions in this slice remain folded until
 /// the unwind, so they are not yet readable as source or sum bits.
 pub(crate) fn ripple_add_consume(
+    circ: &mut Builder, addend: &[QubitId], acc: &[QubitId],
+    carry_in: Option<QubitId>, carry_out: QubitId,
+    consumer: impl FnOnce(&mut Builder, QubitId, QubitId, QubitId, Option<QubitId>),
+) {
+    // y16 trace (no effect on the gates): the consumer is counted apart from the ripple
+    let y16 = super::leapfrog::y16_enter(circ);
+    ripple_add_consume_y16(circ, addend, acc, carry_in, carry_out, |c, o, a, s, p| {
+        let y16c = super::leapfrog::y16_enter(c);
+        super::pingpong::y17_fold_true_cap();
+        consumer(c, o, a, s, p);
+        super::leapfrog::y16_leave(c, 2, y16c);
+    });
+    super::leapfrog::y16_leave(circ, 0, y16);
+}
+fn ripple_add_consume_y16(
     circ: &mut Builder, addend: &[QubitId], acc: &[QubitId],
     carry_in: Option<QubitId>, carry_out: QubitId,
     consumer: impl FnOnce(&mut Builder, QubitId, QubitId, QubitId, Option<QubitId>),
