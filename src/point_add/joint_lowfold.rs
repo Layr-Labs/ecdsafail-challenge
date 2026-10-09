@@ -87,6 +87,7 @@ pub(super) fn try_replay(circ:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId
         circ.active_qubits(),p.bounds.last().unwrap().1-p.bounds.last().unwrap().0,p.prefix,p.guard,p.saving);
     if env_flag("PP_COMPOSE_TRACE"){eprintln!("COMPOSE_MUL {} {} {} {} {} {:?}",round,circ.active_qubits(),fw,p.bits,REPLAY_SIGN_LOANS.with(|s|s.get()),p.bounds);}
     if p.exact {eprintln!("EXACT_RETAINED_FOLD mul {} {}",round,fw);}
+    super::super::leapfrog::y17_log(circ,||format!("joint(r={round},room={},fw={fw},bits={},prefix={},exact={},dropped={},loans={},bridge={},bounds={:?})",walk_max_qubits().saturating_sub(circ.active_qubits()as usize),p.bits,p.prefix,p.exact,p.dropped,REPLAY_SIGN_LOANS.with(|s|s.get()),super::super::bridge::budget(),p.bounds.iter().map(|&(a,b)|b-a).collect::<Vec<_>>()));
     let mut incoming=None;
     let mut previous=None;
     // EXP PP_PREBIAS_DOUBLE: bit 0 leaves the main add. z0 = s^a0 by CX, and the
