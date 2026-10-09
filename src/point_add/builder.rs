@@ -106,8 +106,6 @@ impl Builder {
     /// B3b: (native, expected) Toffoli so far, when the phase report is on.
     pub fn report_totals(&self) -> Option<(usize, f64)> { self.report.as_deref().map(|r| (r.total_native, r.total_expected)) }
     pub(crate) fn i35_cost(&self)->f64{self.model_weighted}
-    /// Running expected (condition-weighted) Toffoli count of the phase report; 0 when the report is off.
-    pub(crate) fn expected_total(&self) -> f64 { self.report.as_deref().map_or(0.0, |r| r.total_expected) }
     pub fn i13_dims(&self)->(usize,usize){(self.next_qubit as usize,self.next_bit as usize)}
     pub fn take_ops(&mut self) -> Vec<Op> {
         if self.model {
@@ -421,6 +419,17 @@ impl Builder {
     pub fn cz(&mut self, a: QubitId, b: QubitId) {
         self.cz_if(a, b, NO_BIT);
     }
+    /// `CCZ(a, b, t)` under classical bit `cond` (`NO_BIT`: unconditional). One Toffoli-class gate.
+    pub fn ccz_if(&mut self, a: QubitId, b: QubitId, t: QubitId, cond: BitId) {
+        assert!(a != b && a != t && b != t, "invalid CCZ with aliased operands");
+        let mut op = Op::empty();
+        op.kind = OperationType::CCZ;
+        op.q_control2 = a;
+        op.q_control1 = b;
+        op.q_target = t;
+        op.c_condition = cond;
+        self.push_op(op);
+    }
     pub fn push_condition(&mut self, cond: BitId) {
         let mut op = Op::empty();
         op.kind = OperationType::PushCondition;
@@ -448,7 +457,13 @@ impl Builder {
         op.q_target = q;
         self.push_op(op);
     }
+    #[track_caller]
     pub fn hmr(&mut self, q: QubitId, c: BitId) {
+        if SQ_HMR_ON.with(|x| *x) {
+            let loc = std::panic::Location::caller();
+            let line = format!("{}\t{}:{}\t{}\n", self.ops.len(), loc.file(), loc.line(), self.phase);
+            SQ_HMR_BUF.with(|b| b.borrow_mut().push_str(&line));
+        }
         let mut op = Op::empty();
         op.kind = OperationType::Hmr;
         op.q_target = q;
@@ -551,5 +566,15 @@ impl Builder {
         self.peak_census.finalize();
         self.ccx_census.finalize();
         self.replay_sites.finalize();
+        if SQ_HMR_ON.with(|x| *x) {
+            SQ_HMR_BUF.with(|b| std::fs::write("hmr_sites.tsv", format!("op\tsite\tphase\n{}", b.borrow())).unwrap());
+            eprintln!("SQ_HMR_SITES wrote hmr_sites.tsv");
+        }
     }
+}
+
+
+thread_local! {
+    static SQ_HMR_ON: bool = std::env::var_os("SQ_HMR_SITES").is_some();
+    static SQ_HMR_BUF: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
 }
