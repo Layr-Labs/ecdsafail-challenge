@@ -61,9 +61,6 @@ pub(crate) fn install_recipe() {
         // ticks 0..76 of the payload-fused traversals split into a rails-only pass (one payload register live: no
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
         ("LF_REORDER", "76"),
-        // y15-room: the divide's and the multiply's boundary set apart (each overrides LF_REORDER for its direction)
-        ("LF_REORDER_DIV", "76"),
-        ("LF_REORDER_MUL", "76"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
         // with the coordinate seams
         ("LF_TIE_SEED", "1"),
@@ -3179,10 +3176,6 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     // own rule, a function of R1 alone) and on a last tick with fewer forced steps (LF_TAIL_FORCED: that tick takes
     // the LF_W1 rule of [`fast_choice`])
     let yp8_here = yp8().is_some() && !t0_plain(t) && tail_forced(t) == 2;
-    // y15-room: on these fused ticks the three payload ops run as one one-fold tick at the merged op's place (the two
-    // cells below are left out; they act on the payload registers and read only the letter)
-    let y15f = pay.is_some() && y15::fused_fwd_on(t);
-    assert!(!y15f || (tail_forced(t) == 2 && t < tie_from() && t > 0), "y15 fused tick out of range");
     for (nk, nnext) in fsteps {
         if yp8_here && letter.len() == 1 {
             // LF_YP8: forced move 2's payload cell first (it reads only the letter), then the rail add with the
@@ -3190,7 +3183,7 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
             let s = c.alloc_qubit();
             pp_sign_into1(c, tr[1 - o], br[1 - o], s);
             let q0 = pmark(c);
-            if let Some(p) = pay.as_deref_mut().filter(|_| !y15f) {
+            if let Some(p) = pay.as_deref_mut() {
                 let (pt, ps) = (p[ti].clone(), p[si].clone());
                 let pads = lr_pad_c(c, 2 * o);
                 let pr = tie_pred(c, t, s, *tr.last().unwrap(), *br.last().unwrap());
@@ -3227,14 +3220,12 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
                 resize(c, tr, wt.min(nnext) - o);
                 resize(c, br, wb.min(w).min(wn) - o);
             }
-            if !y15f {
-                let (pt, ps) = (p[ti].clone(), p[si].clone());
-                let pads = lr_pad_c(c, 2 * o);
-                let pr = tie_pred(c, t, s, *tr.last().unwrap(), *br.last().unwrap());
-                cells::with_tie(pr, || cells::with_cmp_shift(cmp_shift_at(t), || cells::add_halve(c, s, &ps, &pt, fold, proxy)));
-                tie_unpred(c, pr, s, *tr.last().unwrap(), *br.last().unwrap());
-                lr_unpad(c, pads);
-            }
+            let (pt, ps) = (p[ti].clone(), p[si].clone());
+            let pads = lr_pad_c(c, 2 * o);
+            let pr = tie_pred(c, t, s, *tr.last().unwrap(), *br.last().unwrap());
+            cells::with_tie(pr, || cells::with_cmp_shift(cmp_shift_at(t), || cells::add_halve(c, s, &ps, &pt, fold, proxy)));
+            tie_unpred(c, pr, s, *tr.last().unwrap(), *br.last().unwrap());
+            lr_unpad(c, pads);
         }
         pacc(c, &format!("fwd{fk}.pay_cell"), q0);
         letter.push(s);
@@ -3280,7 +3271,7 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     let merged = if pay.is_some() { merged_fits(at_barrel + usize::from(t >= tie_from() && !tie_seed()), t, false) } else { None };
     let qc3 = pmark(c);
     let q0 = pmark(c);
-    if let Some(p) = pay.as_deref_mut().filter(|_| merged.is_none() && !y15f) {
+    if let Some(p) = pay.as_deref_mut().filter(|_| merged.is_none()) {
         let (pt, ps) = (p[ti].clone(), p[si].clone());
         let pads = lr_pad_c(c, o);
         let pr = tie_pred(c, t, s3, *tr.last().unwrap(), *br.last().unwrap());
@@ -3301,12 +3292,7 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     let q0 = pmark(c);
     let pads = if pay.is_some() { lr_pad(c, 2 * o) } else { Vec::new() };
     if let Some(p) = pay.as_deref_mut() {
-        if y15f {
-            assert_eq!(c.active_qubits() as usize, at_barrel);
-            let l5 = [letter[0], letter[1], s3, k1, k2];
-            y15::fwd_tick(c, t, &l5, p);
-            pacc(c, &format!("fwd{fk}.pay_y15"), q0);
-        } else if let Some(mw) = merged {
+        if let Some(mw) = merged {
             assert_eq!(c.active_qubits() as usize, at_barrel);
             let (pt, ps) = (p[ti].clone(), p[si].clone());
             let pr = tie_pred(c, t, s3, *tr.last().unwrap(), *br.last().unwrap());
@@ -3369,16 +3355,7 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     let fk = if pay.is_some() { "F" } else { "R" };
     let tick0 = pmark(c);
     let pads = if pay.is_some() { lr_pad(c, 2 * o) } else { Vec::new() };
-    // y15-room: on these fused ticks the three payload ops run as one reverse one-fold tick
-    let y15r = pay.is_some() && y15::fused_rev_on(t);
-    assert!(!y15r || (nf == 2 && t < tie_from() && t > 0), "y15 fused tick out of range");
-    if y15r {
-        let q0 = pmark(c);
-        let l5 = [s0, s1, s3, k1, k2];
-        y15::rev_tick(c, t, &l5, pay.as_deref_mut().unwrap());
-        pacc(c, "revF.pay_y15", q0);
-    }
-    if let Some(p) = pay.as_deref_mut().filter(|_| !y15r) {
+    if let Some(p) = pay.as_deref_mut() {
         let q0 = pmark(c);
         let merged = merged_fits(c.active_qubits() as usize + usize::from(t >= tie_from() && !tie_seed()), t, true);
         if let Some(mw) = merged {
@@ -4328,15 +4305,8 @@ fn lf_reorder(multiply: bool) -> usize {
     r.min(rounds())
 }
 
-#[path = "y15_onefold.rs"]
-mod y15;
-
 /// Payload half of [`fwd_tick_fast`] on a tick below the tie-safe ticks, its letter already on the tape.
 fn pay_fwd_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<QubitId>; 2]) {
-    if y15::fwd_on(t) {
-        return y15::fwd_tick(c, t, letter, p);
-    }
-    let (y15_e0, y15_a0) = (c.expected_total(), c.active_qubits());
     let [w, ..] = steps()[t];
     let (ti, si) = (t % 2, 1 - t % 2);
     let (fold, proxy) = proxy_fold(w, false);
@@ -4366,15 +4336,10 @@ fn pay_fwd_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<Qubi
         cmod_barrel(c, k1, k2, &p[ti], false);
         pacc(c, "fwdP.pay_cell_barrel", q0);
     }
-    y15::trace_old(c, t, y15_e0, y15_a0);
 }
 
 /// Payload half of [`rev_tick_fast`] on a tick below the tie-safe ticks (the tape is read, not popped).
 fn pay_rev_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<QubitId>; 2]) {
-    if y15::rev_on(t) {
-        return y15::rev_tick(c, t, letter, p);
-    }
-    let (y15_e0, y15_a0) = (c.expected_total(), c.active_qubits());
     let [w, ..] = steps()[t];
     let (ti, si) = (t % 2, 1 - t % 2);
     let (fold, proxy) = proxy_fold(w, true);
@@ -4404,7 +4369,6 @@ fn pay_rev_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<Qubi
         c.x(s);
         pacc(c, "revP.pay_cell", q0);
     }
-    y15::trace_old_rev(c, t, y15_e0, y15_a0);
 }
 
 /// `y <- y / x (mod p)`, x restored. Division payload fused into the forward walk; rails-only walkback.
