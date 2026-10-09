@@ -134,11 +134,7 @@ fn diag_correction_known_top(circ:&mut Builder, x:&[QubitId], product:&[QubitId]
     let mut value=x.to_vec();
     value.extend_from_slice(&pads);
     let c0=if cut_sqident() {Carry0::IsAddend0} else {Carry0::Full};
-    // The leaf holds x^2 - 2 here (SQ_ROW0_COPY), which makes the carries of positions 1 and 2 affine. The relation
-    // needs the leaf register to come back as x^2 - 2. It does not on inputs where the node carry cut (SQ_ASM_TAIL)
-    // has already gone wrong (a leaf input of 0 or 1); on those the output was already wrong before this change.
-    let c1=if cut_sqident() && row0_copy() && m>=4 {Carry1::SquareLeaf} else {Carry1::Full};
-    super::modular::addsub_wide_known_top(circ,&value,product,false,c0,c1,false);
+    super::modular::addsub_wide_known_top(circ,&value,product,false,c0,Carry1::Full,false);
     for i in 0..m-1 { circ.x(pads[i]); circ.cx(x[i],pads[i]); }
     circ.free_vec(&pads);
 }
