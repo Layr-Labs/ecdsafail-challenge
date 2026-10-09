@@ -100,14 +100,8 @@ pinned_env!(flag_widen_div, "PP_FLAG_WIDEN_DIV");
 // four, and its achieved peak this knob exactly.
 pinned_env!(pub(super) walk_max_qubits_base, "PP_WALK_MAX_QUBITS");
 /// K3b pricing instrument: `K3B_EXTRA_ROOM=k` as a CELL pin raises the cap by k inside that cell only.
-// y17 research price knob (default 0 = no effect): extra wires the cap is read with inside one payload op
-thread_local! { pub(super) static Y17_EXTRA: std::cell::Cell<isize> = const { std::cell::Cell::new(0) }; }
-/// y17: a fold reads the true cap (an op planned for a smaller room keeps its fold's own plan)
-pub(super) fn y17_fold_true_cap() {
-    Y17_EXTRA.with(|e| if e.get() < 0 { e.set(0) });
-}
 pub(super) fn walk_max_qubits() -> usize {
-    (walk_max_qubits_base() as isize + super::heo::cell_pin("K3B_EXTRA_ROOM").map_or(0, |v| v.parse::<isize>().unwrap()) + Y17_EXTRA.with(|e| e.get())) as usize
+    (walk_max_qubits_base() as isize + super::heo::cell_pin("K3B_EXTRA_ROOM").map_or(0, |v| v.parse::<isize>().unwrap())) as usize
 }
 
 /// Wires a footprint *model* counts that the allocator has already taken back:
@@ -3184,8 +3178,8 @@ fn replay_add_halve_impl(
     fold_window: usize,
     round: usize,
 ) {
-    if tie_route_ok(1) && retained_prebias::try_replay(circ,sign,source,target,retained_window(fold_window,round),round) {return;}
-    if tie_route_ok(2) && env_flag("PP_JOINT_PREBIAS_DIV") && joint_prebias::eligible(circ,round) {
+    if heo_tie().is_none() && retained_prebias::try_replay(circ,sign,source,target,retained_window(fold_window,round),round) {return;}
+    if heo_tie().is_none() && env_flag("PP_JOINT_PREBIAS_DIV") && joint_prebias::eligible(circ,round) {
         joint_prebias::joint_prebias_div(circ,sign,source,target,fold_window,round);return;
     }
     let f = f();
@@ -3195,7 +3189,7 @@ fn replay_add_halve_impl(
     if env_flag("PP_REUSE_DIV_PARITY") {
         fold_halve_reused(circ, &target[..fold_window], sign, overflow);
         let mut k = flag_compare(round) + usize::from(policy_width(round) >= flag_widen_div());
-        let borrow = if let Some(p)=tie_borrow() {Some(p)} else if env_flag("CMP_SEED_ALL") { if !seed_keep_width_for(false){k -= 1;} Some(source[N-k-1]) } else {None};
+        let borrow = if let Some(p)=heo_tie() {Some(p)} else if env_flag("CMP_SEED_ALL") { if !seed_keep_width_for(false){k -= 1;} Some(source[N-k-1]) } else {None};
         k=refined_flag_window(k,fold_window,borrow.is_some());
         circ.record_replay_site('F', round, N, k);
         trace_replay_predictor('F',round,false,N,k,source,borrow);
@@ -3259,7 +3253,7 @@ fn replay_add_halve_impl(
     circ.cx(overflow, parity);
     circ.cx(sign, parity);
     let mut k = flag_compare(round) + usize::from(policy_width(round) >= flag_widen_div());
-    let borrow = if let Some(p)=tie_borrow() {Some(p)} else if env_flag("CMP_SEED_ALL") { if !seed_keep_width_for(false){k -= 1;} Some(source[N-k-1]) } else {None};
+    let borrow = if let Some(p)=heo_tie() {Some(p)} else if env_flag("CMP_SEED_ALL") { if !seed_keep_width_for(false){k -= 1;} Some(source[N-k-1]) } else {None};
     k=refined_flag_window(k,fold_window,borrow.is_some());
     circ.record_replay_site('F', round, N, k);
     trace_replay_predictor('F',round,false,N,k,source,borrow);
@@ -3303,7 +3297,7 @@ fn replay_double_add_impl(
     joint_lowfold::DPARK.with(|p|p.set(park));
 
     circ.cx_all(sign, target);
-    if tie_route_ok(4) && joint_lowfold::try_replay(circ,sign,source,target,retained_window(fold_window,round),round,Some(doubled_out)) {
+    if heo_tie().is_none() && joint_lowfold::try_replay(circ,sign,source,target,retained_window(fold_window,round),round,Some(doubled_out)) {
         joint_lowfold::DPARK.with(|p|p.set(false));
         circ.cx_all(sign,target);return;
     }
@@ -3403,7 +3397,7 @@ fn replay_double_add_impl(
 
     let wide = policy_width(round) >= 38;
     let mut k = flag_compare(round) + usize::from(a5_policy() == "mul-f-plus1-early200" && (2..202).contains(&round));
-    let borrow = if let Some(p) = tie_borrow() {
+    let borrow = if let Some(p) = heo_tie() {
         Some(p)
     } else if wide && matches!(a5_policy(), "mul-f-seed" | "mul-fb-seed") {
         Some(source[N - k - 1])
@@ -3478,6 +3472,20 @@ fn fold_double_joint(c:&mut Builder,z:&[QubitId],s:QubitId,v0:QubitId,d:QubitId,
     assert!(!z.contains(&v0) && ![s,d,o].contains(&v0));
     c.cx(s,o);let a=and_clean(c,d,o);c.cx(s,o);
     let m=and_clean(c,a,s);c.cx(m,a); // a=plus2, m=minus
+    // SQ_FOLDSETUP (non-pre): finish bit 0 and release d BEFORE the first carry. With y = s^v0 = z0
+    // at entry and x = d^o, first = y & x, and after the finish z0' = y ^ x, so first = y & ~z0'. One wire less.
+    // pre: first = MAJ(s, v0, x) = MAJ(s, v0, ~z0').
+    let lowset=std::env::var_os("SQ_FOLDSETUP").is_some();
+    let first=if lowset {
+        c.cx(d,z[0]);c.cx(o,z[0]); // finish bit0: z0 ^= d ^ o
+        for q in [z[0],s,v0,o] {c.cx(q,d);}
+        c.release_clean(d);
+        if pre {
+            c.x(z[0]);c.cx(z[0],s);c.cx(z[0],v0);let h=and_clean(c,s,v0);c.cx(z[0],h);c.cx(z[0],s);c.cx(z[0],v0);c.x(z[0]);h
+        } else {
+            c.cx(s,v0);c.x(z[0]);let f1=and_clean(c,z[0],v0);c.x(z[0]);c.cx(s,v0);f1
+        }
+    } else {
     c.cx(d,o);
     // pre: the main add skipped bit 0, so its carry s&v0 is still owed. It is
     // exclusive with z0&(d^o) (z0=s^v0), and their sum is MAJ(s,v0,d^o).
@@ -3488,6 +3496,8 @@ fn fold_double_joint(c:&mut Builder,z:&[QubitId],s:QubitId,v0:QubitId,d:QubitId,
 
     for q in [z[0],s,v0,o] {c.cx(q,d);}
     c.release_clean(d);
+    first
+    };
     if let Some(bits)=joint_lowfold::GUARD.with(|g|g.get()) {
         assert!((12..=32).contains(&bits)&&bits<=w);
         let small=U256::from(977);let neg=twos_complement_bits(small,bits);
@@ -3520,16 +3530,27 @@ fn fold_double_joint(c:&mut Builder,z:&[QubitId],s:QubitId,v0:QubitId,d:QubitId,
         map.push(unique);
     }
     let n=w-1;let room=walk_max_qubits().saturating_sub(c.active_qubits() as usize);
+    if !super::lowroom::try_fold(c,&z[1..],f,&[z[0],s,v0,m],&[a],m,first) {
     let plan=(room..=n.max(room)).find_map(|r|super::width_composition::direct_plan(n,r)).unwrap();
     if env_flag("PP_JOINT_FOLD_TRACE") {eprintln!("JOINT_FOLD {} {} {} {} {}",w,base,room,plan.peak,plan.extra2);}
     super::width_composition::direct_add(c,&map,&z[1..],first,&plan);
+    }
 
     }
+    if lowset {
+        if pre {
+            c.x(z[0]);c.cx(z[0],s);c.cx(z[0],v0);c.cx(z[0],first);and_uncompute(c,first,s,v0);c.cx(z[0],s);c.cx(z[0],v0);c.x(z[0]);
+        } else {
+            c.cx(s,v0);c.x(z[0]);and_uncompute(c,first,z[0],v0);c.x(z[0]);c.cx(s,v0);
+        }
+        c.reacquire(d);for q in [z[0],s,v0,o] {c.cx(q,d);}
+    } else {
     c.reacquire(d);for q in [z[0],s,v0,o] {c.cx(q,d);}
     if pre {
         c.cx(d,o);c.cx(o,s);c.cx(o,v0);c.cx(o,first);and_uncompute(c,first,s,v0);c.cx(o,s);c.cx(o,v0);c.cx(d,o);
     }else{
     c.cx(d,o);c.cx(o,z[0]);and_uncompute(c,first,z[0],o);c.cx(o,z[0]);c.cx(d,o);
+    }
     }
     c.cx(m,a);and_uncompute(c,m,a,s);
     c.cx(s,o);and_uncompute(c,a,d,o);c.cx(s,o);
@@ -3575,6 +3596,9 @@ fn with_reverse_replay_sign_loans(circ:&mut Builder,u:&[QubitId],v:&[QubitId],va
 /// output bits equal the ordinary fold; bit0 returns p XOR overflow, ready
 /// for the outer sign complement and final rotation.
 fn fold_halve_reused(circ: &mut Builder, target: &[QubitId], sign: QubitId, overflow: QubitId) {
+    if std::env::var_os("SQ_FOLDSETUP").is_some() {
+        return fold_halve_reused_lowroom(circ, target, sign, overflow);
+    }
     circ.swap(sign, target[0]); // sign hosts p; target0 hosts original s
     circ.x(target[0]);
     let not_sign_and_parity = and_clean(circ, target[0], sign);
@@ -3608,6 +3632,40 @@ fn fold_halve_reused(circ: &mut Builder, target: &[QubitId], sign: QubitId, over
     circ.cx(sign, sign_and_parity);
     circ.cx(not_sign_and_parity, sign_and_parity);
     circ.free(sign_and_parity);
+    circ.x(target[0]);
+    and_uncompute(circ, not_sign_and_parity, target[0], sign);
+    circ.x(target[0]);
+    circ.swap(sign, target[0]); // restore sign and move p into its outgoing slot
+    circ.cx(overflow, target[0]);
+}
+
+/// SQ_FOLDSETUP: [`fold_halve_reused`] without the `sign_and_parity` wire. s&p = p XOR (~s&p) is hosted in
+/// the sign wire (which holds p) for the two gates that read it, so the setup peaks at the fold's three selector
+/// wires instead of four. Same selectors, same fold, same uncompute order; Clifford changes only.
+fn fold_halve_reused_lowroom(circ: &mut Builder, target: &[QubitId], sign: QubitId, overflow: QubitId) {
+    circ.swap(sign, target[0]); // sign hosts p; target0 hosts original s
+    circ.x(target[0]);
+    let not_sign_and_parity = and_clean(circ, target[0], sign);
+    circ.x(target[0]);
+    circ.x(overflow);
+    let minus_f = and_clean(circ, overflow, not_sign_and_parity);
+    circ.x(overflow);
+    circ.cx(not_sign_and_parity, sign); // sign = s & p
+    let plus_2f = and_clean(circ, overflow, sign);
+    circ.cx(not_sign_and_parity, sign); // sign = p
+    circ.cx(target[0], sign);
+    circ.cx(minus_f, sign); // sign hosts plus_f
+    circ.cx(sign, target[0]);
+    circ.cx(minus_f, target[0]);
+    fold_selected(circ, target, f(), sign, Some(plus_2f), minus_f, not_sign_and_parity);
+    circ.cx(minus_f, sign);
+    circ.cx(target[0], sign); // original p
+    circ.cx(not_sign_and_parity, sign); // sign = s & p
+    and_uncompute(circ, plus_2f, overflow, sign);
+    circ.cx(not_sign_and_parity, sign); // sign = p
+    circ.x(overflow);
+    and_uncompute(circ, minus_f, overflow, not_sign_and_parity);
+    circ.x(overflow);
     circ.x(target[0]);
     and_uncompute(circ, not_sign_and_parity, target[0], sign);
     circ.x(target[0]);
@@ -3978,10 +4036,6 @@ fn drop_lead_first_compare(round:usize,multiply:bool,phi:usize)->(usize,bool) {
     (k,seeded)
 }
 
-/// y15-core: a carry-in for the next [`chunked_add`]'s first chunk, as (low, wire): the caller has already added
-/// positions [0, low) (sums written, carries kept) and the first chunk's ripple runs on [low, hi) with this carry-in.
-/// The chunk plan and the boundary compares are those of the plain add. Unset (the default) changes nothing.
-thread_local! { static Y15_CARRY_IN:std::cell::Cell<Option<(usize,QubitId)>>=const{std::cell::Cell::new(None)}; }
 fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: usize, multiply: bool) -> QubitId {
     let _dirty_trace=super::dirty_boundary_probe::Trace::new(circ,"chunked_add",acc.len());
 
@@ -3990,7 +4044,7 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
     let old_ladder=ladder.saturating_sub(loans);
     let pinned=pinned_replay_bounds(addend.len(),round,multiply);
     let layout = pinned.clone().or_else(||chunk_layout(addend.len(), old_ladder+super::bridge::budget()));
-    if pinned.is_none() && tie_route_ok(8) && env_flag("PP_NEW_REPLAY") {
+    if pinned.is_none() && heo_tie().is_none() && env_flag("PP_NEW_REPLAY") {
         let old_fallback=layout.is_none() || old_ladder<replay_chunk_compare()+2;
         let old_extra2=if old_fallback {2*addend.len()} else {
             let bounds=layout.as_ref().unwrap();
@@ -4018,6 +4072,12 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
     if pinned.is_none() && env_flag("PP_Q1208_HELPERS") && (layout.is_none() || old_ladder < replay_chunk_compare()+2) {
         return small_ladder_add(circ, addend, acc);
     }
+    let layout = if layout.is_none() && std::env::var_os("SQ_SOFT").is_some() {
+        // SQ_SOFT: smallest ladder with a layout; log the shortfall.
+        let (l2, b) = (old_ladder + 1..old_ladder + 600).find_map(|l| chunk_layout(addend.len(), l + super::bridge::budget()).map(|b| (l, b))).expect("SQ_SOFT layout");
+        eprintln!("SQ_SOFT site=pingpong.rs:chunked_add kind=layout n={} r={} mul={} live={} room={} need={} short={}", addend.len(), round, multiply as u8, circ.active_qubits(), old_ladder, l2, l2 - old_ladder);
+        Some(b)
+    } else { layout };
     let bounds = layout.unwrap_or_else(|| panic!("layout r={} mul={} live={} cap={} room={}", round, multiply, circ.active_qubits(), walk_max_qubits(), ladder));
     let adjusted=if pinned.is_some(){
         if env_flag("PP_PIN_REPLAY_RELAX_EXACT") {loaned_chunk_bounds(&bounds,ladder,addend.len(),round,multiply)}else{bounds.clone()}
@@ -4030,7 +4090,6 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
         eprintln!("REPLAY_PIN {} {} {} {}",round,multiply as u8,addend.len(),bounds.iter().map(|(a,b)|(b-a).to_string()).collect::<Vec<_>>().join(" "));
     }
 
-    super::leapfrog::y17_log(circ,||format!("chunked(r={round},n={},room={ladder},loans={loans},bridge={},bounds={:?})",addend.len(),super::bridge::budget(),bounds.iter().map(|&(a,b)|b-a).collect::<Vec<_>>()));
     let mut carry_in: Option<QubitId> = None;
     let mut previous: Option<(QubitId, usize, usize)> = None;
 
@@ -4042,15 +4101,11 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
             super::width_composition::add_with_carry(circ,&addend[lo..hi],&acc[lo..hi],carry_in,&plan)
         }else{
             let next=circ.alloc_qubit();
-            match if lo==0 {Y15_CARRY_IN.with(|k|k.take())} else {None} {
-                Some((low,cin)) => {assert!(low>=1 && low+2<hi,"y15: the kept low carries must sit inside the first chunk");ripple_add(circ,&addend[low..hi],&acc[low..hi],Some(cin),Some(next));}
-                None => ripple_add(circ,&addend[lo..hi],&acc[lo..hi],carry_in,Some(next)),
-            }
-            next
+            ripple_add(circ,&addend[lo..hi],&acc[lo..hi],carry_in,Some(next));next
         };
         // Erase the previous chunk's carry as soon as it has been consumed.
         if let Some((carry, plo, phi)) = previous {
-            let tie=tie_borrow();
+            let tie=heo_tie();
             let(compare,seeded)=if tie.is_some(){(chunk_compare(round).min(phi-plo),false)}else{boundary_repair_spec(round,multiply,plo,phi)};
             let borrow = if tie.is_some() {
                 // B3b fix: a whole leading chunk is compared EXACTLY with its true
@@ -4182,6 +4237,12 @@ pub(crate) fn fold_selected_single(
 
     if env_flag("PP_DIRECT_FOLD") && circ.active_qubits() as usize+width.saturating_sub(3)>walk_max_qubits() {
         let n=width-1;let room=walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
+        if super::lowroom::enabled() && super::width_composition::direct_plan_inner(n,room).is_none() {
+            for control in selectors(0){circ.cx(control,acc[0]);}
+            let p2:Vec<QubitId>=plus_2f.into_iter().collect();
+            if super::lowroom::try_fold(circ,&acc[1..],f,&[plus_f],&p2,minus_f,first_carry){return;}
+            for control in selectors(0){circ.cx(control,acc[0]);}
+        }
         let p=(room..=n.max(room)).find_map(|r|super::width_composition::direct_plan(n,r)).unwrap();
         if env_flag("PP_NEW_TRACE"){eprintln!("DIRECT_FOLD {} {} {} {} {}",width,circ.active_qubits(),room,p.peak,p.extra2);}
         for control in selectors(0){circ.cx(control,acc[0]);}
@@ -4623,26 +4684,6 @@ thread_local! { static HEO_TIE: std::cell::Cell<Option<QubitId>> = const { std::
 /// exactly 0 (HEO's first post-swap cell) produces. Prebias / low-fold /
 /// width-composition routes are bypassed while it is set.
 fn heo_tie() -> Option<QubitId> { HEO_TIE.with(|c| c.get()) }
-/// The tie predictor as the cells' compares see it. Leapfrog `LF_TIE_SEED=1`: in tie mode the compares keep their
-/// ordinary seeded predictors (the prebias / low-fold / width-composition routes stay bypassed). The predictor exists
-/// for a cell target of exactly 0 (the add/subtract cancels: HEO's post-swap cell); a Leapfrog step never cancels --
-/// every rail step result is odd, so a cell target is lam * odd, nonzero for lam != 0 (parked pairs P = lam (+-1, +-1)
-/// always take the doubling sign).
-fn tie_borrow() -> Option<QubitId> {
-    static SEED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *SEED.get_or_init(|| std::env::var("LF_TIE_SEED").is_ok_and(|v| v == "1")) { None } else { heo_tie() }
-}
-/// Research knob, NOT lambda-neutral: `LF_TIE_ROUTES=1` keeps the bypassed routes on in tie mode (bitmask
-/// `LF_TIE_ALLOW`: 1 retained_prebias, 2 joint_prebias, 4 joint_lowfold, 8 new-replay width composition). The routes'
-/// own approximations (low-32 fold cut, prebias windows) fail more often than the plain tie-mode cell at ticks >= 100
-/// (64M-shot single-cell rates: joint_lowfold 14 vs 2 value errors at t=124; retained_prebias 32 vs 1 at t=138).
-fn tie_route_ok(bit: u32) -> bool {
-    static M: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    heo_tie().is_none() || (*M.get_or_init(|| {
-        if let Some(m) = std::env::var("LF_TIE_ALLOW").ok().and_then(|v| v.parse().ok()) { return m; }
-        if std::env::var("LF_TIE_ROUTES").is_ok_and(|v| v == "1") { 15 } else { 0 }
-    }) & bit != 0)
-}
 thread_local! { static HEO_CMP_SHIFT: std::cell::Cell<(isize, isize)> = const { std::cell::Cell::new((0, 0)) }; }
 /// B6 (R5-A `HEO_CELL_WINDOWS`): per-cell shifts of the chunk-boundary and flag COMPARE widths. `(0, 0)`
 /// (always, in the default build) leaves [`chunk_compare`] / [`flag_compare`] exactly as the head emits them;
@@ -4712,96 +4753,6 @@ pub(crate) mod heo_hooks {
         let k = flag_compare(round) + usize::from(a5_policy() == "mul-f-plus1-early200" && (2..202).contains(&round));
         let seeded = wide && matches!(a5_policy(), "mul-f-seed" | "mul-fb-seed");
         (refined_flag_window(k, fold_window, seeded), seeded)
-    }
-
-    /// LF_MERGED (Leapfrog merged last cell + payload barrel): measure out a replay cell's overflow flag
-    /// with the cell's own flag-compare rule at `round` -- window width, source-bit seed (or the HEO tie
-    /// predictor when set) and refinement exactly as `replay_add_halve_impl` (PP_REUSE_DIV_PARITY branch,
-    /// `multiply = false`) or `replay_double_add_impl` (`multiply = true`) choose them. `target` is in the
-    /// complemented (sign-XORed) frame, as at the production call sites. The caller frees `overflow`.
-    pub(crate) fn flag_erase(circ: &mut Builder, overflow: QubitId, target: &[QubitId], source: &[QubitId],
-                             fold_window: usize, round: usize, multiply: bool) -> usize {
-        let (k, borrow) = if multiply {
-            let wide = policy_width(round) >= 38;
-            let mut k = flag_compare(round) + usize::from(a5_policy() == "mul-f-plus1-early200" && (2..202).contains(&round));
-            let borrow = if let Some(p) = tie_borrow() {
-                Some(p)
-            } else if wide && matches!(a5_policy(), "mul-f-seed" | "mul-fb-seed") {
-                Some(source[N - k - 1])
-            } else if !wide && env_flag("PP_SEED_SHORT_MUL_F_COST") {
-                k -= 1;
-                Some(source[N - k - 1])
-            } else if !wide && env_flag("PP_SEED_SHORT_MUL_F") {
-                Some(source[N - k - 1])
-            } else { None };
-            (refined_flag_window(k, fold_window, borrow.is_some()), borrow)
-        } else {
-            let mut k = flag_compare(round) + usize::from(policy_width(round) >= flag_widen_div());
-            let borrow = if let Some(p) = tie_borrow() {
-                Some(p)
-            } else if env_flag("CMP_SEED_ALL") {
-                if !seed_keep_width_for(false) { k -= 1; }
-                Some(source[N - k - 1])
-            } else { None };
-            (refined_flag_window(k, fold_window, borrow.is_some()), borrow)
-        };
-        erase_with_compare(circ, overflow, &target[N - k..], &source[N - k..], borrow);
-        k
-    }
-
-    /// LF_MERGED exact-flag route (the retained-prebias frame trick): `acc += addend` as the production chunked
-    /// adder on bits [0, split) (its carry-out kept), then one ripple on [split, N) whose carries stay live while
-    /// `consumer(circ, overflow)` runs; the overflow is erased exactly from the completed top-bit frame, and the split
-    /// carry with the cell's chunk compare at `split`. The consumer may only touch bits below `split - width - 1`
-    /// ([`split_compare_width`]) of `acc` (and no bit of `addend` at or above `split`).
-    pub(crate) fn add_consume_exact(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: usize, multiply: bool,
-                                    split: usize, consumer: impl FnOnce(&mut Builder, QubitId)) {
-        assert!(split >= 2 && split + 1 < N);
-        super::super::leapfrog::y17_log(circ,||format!("exact_split({split})"));
-        let m = super::chunked_add(circ, &addend[..split], &acc[..split], round, multiply);
-        let ov = circ.alloc_qubit();
-        super::super::modular::ripple_add_consume(circ, &addend[split..], &acc[split..], Some(m), ov, |c, o, a, s, p| {
-            consumer(c, o);
-            super::super::modular::erase_overflow_from_frame(c, o, a, s, p);
-        });
-        let (k, seeded) = boundary_repair_spec(round, multiply, 0, split);
-        let borrow = seeded.then(|| addend[split - k - 1]);
-        let k = if seeded { refined_seeded_width(k, split, "PP_REFINE_SEEDED_B") } else { k };
-        circ.record_replay_site('B', round, split, k);
-        erase_with_compare(circ, m, &acc[split - k..split], &addend[split - k..split], borrow);
-        circ.free(m);
-    }
-    /// Bits below `split` read by [`add_consume_exact`]'s split-carry compare (window plus seed).
-    pub(crate) fn split_compare_width(round: usize, multiply: bool, split: usize) -> usize {
-        let (k, seeded) = boundary_repair_spec(round, multiply, 0, split);
-        (if seeded { refined_seeded_width(k, split, "PP_REFINE_SEEDED_B") } else { k }).max(k + usize::from(seeded))
-    }
-
-    /// y15 (one-fold tick): the chunk-boundary compare [`add_consume_exact`] uses at `split`: (window, seed bit index).
-    pub(crate) fn y15_split_spec(round: usize, multiply: bool, split: usize) -> (usize, Option<usize>) {
-        let (k, seeded) = boundary_repair_spec(round, multiply, 0, split);
-        let seed = seeded.then(|| split - k - 1);
-        let k = if seeded { refined_seeded_width(k, split, "PP_REFINE_SEEDED_B") } else { k };
-        (k, seed)
-    }
-    /// y15-core: [`chunked_add`] whose positions [0, low) the caller has already added, `cin` = the carry into `low`.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn y15_chunked_add_cin(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], proxy: usize, multiply: bool, low: usize, cin: QubitId) -> QubitId {
-        super::Y15_CARRY_IN.with(|k| k.set(Some((low, cin))));
-        let out = super::chunked_add(circ, addend, acc, proxy, multiply);
-        assert!(super::Y15_CARRY_IN.with(|k| k.take()).is_none(), "y15: the chunked add did not take the carry-in");
-        out
-    }
-    /// y15: the cells' measured erase of a carry by the compare [a < b] (+ borrow); the caller frees `target`.
-    pub(crate) fn y15_erase_cmp(circ: &mut Builder, target: QubitId, a: &[QubitId], b: &[QubitId], borrow: Option<QubitId>) {
-        erase_with_compare(circ, target, a, b, borrow);
-    }
-
-    /// LF_MERGED: run `body` inside the replay cell's I35 bridge scope at `round` (as `replay_add_halve` /
-    /// `replay_double_add` do), so the chunked adder sees the cell's bridge budget.
-    pub(crate) fn with_bridge<R>(round: usize, multiply: bool, body: impl FnOnce() -> R) -> R {
-        let _scope = super::super::bridge::enter(round, multiply);
-        body()
     }
 
     /// B6: run `body` with the compare-width shifts `(dB, dF)` set (see `heo_cmp_shift`).
@@ -5032,8 +4983,10 @@ fn terminal_fold_early(c:&mut Builder,z:&[QubitId],t:QubitId,q0:QubitId,d:QubitI
         let mut unique=vec![];for v in row{if let Some(j)=unique.iter().position(|&w|w==v){unique.remove(j);}else{unique.push(v);}}unique
     }).collect();
     let room=walk_max_qubits().saturating_sub(c.active_qubits()as usize);
+    if !super::lowroom::try_fold(c,&z[1..],f,&[z[0],t,q0,m],&[a],m,h) {
     let plan=super::width_composition::direct_plan(z.len()-1,room).expect("terminal early-overflow fold room");
     super::width_composition::direct_add(c,&map,&z[1..],h,&plan);
+    }
     if inverse{c.x(q0);}
     c.reacquire(o);for v in [z[0],t,q0,d]{c.cx(v,o);}if inverse{c.x(o);}
     c.cx(d,o);if inverse{c.cx(o,z[0]);}
