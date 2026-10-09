@@ -26,7 +26,7 @@ pub fn enabled() -> bool {
 
 /// Submission recipe, installed by `build()` on top of the Skywalk recipe (which still configures the shared
 /// replay cells, coordinate ops and square): Leapfrog m = 2, sign2 + window choice, fast rails, seed-half, walk
-/// cap 1237;
+/// cap 1236;
 /// the square's B fold stays plain (NATIVE_SFUSE_B=1) and the Skywalk back seam is off (both fuse into its walk).
 pub(crate) fn install_recipe() {
     for (k, v) in [
@@ -37,14 +37,13 @@ pub(crate) fn install_recipe() {
         // window choice rule: in the equal-sign cases that the low bits do not settle, a compare of the two rails on a
         // window of their top bits decides between deep and flat
         ("LF_W1", "1"),
-        // ... in this form on every tick but the first and the last: a 21-bit window, deep or flat by the compare
+        // ... in this form on every tick but the first and the last: a window of up to 22 bits, deep or flat by the compare
         // [|T| > 2|B|] and by what the second forced step did (added, subtracted, or subtracted with a sign flip);
         // computed inside that step's rail add, while its carries are on wires. It has its own 138-tick width table
         // and window anchors (see `steps`, `w1_anchor`)
-        ("LF_YP8", "21"),
-        // ... with a shorter window on the late ticks: 19 bits from tick 90, 17 from 100, 15 from 112, 13 from 118,
-        // 11 from 124
-        ("LF_YP8_LATE", "90:19,100:17,112:15,118:13,124:11"),
+        ("LF_YP8", "22"),
+        // ... with the window length set per tick range (first tick : bits)
+        ("LF_YP8_LATE", "1:13,6:17,11:22,90:20,100:18,112:16,118:14,124:12"),
         // tick 0's letter is not held on the tape while a walk sits at the cap: it is measured away after its last
         // read and derived again from the source rail at the walk's end, where the measurement's phase is fixed
         ("LF_T0_FREE", "1"),
@@ -56,17 +55,12 @@ pub(crate) fn install_recipe() {
         ("LF_MERGED", "1"),
         // ... also on the late ticks (split fold where room is short)
         ("LF_MERGED_LATE", "1"),
-        // merged-op fold windows: standard 56 bits; late 58, capped by the standard window.
-        // G6 (Track G gate, λ est+2SE <= 19.5): 54 -> 56 is the λ buy-back, +640 T for -0.97 classical failures
-        // (paired, CRN); the master/#1 recipe has 54
-        ("LF_MERGED_WIN", "56"),
+        // merged-op fold windows: standard 55 bits; late 58, capped by the standard window
+        ("LF_MERGED_WIN", "55"),
         ("LF_MERGED_LATE_WIN", "58"),
-        // ticks 0..77 of the payload-fused traversals split into a rails-only pass (one payload register live: no
+        // ticks 0..76 of the payload-fused traversals split into a rails-only pass (one payload register live: no
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
         ("LF_REORDER", "76"),
-        // y15-room: the divide's and the multiply's boundary set apart (each overrides LF_REORDER for its direction)
-        ("LF_REORDER_DIV", "82"),
-        ("LF_REORDER_MUL", "76"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
         // with the coordinate seams
         ("LF_TIE_SEED", "1"),
@@ -78,10 +72,9 @@ pub(crate) fn install_recipe() {
         // counts the wire it no longer holds
         ("LF_CORE_FREED", "all"),
         ("NATIVE_SFUSE_B", "1"),
-        // payload cells: fold window floored at 52 bits (Skywalk's late-round profile narrows it to 49),
-        // chunk-boundary compare widened by one bit from tick 120 on, flag compare not widened (1 / 0 bits).
-        // G6: floor 50 -> 52 is the second λ buy-back knob, +132 T for -0.18 classical failures; master/#1 has 50
-        ("LF_CELL_FOLD_MIN", "52"),
+        // payload cells: fold window floored at 50 bits (Skywalk's late-round profile narrows it to 49),
+        // chunk-boundary compare widened by one bit from tick 120 on, flag compare not widened (1 / 0 bits)
+        ("LF_CELL_FOLD_MIN", "50"),
         ("LF_CMP_SHIFT", "1,0"),
         ("LF_CMP_FROM", "120"),
         // tie-safe cell mode off (LF_TIE_FROM past the last tick): Leapfrog rail steps never cancel to zero, so the
@@ -90,70 +83,7 @@ pub(crate) fn install_recipe() {
         // walk room squeeze (see `early()`): odd rails held without their constant bit-0 wire (+2 walk wires, given
         // to the cells), split adders with the minimal low part
         ("LF_EARLY", "1"),
-        // G6 exact pieces (no λ: paired classical failures identical with and without them), -39 T at cap 1236, all
-        // in the multiply:
-        // - merged fold erases up to 3 low carries right after writing the low sum bits (G4, [`lowcar_max`])
-        ("LF_G4_LOWCAR", "3"),
-        // - room-capped adders: lpa_capped's low chunk takes the full room ([`lpa_capped`]), on every caller
-        ("LF_LPA_DENSE", "1"),
-        ("LF_LPA_DENSE_ALL", "1"),
-        // - a rail add whose two-way split does not fit goes through lpa_capped (U4, [`rail_add`])
-        ("LF_RAIL_CAPPED", "1"),
-        // G6 recipe totals: Q 1236, T 787,206 (eval, +725 over #1's recipe), score 972.99M (#1 971.66M: NOT below);
-        // λ 192 nonces paired vs glam_base: fails -1.06 +- 0.17, proj 18.59, proj + 2se 19.13 <= 19.5 (gate passed)
         ("LF_LOWREL_PAD", "0"),
-        // G7 exact phase tricks (same phase functions, no ancilla, lambda-neutral): the multiply's tick-0 phase fix
-        // without its two payload rotations (t0_phrot, -763 T), the divide's endpoint measuring P1 unrotated
-        // (div_phrot, -390 T), the product kept halved into the phase fix (t0_dbl, -48 T); the two k1k2 AND wires
-        // uncomputed by Toffoli (+2 T) so the simulator's random stream stays aligned with G6 (clean paired λ).
-        // G7 totals: Q 1236, T 786,007.565 (eval at the baked nonce; 192-nonce mean 786,006.6; model 786,106.8;
-        // -1,199 vs G6), score 971,505,350 (#1 971,660,388: below by 155k); λ paired vs glam_base: fails
-        // -0.984 +- 0.169 (vs G6 fin +0.078 +- 0.126, mism identical per nonce), proj 18.67; full: 9 cl / 9 ph / 0 anc
-        ("LF_T0_PHROT", "1"),
-        ("LF_DIV_PHROT", "1"),
-        ("LF_T0_DBL", "1"),
-        ("LF_PHROT_TOF", "1"),
-        // G10: port of the board #1 (krishparadox, ac43304 / submission d7df7706, 971,660,388 = 786,133 x 1,236,
-        // built on a2325be) onto G7. Its three λ re-allocations: the rule window back to 22 bits (late 20/18/16/14/12;
-        // overrides the 21-bit lines above), the width table refit at budget 7.7e-4 (LF_G10_TABLE=770, its
-        // leapfrog_data file copied unchanged), and a per-cell I35 bridge profile (overrides the Skywalk recipe's;
-        // re-picked here by the same census method on this recipe, -6.5 T vs theirs). Their MERGED_WIN 55 is not
-        // taken (G7 keeps 56). Plus the boundary compare widened from tick 100 instead of 120 (λ buy, +200 T).
-        // G10 totals: Q 1236, T 785,519.7 (192-nonce eval mean), score ~970.90M (#1 971.66M); λ paired vs glam_base
-        // fails -0.740 +- 0.259 (proj 18.91, proj + 2se 19.43 <= 19.5), vs G7 +0.245 +- 0.244.
-        ("LF_YP8", "22"),
-        // G12: port of the new board #1 (krishparadox, upstream 76e2661 / submission e9cacd1d, 774,510 x 1,236; on
-        // top of leech1996's d6a54d3 early-tick windows "1:13,6:17,11:22" taken here, and jackylee0424's 3405791 I35
-        // cells already in the G10 profile): the y15 one-fold payload tick (y15_onefold.rs, unchanged: three unfolded
-        // adds and one fold per payload tick, payload-only ticks fwd 0.. / rev 1.., fused ticks fwd <99 / rev <92),
-        // LF_REORDER_DIV/MUL 76. G12 totals: Q 1236, T model 773,793.75, 512-nonce eval mean 773,696.1, score
-        // ~956.29M (#1 957.29M); λ paired vs glam_base 512 nonces fails -0.773 +- 0.160, proj 18.88, proj+2se 19.20.
-        ("LF_YP8_LATE", "1:13,6:17,11:22,90:20,100:18,112:16,118:14,124:12"),
-        ("LF_G10_TABLE", "770"),
-        ("HEO_PIN_I35_PROFILE", "437:1:1,440:0:1,446:0:2,528:1:1,550:0:1,550:1:1,581:1:1,588:1:2,611:1:1,627:1:1,636:0:2,646:1:1,655:1:1,666:0:1,670:0:2,670:1:1,675:0:2,681:0:2,681:1:1,687:0:3,687:1:2"),
-        ("LF_CMP_FROM", "120"),
-        // T3 (λ margin into T): boundary compare widened from tick 120 again (-207 T model), with Y15_GUARD 0 in
-        // y15_onefold.rs (-742 T). Both are phase-only (classical mismatches identical per nonce to G12).
-        ("LF_CMP_FROM", "120"),
-        // T6 seed fusion (square's last subtract + the multiply's seed e as one op, [`square_seed_r0`]): exact
-        // (classical mismatches identical per nonce on 1,024 nonces), -46.5 T eval (512-nonce mean 772,700.9, Q 1236).
-        // OFF: the formal λ gate fails by a hair on the first 512 (fails vs 522cbe3 +0.189 +- 0.091, proj+2SE 19.536);
-        // fresh nonces 512..1023 give +0.031 +- 0.091 (pooled +0.110 +- 0.064, phase-noise only). "1" turns it on.
-        ("LF_T6_SEEDFUSE", "0"),
-        // C1 (T3 + T1 y15 add-2 ripple close in y15_onefold.rs, fused passes fwd <120 / rev <114): exact re-sweep on
-        // the combined point, the divide's boundary 76 -> 82 (-40.5 T model; MUL 76 stays optimal) and the square's
-        // retained-AND lend mask 3 -> 4 (-9 T). Combined model 770,787 at Q 1236; 512-nonce eval mean 770,692.40,
-        // score ~952.58M; λ paired vs glam_base 512 fails -0.777 +- 0.158, proj+2se 19.193 (vs T3 -0.143 +- 0.101).
-        ("LF_REORDER_DIV", "82"),
-        ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "4"),
-        // C1 spend of the combined point's λ margin (192-nonce screens paired vs the combined point, then 512):
-        // T6 seed fusion on (-46.6 T, phase-only), merged window 56 -> 54 (-128 T, mism +0.057), late rule windows
-        // one bit shorter from tick 90 (-162 T, mism +0.115). Totals: Q 1236, model 770,449.75, 512-nonce eval mean
-        // 770,358.13, score ~952.16M; λ paired vs glam_base 512 fails -0.590 +- 0.158, proj+2se 19.380 (margin 0.120);
-        // vs the combined point +0.188 +- 0.102 (mism +0.170 +- 0.039).
-        ("LF_T6_SEEDFUSE", "1"),
-        ("LF_MERGED_WIN", "54"),
-        ("LF_YP8_LATE", "1:13,6:17,11:22,90:19,100:17,112:15,118:13,124:11"),
     ] {
         std::env::set_var(k, v);
     }
@@ -219,139 +149,6 @@ pub(crate) fn prof_dump() {
             }
         });
     }
-}
-
-// ---- y16 trace (no effect on the gates): exclusive expected-Toffoli counters by kind ----
-// kind 0: ripple adds (`ripple_add`, `ripple_add_consume` without its consumer); 1: measured erases by compare
-// (`erase_with_compare`); 2: the consumer inside `ripple_add_consume` (a cell's fold).
-thread_local! {
-    /// expected Toffoli of the merged op's fold ([`m_fold`]) since it was last read
-    static Y16_FOLD: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
-    static Y16_ACC: std::cell::Cell<[f64; 3]> = const { std::cell::Cell::new([0.0; 3]) };
-    static Y16_NEST: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
-}
-pub(crate) fn y16_enter(c: &Builder) -> (f64, f64) {
-    (c.expected_total(), Y16_NEST.with(|n| n.replace(0.0)))
-}
-pub(crate) fn y16_leave(c: &Builder, kind: usize, st: (f64, f64)) {
-    let total = c.expected_total() - st.0;
-    let child = Y16_NEST.with(|n| n.replace(st.1 + total));
-    Y16_ACC.with(|a| {
-        let mut v = a.get();
-        v[kind] += total - child;
-        a.set(v);
-    });
-}
-thread_local! { static Y17_LOG: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) }; }
-/// y17 trace (no effect on the gates): a detail line for the payload op being traced
-pub(crate) fn y17_log(_c: &Builder, f: impl FnOnce() -> String) {
-    if y15::trace() {
-        let s = f();
-        Y17_LOG.with(|l| l.borrow_mut().push(s));
-    }
-}
-/// (room, expected total, counters) before a payload op
-type Y16Mark = (usize, f64, [f64; 3]);
-/// y17 research price knob: extra wires the cap is read with inside a payload op of a late three-fold pass (ticks
-/// 117..=136), by direction (0 forward, 1 reverse) and op (0 = the cell of the first forced letter, 1 = the second,
-/// 2 = the merged op). All 0 = no effect on the gates. A non-zero entry is a PRICE, not a build: the peak goes over.
-const Y17_PRICE: [[isize; 3]; 2] = [[0, 0, 0], [0, 0, 0]];
-/// y17 research knob: the I35 bridge budget forced inside every payload op of the late three-fold passes (-1 = the
-/// round's profile, as the base). The bridge is the existing exact split of a ripple that is short of wires.
-const Y17_BRIDGE: isize = -1;
-/// y17 research knob: every reverse cell of a late three-fold pass runs late (see Y17_PLAN); with Y17_LATE_D the
-/// offset d of those cells.
-const Y17_LATE_ALL: bool = false;
-const Y17_LATE_D: isize = 0;
-/// y17 (the late three-fold passes, forward ticks 121..=136 and reverse ticks 117..=136): plan choices per payload op,
-/// found by building every op with every choice (experiments/y17-three in the Pensieve repo). An entry is
-/// (direction: 0 forward, 1 reverse; tick; op: 0 = the cell of the first forced letter, 1 = of the second, 2 = the
-/// merged op; d: the op's add (its route and chunk plan) is made as if the walk cap were d wires lower, its fold reads
-/// the true cap; bridge: the I35 bridge budget of the op, -1 = the round's profile; late: a reverse cell runs just
-/// before the rail step of its own letter is undone, where the choice and barrel letters are already erased, and not
-/// at the tick's start). A plan made for a smaller room always fits, so the peak cannot rise. Y17_ON = false or an
-/// empty table: the base, byte for byte.
-/// Builder counts at peak 1236 on candidate T (9 October 2026; the comment after an entry is the uniform build its
-/// choice was read from and the Toffoli it saves):
-///   Y17_ON = false:                                             expected=772220.8 (gate list da162b12, T's own)
-///   the table below (24 late reverse cells on 12 passes):       expected=772128.8 (bdfcef82; against T 0 outputs
-///     differ on 30 draws and on both stress files)
-///   the full table of 35 ops (commit 1ff9ea0: also 6 adds planned for 1 to 3 wires fewer and 5 bridge budgets):
-///     expected=772095.2 (d2f3ac05; 0 of 812,160 outputs differ on 90 draws, but on the slope stress file 418 differ
-///     and 18 shots are wrong only in the new list)
-///   one pass alone (reverse tick 130, its two cells late):      expected=772206.8 (82c47193)
-/// No pass saves 15 Toffoli (the best saves 14.0), so the y17-three brief's falsifier fired and the table is off.
-/// Uniform builds, each choice on every op: d = -1 / -2 / -3: 772622.8 / 772837.2 / 772989.2; bridge 0 / 1 / 2:
-/// 772353.8 / 772340.8 / 772463.8; every reverse cell late with d = 0 / -1: 772261.8 / 772206.8.
-const Y17_ON: bool = true;
-const Y17_PLAN: &[(usize, usize, usize, isize, isize, bool)] = &[
-    // Y17_PLAN_BEGIN
-    (1, 121, 1, 0, -1, true), // late0: 2.0
-    (1, 121, 0, 0, -1, true), // late0: 2.0
-    (1, 122, 1, 0, -1, true), // late0: 4.5
-    (1, 122, 0, 0, -1, true), // late0: 4.5
-    (1, 123, 1, 0, -1, true), // late0: 6.0
-    (1, 123, 0, 0, -1, true), // late0: 6.0
-    (1, 124, 1, 0, -1, true), // late0: 6.0
-    (1, 124, 0, 0, -1, true), // late0: 6.0
-    (1, 125, 1, 0, -1, true), // late0: 1.0
-    (1, 125, 0, 0, -1, true), // late0: 1.0
-    (1, 128, 1, 0, -1, true), // late0: 2.5
-    (1, 128, 0, 0, -1, true), // late0: 2.5
-    (1, 129, 1, 0, -1, true), // late0: 6.0
-    (1, 129, 0, 0, -1, true), // late0: 6.0
-    (1, 130, 1, 0, -1, true), // late0: 7.0
-    (1, 130, 0, 0, -1, true), // late0: 7.0
-    (1, 131, 1, 0, -1, true), // late0: 1.5
-    (1, 131, 0, 0, -1, true), // late0: 1.5
-    (1, 133, 1, -1, -1, true), // late1: 3.0
-    (1, 133, 0, -1, -1, true), // late1: 3.0
-    (1, 135, 1, -1, -1, true), // late1: 3.0
-    (1, 135, 0, -1, -1, true), // late1: 3.0
-    (1, 136, 1, -1, -1, true), // late1: 3.5
-    (1, 136, 0, -1, -1, true), // late1: 3.5
-    // Y17_PLAN_END
-];
-fn y17_plan(dir: usize, t: usize, slot: usize) -> (isize, isize, bool) {
-    if !(117..=136).contains(&t) {
-        return (0, -1, false);
-    }
-    if Y17_LATE_ALL && dir == 1 && slot < 2 {
-        return (Y17_LATE_D, -1, true);
-    }
-    if !Y17_ON {
-        return (0, -1, false);
-    }
-    Y17_PLAN.iter().find(|e| e.0 == dir && e.1 == t && e.2 == slot).map_or((0, -1, false), |e| (e.3, e.4, e.5))
-}
-fn y16_mark(c: &Builder, t: usize, dir: usize, slot: usize) -> Y16Mark {
-    Y17_LOG.with(|l| l.borrow_mut().clear());
-    if (117..=136).contains(&t) {
-        let (d, b, _) = y17_plan(dir, t, slot);
-        assert!(d <= 0, "y17: a room offset is never positive");
-        super::pingpong::Y17_EXTRA.with(|e| e.set(Y17_PRICE[dir][slot] + d));
-        let b = if Y17_BRIDGE >= 0 { Y17_BRIDGE } else { b };
-        if b >= 0 {
-            super::bridge::Y17_FORCE.with(|v| v.set(Some(b as usize)));
-        }
-    }
-    (cells::cap().saturating_sub(c.active_qubits() as usize), c.expected_total(), Y16_ACC.with(|a| a.get()))
-}
-/// one payload op: (name, room at its start, cost, ripple adds, compares, consumer)
-fn y16_note(c: &Builder, ops: &mut Vec<(&'static str, usize, f64, f64, f64, f64)>, name: &'static str, m: Y16Mark) {
-    super::pingpong::Y17_EXTRA.with(|e| e.set(0));
-    super::bridge::Y17_FORCE.with(|v| v.set(None));
-    let s = Y16_ACC.with(|a| a.get());
-    ops.push((name, m.0, c.expected_total() - m.1, s[0] - m.2[0], s[1] - m.2[1], s[2] - m.2[2]));
-    if y15::trace() {
-        eprintln!("Y17_OP {name} room={} cost={:.1} adds={:.1} cmps={:.1} cons={:.1} :: {}", m.0, c.expected_total() - m.1, s[0] - m.2[0], s[1] - m.2[1], s[2] - m.2[2], Y17_LOG.with(|l| l.borrow_mut().drain(..).collect::<Vec<_>>().join(" ")));
-    }
-}
-fn y16_print(dir: &str, t: usize, room: usize, extra: &str, ops: &[(&'static str, usize, f64, f64, f64, f64)]) {
-    let tot = |f: fn(&(&'static str, usize, f64, f64, f64, f64)) -> f64| ops.iter().map(f).sum::<f64>();
-    let (cost, adds, cmps, cons) = (tot(|o| o.2), tot(|o| o.3), tot(|o| o.4), tot(|o| o.5));
-    let parts: Vec<String> = ops.iter().map(|o| format!("{}@{}:{:.1}/{:.1}/{:.1}/{:.1}", o.0, o.1, o.2, o.3, o.4, o.5)).collect();
-    eprintln!("Y16_OLD {dir} t={t} room={room} cost={cost:.1} adds={adds:.1} cmps={cmps:.1} rest={:.1} consumer={cons:.1} {extra} ops=[{}]", cost - adds - cmps, parts.join(" "));
 }
 
 /// `LEAPFROG_BARREL=old`: the two nested shift stages (halve + quarter) instead of [`cmod_barrel`].
@@ -642,39 +439,10 @@ fn lf_fast() -> bool {
 fn steps() -> &'static Vec<[usize; 5]> {
     static S: OnceLock<Vec<[usize; 5]>> = OnceLock::new();
     S.get_or_init(|| {
-        let u2 = std::env::var("LF_U2_ENV").unwrap_or_default();
-        if yp8().is_some() && u2 == "137_1198" {
-            include_str!("leapfrog_data/u2_env_137_1198.txt")
-        } else if yp8().is_some() && u2 == "136_1192" {
-            include_str!("leapfrog_data/u2_env_136_1192.txt")
-        } else if yp8().is_some() && u2 == "135_1188" {
-            include_str!("leapfrog_data/u2_env_135_1188.txt")
-        } else if yp8().is_some() && u2 == "135_1184" {
-            include_str!("leapfrog_data/u2_env_135_1184.txt")
-        } else if yp8().is_some() && u2 == "135_1182" {
-            include_str!("leapfrog_data/u2_env_135_1182.txt")
-        } else if yp8().is_some() && u2 == "134_1186" {
-            include_str!("leapfrog_data/u2_env_134_1186.txt")
-        } else if yp8().is_some() && u2 == "134_1184" {
-            include_str!("leapfrog_data/u2_env_134_1184.txt")
-        } else if yp8().is_some() && u2 == "134_1182" {
-            include_str!("leapfrog_data/u2_env_134_1182.txt")
-        } else if yp8().is_some() && u2 == "134_1180" {
-            include_str!("leapfrog_data/u2_env_134_1180.txt")
-        } else if yp8().is_some() && u2 == "133_1182" {
-            include_str!("leapfrog_data/u2_env_133_1182.txt")
-        } else if yp8().is_some() && u2 == "133_1180" {
-            include_str!("leapfrog_data/u2_env_133_1180.txt")
-        } else if yp8().is_some() && u2 == "133_1178" {
-            include_str!("leapfrog_data/u2_env_133_1178.txt")
-        } else if yp8().is_some() && std::env::var("LF_G10_TABLE").is_ok_and(|v| v == "770") {
-            // G10 port of krishparadox's ac43304 (d7df7706, board #1 971,660,388): the same peel fit refit at the
-            // looser budget 7.7e-4 per walk under the 22-bit rule (LF_YP8=22, late 20/18/16/14/12)
-            include_str!("leapfrog_data/pack_t0hat_tail0_138_steps_k770_lw2.txt")
-        } else if yp8().is_some() {
+        if yp8().is_some() {
             // 138 ticks, fitted for the pinned recipe: the LF_YP8 rule with its late window lengths, tick 0 on its
             // own rule (LF_T0_FREE) and a last tick without forced steps (LF_TAIL_FORCED=0)
-            include_str!("leapfrog_data/pack_t0hat_tail0_138_steps_k700_lw2.txt")
+            include_str!("leapfrog_data/pack_t0hat_tail0_138_steps_k770_lw2.txt")
         } else if seed_half() && lf_w1() && lf_peel() {
             include_str!("leapfrog_data/env_w1_peel139_steps.txt")
         } else if seed_half() && lf_w1() && w1_k() == 20 {
@@ -704,36 +472,19 @@ fn lf_signwire() -> bool {
     std::env::var("LF_SIGNWIRE").is_ok_and(|v| v == "1")
 }
 
-/// `LF_RAIL_CAPPED=1`: see [`rail_add`].
-fn rail_capped() -> bool {
-    std::env::var("LF_RAIL_CAPPED").is_ok_and(|v| v == "1")
-}
-
 /// Rail `b += a + cin` with `a` possibly shorter than `b` (two's complement: positions past `a` read `a`'s sign wire,
 /// shared by every such position of the parity ladder); same split policy under the walk cap as the full-width add.
 fn rail_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>) {
-    let n = b.len();
-    let room = cells::cap().saturating_sub(c.active_qubits() as usize);
-    let off = std::env::var("LF_RAIL_SPLIT").is_ok_and(|v| v == "0");
-    // LF_RAIL_CAPPED=1: an add whose two-way split does not fit either (n > ~2 room) goes through the recursive
-    // room-sized split of the fold ladders ([`lpa_capped`]) instead of a full-width ladder that overruns the cap
-    let deep = rail_capped() && !off && n > 3 && n - 2 > room && {
-        let delta = (n - room).saturating_sub(split_tight() as usize);
-        delta + 3 > room || delta + 1 >= n || (a.len() < n && delta >= a.len())
-    };
-    if a.len() >= b.len() && !deep {
+    if a.len() >= b.len() {
         return capped_add(c, a, b, cin);
     }
     let sg = *a.last().unwrap();
     let add: Vec<Vec<QubitId>> = (0..b.len()).map(|i| vec![if i < a.len() { a[i] } else { sg }]).collect();
-    if deep {
-        let q0 = pmark(c);
-        lpa_capped(c, b, &add, cin);
-        pacc(c, "split.rail_deep", q0);
-        return;
-    }
     // capped_add's split: the low `delta` bits first with their carry kept, the rest takes it as carry-in, the kept
     // carry erased (MBU) as NOT carry_out(b_low_new + NOT a_low + NOT cin)
+    let n = b.len();
+    let room = cells::cap().saturating_sub(c.active_qubits() as usize);
+    let off = std::env::var("LF_RAIL_SPLIT").is_ok_and(|v| v == "0");
     // the parity ladder holds n - 2 carries (its top carry goes straight into the top sum wire)
     if off || n <= 3 || n - 2 <= room {
         return ladder_parity_add(c, b, &add, cin);
@@ -1524,9 +1275,6 @@ fn refl4_pairs(n: usize) -> [Vec<(usize, usize)>; 3] {
 
 /// The 4-way rotation of `t` by e = k1 + 2 k2 (inverse: by -e).
 fn rot4(c: &mut Builder, k1: QubitId, k2: QubitId, t: &[QubitId], inverse: bool) {
-    if SKIP_ROT4.with(|s| s.get()) {
-        return;
-    }
     let [r1, r0, rm2] = refl4_pairs(t.len());
     let stages: [(&Vec<(usize, usize)>, u8); 3] = [(&r1, 1), (&r0, 2), (&rm2, 3)];
     let order: Vec<usize> = if inverse { vec![2, 1, 0] } else { vec![0, 1, 2] };
@@ -1736,16 +1484,6 @@ fn carry_out_parity_xor(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], 
 /// [`ladder_parity_add`] under the walk cap, split recursively: when the ladder does not fit, the low chunk (sized to
 /// the room) goes first with its carry-out kept, the rest (recursively) takes it as carry-in, and each kept carry is
 /// erased exactly as NOT carry_out(acc_low_new + NOT addend_low + NOT cin) (MBU-halved unless LF_SPLIT_MBU=0).
-/// `LF_LPA_DENSE=1`: [`lpa_capped`] fills the room with the low chunk when the room is short (< 8) instead of
-/// falling back to a full ladder that overruns the cap (exact: the same split, smaller chunks).
-fn lpa_dense() -> bool {
-    std::env::var("LF_LPA_DENSE").is_ok_and(|v| v == "1")
-}
-/// `LF_LPA_DENSE_ALL=1`: ... at every room, not only when it is short: the low chunk is the room (room - 1 with
-/// no carry-in) instead of room - 4, so a fold ladder of n bits fits beside r free wires when n <= ~r (r + 1) / 2.
-fn lpa_dense_all() -> bool {
-    std::env::var("LF_LPA_DENSE_ALL").is_ok_and(|v| v == "1")
-}
 fn ladder_parity_add_capped(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>]) {
     lpa_capped(c, acc, add, None);
 }
@@ -1760,14 +1498,8 @@ fn lpa_capped(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], cin: Optio
     }
     // tight: the minimal low chunk when it fits beside its kept carry; otherwise the room-sized low chunk (recursive)
     let tight = split_tight() && n - room + 2 <= room;
-    let mut l = if tight { n - room - 1 } else { room.saturating_sub(4) };
-    if !tight && (l < 4 || lpa_dense_all()) && lpa_dense() {
-        // low room: the low chunk fills the room exactly (its l - 1 ladder carries + the kept carry; its erase holds
-        // l - 1 carries + the inverted carry-in, allocated when there is none). Each level costs one kept carry, so
-        // room r covers r (r + 1) / 2 bits; the erase compares only its own chunk, so the Toffoli count is the same.
-        l = room.saturating_sub(cin.is_none() as usize).min(n - 2);
-    }
-    if (!tight && l < 4 && !(lpa_dense() && l >= 1)) || l + 1 >= n {
+    let l = if tight { n - room - 1 } else { room.saturating_sub(4) };
+    if (!tight && l < 4) || l + 1 >= n {
         ladder_parity_add(c, acc, add, cin);
         return;
     }
@@ -2295,14 +2027,8 @@ fn m_carry_erase(c: &mut Builder, t: QubitId, acc: QubitId, add: &Lin, ci: Qubit
 /// The merged fold ladder acc[0..MW) += ov + addend(u) (mod 2^MW). `hook` runs once the carries into bits 1..4 are
 /// live (sum bits 0..3 = acc_j ^ c_j, acc_0 ^ ov) and returns the addend forms of bits [4, MW); the ANDs it
 /// records are erased at the mirror point of the backward pass (before bits 3..0 are written).
-fn m_fold(c: &mut Builder, acc: &[QubitId], ov: QubitId, recs: &mut Recs, plan: &[usize], k: usize,
-          hook: impl FnOnce(&mut Builder, &mut Recs, [Lin; 4], bool) -> Vec<Lin>) {
-    let y16_e0 = c.expected_total();
-    m_fold_y16(c, acc, ov, recs, plan, k, hook);
-    Y16_FOLD.with(|f| f.set(f.get() + c.expected_total() - y16_e0));
-}
-fn m_fold_y16(c: &mut Builder, acc: &[QubitId], ov: QubitId, recs: &mut Recs, plan: &[usize], k: usize,
-          hook: impl FnOnce(&mut Builder, &mut Recs, [Lin; 4], bool) -> Vec<Lin>) {
+fn m_fold(c: &mut Builder, acc: &[QubitId], ov: QubitId, recs: &mut Recs, plan: &[usize],
+          hook: impl FnOnce(&mut Builder, &mut Recs, [QubitId; 4]) -> Vec<Lin>) {
     let mw = acc.len();
     assert_eq!(plan.iter().sum::<usize>(), mw - 4, "fold plan covers bits [4, MW)");
     let mut car: Vec<QubitId> = Vec::with_capacity(5);
@@ -2313,25 +2039,8 @@ fn m_fold_y16(c: &mut Builder, acc: &[QubitId], ov: QubitId, recs: &mut Recs, pl
         let t = and_new(c, acc[i], car[i]);
         car.push(t);
     }
-    // LF_G4_LOWCAR ([`lowcar_max`]): write the low sum bits 0..3 now and erase the carries into bits 1..k at once
-    // (car_i = car_(i-1) AND NOT new_(i-1): Clifford MBU); the kept car_(k+1) is erased at the end with a k-AND phase
-    let early = k > 0;
-    assert!(k <= 3);
-    let one = Lin::k(true);
-    let nu: [Lin; 4] = if early {
-        for i in 1..4 {
-            c.cx(car[i], acc[i]);
-        }
-        c.cx(ov, acc[0]);
-        for i in (1..=k).rev() {
-            lin_and_erase(c, car[i], &Lin::of(&[car[i - 1]]), &Lin::of(&[acc[i - 1]]).x(&one));
-        }
-        std::array::from_fn(|j| Lin::of(&[acc[j]]))
-    } else {
-        std::array::from_fn(|j| Lin::of(&[acc[j], car[j]]))
-    };
     let base = recs.len();
-    let add = hook(c, recs, nu, early);
+    let add = hook(c, recs, [car[1], car[2], car[3], car[4]]);
     // upper ladder [4, MW) in chunks: a non-final chunk keeps its carry-out (the next chunk's carry-in) and is
     // written back at once; kept carries are erased exactly at the end (MBU + [acc < add + cin] phase compare)
     let mut kept: Vec<(usize, usize, QubitId, QubitId)> = Vec::new();
@@ -2385,27 +2094,6 @@ fn m_fold_y16(c: &mut Builder, acc: &[QubitId], ov: QubitId, recs: &mut Recs, pl
         lin_lt_phase(c, &acc[lo..hi], &add[lo..hi], cin);
         c.pop_condition();
         c.free_bit(m);
-    }
-    if early {
-        m_erase(c, recs, base);
-        for i in ((k + 2)..=4).rev() {
-            lin_and_erase(c, car[i], &Lin::of(&[car[i - 1]]), &Lin::of(&[acc[i - 1]]).x(&one));
-        }
-        // car_(k+1) = ov AND NOT new_0 AND .. AND NOT new_k: measured out, its phase fix (k ANDs) on half the shots
-        let m = c.alloc_bit();
-        c.hmr(car[k + 1], m);
-        c.release_clean(car[k + 1]);
-        c.push_condition(m);
-        let mut tr: Recs = Vec::new();
-        let mut a = Lin::of(&[ov]);
-        for j in 0..k {
-            a = m_and(c, &mut tr, a, Lin::of(&[acc[j]]).x(&one));
-        }
-        lin_cz(c, &a, &Lin::of(&[acc[k]]).x(&one));
-        m_erase(c, &mut tr, 0);
-        c.pop_condition();
-        c.free_bit(m);
-        return;
     }
     and_erase(c, car[4], acc[3], car[3]);
     m_erase(c, recs, base);
@@ -2525,9 +2213,10 @@ fn rot1(c: &mut Builder, p: &[QubitId], down: bool) {
 /// Merged fold of the forward op (register in the sg-complemented frame, holding A; `ov` the adder's overflow).
 fn m_fold_fwd(c: &mut Builder, acc: &[QubitId], ov: QubitId, sg: QubitId, k1: QubitId, k2: QubitId) {
     let (lsg, lov) = (Lin::of(&[sg]), Lin::of(&[ov]));
-    let (plan, lk) = m_fold_plan(c, M_FIXED_FWD - core_freed(true), acc.len());
-    m_fold(c, acc, ov, &mut Vec::new(), &plan, lk, |c, recs, nu, _| {
+    let plan = m_fold_plan(c, M_FIXED_FWD - core_freed(true), acc.len());
+    m_fold(c, acc, ov, &mut Vec::new(), &plan, |c, recs, car| {
         // low sum bits nu_j = acc_j ^ c_j; mu_j = nu_j ^ sg masked by [k > j]
+        let nu = [Lin::of(&[acc[0], ov]), Lin::of(&[acc[1], car[0]]), Lin::of(&[acc[2], car[1]]), Lin::of(&[acc[3], car[2]])];
         let tt = m_and(c, recs, Lin::of(&[k1]), Lin::of(&[k2]));
         let gates = [Lin::of(&[k1, k2]).x(&tt), Lin::of(&[k2]), tt.clone()];
         let mut y = vec![nu[0].x(&lsg)];
@@ -2543,20 +2232,7 @@ fn m_fold_fwd(c: &mut Builder, acc: &[QubitId], ov: QubitId, sg: QubitId, k1: Qu
 /// Fold extra (live wires beyond the adder's overflow) of the merged ops: MW - 1 carries plus 31 (forward: k-gate,
 /// gated mu bits, u, monomials) or 27 (reverse: u, monomials; its 5 mu copies are live before the add).
 fn m_fold_need(rev: bool) -> usize {
-    (merged_win() - 1 + if rev { if lf_merged_rev2() { 3 + 4 + 14 } else { 14 } } else { 18 } - core_freed(true)).saturating_sub(g4_fake() + if std::env::var("LF_G4_LOWCAR_NEED").is_ok_and(|v| v == "1") { lowcar_max() } else { 0 })
-}
-
-/// `LF_G4_LOWCAR=K` (0..3): the merged fold may erase up to K of its carries into bits 1..3 right after writing the
-/// low sum bits first (Clifford), K wires fewer through the hook and the ladder, for K/2 expected Toffoli at the end
-/// (the kept carry's measured phase is a (K+2)-literal product). [`m_fold_plan`] picks k <= K per op by the plan's
-/// expected cost; [`merged_fits`] and [`m_fold_need`] count K wires fewer.
-fn lowcar_max() -> usize {
-    std::env::var("LF_G4_LOWCAR").ok().and_then(|v| v.parse().ok()).unwrap_or(0).min(3)
-}
-
-/// G4 experiment only: pretend the merged fold's fixed part is this many wires smaller (with LF_MERGED_NOCAPCHECK: T bound).
-fn g4_fake() -> usize {
-    std::env::var("LF_G4_FAKE").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+    merged_win() - 1 + if rev { if lf_merged_rev2() { 3 + 4 + 14 } else { 14 } } else { 18 } - core_freed(true)
 }
 
 /// `LF_CORE_FREED`: [`core13`] holds 13 wires where the fit, split and plan rules count 14. Unset: the
@@ -2645,11 +2321,11 @@ fn merged_rev(c: &mut Builder, sg: QubitId, src: &[QubitId], tgt: &[QubitId], k1
     // fold, then erase the mu copies (R = the rotated-in low bits, recovered from the folded register, S_low, ov)
     let core = |c: &mut Builder, ov: QubitId, mut gl_recs: Recs| {
         let (lsg, lov) = (Lin::of(&[sg]), Lin::of(&[ov]));
-        let (plan, lk) = m_fold_plan(c, M_FIXED_REV - core_freed(true), mw);
+        let plan = m_fold_plan(c, M_FIXED_REV - core_freed(true), mw);
         let mut recs: Recs = Vec::new();
         let y: [Lin; 4] = std::array::from_fn(|j| gl[j].clone());
         let add = m_core(c, &mut recs, &y, &lov, &lsg);
-        m_fold(c, &tgt[..mw], ov, &mut Vec::new(), &plan, lk, |_, _, _, _| add.clone());
+        m_fold(c, &tgt[..mw], ov, &mut Vec::new(), &plan, |_, _, _| add.clone());
         m_erase(c, &mut recs, 0);
         // in the frame: R = ((frame ^ 1) + S_low + ov) ^ sg (mod 16)
         let mut rr: Recs = Vec::new();
@@ -2711,19 +2387,12 @@ fn merged_rev2(c: &mut Builder, sg: QubitId, src: &[QubitId], tgt: &[QubitId], k
     }
     let core = |c: &mut Builder, ov: QubitId| {
         let (lsg, lov, one) = (Lin::of(&[sg]), Lin::of(&[ov]), Lin::k(true));
-        let (plan, lk) = m_fold_plan(c, M_FIXED_REV2 - core_freed(true), mw);
-        m_fold(c, &tgt[..mw], ov, &mut Vec::new(), &plan, lk, |c, recs, _nu, written| {
-            // W_low = (L - S_low) ^ sg ^ 1, borrows beta_{j+1} = MAJ(NOT L_j, S_j, beta_j); with the low bits already
-            // written (L' = L + ov): W_low = (L' - S_low - ov) ^ sg ^ 1, borrow-in ov, the same 3 ANDs
+        let plan = m_fold_plan(c, M_FIXED_REV2 - core_freed(true), mw);
+        m_fold(c, &tgt[..mw], ov, &mut Vec::new(), &plan, |c, recs, _car| {
+            // W_low = (L - S_low) ^ sg ^ 1, borrows beta_{j+1} = MAJ(NOT L_j, S_j, beta_j)
             let l: Vec<Lin> = (0..4).map(|j| Lin::of(&[tgt[j]])).collect();
             let sl: Vec<Lin> = (0..4).map(|j| Lin::of(&[src[j]])).collect();
-            let mut beta = if written {
-                let b0 = lov.clone();
-                let q = m_and(c, recs, l[0].x(&one).x(&b0), sl[0].x(&b0));
-                vec![b0.clone(), q.x(&b0)]
-            } else {
-                vec![Lin::k(false), m_and(c, recs, l[0].x(&one), sl[0].clone())]
-            };
+            let mut beta = vec![Lin::k(false), m_and(c, recs, l[0].x(&one), sl[0].clone())];
             for j in 1..3 {
                 let b = beta[j].clone();
                 let q = m_and(c, recs, l[j].x(&one).x(&b), sl[j].x(&b));
@@ -2785,31 +2454,22 @@ fn m_fold_lean() -> bool {
 }
 
 /// The fold's chunk plan at the current live count (`fixed`: the fold's non-ladder wires still to be allocated).
-fn m_fold_plan(c: &Builder, fixed: usize, mw: usize) -> (Vec<usize>, usize) {
-    super::pingpong::y17_fold_true_cap();
-    let plan_at = |k: usize| -> Option<Vec<usize>> {
-        let budget = cells::cap().saturating_sub((c.active_qubits() as usize + fixed - m_fold_slack()).saturating_sub(g4_fake() + k));
-        // lean final chunk ([`m_fold`]): it holds one carry fewer, so plan one bit less and give that bit to the final
-        // chunk. The fit rule ([`merged_fits`]) keeps the plain plan, so the same ticks run the merged op.
-        let lean = if m_fold_lean() && mw >= 7 { merged_plan(mw - 5, budget) } else { None };
-        match lean {
-            Some(mut p) => {
-                *p.last_mut().unwrap() += 1;
-                Some(p)
-            }
-            None => merged_plan(mw - 4, budget),
+fn m_fold_plan(c: &Builder, fixed: usize, mw: usize) -> Vec<usize> {
+    let budget = cells::cap().saturating_sub(c.active_qubits() as usize + fixed - m_fold_slack());
+    // lean final chunk ([`m_fold`]): it holds one carry fewer, so plan one bit less and give that bit to the final
+    // chunk. The fit rule ([`merged_fits`]) keeps the plain plan, so the same ticks run the merged op.
+    let lean = if m_fold_lean() && mw >= 7 { merged_plan(mw - 5, budget) } else { None };
+    let plan = match lean {
+        Some(mut p) => {
+            *p.last_mut().unwrap() += 1;
+            p
         }
+        None => merged_plan(mw - 4, budget).expect("merged fold plan (checked by merged_fits)"),
     };
-    // k early-erased low carries cost k/2 expected Toffoli (x2 units: k)
-    let (plan, k) = (0..=lowcar_max())
-        .filter_map(|k| plan_at(k).map(|p| (p, k)))
-        .min_by_key(|(p, k)| (plan_x2(p) + k, *k))
-        .expect("merged fold plan (checked by merged_fits)");
-    y17_log(c, || format!("mfold(room={},k={k},plan={plan:?})", cells::cap().saturating_sub(c.active_qubits() as usize)));
-    if lf_merged_trace() && (plan.len() > 1 || k > 0) {
-        eprintln!("LF_MERGED_PLAN k={k} plan={plan:?} x2={}", plan_x2(&plan));
+    if lf_merged_trace() && plan.len() > 1 {
+        eprintln!("LF_MERGED_PLAN budget={budget} plan={plan:?} x2={}", plan_x2(&plan));
     }
-    (plan, k)
+    plan
 }
 
 /// Twice the expected extra Toffoli of a chunk plan (the kept carries' exact compares fire on half the shots).
@@ -2840,7 +2500,7 @@ fn merged_fits(active: usize, t: usize, rev: bool) -> Option<usize> {
         return None;
     }
     // forward: overflow + fold fixed part; reverse: 5 mu copies + overflow + fold fixed part; then the ladder budget
-    let fixed = (1 + if rev { if lf_merged_rev2() { M_FIXED_REV2 } else { 5 + M_FIXED_REV } } else { M_FIXED_FWD } - core_freed(true)).saturating_sub(g4_fake() + lowcar_max());
+    let fixed = 1 + if rev { if lf_merged_rev2() { M_FIXED_REV2 } else { 5 + M_FIXED_REV } } else { M_FIXED_FWD } - core_freed(true);
     let budget = cells::cap().checked_sub(active + fixed)?;
     let mw = merged_win();
     // the standard op: a single-chunk fold before the tie-safe ticks
@@ -3277,67 +2937,6 @@ fn seed_r0_seam(c: &mut Builder, x: &[QubitId], ox: &[crate::circuit::BitId]) ->
     r0
 }
 
-thread_local! {
-    /// T6 seed fusion: R0 of the multiply's seed, formed by the square's last subtract ([`square_seed_r0`]).
-    static T6_PRESEED: std::cell::RefCell<Option<Vec<QubitId>>> = const { std::cell::RefCell::new(None) };
-}
-
-/// `LF_T6_SEEDFUSE=1` (with `LF_SEAMS` and `LF_SEED=half`): the square's last modular subtract and the multiply's
-/// seed e as one op. The square leaves D = out - b2 unreduced (out mod 2^256, ov = [D < 0]); R0 of seed e is then
-/// formed straight from (D, ov) exactly as [`seed_r0_seam`] does from x2 - ox, with one selected +-f fold in
-/// place of the subtract's +f fold and the seed's own +f fold; ov is erased by the same top-window phase compare
-/// against b2 (still live). R0 (on out's wires + extension) is handed to the next [`multiply`].
-pub fn t6_seedfuse() -> bool {
-    std::env::var("LF_T6_SEEDFUSE").is_ok_and(|v| v == "1") && enabled() && lf_seams() && seed_half()
-}
-pub(crate) fn square_seed_r0(c: &mut Builder, b2: &[QubitId], out: &[QubitId]) {
-    let w0 = envelope()[0].max(N + 4);
-    let fs = seam_fs();
-    let x = out;
-    let ov = super::modular::r4_addsub_head(c, b2, x); // ~x + b2: carry = [b2 > x]
-    c.x_all(x); // x = D mod 2^256
-    let e = c.alloc_qubit();
-    c.cx(x[0], e);
-    c.x(e); // [D even]
-    c.x(ov);
-    let g = and_new(c, e, ov); // D >= 0 even: - p
-    c.x(ov);
-    let mut r0 = x.to_vec();
-    // ext outlives the square's fold scope: keep it off the wires the square lent its folds (reacquired after)
-    let loans = super::square::SQ_LOANS.with(|l| l.borrow().clone());
-    c.set_avoid(&loans);
-    let ext = c.alloc_qubits(w0 - N);
-    c.set_avoid(&[]);
-    c.cx(ov, ext[0]);
-    c.cx(e, ext[0]); // sign(R0) = ov ^ [D even]
-    for &q in &ext[1..] {
-        c.cx(ext[0], q);
-    }
-    r0.extend(ext.iter().copied());
-    let nf = alloy_primitives::U256::ZERO.wrapping_sub(f()) & low_mask(fs);
-    let add: Vec<Vec<QubitId>> = (0..fs)
-        .map(|i| {
-            let mut v = Vec::new();
-            if f().bit(i) != nf.bit(i) { v.push(g); }
-            if nf.bit(i) { v.push(e); }
-            v
-        })
-        .collect();
-    ladder_parity_add(c, &r0[..fs], &add, None);
-    c.x(ov);
-    and_erase(c, g, e, ov);
-    c.x(ov);
-    c.cx(ext[0], e);
-    c.cx(ov, e);
-    c.free(e);
-    let k = super::modular::erase_compare();
-    c.x_all(&r0[N - k..N]);
-    super::compare::erase_with_compare(c, ov, &r0[N - k..N], &b2[N - k..N], None);
-    c.x_all(&r0[N - k..N]);
-    c.free(ov);
-    T6_PRESEED.with(|s| *s.borrow_mut() = Some(r0));
-}
-
 /// Back seam (`LF_SEAMS`): from R (odd, |R| < p, two's complement on `r` = low N wires + sign copies) to
 /// x = (R + C) mod p on the low N wires (returned; the sign wires are freed), without forming d = R + p [R < 0].
 /// The register gets `add` (= C, or C + 1 over a complemented R for the reverse subtraction); `cb` = C. With
@@ -3577,11 +3176,6 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     // own rule, a function of R1 alone) and on a last tick with fewer forced steps (LF_TAIL_FORCED: that tick takes
     // the LF_W1 rule of [`fast_choice`])
     let yp8_here = yp8().is_some() && !t0_plain(t) && tail_forced(t) == 2;
-    // y15-room: on these fused ticks the three payload ops run as one one-fold tick at the merged op's place (the two
-    // cells below are left out; they act on the payload registers and read only the letter)
-    let y15f = pay.is_some() && y15::fused_fwd_on(t);
-    assert!(!y15f || (tail_forced(t) == 2 && t < tie_from() && t > 0), "y15 fused tick out of range");
-    let mut y16_ops: Vec<(&'static str, usize, f64, f64, f64, f64)> = Vec::new();
     for (nk, nnext) in fsteps {
         if yp8_here && letter.len() == 1 {
             // LF_YP8: forced move 2's payload cell first (it reads only the letter), then the rail add with the
@@ -3589,20 +3183,15 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
             let s = c.alloc_qubit();
             pp_sign_into1(c, tr[1 - o], br[1 - o], s);
             let q0 = pmark(c);
-            if let Some(p) = pay.as_deref_mut().filter(|_| !y15f) {
+            if let Some(p) = pay.as_deref_mut() {
                 let (pt, ps) = (p[ti].clone(), p[si].clone());
                 let pads = lr_pad_c(c, 2 * o);
                 let pr = tie_pred(c, t, s, *tr.last().unwrap(), *br.last().unwrap());
-                let y16_m = y16_mark(c, t, 0, 1);
                 cells::with_tie(pr, || cells::with_cmp_shift(cmp_shift_at(t), || cells::add_halve(c, s, &ps, &pt, fold, proxy)));
-                y16_note(c, &mut y16_ops, "cell", y16_m);
                 tie_unpred(c, pr, s, *tr.last().unwrap(), *br.last().unwrap());
                 lr_unpad(c, pads);
             }
             pacc(c, &format!("fwd{fk}.pay_cell"), q0);
-            if pay.is_some() {
-                pacc(c, &format!("pc.fwd.t{t:03}"), q0);
-            }
             resize(c, tr, nk - o);
             resize(c, br, bw(nk) - o);
             let trio = (c.alloc_qubit(), c.alloc_qubit(), c.alloc_qubit());
@@ -3631,21 +3220,14 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
                 resize(c, tr, wt.min(nnext) - o);
                 resize(c, br, wb.min(w).min(wn) - o);
             }
-            if !y15f {
-                let (pt, ps) = (p[ti].clone(), p[si].clone());
-                let pads = lr_pad_c(c, 2 * o);
-                let pr = tie_pred(c, t, s, *tr.last().unwrap(), *br.last().unwrap());
-                let y16_m = y16_mark(c, t, 0, letter.len().min(1));
-                cells::with_tie(pr, || cells::with_cmp_shift(cmp_shift_at(t), || cells::add_halve(c, s, &ps, &pt, fold, proxy)));
-                y16_note(c, &mut y16_ops, "cell", y16_m);
-                tie_unpred(c, pr, s, *tr.last().unwrap(), *br.last().unwrap());
-                lr_unpad(c, pads);
-            }
+            let (pt, ps) = (p[ti].clone(), p[si].clone());
+            let pads = lr_pad_c(c, 2 * o);
+            let pr = tie_pred(c, t, s, *tr.last().unwrap(), *br.last().unwrap());
+            cells::with_tie(pr, || cells::with_cmp_shift(cmp_shift_at(t), || cells::add_halve(c, s, &ps, &pt, fold, proxy)));
+            tie_unpred(c, pr, s, *tr.last().unwrap(), *br.last().unwrap());
+            lr_unpad(c, pads);
         }
         pacc(c, &format!("fwd{fk}.pay_cell"), q0);
-        if pay.is_some() {
-            pacc(c, &format!("pc.fwd.t{t:03}"), q0);
-        }
         letter.push(s);
     }
     resize(c, tr, n2 - o);
@@ -3689,13 +3271,11 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     let merged = if pay.is_some() { merged_fits(at_barrel + usize::from(t >= tie_from() && !tie_seed()), t, false) } else { None };
     let qc3 = pmark(c);
     let q0 = pmark(c);
-    if let Some(p) = pay.as_deref_mut().filter(|_| merged.is_none() && !y15f) {
+    if let Some(p) = pay.as_deref_mut().filter(|_| merged.is_none()) {
         let (pt, ps) = (p[ti].clone(), p[si].clone());
         let pads = lr_pad_c(c, o);
         let pr = tie_pred(c, t, s3, *tr.last().unwrap(), *br.last().unwrap());
-        let y16_m = y16_mark(c, t, 0, 2);
         cells::with_tie(pr, || cells::with_cmp_shift(cmp_shift_at(t), || cells::add_halve(c, s3, &ps, &pt, fold, proxy)));
-        y16_note(c, &mut y16_ops, "cell3", y16_m);
         tie_unpred(c, pr, s3, *tr.last().unwrap(), *br.last().unwrap());
         lr_unpad(c, pads);
         pacc(c, &format!("c3cell.fwd.t{t:03}"), q0);
@@ -3711,20 +3291,11 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     pacc(c, &format!("fwd{fk}.rail_barrel"), q0);
     let q0 = pmark(c);
     let pads = if pay.is_some() { lr_pad(c, 2 * o) } else { Vec::new() };
-    // LF_DIV_PHROT: the divide's last tick leaves its target unrotated (the endpoint measures it away)
-    let skip_pay_rot = pay.is_some() && SKIP_PAY_ROT_AT.with(|s| s.get()) == t;
-    SKIP_ROT4.with(|s| s.set(skip_pay_rot));
     if let Some(p) = pay.as_deref_mut() {
-        if y15f {
-            assert_eq!(c.active_qubits() as usize, at_barrel);
-            let l5 = [letter[0], letter[1], s3, k1, k2];
-            y15::fwd_tick(c, t, &l5, p);
-            pacc(c, &format!("fwd{fk}.pay_y15"), q0);
-        } else if let Some(mw) = merged {
+        if let Some(mw) = merged {
             assert_eq!(c.active_qubits() as usize, at_barrel);
             let (pt, ps) = (p[ti].clone(), p[si].clone());
             let pr = tie_pred(c, t, s3, *tr.last().unwrap(), *br.last().unwrap());
-            let y16_m = y16_mark(c, t, 0, 2);
             cells::with_tie(pr, || {
                 cells::with_cmp_shift(cmp_shift_at(t), || cells::with_bridge(proxy, false, || {
                     let split = if pr.is_none() { merged_split(c, proxy, false, false) } else { None };
@@ -3734,20 +3305,13 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
                     merged_fwd(c, s3, &ps, &pt, k1, k2, proxy, split, mw)
                 }))
             });
-            y16_note(c, &mut y16_ops, "merged", y16_m);
             tie_unpred(c, pr, s3, *tr.last().unwrap(), *br.last().unwrap());
             pacc(c, &format!("fwd{fk}.pay_merged"), q0);
         } else {
-            let y16_m = y16_mark(c, t, 0, 2);
             cmod_barrel(c, k1, k2, &p[ti], false);
-            y16_note(c, &mut y16_ops, "barrel", y16_m);
             pacc(c, &format!("c3bar.fwd.t{t:03}"), q0);
         }
-        if !y15f && y15::trace() {
-            y16_print("fwd", t, cells::cap().saturating_sub(at_barrel), &format!("merged={merged:?} fold_cost={:.1} tie={}", Y16_FOLD.with(|f| f.replace(0.0)), t >= tie_from()), &y16_ops);
-        }
     }
-    SKIP_ROT4.with(|s| s.set(false));
     lr_unpad(c, pads);
     pacc(c, &format!("fwd{fk}.pay_barrel"), q0);
     if pay.is_some() {
@@ -3791,25 +3355,8 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     let fk = if pay.is_some() { "F" } else { "R" };
     let tick0 = pmark(c);
     let pads = if pay.is_some() { lr_pad(c, 2 * o) } else { Vec::new() };
-    // y15-room: on these fused ticks the three payload ops run as one reverse one-fold tick
-    let y15r = pay.is_some() && y15::fused_rev_on(t);
-    assert!(!y15r || (nf == 2 && t < tie_from() && t > 0), "y15 fused tick out of range");
-    if y15r {
+    if let Some(p) = pay.as_deref_mut() {
         let q0 = pmark(c);
-        let l5 = [s0, s1, s3, k1, k2];
-        y15::rev_tick(c, t, &l5, pay.as_deref_mut().unwrap());
-        pacc(c, "revF.pay_y15", q0);
-    }
-    // y17: the trace's ops of this tick-pass, and which reverse cells run late (Y17_PLAN): the cell of forced letter 2
-    // may run late only if that of letter 1 does (the payload order is merged op, cell 2, cell 1)
-    let mut y16_ops: Vec<(&'static str, usize, f64, f64, f64, f64)> = Vec::new();
-    let mut y16_info: Option<(usize, String)> = None;
-    let y17_three = pay.is_some() && !y15r && nf == 2;
-    let y17_late = [y17_three && y17_plan(1, t, 0).2, y17_three && y17_plan(1, t, 1).2];
-    assert!(!y17_late[1] || y17_late[0], "y17: cell 2 late needs cell 1 late");
-    if let Some(p) = pay.as_deref_mut().filter(|_| !y15r) {
-        let q0 = pmark(c);
-        let y16_room = cells::cap().saturating_sub(c.active_qubits() as usize);
         let merged = merged_fits(c.active_qubits() as usize + usize::from(t >= tie_from() && !tie_seed()), t, true);
         if let Some(mw) = merged {
             let (pt, ps) = (p[ti].clone(), p[si].clone());
@@ -3820,11 +3367,9 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
                 c.x(s3);
                 pr
             }).flatten();
-            let y16_m = y16_mark(c, t, 1, 2);
             cells::with_tie(pr, || {
                 cells::with_cmp_shift(cmp_shift_at(t), || cells::with_bridge(proxy, true, || merged_rev(c, s3, &ps, &pt, k1, k2, proxy, pr.is_none(), mw)))
             });
-            y16_note(c, &mut y16_ops, "merged", y16_m);
             if pr.is_some() {
                 c.x(s3);
                 tie_unpred(c, pr, s3, *tr.last().unwrap(), *br.last().unwrap());
@@ -3833,36 +3378,28 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
             pacc(c, "revF.pay_merged", q0);
             pacc(c, &format!("c3b.rev.t{t:03}"), q0);
         } else {
-            let y16_m = y16_mark(c, t, 1, 2);
             cmod_barrel(c, k1, k2, &p[ti], true);
-            y16_note(c, &mut y16_ops, "barrel", y16_m);
             pacc(c, &format!("c3bar.rev.t{t:03}"), q0);
         }
         pacc(c, "revF.pay_barrel", q0);
         let qc3 = q0;
         let q0 = pmark(c);
         for (j, s) in [s3, s1, s0].into_iter().enumerate() {
-            if j > nf || (merged.is_some() && s == s3) || (j == 1 && y17_late[1]) || (j == 2 && y17_late[0]) {
+            if j > nf || (merged.is_some() && s == s3) {
                 continue;
             }
             let (pt, ps) = (p[ti].clone(), p[si].clone());
-            let q0f = pmark(c);
             c.x(s);
             let cp = lr_pad_c2(c, 2 * o);
             let pr = tie_pred(c, t, s, *tr.last().unwrap(), *br.last().unwrap());
-            let y16_m = y16_mark(c, t, 1, if s == s3 { 2 } else if s == s1 { 1 } else { 0 });
             cells::with_tie(pr, || cells::with_cmp_shift(cmp_shift_at(t), || cells::double_add(c, s, &ps, &pt, fold, proxy)));
-            y16_note(c, &mut y16_ops, if s == s3 { "cell3" } else { "cell" }, y16_m);
             tie_unpred(c, pr, s, *tr.last().unwrap(), *br.last().unwrap());
             lr_unpad(c, cp);
             c.x(s);
             if s == s3 {
                 pacc(c, &format!("c3b.rev.t{t:03}"), qc3);
-            } else {
-                pacc(c, &format!("pc.rev.t{t:03}"), q0f);
             }
         }
-        y16_info = Some((y16_room, format!("merged={merged:?} fold_cost={:.1} tie={}", Y16_FOLD.with(|f| f.replace(0.0)), t >= tie_from())));
 
         pacc(c, "revF.pay_cell", q0);
     }
@@ -3913,19 +3450,6 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     for (s, nk) in [(s1, n1), (s0, n0)].into_iter().skip(2 - nf) {
         resize(c, tr, nk - 1 - o);
         resize(c, br, bw(nk) - o);
-        // y17: a late cell (it touches the payload registers and reads only its letter, which is still live here)
-        let y17_slot = usize::from(s == s1 && nf == 2);
-        if y17_late[y17_slot] {
-            let p = pay.as_deref_mut().expect("y17: a late cell has a payload");
-            let (pt, ps) = (p[ti].clone(), p[si].clone());
-            c.x(s);
-            let pr = tie_pred(c, t, s, *tr.last().unwrap(), *br.last().unwrap());
-            assert!(pr.is_none(), "y17: late cells are not built for tie-safe ticks");
-            let y16_m = y16_mark(c, t, 1, y17_slot);
-            cells::with_cmp_shift(cmp_shift_at(t), || cells::double_add(c, s, &ps, &pt, fold, proxy));
-            y16_note(c, &mut y16_ops, "cell", y16_m);
-            c.x(s);
-        }
         let q0 = pmark(c);
         if let (Some(m), true) = (yp8_m, s == s1) {
             yp8_double_sub_forced_erase(c, s, br, tr, m, t);
@@ -3939,11 +3463,6 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
         pacc(c, &format!("rev{fk}.rail_forced"), q0);
         pp_sign_into1(c, tr[1 - o], br[1 - o], s);
         c.free(s);
-    }
-    if let Some((room, extra)) = y16_info {
-        if y15::trace() {
-            y16_print("rev", t, room, &extra, &y16_ops);
-        }
     }
     pacc(c, &format!("tick.rev{fk}.t{:03}", t / 10 * 10), tick0);
     resize(c, tr, w - o);
@@ -4094,27 +3613,6 @@ fn ladder_parity_add_mid(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>],
     }
 }
 
-/// `LF_YP8_CHUNK=1`: see [`rail_add_mid`] (both directions).
-fn yp8_chunk() -> bool {
-    std::env::var("LF_YP8_CHUNK").is_ok_and(|v| v == "1")
-}
-/// Phase-only [`carry_out_parity_xor`] (`out = None`) under the walk cap: when its carries do not fit, the carry-out
-/// of a room-sized low chunk goes onto a kept wire (computed, used as the rest's carry-in, then computed again to
-/// clear it; acc is unchanged throughout).
-fn carry_out_capped(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], comp: bool, cin: QubitId, out: Option<QubitId>) {
-    let n = acc.len();
-    let room = cells::cap().saturating_sub(c.active_qubits() as usize);
-    if n + 2 <= room || room < 8 {
-        carry_out_parity_xor(c, acc, add, comp, cin, out);
-        return;
-    }
-    let l = room - 4;
-    let k = c.alloc_qubit();
-    carry_out_parity_xor(c, &acc[..l], &add[..l], comp, cin, Some(k));
-    carry_out_capped(c, &acc[l..], &add[l..], comp, k, out);
-    carry_out_parity_xor(c, &acc[..l], &add[..l], comp, cin, Some(k));
-    c.free(k);
-}
 /// [`rail_add`] (`b += a + cin`, `a` possibly shorter) with a pause that leaves `reserve` wires of room under the
 /// walk cap: `mid(c, add, delta, carry)` runs with positions delta.. of `b` untouched and carry[j] = the carry into
 /// position delta + j (so carry.last() is the carry into the top position).
@@ -4148,10 +3646,7 @@ fn rail_add_mid(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, res
     if let Some((k, _)) = low_first {
         delta += k - 1;
     }
-    // LF_YP8_CHUNK: a low part wider than the room is itself added in room-sized chunks
-    // ([`lpa_capped`]) and its kept carry made / erased by a chunked compare ([`carry_out_capped`])
-    let chunk = yp8_chunk() && delta + 3 > room && room >= 10;
-    if (delta + 3 > room && !chunk) || delta + 1 >= n || delta >= a.len() {
+    if delta + 3 > room || delta + 1 >= n || delta >= a.len() {
         eprintln!("YP8_NOFIT n={n} room={room} reserve={reserve} delta={delta} fwd={fwd}");
         return whole(c, mid);
     }
@@ -4160,28 +3655,7 @@ fn rail_add_mid(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, res
     lo.push(cq);
     let mut lo_add = add[..delta].to_vec();
     lo_add.push(vec![]);
-    if chunk && !fwd {
-        let q0 = pmark(c);
-        carry_out_capped(c, &b[..delta], &add[..delta], false, cin, Some(cq));
-        pacc(c, "split.yp8_carry_chunk", q0);
-        ladder_parity_add_mid(c, &b[delta..], &add[delta..], Some(cq), &mut |c, carry| mid(c, &add, delta, carry));
-        lpa_capped(c, &lo, &lo_add, Some(cin));
-        c.free(cq);
-    } else if chunk {
-        lpa_capped(c, &lo, &lo_add, Some(cin));
-        ladder_parity_add_mid(c, &b[delta..], &add[delta..], Some(cq), &mut |c, carry| mid(c, &add, delta, carry));
-        c.x(cin);
-        let q0 = pmark(c);
-        let m = c.alloc_bit();
-        c.hmr(cq, m);
-        c.release_clean(cq);
-        c.push_condition(m);
-        carry_out_capped(c, &b[..delta], &add[..delta], true, cin, None);
-        c.pop_condition();
-        c.free_bit(m);
-        pacc(c, "split.yp8_erase_chunk", q0);
-        c.x(cin);
-    } else if fwd {
+    if fwd {
         ladder_parity_add(c, &lo, &lo_add, Some(cin));
         ladder_parity_add_mid(c, &b[delta..], &add[delta..], Some(cq), &mut |c, carry| mid(c, &add, delta, carry));
         c.x(cin);
@@ -4655,90 +4129,6 @@ thread_local! {
     /// with the equal-sign veto read from the source rail ([`t0_m_on`]).
     static T0_PLAIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
-thread_local! {
-    /// Set around the payload tick 0 of [`multiply`]'s phase fix under `LF_T0_PHROT=1`: [`rot4`] is a no-op.
-    static SKIP_ROT4: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// `LF_DIV_PHROT=1`: the fused forward tick whose payload rotation [`fwd_tick_fast`] skips (usize::MAX: none).
-    static SKIP_PAY_ROT_AT: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
-}
-/// `LF_DIV_PHROT=1`: the divide's endpoint erases P1 = (-1)^x01 P0 (x01 = s0 ^ s1) by a CNOT copy. P1's last op is
-/// tick 137's payload rotation rot_e; it is skipped, P1's unrotated wires V are measured (HMR, bits m) and the
-/// phase (-1)^(m . V) = (-1)^(m . rot_e^-1(N_x01 P0)) is applied on P0 with [`rot4_phase`] (inverse side):
-/// cond-negate P0 by x01, the phase, then cond-negate by s1 (N_x01 then N_s1 = N_s0, the old endpoint's map).
-/// Exact (the same phase function on the valid subspace); saves the 1.5n - 2 Fredkins for one AND.
-fn t0_dbl() -> bool {
-    std::env::var("LF_T0_DBL").is_ok_and(|v| v == "1")
-}
-fn div_phrot() -> bool {
-    std::env::var("LF_DIV_PHROT").is_ok_and(|v| v == "1")
-}
-/// `LF_T0_PHROT=1`: in the multiply's `LF_T0_FREE` phase fix the payload tick 0 ends with a 4-way rotation (a
-/// permutation of the target's wires controlled by the letter bits k1, k2), undone first by the reverse tick. The
-/// phase (-1)^(m . rot_e(V)) is applied on the unrotated V instead: for each e the Z pattern is m permuted, and
-/// [e == v] has the ANF 1 ^ k1 ^ k2 ^ k1k2 (v = 0), k1 ^ k1k2, k2 ^ k1k2, k1k2: CZs (k1k2 on one AND wire) under
-/// the kept bits, so both rotations (2 (1.5n - 2) Fredkins) go for one AND. Exact (the same phase function).
-fn t0_phrot() -> bool {
-    std::env::var("LF_T0_PHROT").is_ok_and(|v| v == "1")
-}
-/// Index map of [`rot4`] (forward) for rotation amount e: out[i] = in[map[i]].
-fn rot4_map(n: usize, e: usize) -> Vec<usize> {
-    let [r1, r0, rm2] = refl4_pairs(n);
-    let (k1, k2) = (e & 1 == 1, e & 2 == 2);
-    let mut arr: Vec<usize> = (0..n).collect();
-    for (pairs, on) in [(&r1, k1), (&r0, k1 ^ k2), (&rm2, k2)] {
-        if on {
-            for &(a, b) in pairs.iter() {
-                arr.swap(a, b);
-            }
-        }
-    }
-    arr
-}
-/// Phase (-1)^(sum_i m_i rot_e(v)_i), e = k1 + 2 k2, on the unrotated `v` (see [`t0_phrot`]); frees the bits.
-/// `inv`: the phase (-1)^(sum_i m_i rot_e^-1(v)_i) instead (see [`div_phrot`]).
-fn rot4_phase(c: &mut Builder, k1: QubitId, k2: QubitId, v: &[QubitId], bits: Vec<crate::circuit::BitId>, inv: bool) {
-    let n = v.len();
-    let maps: Vec<Vec<usize>> = (0..4).map(|e| rot4_map(n, e)).collect();
-    // monomials: 0 = 1, 1 = k1, 2 = k2, 3 = k1k2; [e == val] in ANF
-    let anf: [&[usize]; 4] = [&[0, 1, 2, 3], &[1, 3], &[2, 3], &[3]];
-    let mut acc: std::collections::BTreeMap<(usize, usize), Vec<usize>> = std::collections::BTreeMap::new();
-    for i in 0..bits.len() {
-        for val in 0..4 {
-            // m . rot_e(v) = sum_i m_i v_map(i); m . rot_e^-1(v) = sum_i m_map(i) v_i
-            let (j, bi) = if inv { (i, maps[val][i]) } else { (maps[val][i], i) };
-            for &mono in anf[val] {
-                let l = acc.entry((j, mono)).or_default();
-                if let Some(p) = l.iter().position(|&x| x == bi) {
-                    l.remove(p);
-                } else {
-                    l.push(bi);
-                }
-            }
-        }
-    }
-    let t = and_new(c, k1, k2);
-    for (&(j, mono), l) in acc.iter() {
-        for &i in l {
-            match mono {
-                0 => c.z_if(v[j], bits[i]),
-                1 => c.cz_if(k1, v[j], bits[i]),
-                2 => c.cz_if(k2, v[j], bits[i]),
-                _ => c.cz_if(t, v[j], bits[i]),
-            }
-        }
-    }
-    if std::env::var("LF_PHROT_TOF").is_ok_and(|v| v == "1") {
-        // +1 Toffoli, no measurement: keeps the simulator's random stream aligned with the unrotated circuit
-        // (clean paired phase-failure comparison)
-        c.ccx(k1, k2, t);
-        c.release_clean(t);
-    } else {
-        and_erase(c, t, k1, k2);
-    }
-    for b in bits {
-        c.free_bit(b);
-    }
-}
 fn t0_plain(tick: usize) -> bool {
     tick == 0 && T0_PLAIN.with(|p| p.get())
 }
@@ -4915,15 +4305,8 @@ fn lf_reorder(multiply: bool) -> usize {
     r.min(rounds())
 }
 
-#[path = "y15_onefold.rs"]
-mod y15;
-
 /// Payload half of [`fwd_tick_fast`] on a tick below the tie-safe ticks, its letter already on the tape.
 fn pay_fwd_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<QubitId>; 2]) {
-    if y15::fwd_on(t) {
-        return y15::fwd_tick(c, t, letter, p);
-    }
-    let (y15_e0, y15_a0) = (c.expected_total(), c.active_qubits());
     let [w, ..] = steps()[t];
     let (ti, si) = (t % 2, 1 - t % 2);
     let (fold, proxy) = proxy_fold(w, false);
@@ -4953,15 +4336,10 @@ fn pay_fwd_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<Qubi
         cmod_barrel(c, k1, k2, &p[ti], false);
         pacc(c, "fwdP.pay_cell_barrel", q0);
     }
-    y15::trace_old(c, t, y15_e0, y15_a0);
 }
 
 /// Payload half of [`rev_tick_fast`] on a tick below the tie-safe ticks (the tape is read, not popped).
 fn pay_rev_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<QubitId>; 2]) {
-    if y15::rev_on(t) {
-        return y15::rev_tick(c, t, letter, p);
-    }
-    let (y15_e0, y15_a0) = (c.expected_total(), c.active_qubits());
     let [w, ..] = steps()[t];
     let (ti, si) = (t % 2, 1 - t % 2);
     let (fold, proxy) = proxy_fold(w, true);
@@ -4991,7 +4369,6 @@ fn pay_rev_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<Qubi
         c.x(s);
         pacc(c, "revP.pay_cell", q0);
     }
-    y15::trace_old_rev(c, t, y15_e0, y15_a0);
 }
 
 /// `y <- y / x (mod p)`, x restored. Division payload fused into the forward walk; rails-only walkback.
@@ -5077,56 +4454,25 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
         parity_rail_in(c, &mut wk, ahead, loan_pad);
         loan_pad = parity_tape_out(c, &wk, ahead);
     }
-    let dphrot = div_phrot() && !keep_p1;
     for t in ahead..rounds() {
-        if dphrot && t + 1 == rounds() {
-            SKIP_PAY_ROT_AT.with(|s| s.set(t));
-        }
         fwd_tick(c, &mut wk, t, Some(&mut pay));
-        SKIP_PAY_ROT_AT.with(|s| s.set(usize::MAX));
     }
     let q0 = pmark(c);
     // endpoint: rails (+-1, +-1); P = (s0 lam, s1 lam)
     let (s0, s1) = (*wk.r[0].last().unwrap(), *wk.r[1].last().unwrap());
-    let p1 = if dphrot {
-        let last = rounds() - 1;
-        assert_eq!(last % 2, 1, "LF_DIV_PHROT: the last tick's target is P1");
-        let lt = &wk.tape[last];
-        let (k1, k2) = (lt[lt.len() - 2], lt[lt.len() - 1]);
-        let p1 = std::mem::take(&mut pay[1]);
-        let mut bits = Vec::with_capacity(p1.len());
-        for &q in p1.iter() {
-            let m = c.alloc_bit();
-            c.hmr(q, m);
-            c.release_clean(q);
-            bits.push(m);
-        }
-        let x01 = c.alloc_qubit();
-        c.cx(s0, x01);
-        c.cx(s1, x01);
-        cells::cond_negate(c, x01, &pay[0]);
-        rot4_phase(c, k1, k2, &pay[0], bits, true);
-        c.cx(s0, x01);
-        c.cx(s1, x01);
-        c.free(x01);
-        cells::cond_negate(c, s1, &pay[0]);
-        p1
-    } else {
-        let x01 = c.alloc_qubit();
-        c.cx(s0, x01);
-        c.cx(s1, x01);
-        cells::cond_negate(c, x01, &pay[1]);
-        c.cx_pairs(&pay[0], &pay[1]);
-        c.cx(s0, x01);
-        c.cx(s1, x01);
-        c.free(x01);
-        let p1 = std::mem::take(&mut pay[1]);
-        if !keep_p1 {
-            c.free_vec(&p1);
-        }
-        cells::cond_negate(c, s0, &pay[0]);
-        p1
-    };
+    let x01 = c.alloc_qubit();
+    c.cx(s0, x01);
+    c.cx(s1, x01);
+    cells::cond_negate(c, x01, &pay[1]);
+    c.cx_pairs(&pay[0], &pay[1]);
+    c.cx(s0, x01);
+    c.cx(s1, x01);
+    c.free(x01);
+    let p1 = std::mem::take(&mut pay[1]);
+    if !keep_p1 {
+        c.free_vec(&p1);
+    }
+    cells::cond_negate(c, s0, &pay[0]);
     pacc(c, "div.endpoint", q0);
     for t in (0..rounds()).rev() {
         if loan && t + 1 == ahead {
@@ -5157,14 +4503,7 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
 /// `y <- y * x (mod p)`, x restored. Rails-only forward, payload fused into the walkback.
 pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
     let q0 = pmark(c);
-    let r = match T6_PRESEED.with(|s| s.borrow_mut().take()) {
-        Some(r0) => {
-            assert_eq!(&r0[..N], x, "T6 seed fusion: R0 must sit on x's wires");
-            let r1 = seed_r1(c, &r0);
-            lr_walk_drop(c, [r0, r1])
-        }
-        None => seed(c, x),
-    };
+    let r = seed(c, x);
     pacc(c, "mul.seed", q0);
     let mut wk = Walk { r, tape: Vec::new() };
     let t0f = t0_free(true);
@@ -5216,12 +4555,7 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
     }
     let q0 = pmark(c);
     let p1 = std::mem::take(&mut pay[1]);
-    // LF_T0_DBL=1 (with LF_T0_FREE): the product stays halved (P/2) until tick 0's phase fix, which needs P/2
-    // anyway: there P/2 is copied and the product doubled in place (one mod_halve fewer, the same values)
-    let t0dbl = t0f && seed_half() && t0_dbl();
-    if t0dbl {
-        // p1 = P/2
-    } else if seed_half() {
+    if seed_half() {
         cells::mod_double(c, &p1); // P0
     } else {
         mod_addsub(c, true, &pay[0], &p1); // 2 P0
@@ -5251,28 +4585,15 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
                 // (-1)^(m . y R2): payload tick 0 forward on (product, product / 2), Z under the kept bits, and back
                 let p1 = c.alloc_qubits(N);
                 c.cx_pairs(&pay[0], &p1);
-                if t0dbl {
-                    cells::mod_double(c, &pay[0]); // pay[0]: P/2 -> P; p1 = P/2
-                } else {
-                    cells::mod_halve(c, &p1);
-                }
+                cells::mod_halve(c, &p1);
                 let mut pay2 = [pay[0].clone(), p1];
                 let letter = wk.tape[0].clone();
-                let phrot = t0_phrot();
-                SKIP_ROT4.with(|s| s.set(phrot));
                 pay_fwd_tick(c, 0, &letter, &mut pay2);
-                SKIP_ROT4.with(|s| s.set(false));
-                if phrot {
-                    rot4_phase(c, letter[3], letter[4], &pay2[0], std::mem::take(&mut junk_bits), false);
-                } else {
-                    for (&q, m) in pay2[0].iter().zip(std::mem::take(&mut junk_bits)) {
-                        c.z_if(q, m);
-                        c.free_bit(m);
-                    }
+                for (&q, m) in pay2[0].iter().zip(std::mem::take(&mut junk_bits)) {
+                    c.z_if(q, m);
+                    c.free_bit(m);
                 }
-                SKIP_ROT4.with(|s| s.set(phrot));
                 pay_rev_tick(c, 0, &letter, &mut pay2);
-                SKIP_ROT4.with(|s| s.set(false));
                 let p1 = std::mem::take(&mut pay2[1]);
                 cells::mod_double(c, &p1);
                 c.cx_pairs(&pay2[0], &p1);
