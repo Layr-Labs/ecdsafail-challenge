@@ -141,10 +141,13 @@ pub fn erase_with_compare(
     b: &[QubitId],
     borrow_in: Option<QubitId>,
 ) {
+    let y16 = super::leapfrog::y16_enter(circ); // y16 trace (no effect on the gates)
     let bit = circ.alloc_bit();
     circ.hmr(target, bit);
     circ.push_condition(bit);
     cmp_lt_phase(circ, a, b, borrow_in);
     circ.pop_condition();
     circ.free_bit(bit);
+    super::leapfrog::y16_leave(circ, 1, y16);
+    super::leapfrog::y17_log(circ, || format!("cmp{}{}={:.1}", a.len(), if borrow_in.is_some() { "s" } else { "" }, circ.expected_total() - y16.0));
 }
