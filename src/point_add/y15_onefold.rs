@@ -35,7 +35,7 @@ pub(super) const Y15_FWD_TO: usize = 999;
 pub(super) const Y15_REV_FROM: usize = 1;
 pub(super) const Y15_REV_TO: usize = 999;
 /// Fold window (bits [0, MW) of the payload).
-const Y15_WIN: usize = 57;
+const Y15_WIN: usize = 56;
 /// Bits below the compare window of m0 on which add 1's carries are built again.
 const Y15_GUARD: usize = 0;
 /// Research knob: bits added to every chunk-boundary compare of the tick (the cells' own shift is kept). 0 = as the cells.

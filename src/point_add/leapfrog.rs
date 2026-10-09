@@ -65,7 +65,7 @@ pub(crate) fn install_recipe() {
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
         ("LF_REORDER", "76"),
         // y15-room: the divide's and the multiply's boundary set apart (each overrides LF_REORDER for its direction)
-        ("LF_REORDER_DIV", "76"),
+        ("LF_REORDER_DIV", "82"),
         ("LF_REORDER_MUL", "76"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
         // with the coordinate seams
@@ -131,7 +131,7 @@ pub(crate) fn install_recipe() {
         ("LF_YP8_LATE", "1:13,6:17,11:22,90:20,100:18,112:16,118:14,124:12"),
         ("LF_G10_TABLE", "770"),
         ("HEO_PIN_I35_PROFILE", "437:1:1,440:0:1,446:0:2,528:1:1,550:0:1,550:1:1,581:1:1,588:1:2,611:1:1,627:1:1,636:0:2,646:1:1,655:1:1,666:0:1,670:0:2,670:1:1,675:0:2,681:0:2,681:1:1,687:0:3,687:1:2"),
-        ("LF_CMP_FROM", "100"),
+        ("LF_CMP_FROM", "120"),
         // T3 (λ margin into T): boundary compare widened from tick 120 again (-207 T model), with Y15_GUARD 0 in
         // y15_onefold.rs (-742 T). Both are phase-only (classical mismatches identical per nonce to G12).
         ("LF_CMP_FROM", "120"),
@@ -144,7 +144,7 @@ pub(crate) fn install_recipe() {
         // the combined point, the divide's boundary 76 -> 82 (-40.5 T model; MUL 76 stays optimal) and the square's
         // retained-AND lend mask 3 -> 4 (-9 T). Combined model 770,787 at Q 1236; 512-nonce eval mean 770,692.40,
         // score ~952.58M; λ paired vs glam_base 512 fails -0.777 +- 0.158, proj+2se 19.193 (vs T3 -0.143 +- 0.101).
-        ("LF_REORDER_DIV", "76"),
+        ("LF_REORDER_DIV", "82"),
         ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "4"),
         // C1 spend of the combined point's λ margin (192-nonce screens paired vs the combined point, then 512):
         // T6 seed fusion on (-46.6 T, phase-only), merged window 56 -> 54 (-128 T, mism +0.057), late rule windows
