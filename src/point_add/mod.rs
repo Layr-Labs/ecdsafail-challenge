@@ -152,7 +152,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "86000151752556",
+        "TAIL_NONCE" => "281314017851020",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -328,7 +328,7 @@ fn install_skywalk_submission_recipe() {
         ("HEO_LR1", "1"),
         ("HEO_PIN_SQ_SPARSE_CORRECTION", "1"),
         ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "3"),
-        ("HEO_PIN_I35_PROFILE", "430:1:1,440:0:1,446:0:2,536:1:1,581:1:1,588:1:2,611:1:1,627:1:1,636:0:1,646:1:1,655:1:1,666:0:1,670:0:2,670:1:1,675:0:2,675:1:1,681:0:2,681:1:1,687:1:2"),
+        ("HEO_PIN_I35_PROFILE", "430:1:1,437:1:1,440:0:1,446:0:2,528:1:1,536:1:1,550:0:1,550:1:1,581:1:1,588:1:2,611:1:1,627:1:1,636:0:1,646:1:1,655:1:1,666:0:1,670:0:2,670:1:1,675:0:2,675:1:1,681:0:2,681:1:1,687:1:2"),
         ("HEO_HEAD_LIFO_N", "2"),
         ("HEO_DIV_LIFO_N", "2"),
         ("HEO_MULB_LIFO_N", "2"),
