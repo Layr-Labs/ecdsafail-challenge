@@ -129,6 +129,17 @@ fn row_addsub_cin(circ:&mut Builder, xi:QubitId, operand:&[QubitId], acc:&[Qubit
 /// been undone, so the result's top bit is zero: measured terminal.
 fn diag_correction_known_top(circ:&mut Builder, x:&[QubitId], product:&[QubitId]) {
     let m=x.len();
+    if super::env_flag("G3_SQ_SPARSE_KT") {
+        // G3 (low-cap square): no m pads and no full-width ladder; the mapped add is planned to the room left
+        // under the phase cap. Same value, x + ~x_low << m, with the top position empty.
+        let one = circ.alloc_qubit(); circ.x(one);
+        let mut map: Vec<Vec<QubitId>> = x.iter().map(|&q| vec![q]).collect();
+        for &q in x.iter().take(m-1) { map.push(vec![q, one]); }
+        map.push(Vec::new());
+        sparse_diag_add(circ, &map, product, false, cut_sqident() && 2*m >= 4);
+        circ.x(one); circ.free(one);
+        return;
+    }
     let pads=circ.alloc_qubits(m);
     for i in 0..m-1 { circ.cx(x[i],pads[i]); circ.x(pads[i]); }
     let mut value=x.to_vec();
@@ -1056,7 +1067,11 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
     let product = circ.alloc_qubits(2 * x.len());
     let k=super::optional_env::<usize>(match policy_name{"SQ_A_POLICY"=>"GO_B3_A","SQ_B_POLICY"=>"GO_B3_B","SQ_C_POLICY"=>"GO_B3_C",_=>"GO_B3_X"}).unwrap_or(0);
     let old=GO_B3.with(|g|g.replace((x.len(),k)));
+    let g2=super::env_flag("G2_TRACE");
+    let g2t=|c:&Builder|c.report_totals().map(|t|t.1).unwrap_or(0.0);
+    let (t0,_)=(g2t(circ),circ.take_win_peak());
     let retained = tri_square_k2r(circ, x, &product);
+    let (t1,p1)=(g2t(circ),circ.take_win_peak());
     GO_B3.with(|g|g.set(old));
     let mut loans=Vec::new();
     if super::env_flag("SQ_LEND_RETAINED_ZEROS"){retained_zero_bits(&retained,x.len(),&mut loans);}
@@ -1087,6 +1102,7 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
     for &q in &loans{circ.release_clean(q);}
     if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() || super::native_sfuse_b::mode()>0 {SQ_LOANS.with(|l|*l.borrow_mut()=loans.clone());}
     folds(circ, &consumer_product);
+    let (t2,p2)=(g2t(circ),circ.take_win_peak());
     if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() || super::native_sfuse_b::mode()>0 {SQ_LOANS.with(|l|l.borrow_mut().clear());}
     // Every consumer restores its temporary work and source. Reclaim the same
     // physical wire identities before the retained inverse consumes them.
@@ -1095,6 +1111,8 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
     for &l in &cross2_loans{cross2_restore(circ,l);}
     if alias{circ.cx(x[0],product[0]);}
     tri_square_k2r_inv(circ, x, &product, retained);
+    let (t3,p3)=(g2t(circ),circ.take_win_peak());
+    if g2 {eprintln!("G2_SQ {} m={} build T={:.0} peak={} folds T={:.0} peak={} inverse T={:.0} peak={}",policy_name,x.len(),t1-t0,p1,t2-t1,p2,t3-t2,p3);}
     circ.free_vec(&product);
     OUTER_SQUARE_POLICY.with(|p| p.set(old_policy));
     if price_branches {circ.set_phase("square_between");}
@@ -1152,6 +1170,17 @@ thread_local! {
 }
 
 pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
+    // G3_SQ_EXACT_SPLIT: every ladder the square splits to fit its cap erases its boundary carries exactly
+    // (whole-chunk compares in reverse order) instead of through the HEO_FIT_K window, so a capped square
+    // spends no lambda. Off in the default recipe.
+    if super::env_flag("G3_SQ_EXACT_SPLIT") {
+        super::modular::shared_exact_split_scope(circ, |c| sub_square_body(c, out, y));
+    } else {
+        sub_square_body(circ, out, y);
+    }
+}
+
+fn sub_square_body(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
     assert_eq!(y.len(), N);
     assert_eq!(out.len(), N);
     let h = N / 2;
@@ -1190,7 +1219,7 @@ pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
                     }
                 }
                 if super::native_sfuse_b::mode()>0 {
-                    if super::native_sfuse_b::mode()==1 {mod_addsub(circ,true,b2,out);}
+                    if super::native_sfuse_b::mode()==1 {if super::leapfrog::t6_seedfuse(){super::leapfrog::square_seed_r0(circ,b2,out);}else{mod_addsub(circ,true,b2,out);}}
                     else {super::native_sfuse_b::prepare_native(circ,out,b2);}
                     return;
                 }
@@ -1300,4 +1329,100 @@ fn skywalk_merged_high_stream(circ:&mut Builder, high:&[QubitId], consume:impl F
     super::stream_wide::add(circ,hi(6),&small,None,&restored_small);
     for i in 0..10 {circ.cx(hi(10)[i],small[i]);}
     circ.free_vec(&small);
+}
+
+/// G3 unit check of the square phase alone, under the submission env (as `build()` installs it):
+/// `out == x - y^2 - sub_square_offset() (mod p)`, `y` restored, no phase, every other wire back to |0>.
+/// Extra pins `G3_UT_PINS="K=V;K=V"` and the phase cap `G3_UT_CAP` are read before the env is cleared.
+/// `cargo test --release --lib g3_square_unit -- --nocapture`
+#[cfg(test)]
+mod g3_tests {
+    use super::*;
+    use crate::circuit::{analyze_ops, QubitOrBit};
+    use crate::sim::Simulator;
+    use sha3::digest::{ExtendableOutput, Update};
+
+    #[test]
+    fn g3_square_unit() {
+        let pins = std::env::var("G3_UT_PINS").unwrap_or_default();
+        let cap: Option<usize> = std::env::var("G3_UT_CAP").ok().and_then(|v| v.parse().ok());
+        let batches: usize = std::env::var("G3_UT_BATCHES").ok().and_then(|v| v.parse().ok()).unwrap_or(16);
+        let ut_seed = std::env::var("G3_UT_SEED").unwrap_or_default();
+        super::super::clear_process_env();
+        super::super::install_skywalk_submission_recipe();
+        std::env::set_var("EXACT_PAIR_CARRY", "1");
+        super::super::leapfrog::install_recipe();
+        for kv in pins.split(';').filter(|k| !k.is_empty()) {
+            let (k, v) = kv.split_once('=').unwrap();
+            std::env::set_var(k, v);
+        }
+        let mut c = Builder::new();
+        let x = c.alloc_qubits(N);
+        let y = c.alloc_qubits(N);
+        super::super::pingpong::with_phase_cap(cap, || sub_square(&mut c, &x, &y));
+        c.declare_qubit_register(&x);
+        c.declare_qubit_register(&y);
+        if pins.contains("PEAK_CENSUS") { c.finalize_records(); }
+        let offset = sub_square_offset();
+        let ops = c.take_ops();
+        let (nq, nb, _, _) = analyze_ops(ops.iter());
+        let rx: Vec<QubitOrBit> = x.iter().map(|&q| QubitOrBit::Qubit(q)).collect();
+        let ry: Vec<QubitOrBit> = y.iter().map(|&q| QubitOrBit::Qubit(q)).collect();
+        let p = super::super::SECP256K1_P;
+        let mut h = sha3::Shake256::default();
+        h.update(b"g3-square");
+        h.update(ut_seed.as_bytes());
+        let mut xof = h.finalize_xof();
+        let mut sim = Simulator::new(nq as usize, (nb as usize).max(1), &mut xof);
+        let mut s = 0x9e37_79b9_7f4a_7c15u64;
+        let mut rnd = || {
+            let mut v = U256::ZERO;
+            for i in 0..4 { s ^= s << 13; s ^= s >> 7; s ^= s << 17; v |= U256::from(s) << (64 * i); }
+            v.reduce_mod(p)
+        };
+        let one = U256::from(1u64);
+        let (mut bad, mut bad_plus, mut ybad, mut phase, mut anc) = (0usize, 0usize, 0usize, 0usize, 0usize);
+        for b in 0..batches {
+            sim.clear_for_shot();
+            let mut exp = Vec::new();
+            for shot in 0..64 {
+                let (xv, yv) = match (b, shot) {
+                    (0, 0) => (U256::ZERO, U256::ZERO),
+                    (0, 1) => (U256::ZERO, p - one),
+                    (0, 2) => (p - one, one),
+                    (0, 3) => (one, (one << 128) - one),
+                    (0, 4) => (p - one, p - one),
+                    (0, 5) => (U256::ZERO, (one << 255) - one),
+                    _ => (rnd(), rnd()),
+                };
+                sim.set_register(&rx, xv, shot);
+                sim.set_register(&ry, yv, shot);
+                let sq = yv.mul_mod(yv, p);
+                exp.push((xv.add_mod(p - sq.add_mod(offset, p), p), xv.add_mod(p - sq, p).add_mod(offset, p), yv));
+            }
+            sim.apply_iter(ops.iter());
+            for (shot, e) in exp.iter().enumerate() {
+                let o = sim.get_register(&rx, shot);
+                if o.reduce_mod(p) != e.0 && (b > 0 || shot >= 6) { bad += 1; }
+                if o.reduce_mod(p) != e.1 { bad_plus += 1; }
+                if sim.get_register(&ry, shot) != e.2 { ybad += 1; }
+            }
+            // edge shots (batch 0, shots 0..6) sit outside the walk's input domain; count them apart
+            let pm = if b == 0 { sim.phase & !0x3f } else { sim.phase };
+            if b == 0 && sim.phase & 0x3f != 0 { eprintln!("G3_UT edge phase mask={:#x}", sim.phase & 0x3f); }
+            phase += pm.count_ones() as usize;
+            if pm != 0 { let s = pm.trailing_zeros() as usize; eprintln!("G3_UT phase miss b={b} shot={s} y={:#x}", exp[s].2); }
+            for q in x.iter().chain(y.iter()) { *sim.qubit_mut(*q) = 0; }
+            if sim.qubits.iter().any(|&v| v != 0) { anc += 1; }
+        }
+        let shots = 64 * batches;
+        eprintln!(
+            "G3_UT pins={pins} cap={cap:?} wires={nq} T/shot={:.0} shots={shots} out_bad(-off)={bad} out_bad(+off)={bad_plus} y_bad={ybad} phase_bad={phase} ancilla_bad_batches={anc} offset_zero={}",
+            sim.stats.toffoli_gates as f64 / shots as f64, offset == U256::ZERO
+        );
+        assert_eq!(anc, 0);
+        assert_eq!(ybad, 0);
+        assert_eq!(phase, 0);
+        assert_eq!(bad, 0);
+    }
 }
