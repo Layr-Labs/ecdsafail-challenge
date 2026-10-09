@@ -3972,6 +3972,10 @@ fn drop_lead_first_compare(round:usize,multiply:bool,phi:usize)->(usize,bool) {
     (k,seeded)
 }
 
+/// y15-core: a carry-in for the next [`chunked_add`]'s first chunk, as (low, wire): the caller has already added
+/// positions [0, low) (sums written, carries kept) and the first chunk's ripple runs on [low, hi) with this carry-in.
+/// The chunk plan and the boundary compares are those of the plain add. Unset (the default) changes nothing.
+thread_local! { static Y15_CARRY_IN:std::cell::Cell<Option<(usize,QubitId)>>=const{std::cell::Cell::new(None)}; }
 fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: usize, multiply: bool) -> QubitId {
     let _dirty_trace=super::dirty_boundary_probe::Trace::new(circ,"chunked_add",acc.len());
 
@@ -4031,7 +4035,11 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
             super::width_composition::add_with_carry(circ,&addend[lo..hi],&acc[lo..hi],carry_in,&plan)
         }else{
             let next=circ.alloc_qubit();
-            ripple_add(circ,&addend[lo..hi],&acc[lo..hi],carry_in,Some(next));next
+            match if lo==0 {Y15_CARRY_IN.with(|k|k.take())} else {None} {
+                Some((low,cin)) => {assert!(low>=1 && low+2<hi,"y15: the kept low carries must sit inside the first chunk");ripple_add(circ,&addend[low..hi],&acc[low..hi],Some(cin),Some(next));}
+                None => ripple_add(circ,&addend[lo..hi],&acc[lo..hi],carry_in,Some(next)),
+            }
+            next
         };
         // Erase the previous chunk's carry as soon as it has been consumed.
         if let Some((carry, plo, phi)) = previous {
@@ -4759,6 +4767,26 @@ pub(crate) mod heo_hooks {
     pub(crate) fn split_compare_width(round: usize, multiply: bool, split: usize) -> usize {
         let (k, seeded) = boundary_repair_spec(round, multiply, 0, split);
         (if seeded { refined_seeded_width(k, split, "PP_REFINE_SEEDED_B") } else { k }).max(k + usize::from(seeded))
+    }
+
+    /// y15 (one-fold tick): the chunk-boundary compare [`add_consume_exact`] uses at `split`: (window, seed bit index).
+    pub(crate) fn y15_split_spec(round: usize, multiply: bool, split: usize) -> (usize, Option<usize>) {
+        let (k, seeded) = boundary_repair_spec(round, multiply, 0, split);
+        let seed = seeded.then(|| split - k - 1);
+        let k = if seeded { refined_seeded_width(k, split, "PP_REFINE_SEEDED_B") } else { k };
+        (k, seed)
+    }
+    /// y15-core: [`chunked_add`] whose positions [0, low) the caller has already added, `cin` = the carry into `low`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn y15_chunked_add_cin(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], proxy: usize, multiply: bool, low: usize, cin: QubitId) -> QubitId {
+        super::Y15_CARRY_IN.with(|k| k.set(Some((low, cin))));
+        let out = super::chunked_add(circ, addend, acc, proxy, multiply);
+        assert!(super::Y15_CARRY_IN.with(|k| k.take()).is_none(), "y15: the chunked add did not take the carry-in");
+        out
+    }
+    /// y15: the cells' measured erase of a carry by the compare [a < b] (+ borrow); the caller frees `target`.
+    pub(crate) fn y15_erase_cmp(circ: &mut Builder, target: QubitId, a: &[QubitId], b: &[QubitId], borrow: Option<QubitId>) {
+        erase_with_compare(circ, target, a, b, borrow);
     }
 
     /// LF_MERGED: run `body` inside the replay cell's I35 bridge scope at `round` (as `replay_add_halve` /
