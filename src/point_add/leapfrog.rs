@@ -37,14 +37,13 @@ pub(crate) fn install_recipe() {
         // window choice rule: in the equal-sign cases that the low bits do not settle, a compare of the two rails on a
         // window of their top bits decides between deep and flat
         ("LF_W1", "1"),
-        // ... in this form on every tick but the first and the last: a 22-bit window, deep or flat by the compare
+        // ... in this form on every tick but the first and the last: a window of up to 22 bits, deep or flat by the compare
         // [|T| > 2|B|] and by what the second forced step did (added, subtracted, or subtracted with a sign flip);
         // computed inside that step's rail add, while its carries are on wires. It has its own 138-tick width table
         // and window anchors (see `steps`, `w1_anchor`)
         ("LF_YP8", "22"),
-        // ... with a shorter window on the late ticks: 20 bits from tick 90, 18 from 100, 16 from 112, 14 from 118,
-        // 12 from 124
-        ("LF_YP8_LATE", "90:20,100:18,112:16,118:14,124:12"),
+        // ... with the window length set per tick range (first tick : bits)
+        ("LF_YP8_LATE", "1:13,6:17,11:22,90:20,100:18,112:16,118:14,124:12"),
         // tick 0's letter is not held on the tape while a walk sits at the cap: it is measured away after its last
         // read and derived again from the source rail at the walk's end, where the measurement's phase is fixed
         ("LF_T0_FREE", "1"),
