@@ -72,6 +72,75 @@ const Y15_TRACE: bool = false;
 /// y18 research price knob (0 = no effect on the gates): inside the body of every one-fold tick-pass the walk cap is
 /// read this many wires higher. A non-zero value is a PRICE, never a build: the peak goes over 1236.
 const Y18_PRICE: isize = 0;
+/// y19 research price knob (0 = no effect on the gates): from the end of the three adds to the end of the erases of
+/// m0 and m1 (the shed decision, the fold and both erases) the walk cap is read this many wires higher still. It
+/// prices wires that a change would free from the fold on (for example the three held wires m0, m1, h1). A non-zero
+/// value is a PRICE, never a build: the peak goes over 1236.
+const Y19_PRICE_FOLD: isize = 0;
+/// y20-ripple (10 October 2026), "direct cuts": the chunked parts of adds 0 and 1 run one bit higher (256 and 255
+/// bits), so the wire each leaves is its carry into bit 256: g0 = X0[256], which becomes the top wire x256, and h1.
+/// The carries into bit 255 (m0, m1) are then inner carries of the last chunks and no wire is held for them. The two
+/// compares that erase the held carries move up one bit (windows tg[N - k, N) for tg[N - 1 - k, N - 1)), and add 2's
+/// open ripple starts one bit higher. Same Toffoli; 3 wires fewer from the end of the adds to the end of the erases.
+/// h1 has no exact erase any more, so at most 2 top carries are shed around the fold, and the forward fold's own shed
+/// of the top wires (fin 4, 5) leaves x256 and h1 in place. Not on reverse tick 0. false: as candidate V.
+/// Builder counts at peak 1236 on candidate V (768640.2, gate list e957530d; both y20 switches off give it byte for
+/// byte), 10 October 2026:
+///   Y20_CUT, ranges 130 / 124:            expected=768229.2 (5bc60bb1; against V 0 outputs differ on 30 draws and on
+///     both stress files, phase shots 345 / 337)
+///   and reverse TO = 125 (tick 124 fits):  expected=768197.9 (303b7654; 0 differ on 30 draws; slope file 710 differ,
+///     13 wrong only in V and 4 only here; denominator file 0)
+/// Reverse TO = 126 and forward TO = 131 are each one wire short: the cuts free 3 wires and take 2 (reverse) or 3
+/// (forward) places from the shed.
+const Y20_CUT: bool = true;
+/// y20-ripple, "closed ripple": on these ticks ([from, to)) add 2's chunked part runs to the top (its held carry m2
+/// is the carry into the top wire x256, or into bit 255 without Y20_CUT) and no ripple stays open over the windows of
+/// the two held carries. Their erases then read the register through add 2: its carries are built again on the window
+/// (k + Y20_G2 Toffoli, on the 3/4 of the shots where either measures 1), and that chain's top wire is m2's own
+/// value, so m2's compare runs on 1/8 of the shots. k wires fewer from the fold to the end of the erases, for
+/// (3k + 3)/8 Toffoli a pass. Needs the room for two rebuilt chains and a compare (3k + 1). Empty: off.
+/// It also puts k more bits into add 2's chunked part, which takes one more chunk on most passes. Builder counts:
+///   alone on V, forward [80, 109) and reverse [1, 108):                         expected=768686.6 (46.4 over V)
+///   on the head, every pass where it fits (forward [1, 109), reverse [1, 108)):  expected=768598.6 (400.7 over)
+///   on the head, forward [(83, 87), (96, 107)], reverse [(81, 84), (86, 87), (93, 104), (106, 108)]:
+///                                                                                expected=768146.8 (51.1 under; 7e219890)
+///   the same without reverse 106, 107, Y20_G2 = 0 / 2 / 4:                       768150.8 / 768195.8 / 768240.8
+/// Off at the head: under the round's bar, and 116 more phase shots than the head on the slope stress file.
+const Y20_CLOSE_FWD: &[(usize, usize)] = &[];
+const Y20_CLOSE_REV: &[(usize, usize)] = &[];
+/// Bits below the window on which the closed ripple's rebuilt chain of add 2 starts (0: seeded just under the window).
+const Y20_G2: usize = 0;
+fn y20_close_on(t: usize, rev: bool) -> bool {
+    (if rev { Y20_CLOSE_REV } else { Y20_CLOSE_FWD }).iter().any(|&(a, b)| t >= a && t < b)
+}
+/// y21-shed (10 October 2026), "top cut": on these ticks ([from, to)) add 1's chunked part runs to the top (256 bits;
+/// its top target bit is the wire that holds add 0's cut carry g0), so the wire it leaves is its carry out x257 and
+/// h1 (its carry into bit 256) is never held: one wire fewer from the end of add 2 to the joint erase. x257 has no
+/// exact erase without h1, so it stays through the fold and the erase of the top wires and is measured first in the
+/// joint erase. Its fix needs h1: when its bit is set, add 1's chain is built (the chain of g0's erase, the same
+/// window and seed), one step more gives x257's value (Z), and the chain's top turns the wire x256 (g0 ^ h1) into g0
+/// before that is measured; g0's compare then runs on the chain as today. When x257's bit is clear, x256 is measured
+/// as g0 ^ h1 and the chain runs only when its bit is set, with a Z on its top for h1. By count at k = 20:
+/// 24.5 expected Toffoli for 24.25 (chain 20 on 1/2, compare 19 on 1/4; chain and compare on 1/4; x257's own fix
+/// is a CZ and a Z once h1 is on a wire).
+/// Add 1's own compare is not run. The forward fold's own shed of the top wires then takes x258 alone (fin 4).
+/// Needs Y20_CUT; not with the closed ripple. Empty: off (candidate W byte for byte).
+const Y21_TOP_FWD: &[(usize, usize)] = &[(1, 86), (91, 106), (107, 999)];
+const Y21_TOP_REV: &[(usize, usize)] = &[(1, 84), (89, 103), (104, 999)];
+fn y21_top_on(t: usize, rev: bool) -> bool {
+    (if rev { Y21_TOP_REV } else { Y21_TOP_FWD }).iter().any(|&(a, b)| t >= a && t < b)
+}
+/// y21-shed, "deep shed": on these ticks the last ripple carry cq(N - 3) leaves around the fold as well (one more
+/// place). The erase of the top wires right after the fold reads it, and its own erase reads the carry below, so the
+/// whole block is built again after the fold (forward: after the ladder, inside the fold's own shed of the top wires;
+/// reverse: right after the fold), the top wires are erased, and the block is shed again for the erases of the held
+/// carries. Exact (measured erases and rebuilds only); block + 1 Toffoli more on the pass. Needs the whole block shed
+/// there. Empty: off.
+const Y21_DEEP_FWD: &[(usize, usize)] = &[(130, 131)];
+const Y21_DEEP_REV: &[(usize, usize)] = &[(126, 127)];
+fn y21_deep_on(t: usize, rev: bool) -> bool {
+    (if rev { Y21_DEEP_REV } else { Y21_DEEP_FWD }).iter().any(|&(a, b)| t >= a && t < b)
+}
 /// y18-next (9 October 2026), "late tops": the three wires at the top of adds 0 and 1 (x256 = add 0's carry out of bit
 /// 255; h1 and x257 = add 1's carries out of bits 255 and 256) are built after add 2's chunked part, just before its
 /// open ripple, and not at the end of their own adds. Nothing between reads them: add 1's chunked part ends at bit 254
@@ -122,6 +191,15 @@ struct ESh {
     b2: QubitId,
     b3: QubitId,
     s: [QubitId; 3],
+    /// y20 (Y20_CUT): x256 and h1 are the adds' cut carries and stay; only x258, the two top carries and x257 leave
+    direct: bool,
+    /// y21 (top cut): there is no h1 and x257 stays too; only x258 and the two top carries leave
+    top1: bool,
+    /// y21 (deep shed): the ripple's carries from m2 (index 0, stays) up to cq(N - 3) (the last, = cq3), with the
+    /// register and source wires each is the majority of; empty: off
+    deep_c: Vec<QubitId>,
+    deep_a: Vec<QubitId>,
+    deep_b: Vec<QubitId>,
 }
 impl ESh {
     /// (F1, F2): x257 = AND(F1, F2) ^ h1; (H1, H2): h1 = AND(H1, H2) ^ m1; (G1, G2): x256 = AND(G1, G2) ^ m0
@@ -144,10 +222,19 @@ fn esh_out(c: &mut Builder, st: &ESh) {
     m_carry_erase(c, st.x258, st.x257, &l(st.b1), st.cq1);
     m_carry_erase(c, st.cq1, st.x256, &l(st.b2), st.cq2);
     m_carry_erase(c, st.cq2, st.t255, &l(st.b3), st.cq3);
+    for j in (1..st.deep_c.len()).rev() {
+        m_carry_erase(c, st.deep_c[j], st.deep_a[j - 1], &l(st.deep_b[j - 1]), st.deep_c[j - 1]);
+    }
+    if st.top1 {
+        return; // x256 holds X1[256] and x257 its own value, both without add 2's sums
+    }
     let (f1, f2) = st.f();
     c.cx(st.h1, st.x257);
     lin_and_erase(c, st.x257, &f1, &f2);
     lin_xor_into(c, &f2, st.x256); // x256 = X0[256]
+    if st.direct {
+        return;
+    }
     let (h1, h2) = st.h();
     c.cx(st.m1, st.h1);
     lin_and_erase(c, st.h1, &h1, &h2);
@@ -157,17 +244,27 @@ fn esh_out(c: &mut Builder, st: &ESh) {
 }
 /// Build the six wires again, in the opposite order (fresh wires).
 fn esh_in(c: &mut Builder, st: &mut ESh) {
-    let (g1, g2) = st.g();
-    st.x256 = lin_and(c, &g1, &g2);
-    c.cx(st.m0, st.x256);
-    let (h1, h2) = st.h();
-    st.h1 = lin_and(c, &h1, &h2);
-    c.cx(st.m1, st.h1);
-    let (_, f2) = st.f();
-    lin_xor_into(c, &f2, st.x256); // x256 = X1[256]
-    let (f1, f2) = st.f();
-    st.x257 = lin_and(c, &f1, &f2);
-    c.cx(st.h1, st.x257);
+    if !st.direct {
+        let (g1, g2) = st.g();
+        st.x256 = lin_and(c, &g1, &g2);
+        c.cx(st.m0, st.x256);
+        let (h1, h2) = st.h();
+        st.h1 = lin_and(c, &h1, &h2);
+        c.cx(st.m1, st.h1);
+    }
+    if !st.top1 {
+        let (_, f2) = st.f();
+        lin_xor_into(c, &f2, st.x256); // x256 = X1[256]
+        let (f1, f2) = st.f();
+        st.x257 = lin_and(c, &f1, &f2);
+        c.cx(st.h1, st.x257);
+    }
+    for j in 1..st.deep_c.len() {
+        st.deep_c[j] = m_carry(c, st.deep_a[j - 1], &l(st.deep_b[j - 1]), st.deep_c[j - 1]);
+    }
+    if st.deep_c.len() > 1 {
+        st.cq3 = st.deep_c[st.deep_c.len() - 1];
+    }
     st.cq2 = m_carry(c, st.t255, &l(st.b3), st.cq3);
     st.cq1 = m_carry(c, st.x256, &l(st.b2), st.cq2);
     st.x258 = m_carry(c, st.x257, &l(st.b1), st.cq1);
@@ -317,10 +414,12 @@ const Y15_KEEP_ROOM: usize = 96;
 /// seventh wire inside the fold and reverse TO = 125 a third (none found at about 1 Toffoli).
 /// The new passes do not give U's outputs: on 30 draws 8 outputs differ, 6 wrong only in U, 1 wrong only here, 1 wrong
 /// in both. The sheds are identities (forced on every pass: 0 outputs differ on 30 draws and on both stress files).
+/// y20-ripple (10 October 2026, base = candidate V, 768640.2 x 1236 with 130 / 124): with Y20_CUT reverse TO = 125
+/// (expected=768197.9); see Y20_CUT for the counts and for why 131 / 126 do not fit.
 pub(super) const Y15_FUSED_FWD_FROM: usize = 0;
-pub(super) const Y15_FUSED_FWD_TO: usize = 130;
+pub(super) const Y15_FUSED_FWD_TO: usize = 131;
 pub(super) const Y15_FUSED_REV_FROM: usize = 0;
-pub(super) const Y15_FUSED_REV_TO: usize = 124;
+pub(super) const Y15_FUSED_REV_TO: usize = 127;
 /// y16-late: where the fold does not fit the room left, a block of carries of add 2's open ripple (the carries into
 /// its positions N - 3 - shed .. N - 4, just under the three the top wires are erased from) is erased before the fold
 /// and built again only before the ripple is closed. The erase is measured (0 Toffoli: each carry is the majority of
@@ -407,7 +506,7 @@ const Y17_FIXED_REV_LEAN: usize = Y16_FIXED_REV_COPY + 2;
 /// m0's erase will have with nothing shed; `need_m`: what it takes (its rebuilt chain and its compare); `pool`: the
 /// carries of the block; `fixed`: the wires the fold holds beside its ladder's carries.
 #[allow(clippy::too_many_arguments)]
-fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usize, pool: usize, fmax: usize) -> (usize, usize, usize, usize, usize) {
+fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usize, pool: usize, fmax: usize, tops_max: usize, at: (bool, usize)) -> (usize, usize, usize, usize, usize) {
     if !Y16_SHED || !Y15_CORE_V2 || !Y15_JOINT_M || !on {
         return (0, 0, 0, 0, 0);
     }
@@ -422,14 +521,16 @@ fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usi
     // y18-next: past the three top wires the fold sheds wires of its own (see Y18_FIN)
     let fmax = if Y18_FIN { fmax } else { 0 };
     let rest_f = short_f - short_f.min(block);
-    let fin = rest_f - rest_f.min(Y17_TOPS_MAX);
+    let fin = rest_f - rest_f.min(tops_max);
     let tops = (rest_f - fin).max(usize::from(Y16_TOP_ALWAYS && block > 0)).max(Y17_TOPS_MIN);
     let rest = short_m - short_m.min(block);
     let gsh = rest.min(gmax);
     let c3m = (rest - gsh).max(usize::from(Y17_C3M_ALWAYS));
     assert!(
         rest - gsh <= usize::from(Y17_C3M) && fin <= fmax && tops <= 3 && c3m <= 1,
-        "y16: the room is too small: fold short of {short_f} (room {room_fold}, need {need}), m0's erase short of {short_m} (room {room_m}, need {need_m}), block {pool} + {Y17_TOPS_MAX} + {fmax} for the fold, + {gmax} + {} for the erase",
+        "y16 at {} t={}: the room is too small: fold short of {short_f} (room {room_fold}, need {need}), m0's erase short of {short_m} (room {room_m}, need {need_m}), block {pool} + {tops_max} + {fmax} for the fold, + {gmax} + {} for the erase",
+        if at.0 { "rev" } else { "fwd" },
+        at.1,
         usize::from(Y17_C3M)
     );
     (block, tops, c3m, gsh, fin)
@@ -1605,6 +1706,13 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     // (x256, h1, x257) once built: at the end of adds 0 and 1, or after add 2's chunked part (Y18_LATE_TOPS)
     let mut top3: Option<(QubitId, QubitId, QubitId)> = None;
     let late = Y18_LATE_TOPS && !swap01;
+    // y20: direct cuts (the chunked parts of adds 0 and 1 one bit longer) and the closed ripple on this pass
+    let cut = Y20_CUT && late && Y15_JOINT_M;
+    let dcut = usize::from(cut);
+    let close = !swap01 && late && Y15_JOINT_M && y20_close_on(t, rev);
+    // y21: add 1's chunked part to the top on this pass (no h1; m1 is then x257)
+    let top1 = cut && !close && y21_top_on(t, rev);
+    let deep = cut && !close && y21_deep_on(t, rev);
     let mut pads18: Vec<QubitId> = Vec::new();
     let _ = y18_log();
     let a_pre0 = c.active_qubits();
@@ -1613,7 +1721,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         // first: X0' = T + 2 S'1 on bits [1, 257) (T has no bit 256); held: m1 = the carry into bit 255, h1 = the
         // carry into bit 256
         c.cx_all(s[1], b);
-        (m1, kept1) = low_keep_add(c, &b[..N - 2], &tg[1..N - 1], proxy, rev, keep[1]);
+        (m1, kept1) = low_keep_add(c, &b[..N - 2 + dcut], &tg[1..N - 1 + dcut], proxy, rev, keep[1]);
         let h1 = m_carry(c, tg[N - 1], &l(b[N - 2]), m1);
         c.cx(b[N - 2], tg[N - 1]);
         c.cx(m1, tg[N - 1]);
@@ -1623,7 +1731,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         a_pre1 = c.active_qubits();
         // second: X1' = X0' + S'0 on bits [0, 256); held: m0 = the carry into bit 255; g = its carry out
         c.cx_all(s[0], b);
-        (m0, kept0) = low_keep_add(c, &b[..N - 1], &tg[..N - 1], proxy, rev, keep[0]);
+        (m0, kept0) = low_keep_add(c, &b[..N - 1 + dcut], &tg[..N - 1 + dcut], proxy, rev, keep[0]);
         let g = m_carry(c, tg[N - 1], &l(b[N - 1]), m0);
         c.cx(b[N - 1], tg[N - 1]);
         c.cx(m0, tg[N - 1]);
@@ -1639,7 +1747,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     } else {
         // add 0: X0 = T + S'0; held: m0 = the carry into bit 255
         c.cx_all(s[0], b);
-        (m0, kept0) = low_keep_add(c, &b[..N - 1], &tg[..N - 1], proxy, rev, keep[0]);
+        (m0, kept0) = low_keep_add(c, &b[..N - 1 + dcut], &tg[..N - 1 + dcut], proxy, rev, keep[0]);
         let x256e = if late {
             None
         } else {
@@ -1657,7 +1765,14 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         a_pre1 = c.active_qubits();
         // add 1: X1 = X0 + 2 S'1 on bits [1, 257); held: m1, h1 = the carries into its top two positions
         c.cx_all(s[1], b);
-        (m1, kept1) = low_keep_add(c, &b[..N - 2], &tg[1..N - 1], proxy, rev, keep[1]);
+        (m1, kept1) = if top1 {
+            // y21: all 256 bits; the top target bit is m0 (g0 = X0[256]), which then holds X1[256]
+            let mut a1: Vec<QubitId> = tg[1..].to_vec();
+            a1.push(m0);
+            low_keep_add(c, &b[..N], &a1, proxy, rev, keep[1])
+        } else {
+            low_keep_add(c, &b[..N - 2 + dcut], &tg[1..N - 1 + dcut], proxy, rev, keep[1])
+        };
         if let Some(x256) = x256e {
             let h1 = m_carry(c, tg[N - 1], &l(b[N - 2]), m1);
             let x257 = m_carry(c, x256, &l(b[N - 1]), h1);
@@ -1678,16 +1793,28 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     // add 2: X = X1 + 4 S'2 on bits [2, 258); its top ripple [sp2, 256) stays open (register, source and carries
     // each on their own wires, sums not written) through the fold and the erases
     c.cx_all(s[2], b);
-    let (k0, seed0) = cells::y15_split_spec(proxy, rev, N - 1);
-    let (kk1, seed1) = cells::y15_split_spec(proxy, rev, N - 2);
+    let (k0, seed0) = cells::y15_split_spec(proxy, rev, N - 1 + dcut);
+    let (kk1, seed1) = cells::y15_split_spec(proxy, rev, N - 2 + dcut);
     // (swap01: it is the first add's carry m1 whose erase builds a chain again, on its window and the guard)
-    let sp2 = N - 3 - if swap01 { (kk1 + Y15_GUARD).max(k0) } else { (k0 + Y15_GUARD).max(kk1) };
+    let kwin = if swap01 { (kk1 + Y15_GUARD).max(k0) } else { (k0 + Y15_GUARD).max(kk1) };
+    // y20: the closed ripple leaves only the steps into the top wires open (and bit 255's without the direct cuts)
+    let sp2 = if close { N - 3 + dcut } else { N - 3 + dcut - kwin };
     let (m2, kept2) = low_keep_add(c, &b[..sp2], &tg[2..2 + sp2], proxy, rev, keep[2]);
     for &q in &pads18 {
         c.release_clean(q); // never written
     }
     let (x256, h1, x257) = match top3 {
         Some(t) => t,
+        // y21: m0 holds X1[256] and m1 is x257 (the middle entry, h1, is not a wire of its own: never read)
+        None if top1 => (m0, m1, m1),
+        None if cut => {
+            // y20: m0 is g0 = X0[256] and m1 is h1; the chunked parts wrote bit 255, so only x257 is built here
+            let s1f = |i: usize| Lin::of(&[b[i], s[2], s[1]]);
+            let x257 = m_carry(c, m0, &s1f(N - 1), m1);
+            lin_xor_into(c, &s1f(N - 1), m0);
+            c.cx(m1, m0);
+            (m0, m1, x257)
+        }
         None => {
             // y18-next: the tops of adds 0 and 1 now (b holds the source complemented by s2: S'i[j] = b[j] ^ s2 ^ si)
             let s0f = |i: usize| Lin::of(&[b[i], s[2], s[0]]);
@@ -1723,6 +1850,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     let e_add2 = c.expected_total();
     let a_fold = c.active_qubits();
     let log2 = y18_log();
+    super::super::pingpong::Y17_EXTRA.with(|e| e.set(Y18_PRICE + Y19_PRICE_FOLD));
     // the two lower top wires hold their sums while the fold reads them
     c.cx(b[N - 2], x256);
     c.cx(cq(N - 2), x256);
@@ -1733,9 +1861,12 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     // and m1; m0's erase holds m2, the ripple's carries up to cq(N - 3), its chain of k0 + Y15_GUARD and k0 - 1 compare
     // carries.
     let room_now = cells::cap().saturating_sub(c.active_qubits() as usize);
-    let live_m = 1 + (N - 3 - sp2);
+    let live_m = 1 + (N - 3).saturating_sub(sp2);
     let shed_on = !kept.iter().any(|k| !k.is_empty()) && (!rev || !wc.is_empty() || lean_here || yg_here);
-    let fmax = if rev { 2 } else { 6 };
+    // y20: with the direct cuts h1 and x256 stay through the fold (2 top carries to shed, 2 more wires in the fold's
+    // own shed); with the closed ripple as well the carry under the top one is m2 itself
+    let fmax = (if rev { 2 } else if top1 { 4 } else if cut { 5 } else { 6 }) + usize::from(deep);
+    let tops_max = if cut { if close { 1 } else { 2 } } else { Y17_TOPS_MAX };
     let (shed, tops, c3m, gsh, fin) = y16_shed(
         shed_on,
         if !rev {
@@ -1749,14 +1880,23 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         },
         room_now,
         cells::cap().saturating_sub(a_start as usize + live_m),
-        if swap01 { kk1 + Y15_GUARD + kk1 - 1 } else { k0 + Y15_GUARD + k0 - 1 },
-        N - 4 - sp2,
+        if swap01 { kk1 + Y15_GUARD + kk1 - 1 } else { k0 + Y15_GUARD + k0 - 1 + if close { kwin + Y20_G2 } else { 0 } },
+        (N - 4).saturating_sub(sp2),
         fmax,
+        tops_max,
+        (rev, t),
     );
+    assert!(!close || ((shed, c3m, gsh) == (0, 0, 0) && fin <= 3), "y20: the closed ripple on {} t={t} needs a shed it does not have: {:?}", if rev { "rev" } else { "fwd" }, (shed, tops, c3m, gsh, fin));
     // the top carry: cq(N - 1) = MAJ(x256', S'2[N - 2], cq(N - 2)), and x256 holds its sum x256' ^ S'2[N - 2] ^ cq(N - 2)
     // y18-next: with the top wires leaving inside the forward fold (fin 4 to 6) the top carries are not shed here
     let esh_on = !rev && !swap01 && Y15_CORE_V2 && fin.max(Y18_FIN_MIN.min(fmax)) >= 4;
     let tops_pre = if esh_on { 0 } else { tops };
+    assert!(
+        !deep || (shed == (N - 4).saturating_sub(sp2) && shed >= 1 && if rev { tops_pre == 2 } else { esh_on }),
+        "y21: the deep shed on {} t={t} needs the whole block shed and the top carries gone: {:?}",
+        if rev { "rev" } else { "fwd" },
+        (shed, tops, c3m, gsh, fin)
+    );
     if tops_pre >= 1 {
         c.cx(cq(N - 2), cq(N - 1));
         lin_and_erase(c, cq(N - 1), &Lin::of(&[x256, b[N - 2]]), &Lin::of(&[b[N - 2], cq(N - 2)]));
@@ -1776,17 +1916,28 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     let fin = if swap01 || !Y15_CORE_V2 { 0 } else { fin.max(Y18_FIN_MIN.min(fmax)) };
     let gsh = if swap01 { 0 } else { gsh.max(Y18_GSHED_MIN.min(Y15_GUARD.saturating_sub(1))) };
     let (sh_lo, sh_hi) = (N - 3 - shed, N - 3);
-    for i in (sh_lo..sh_hi).rev() {
-        m_carry_erase(c, cq(i), acc2[i - 1], &l(b[i - 1]), cq(i - 1));
+    // y21, deep shed: reverse, cq(N - 3) first (the top carries are gone); forward, the fold sheds all of them itself
+    if deep && rev {
+        m_carry_erase(c, cq(N - 3), acc2[N - 4], &l(b[N - 4]), cq(N - 4));
     }
-    let mut esh: Option<ESh> = esh_on.then(|| ESh { x256, x257, x258, h1, m0, m1, cq1: cq(N - 1), cq2: cq(N - 2), cq3: cq(N - 3), t255: tg[N - 1], b1: b[N - 1], b2: b[N - 2], b3: b[N - 3], s });
+    if !(deep && !rev) {
+        for i in (sh_lo..sh_hi).rev() {
+            m_carry_erase(c, cq(i), acc2[i - 1], &l(b[i - 1]), cq(i - 1));
+        }
+    }
+    assert!(!cut || tops_pre <= 2);
+    let mut esh: Option<ESh> = esh_on.then(|| ESh { x256, x257, x258, h1, m0, m1, cq1: cq(N - 1), cq2: cq(N - 2), cq3: cq(N - 3), t255: tg[N - 1], b1: b[N - 1], b2: b[N - 2], b3: b[N - 3], s, direct: cut, top1,
+        deep_c: if deep { cc[..=N - 3 - sp2].to_vec() } else { Vec::new() },
+        deep_a: if deep { acc2[sp2..N - 3].to_vec() } else { Vec::new() },
+        deep_b: if deep { b[sp2..N - 3].to_vec() } else { Vec::new() },
+    });
     let plan = if rev {
         // the reverse fold reads the source's low 6 bits as they are (b holds the source complemented by s[2])
         for j in 0..6 {
             c.cx(s[2], b[j]);
         }
         let plan = if Y15_CORE_V2 {
-            fold_rev_v2(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, &b[..6], &kept, &wc, lean_here, if swap01 { [2, 0, 1] } else { [2, 1, 0] }, &yg, fin)
+            fold_rev_v2(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, &b[..6], &kept, &wc, lean_here, if swap01 { [2, 0, 1] } else { [2, 1, 0] }, &yg, fin.min(2))
         } else {
             fold_rev(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, &b[..6], &wc)
         };
@@ -1802,6 +1953,12 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     } else {
         fold_fwd(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2)
     };
+    // y21, deep shed, reverse: the block and cq(N - 3) again, bottom up
+    if deep && rev {
+        for i in sh_lo..=sh_hi {
+            cc[i - sp2] = m_carry(c, acc2[i - 1], &l(b[i - 1]), cc[i - 1 - sp2]);
+        }
+    }
     // y17-edge: h1 and cq(N - 2) again
     let h1 = if tops_pre >= 3 {
         let q = lin_and(c, &h1_forms.0, &h1_forms.1);
@@ -1819,6 +1976,9 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
             cc[N - 1 - sp2] = st.cq1;
             cc[N - 2 - sp2] = st.cq2;
             cc[N - sp2] = st.x258;
+            for j in 1..st.deep_c.len() {
+                cc[j] = st.deep_c[j];
+            }
             (st.x256, st.x257, st.x258, st.h1)
         }
         None => (x256, x257, x258, h1),
@@ -1841,12 +2001,17 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     // the three top wires and the carries next to them (measurements and Clifford gates only)
     m_carry_erase(c, x258, x257, &l(b[N - 1]), cq(N - 1));
     m_carry_erase(c, cq(N - 1), x256, &l(b[N - 2]), cq(N - 2));
-    m_carry_erase(c, cq(N - 2), tg[N - 1], &l(b[N - 3]), cq(N - 3));
+    // (y20, closed ripple with the direct cuts: cq(N - 2) is m2 itself)
+    if sp2 <= N - 3 {
+        m_carry_erase(c, cq(N - 2), tg[N - 1], &l(b[N - 3]), cq(N - 3));
+    }
     // x257 = MAJ(S'1[255], X0[256], h1), with X0[256] ^ h1 = X1[256] ^ S'1[255] and S'1 = b ^ s2 ^ s1
     // (swap01: x257 = MAJ(S'1[255], g, h1) and x256 holds g ^ h1 ^ S'1[255]: the same forms; x256 is then g)
-    c.cx(h1, x257);
-    lin_and_erase(c, x257, &Lin::of(&[x256, b[N - 1], s[2], s[1]]), &Lin::of(&[b[N - 1], s[2], s[1], h1]));
-    lin_xor_into(c, &Lin::of(&[b[N - 1], s[2], s[1], h1]), x256); // x256 = X0[256]
+    if !top1 {
+        c.cx(h1, x257);
+        lin_and_erase(c, x257, &Lin::of(&[x256, b[N - 1], s[2], s[1]]), &Lin::of(&[b[N - 1], s[2], s[1], h1]));
+        lin_xor_into(c, &Lin::of(&[b[N - 1], s[2], s[1], h1]), x256); // x256 = X0[256]
+    }
     if swap01 {
         // h1 = MAJ(S'1[254], T[255], m1), with T[255] ^ m1 = X0'[255] ^ S'1[254] and X0'[255] = X1'[255] ^ S'0[255] ^ m0
         c.cx(m1, h1);
@@ -1859,7 +2024,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         // g = MAJ(S'0[255], X0'[255], m0), with X0'[255] ^ m0 = X1'[255] ^ S'0[255]
         c.cx(m0, x256);
         lin_and_erase(c, x256, &Lin::of(&[tg[N - 1], b[N - 1], s[2], s[0]]), &Lin::of(&[b[N - 1], s[2], s[0], m0]));
-    } else {
+    } else if !cut {
         // h1 = MAJ(S'1[254], X0[255], m1), with X0[255] ^ m1 = X1[255] ^ S'1[254]
         c.cx(m1, h1);
         lin_and_erase(c, h1, &Lin::of(&[tg[N - 1], b[N - 2], s[2], s[1]]), &Lin::of(&[b[N - 2], s[2], s[1], m1]));
@@ -1871,6 +2036,12 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
             &Lin::of(&[tg[N - 1], b[N - 2], s[2], s[1], m1, b[N - 1], s[2], s[0]]),
             &Lin::of(&[b[N - 1], s[2], s[0], m0]),
         );
+    }
+    // y21, deep shed: the block was built again for the erase of the top wires; shed again for the erases below
+    if deep {
+        for i in (sh_lo..sh_hi).rev() {
+            m_carry_erase(c, cc[i - sp2], acc2[i - 1], &l(b[i - 1]), cc[i - 1 - sp2]);
+        }
     }
     let e_tops = c.expected_total();
     // y17-edge: cq(N - 3) is idle until the ripple is closed; its inputs are shed, so it is measured now and its phase
@@ -1960,22 +2131,162 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         c.free_bit(nb);
         c.free_bit(bit_i);
         c.free_bit(bit_o);
-    } else if Y15_JOINT_M {
-        // m0 and m1 are measured together. m0's fix builds add 1's carries again on its window; one step more and the
-        // chain's top wire is the carry into bit 255 of add 1, which is m1's own value: m1's fix is then a Z on it.
-        // m1's own chunk compare runs only when m0's branch did not (a quarter of the shots, not a half).
-        let split = N - 1;
+    } else if top1 {
+        // y21, top cut: x257 (on m1) is measured first; x256 (on m0) holds X1[256]
+        assert!(cut && !close && gsh == 0 && Y15_GUARD == 0);
+        let split = N;
         let lo = split - k0;
         let i0 = lo - 1 - Y15_GUARD;
         assert!(sp2 + 2 <= i0 + 1 && i0 >= 1);
         let s1f = |i: usize| Lin::of(&[b[i], s[2], s[1]]);
+        lin_xor_into(c, &s1f(N - 1), m0); // m0 = g0 ^ h1
+        let bitx = c.alloc_bit();
+        c.hmr(m1, bitx);
+        c.free(m1);
+        let nbx = c.alloc_bit();
+        c.bit_store1(nbx);
+        c.bit_xor_into(nbx, bitx);
+        // add 1's carries on the window, built again: r[j] = C1[i0 + j]; the top wire is C1[N - 1] = h1
+        let chain = |c: &mut Builder| -> (Vec<Lin>, Vec<(QubitId, Lin, Lin, Lin)>) {
+            let mut r: Vec<Lin> = vec![s1f(i0 - 1)];
+            let mut rr: Vec<(QubitId, Lin, Lin, Lin)> = Vec::new();
+            for i in i0..split - 1 {
+                let ci = r[i - i0].clone();
+                let (fa, fb) = (s1f(i).x(&ci), l(tg[i + 1]).x(&s1f(i)));
+                let q = lin_and(c, &fa, &fb);
+                lin_xor_into(c, &ci, q);
+                rr.push((q, fa, fb, ci));
+                r.push(l(q));
+            }
+            (r, rr)
+        };
+        let unchain = |c: &mut Builder, mut rr: Vec<(QubitId, Lin, Lin, Lin)>| {
+            while let Some((q, fa, fb, ci)) = rr.pop() {
+                lin_xor_into(c, &ci, q);
+                lin_and_erase(c, q, &fa, &fb);
+            }
+        };
+        // g0's fix: the compare [X0 < S'0] on bits [lo, 256), X0[j] = X1[j] ^ S'1[j - 1] ^ C1[j - 1]
+        let cmp0 = |c: &mut Builder, r: &[Lin]| {
+            for j in lo..split {
+                lin_xor_into(c, &s1f(j - 1).x(&r[j - 1 - i0]), tg[j]);
+            }
+            let blo = seed0.map_or(lo, |sd| sd.min(lo));
+            for i in blo..split {
+                c.cx(s[2], b[i]);
+                c.cx(s[0], b[i]);
+            }
+            super::super::compare::cmp_lt_phase(c, &tg[lo..split], &b[lo..split], seed0.map(|sd| b[sd]));
+            for i in blo..split {
+                c.cx(s[0], b[i]);
+                c.cx(s[2], b[i]);
+            }
+            for j in (lo..split).rev() {
+                lin_xor_into(c, &s1f(j - 1).x(&r[j - 1 - i0]), tg[j]);
+            }
+        };
+        // x257's bit set: the chain now. x257 = AND(S'1[255] ^ h1, g0 ^ h1) ^ h1, so its fix is a CZ of the two forms
+        // (the second is the wire m0) and a Z on h1: no Toffoli. Then m0 = g0
+        c.push_condition(bitx);
+        let (ra, rra) = chain(c);
+        let ha = rra.last().expect("y21: the rebuilt chain is not empty").0;
+        for w in [b[N - 1], s[2], s[1], ha] {
+            c.cz(w, m0);
+        }
+        c.cz(ha, ha);
+        c.cx(ha, m0);
+        c.pop_condition();
+        let bit0 = c.alloc_bit();
+        c.hmr(m0, bit0);
+        c.release_clean(m0);
+        c.push_condition(bitx);
+        c.push_condition(bit0);
+        cmp0(c, &ra);
+        c.pop_condition();
+        unchain(c, rra);
+        c.pop_condition();
+        // x257's bit clear: m0 was measured as g0 ^ h1; with its bit set the chain, a Z on its top (h1), g0's compare
+        c.push_condition(nbx);
+        c.push_condition(bit0);
+        let (rb, rrb) = chain(c);
+        let hb = rrb.last().expect("y21: the rebuilt chain is not empty").0;
+        c.cz(hb, hb);
+        cmp0(c, &rb);
+        unchain(c, rrb);
+        c.pop_condition();
+        c.pop_condition();
+        e_m0 = c.expected_total();
+        c.free_bit(nbx);
+        c.free_bit(bitx);
+        c.free_bit(bit0);
+    } else if Y15_JOINT_M {
+        // m0 and m1 are measured together. m0's fix builds add 1's carries again on its window; one step more and the
+        // chain's top wire is the carry into bit 255 of add 1, which is m1's own value: m1's fix is then a Z on it.
+        // m1's own chunk compare runs only when m0's branch did not (a quarter of the shots, not a half).
+        let split = N - 1 + dcut;
+        let lo = split - k0;
+        let i0 = lo - 1 - Y15_GUARD;
+        assert!((close || sp2 + 2 <= i0 + 1) && i0 >= 1);
+        let s1f = |i: usize| Lin::of(&[b[i], s[2], s[1]]);
+        // y20, closed ripple: add 2's last sum bit (without the direct cuts) is written now, and m2 is measured with
+        // the other two
+        if close {
+            for i in (sp2..N - 2).rev() {
+                c.cx(b[i], acc2[i]);
+                c.cx(cc[i - sp2], acc2[i]);
+                assert!(i == sp2);
+            }
+        }
         let bit0 = c.alloc_bit();
         c.hmr(m0, bit0);
         c.release_clean(m0);
         let bit1 = c.alloc_bit();
         c.hmr(m1, bit1);
         c.free(m1);
+        let bit2 = close.then(|| {
+            let m = c.alloc_bit();
+            c.hmr(m2, m);
+            c.free(m2);
+            m
+        });
+        // y20: the register under add 2 on the windows, tg[wlo, split): X1[j] = X[j] ^ S'2[j - 2] ^ C2[j - 2], add 2's
+        // carries built again from Y20_G2 bits below (seeded with the source bit below; b holds S'2). The top of the
+        // chain is the carry into index sp2, m2's own value. Returns the chain for [`y20_unpeel`].
+        let wlo = split - kwin;
+        let i2 = (wlo - 2).saturating_sub(Y20_G2);
+        let peel = |c: &mut Builder| -> Vec<(QubitId, Lin, Lin, Lin)> {
+            assert!(i2 >= 1 && sp2 == split - 2);
+            let mut r2: Vec<Lin> = vec![l(b[i2 - 1])]; // r2[j] = C2[i2 + j]
+            let mut rr2: Vec<(QubitId, Lin, Lin, Lin)> = Vec::new();
+            for i in i2..sp2 {
+                let ci = r2[i - i2].clone();
+                let (fa, fb) = (l(b[i]).x(&ci), Lin::of(&[tg[i + 2], b[i]]));
+                let q = lin_and(c, &fa, &fb);
+                lin_xor_into(c, &ci, q);
+                rr2.push((q, fa, fb, ci));
+                r2.push(l(q));
+            }
+            let top2 = rr2.last().expect("y20: the rebuilt chain is not empty").0; // C2[sp2] = m2
+            c.push_condition(bit2.expect("y20: m2 is measured"));
+            c.cz(top2, top2);
+            c.pop_condition();
+            for j in wlo..split {
+                lin_xor_into(c, &l(b[j - 2]).x(&r2[j - 2 - i2]), tg[j]);
+            }
+            rr2
+        };
+        let unpeel = |c: &mut Builder, mut rr2: Vec<(QubitId, Lin, Lin, Lin)>| {
+            for j in (wlo..split).rev() {
+                let ci = if j - 2 == i2 { l(b[i2 - 1]) } else { l(rr2[j - 3 - i2].0) };
+                lin_xor_into(c, &l(b[j - 2]).x(&ci), tg[j]);
+            }
+            while let Some((q, fa, fb, ci)) = rr2.pop() {
+                lin_xor_into(c, &ci, q);
+                lin_and_erase(c, q, &fa, &fb);
+            }
+        };
         c.push_condition(bit0);
+        let peeled = close.then(|| peel(c));
         let mut r: Vec<Lin> = vec![s1f(i0 - 1)]; // r[j] = C1[i0 + j]
         let mut rr: Vec<(QubitId, Lin, Lin, Lin)> = Vec::new();
         for i in i0..split - 1 {
@@ -2034,16 +2345,27 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
             lin_xor_into(c, &ci, q);
             lin_and_erase(c, q, &fa, &fb);
         }
+        if let Some(rr2) = peeled {
+            unpeel(c, rr2);
+        }
         c.pop_condition();
         e_m0 = c.expected_total();
         // m1: the cells' chunk compare at index 254 of add 1, only when bit1 is set and bit0 is not
         let nb = c.alloc_bit();
         c.bit_store1(nb);
         c.bit_xor_into(nb, bit0);
-        let split = N - 2;
+        let split = N - 2 + dcut;
         let lo = split - kk1;
-        assert!(sp2 + 2 <= lo + 1);
+        assert!(close || sp2 + 2 <= lo + 1);
         let blo = seed1.map_or(lo, |sd| sd.min(lo));
+        let peeled = close.then(|| {
+            c.push_condition(bit1);
+            c.push_condition(nb);
+            let rr2 = peel(c);
+            c.pop_condition();
+            c.pop_condition();
+            rr2
+        });
         for i in blo..split {
             c.cx(s[2], b[i]);
             c.cx(s[1], b[i]);
@@ -2057,10 +2379,35 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
             c.cx(s[1], b[i]);
             c.cx(s[2], b[i]);
         }
+        if let Some(rr2) = peeled {
+            c.push_condition(bit1);
+            c.push_condition(nb);
+            unpeel(c, rr2);
+            c.pop_condition();
+            c.pop_condition();
+        }
+        // y20, closed ripple: m2's own compare (the cells' chunk compare at index sp2 of add 2, on its own sum),
+        // only when its bit is set and neither peel ran
+        if let Some(b2) = bit2 {
+            let nb1 = c.alloc_bit();
+            c.bit_store1(nb1);
+            c.bit_xor_into(nb1, bit1);
+            let (kk2, seed2) = cells::y15_split_spec(proxy, rev, sp2);
+            c.push_condition(b2);
+            c.push_condition(nb);
+            c.push_condition(nb1);
+            super::super::compare::cmp_lt_phase(c, &acc2[sp2 - kk2..sp2], &b[sp2 - kk2..sp2], seed2.map(|sd| b[sd]));
+            c.pop_condition();
+            c.pop_condition();
+            c.pop_condition();
+            c.free_bit(nb1);
+            c.free_bit(b2);
+        }
         c.free_bit(nb);
         c.free_bit(bit1);
         c.free_bit(bit0);
     } else {
+        assert!(!cut && !close);
         // m0: the compare [X0 < S'0] on bits [lo, 255); X0[j] = X1[j] ^ S'1[j - 1] ^ C1[j - 1], add 1's carries built
         // again from Y15_GUARD bits below the window (seeded with the source bit below), all on the measured half
         {
@@ -2126,6 +2473,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         }
     }
     let e_m1 = c.expected_total();
+    super::super::pingpong::Y17_EXTRA.with(|e| e.set(Y18_PRICE));
     let logm = y18_log();
     // y16-late: the shed carries again, bottom up
     for i in sh_lo..sh_hi {
@@ -2139,27 +2487,32 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     }
     let cq = |i: usize| cc[i - sp2];
     // close add 2's top ripple, then its split carry with the cells' chunk compare
-    for i in (sp2..N - 2).rev() {
-        c.cx(b[i], acc2[i]);
-        c.cx(cq(i), acc2[i]);
-        if i > sp2 {
-            m_carry_erase(c, cq(i), acc2[i - 1], &l(b[i - 1]), cq(i - 1));
+    let (kk2, _) = cells::y15_split_spec(proxy, rev, sp2);
+    if !close {
+        for i in (sp2..N - 2).rev() {
+            c.cx(b[i], acc2[i]);
+            c.cx(cq(i), acc2[i]);
+            if i > sp2 {
+                m_carry_erase(c, cq(i), acc2[i - 1], &l(b[i - 1]), cq(i - 1));
+            }
         }
+        let (kk2, seed2) = cells::y15_split_spec(proxy, rev, sp2);
+        cells::y15_erase_cmp(c, m2, &acc2[sp2 - kk2..sp2], &b[sp2 - kk2..sp2], seed2.map(|sd| b[sd]));
+        c.free(m2);
     }
-    let (kk2, seed2) = cells::y15_split_spec(proxy, rev, sp2);
-    cells::y15_erase_cmp(c, m2, &acc2[sp2 - kk2..sp2], &b[sp2 - kk2..sp2], seed2.map(|sd| b[sd]));
-    c.free(m2);
     c.cx_all(s[2], b);
     let e_end = c.expected_total();
     assert_eq!(c.active_qubits(), a_start, "y15: a wire was left behind");
     if Y15_TRACE {
         eprintln!(
-            "Y15_NEW {} t={t} active={a_start} room={} low={} at_fold={a_fold} sp2={sp2} k0={k0} k1={kk1} k2={kk2} seeds={:?} plan={plan:?} shed={shed} top={tops} c3m={c3m} gsh={gsh} fin={fin} \
+            "Y15_NEW {} t={t} active={a_start} room={} low={} at_fold={a_fold} sp2={sp2} k0={k0} k1={kk1} k2={kk2} cut={dcut} closed={} top1={} seeds={:?} plan={plan:?} shed={shed} top={tops} c3m={c3m} gsh={gsh} fin={fin} \
              add0={:.1} add1={:.1} add2={:.1} fold={:.1} tops={:.1} m0={:.1} m1={:.1} close={:.1} body={:.1}",
             if rev { "rev" } else { "fwd" },
             cells::cap().saturating_sub(a_start as usize),
             if !rev { "-" } else if lean_here { "lean" } else if yg_here { "ygate" } else if copy_here { "copy" } else if keep_on { "keep" } else { "chains" },
-            (seed0, seed1, seed2),
+            usize::from(close),
+            usize::from(top1),
+            (seed0, seed1),
             e_add0 - e_start,
             e_add1 - e_add0,
             e_add2 - e_add1,
@@ -2192,6 +2545,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
 fn body_capped(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b: &[QubitId], tg: &[QubitId], proxy: usize, rev: bool) {
     super::super::pingpong::Y17_EXTRA.with(|e| e.set(Y18_PRICE));
     let ((), peak) = c.r3_peak(|c| body(c, t, s, k1, k2, b, tg, proxy, rev));
+    super::super::pingpong::Y17_EXTRA.with(|e| e.set(Y18_PRICE + Y19_PRICE_FOLD));
     let dir = if rev { "rev" } else { "fwd" };
     if Y15_TRACE {
         eprintln!("Y16_PEAK {dir} t={t} peak={peak} cap={}", cells::cap());
