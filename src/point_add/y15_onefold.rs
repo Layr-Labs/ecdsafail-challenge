@@ -340,6 +340,73 @@ const Y15_REV_COPY_MBU: bool = true;
 /// y15-room: where the fold's ladder does not fit its room, the carries into bits 4 and 5 are erased before the ladder
 /// (measured, 0 Toffoli) and built again after it: 2 ANDs for 2 wires, paid only on those ticks.
 const Y15_LEAN45: bool = true;
+/// y28-loop (card s2-2), forward fold on the ticks where [`Y15_LEAN45`] fires: sums 4 and 5 are written before the
+/// ladder (the carries into bits 4 and 5 are still measured away there, with today's forms), and after the ladder
+/// nothing reads those two carries as values but the erase of the carry into bit 6. That carry is X-measured and the
+/// two are built again only under its bit: c4 = AND(acc[3], c3), c5 = AND(acc[4] ^ a4, a4 ^ c4) ^ c4 on the written
+/// sum, the phase is CZ(acc[5] ^ a5, a5 ^ c5) and Z(c5), and both are measured away again under the same bit at the
+/// places today's undo measures them (the gate list keeps the head's measurements in the head's order).
+/// 1 expected Toffoli for 2 on each such pass. false = the head, gate for gate.
+const Y28_LEAN_FWD: bool = true;
+/// y28-loop (card s2-4, step 1), reverse fold with the gate wires built first: the AND of the shift letter is read
+/// only by the clearing of y5 (its gate form is that AND) and of y3 (k1 ^ k2 ^ the AND), each under that wire's
+/// measured bit. It is built into a wire that holds 0 only where one of those bits is set (y5's, or with y5's clear
+/// y3's: 3/4 of the shots) and measured away at the head's place under the OR of the two. 0.75 expected Toffoli for 1
+/// on each such pass; the gate list keeps the head's measurements in the head's order. false = the head, gate for gate.
+const Y28_TT_REV: bool = true;
+/// y28-loop (card s2-4, step 2), forward fold: the same for the AND of the shift letter where it leaves for the
+/// ladder. After the ladder only the erases of y5 (forms: the AND, sum 5) and y3 (k1 ^ k2 ^ the AND, sum 3) read it,
+/// each under its own measured bit: it is built under y5's bit, or with that clear under y3's (0.75 expected Toffoli
+/// for the 1 of [`Y18_FIN`]'s third wire), and measured away at the head's place under the OR of the two.
+/// At that price it is the first wire to leave on a pass that sheds for the fold: one carry fewer in the block (or
+/// one top wire fewer), 0.75 for 1. false = the head, gate for gate.
+const Y28_TT_FWD: bool = true;
+/// y28-loop (card s2-5), reverse fold on the passes where [`Y15_LEAN45`] fires (gate wires first or lean chains): as
+/// [`Y28_LEAN_FWD`], sums 4 and 5 are written before the ladder. After it the register's old bits 4 and 5 are the
+/// forms acc[4] ^ n0 ^ c4 and acc[5] ^ n1 ^ c5, read by the clearing of the gate wires (y5's branch reads both, y4's
+/// reads bit 4, y3's neither) and by the erase of the carry into bit 6. The two carries are built into wires that
+/// hold 0 only on the branches that read them: c4 where y5's bit, y4's or c6's is set (7/8 of the shots), c5 where
+/// y5's or c6's is (3/4); each is measured away at the head's place under the OR of those bits. 1.625 expected
+/// Toffoli for 2 on each such pass. false = the head, gate for gate.
+const Y28_LEAN_REV: bool = true;
+/// y28-loop (card s2-1): on these ticks ([from, to), wires) the fold's ladder runs on 1 or 2 wires fewer than
+/// [`merged_plan`]'s least budget of 10. A kept carry named in the plan's drop list is X-measured as soon as the next
+/// chunk has read it (its exact compare on its own chunk, the carry below still live: the cost it has at the end
+/// today). At the end the erase of the kept carry above it lacks its carry-in: under that carry's measured bit the
+/// dropped one is built again as a value (its chunk's carry chain on the written sums, one AND a bit; the chain's
+/// lower carries are measured away at once), the compare runs, and the rebuilt carry is X-measured again with its own
+/// compare under its bit. One wire for 2.75 expected Toffoli, two for 10.0 (netlist model: 0 wrong windows, 0 unclean
+/// wires on 262,144 forward and 1,048,576 reverse inputs). On such a tick the deep shed ([`Y21_DEEP_FWD`]) is off.
+/// Empty: off (the head, gate for gate).
+/// Kept: one wire on the last one-fold tick of each direction (card s2-1). NOT kept: card s2-3, the one-fold range
+/// one tick wider with two wires dropped there ([`Y15_FUSED_FWD_TO`] = 132 and [`Y15_FUSED_REV_TO`] = 128 with
+/// (131, 132, 2) and (127, 128, 2) added here). It builds at peak 1,236 and is 73.75 Toffoli cheaper, but a one-fold
+/// pass in place of a three-fold pass fails on other inputs: on 90 draws 3 shots pass in entry Y and fail there, 8
+/// the other way, 1 output differs. An error trade, not an exact change.
+const Y28_DROP_FWD: &[(usize, usize, usize)] = &[(130, 131, 1)];
+const Y28_DROP_REV: &[(usize, usize, usize)] = &[(126, 127, 1)];
+fn y28_drop(t: usize, rev: bool) -> usize {
+    (if rev { Y28_DROP_REV } else { Y28_DROP_FWD }).iter().find(|&&(a, b, _)| t >= a && t < b).map_or(0, |&(_, _, n)| n)
+}
+/// y28 DIAGNOSTIC, used only with leapfrog.rs's `Y28_ALIGNED` (the aligned copy, never an entry): (tick, n) = n idle
+/// measurements (of a wire that holds 0) on that one-fold pass, between the erase of the top wires and the erases of
+/// the held carries. A pass that runs the dropped-carry ladder in place of the deep shed has fewer measurements than
+/// the head's (the deep shed measures its block three times); with the difference put back the gate list draws the
+/// head's number of random words from there on, and a paired run compares phase flags shot by shot. Every measurement
+/// between the adds and this point is an exact erase in both gate lists, so which random word each one draws does
+/// not matter.
+const Y28_PADS_FWD: &[(usize, usize)] = &[(130, 9)];
+const Y28_PADS_REV: &[(usize, usize)] = &[(126, 10)];
+fn y28_pads(t: usize, rev: bool) -> usize {
+    if !Y28_ALIGNED {
+        return 0;
+    }
+    (if rev { Y28_PADS_REV } else { Y28_PADS_FWD }).iter().find(|&&(a, _)| a == t).map_or(0, |&(_, n)| n)
+}
+/// The ladder's plans on bits [6, 56) for budgets 9 and 8 with the 0-based chunks whose kept carry is dropped
+/// (experiments/y28-loop/s2/ladder_drop.py: the cheapest of each kind).
+const Y28_PLAN9: ([usize; 10], [usize; 1]) = ([4, 8, 8, 7, 6, 5, 4, 3, 2, 3], [0]);
+const Y28_PLAN8: ([usize; 10], [usize; 2]) = ([7, 7, 7, 6, 6, 5, 4, 3, 2, 3], [0, 2]);
 /// y15-pack: with Y15_CORE_V2, Y15_KEEP_LOW and Y15_REV_COPY all on, the way a reverse tick-pass gets W's low bits is
 /// chosen by its room (the walk cap less the wires live when the tick's body starts): the adds' kept carries (no AND,
 /// 12 wires at the fold) where the room is Y15_KEEP_ROOM or more, the four CX copies (9.25 ANDs with the first
@@ -506,14 +573,15 @@ const Y17_FIXED_REV_LEAN: usize = Y16_FIXED_REV_COPY + 2;
 /// m0's erase will have with nothing shed; `need_m`: what it takes (its rebuilt chain and its compare); `pool`: the
 /// carries of the block; `fixed`: the wires the fold holds beside its ladder's carries.
 #[allow(clippy::too_many_arguments)]
-fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usize, pool: usize, fmax: usize, tops_max: usize, at: (bool, usize)) -> (usize, usize, usize, usize, usize) {
+fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usize, pool: usize, fmax: usize, tops_max: usize, at: (bool, usize), drop: usize) -> (usize, usize, usize, usize, usize) {
     if !Y16_SHED || !Y15_CORE_V2 || !Y15_JOINT_M || !on {
         return (0, 0, 0, 0, 0);
     }
     // the ladder's least budget on bits [6, MW): 10 at window 57 (as [`fold_plan`] finds it)
     let nbits = Y15_WIN - 6;
     let min_budget = (1..=nbits).find(|&b| merged_plan(nbits - 1, b).is_some() || merged_plan(nbits, b).is_some()).expect("y16: a ladder budget");
-    let need = fixed + min_budget - 2 * usize::from(Y15_LEAN45);
+    // y28: the ladder with `drop` kept carries dropped early runs on that many wires fewer
+    let need = fixed + min_budget - drop - 2 * usize::from(Y15_LEAN45);
     let (short_f, short_m) = (need.saturating_sub(room_fold), need_m.saturating_sub(room_m));
     // y18-next: the guard carries of m0's rebuilt chain come first for its erase (see Y18_GSHED)
     let gmax = if Y18_GSHED { Y15_GUARD.saturating_sub(1) } else { 0 };
@@ -664,6 +732,14 @@ fn addend_from_n(c: &mut Builder, recs: &mut Vec<Rec>, n: &[Lin], mw: usize) -> 
 /// The upper ladder of [`m_fold`] from bit `lo0` with carry-in `cin0`: acc[lo0..) += add[lo0..) + cin0 (mod 2^len),
 /// in chunks; a non-final chunk keeps its carry-out, erased at the end by an exact compare on half the shots.
 fn ladder(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: QubitId, plan: &[usize]) {
+    ladder_d(c, acc, add, lo0, cin0, plan, &[]);
+}
+/// [`ladder`]; `drops` (y28, card s2-1) = the 0-based chunks whose kept carry is measured away as soon as the next
+/// chunk has read it and built again under the measured bit of the kept carry above it (see [`Y28_DROP_FWD`]).
+fn ladder_d(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: QubitId, plan: &[usize], drops: &[usize]) {
+    if !drops.is_empty() {
+        return ladder_drop(c, acc, add, lo0, cin0, plan, drops);
+    }
     let mw = acc.len();
     assert_eq!(plan.iter().sum::<usize>(), mw - lo0, "y15 fold plan covers bits [lo, MW)");
     let mut kept: Vec<(usize, usize, QubitId, QubitId)> = Vec::new();
@@ -709,6 +785,110 @@ fn ladder(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: Qubit
         c.release_clean(out);
         c.push_condition(m);
         lin_lt_phase(c, &acc[lo..hi], &add[lo..hi], cin);
+        c.pop_condition();
+        c.free_bit(m);
+    }
+}
+
+/// One chunk of the fold's ladder, as [`ladder`] runs it: carries, sums written back, the carries erased. Returns the
+/// chunk's carry-out wire (a non-final chunk keeps it).
+fn ladder_chunk(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo: usize, w: usize, cin: QubitId, last: bool) -> Option<QubitId> {
+    let hi = lo + w;
+    let direct = last && w >= 2;
+    let mut cc = vec![cin];
+    for i in lo..(if last { hi - 1 - direct as usize } else { hi }) {
+        let t = m_carry(c, acc[i], &add[i], cc[i - lo]);
+        cc.push(t);
+    }
+    if direct {
+        let (i, ci) = (hi - 2, cc[w - 2]);
+        let (a, b) = (Lin::of(&[acc[i], ci]), add[i].x(&Lin::of(&[ci])));
+        let (ha, hb) = lin_pair_on(c, &a, &b);
+        c.ccx(ha, hb, acc[hi - 1]);
+        lin_pair_off(c, &a, &b);
+        c.cx(ci, acc[hi - 1]);
+    }
+    assert!(c.active_qubits() as usize <= cells::cap(), "y15 fold over the walk cap: {} > {}", c.active_qubits(), cells::cap());
+    for i in (lo..hi).rev() {
+        lin_xor_into(c, &add[i], acc[i]);
+        if direct && i == hi - 1 {
+            continue;
+        }
+        c.cx(cc[i - lo], acc[i]);
+        if i > lo {
+            m_carry_erase(c, cc[i - lo], acc[i - 1], &add[i - 1], cc[i - lo - 1]);
+        }
+    }
+    (!last).then(|| cc[w])
+}
+/// X-measure a kept carry of the ladder and fix its phase by the exact compare on its chunk [lo, hi) (carry-in `cin`),
+/// under the measured bit.
+fn kept_erase(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo: usize, hi: usize, cin: QubitId, out: QubitId) {
+    let m = c.alloc_bit();
+    c.hmr(out, m);
+    c.release_clean(out);
+    c.push_condition(m);
+    lin_lt_phase(c, &acc[lo..hi], &add[lo..hi], cin);
+    c.pop_condition();
+    c.free_bit(m);
+}
+/// y28 (card s2-1): [`ladder`] with the kept carries of the chunks in `drops` dropped early.
+fn ladder_drop(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: QubitId, plan: &[usize], drops: &[usize]) {
+    let mw = acc.len();
+    assert_eq!(plan.iter().sum::<usize>(), mw - lo0, "y15 fold plan covers bits [lo, MW)");
+    // (lo, hi, carry-in wire, carry-out wire, still live)
+    let mut kept: Vec<(usize, usize, QubitId, QubitId, bool)> = Vec::new();
+    let (mut lo, mut cin) = (lo0, cin0);
+    for (j, &w) in plan.iter().enumerate() {
+        let last = j + 1 == plan.len();
+        if let Some(out) = ladder_chunk(c, acc, add, lo, w, cin, last) {
+            kept.push((lo, lo + w, cin, out, true));
+            cin = out;
+        }
+        // the carry below the one this chunk read: nothing reads it as a value any more
+        if j >= 1 && drops.contains(&(j - 1)) {
+            assert!(!last && (j < 2 || kept[j - 2].4), "y28: a dropped carry needs the next kept carry and its own carry-in live");
+            let (l0, h0, c0, o0, _) = kept[j - 1];
+            kept_erase(c, acc, add, l0, h0, c0, o0);
+            kept[j - 1].4 = false;
+        }
+        lo += w;
+    }
+    for idx in (0..kept.len()).rev() {
+        let (lo, hi, cin, out, live) = kept[idx];
+        if !live {
+            continue;
+        }
+        if idx == 0 || kept[idx - 1].4 {
+            kept_erase(c, acc, add, lo, hi, cin, out);
+            continue;
+        }
+        // its carry-in was dropped: under this carry's measured bit, build it again on the written sums
+        let (l0, h0, c0, _, _) = kept[idx - 1];
+        let m = c.alloc_bit();
+        c.hmr(out, m);
+        c.release_clean(out);
+        c.push_condition(m);
+        // the carry out of bit i is MAJ(X_i, add_i, d_i) with X_i ^ d_i = acc_i ^ add_i (acc holds the sum)
+        let forms = |i: usize, di: QubitId| (l(acc[i]).x(&add[i]), add[i].x(&l(di)));
+        let mut d = vec![c0];
+        for i in l0..h0 {
+            let di = d[i - l0];
+            let (a, b) = forms(i, di);
+            let q = lin_and(c, &a, &b);
+            c.cx(di, q);
+            d.push(q);
+        }
+        // the chain's lower carries leave at once (measured, each from the carry below it)
+        for i in (l0 + 1..h0).rev() {
+            let (q, di) = (d[i - l0], d[i - l0 - 1]);
+            let (a, b) = forms(i - 1, di);
+            c.cx(di, q);
+            lin_and_erase(c, q, &a, &b);
+        }
+        let back = d[h0 - l0];
+        lin_lt_phase(c, &acc[lo..hi], &add[lo..hi], back);
+        kept_erase(c, acc, add, l0, h0, c0, back);
         c.pop_condition();
         c.free_bit(m);
     }
@@ -856,10 +1036,19 @@ fn w_mod64(c: &mut Builder, recs: &mut Vec<Rec>, acc: &[QubitId], src: &[QubitId
 /// from `pre` in place of their ANDs where it is given. Needs top >= 2.
 #[allow(clippy::too_many_arguments)]
 fn w_mod64_pre(c: &mut Builder, recs: &mut Vec<Rec>, acc: &[QubitId], src: &[QubitId], nm: [QubitId; 3], b01: &Lin, top: usize, pre: Option<&[Lin; 2]>) -> (Vec<Lin>, [Lin; 2]) {
+    w_mod64_pre_x(c, recs, acc, src, nm, b01, top, pre, None)
+}
+/// `x45` (y28, card s2-5): the forms of low(X_r)'s bits 4 and 5 where acc[4] and acc[5] already hold their sums.
+#[allow(clippy::too_many_arguments)]
+fn w_mod64_pre_x(c: &mut Builder, recs: &mut Vec<Rec>, acc: &[QubitId], src: &[QubitId], nm: [QubitId; 3], b01: &Lin, top: usize, pre: Option<&[Lin; 2]>, x45: Option<[Lin; 2]>) -> (Vec<Lin>, [Lin; 2]) {
     assert!((2..=5).contains(&top));
     let one = Lin::k(true);
     let sb = |j: usize, sh: usize| Lin::of(&[src[j], nm[sh]]);
     let mut w: Vec<Lin> = (0..6).map(|i| l(acc[i])).collect();
+    if let Some([x4, x5]) = x45 {
+        w[4] = x4;
+        w[5] = x5;
+    }
     let mut got: [Option<Lin>; 2] = [None, None];
     for sh in [2usize, 1, 0] {
         let mut bo: Option<Lin> = None;
@@ -913,17 +1102,96 @@ fn w_mod64_pre(c: &mut Builder, recs: &mut Vec<Rec>, acc: &[QubitId], src: &[Qub
 /// measurement bit or its complement.
 #[allow(clippy::too_many_arguments)]
 fn lean_clear_y(c: &mut Builder, acc: &[QubitId], src: &[QubitId], nm: [QubitId; 3], b01: &Lin, pre: &[Lin; 2], yq: &[QubitId; 3], gates: &[Lin; 3], top: usize) {
+    lean_clear_y_t(c, acc, src, nm, b01, pre, yq, gates, top, None, &mut None);
+}
+/// y28 (card s2-5): the reverse fold's carries into bits 4 and 5 built late (see [`Y28_LEAN_REV`]). `c4`, `c5`: wires
+/// that hold 0 until built; `need4`, `need5`: bits that hold 0 until then; `n5`, `n4`: the complements of y5's measured
+/// bit and (where that is clear) of y4's, kept from the clearing of the gate wires for c6's erase.
+struct Late45 {
+    acc3: QubitId,
+    acc4: QubitId,
+    acc5: QubitId,
+    c3: QubitId,
+    c4: QubitId,
+    c5: QubitId,
+    n0: Lin,
+    n1: Lin,
+    need4: crate::circuit::BitId,
+    need5: crate::circuit::BitId,
+    n5: Option<crate::circuit::BitId>,
+    n4: Option<crate::circuit::BitId>,
+}
+impl Late45 {
+    fn build4(&self, c: &mut Builder) {
+        lin_and_into(c, self.c4, &l(self.acc3), &l(self.c3));
+        c.bit_store1(self.need4);
+    }
+    /// c5 = MAJ(X[4], n0, c4) with X[4] ^ c4 = acc[4] ^ n0 (acc[4] holds the sum); needs c4
+    fn build5(&self, c: &mut Builder) {
+        lin_and_into(c, self.c5, &l(self.acc4).x(&self.n0), &self.n0.x(&l(self.c4)));
+        c.cx(self.c4, self.c5);
+        c.bit_store1(self.need5);
+    }
+    fn erase5(&self, c: &mut Builder) {
+        c.push_condition(self.need5);
+        c.cx(self.c4, self.c5);
+        lin_and_erase(c, self.c5, &l(self.acc4).x(&self.n0), &self.n0.x(&l(self.c4)));
+        c.pop_condition();
+    }
+    /// low(X_r)'s bits 4 and 5 from the written sums
+    fn x45(&self) -> [Lin; 2] {
+        [l(self.acc4).x(&self.n0).x(&l(self.c4)), l(self.acc5).x(&self.n1).x(&l(self.c5))]
+    }
+}
+/// The AND of the shift letter built late (y28, card s2-4): into `q` (a wire that holds 0) under the conditions in
+/// force, and `need` (a bit that holds 0 until then) is set: the wire is measured away under it.
+#[derive(Clone, Copy)]
+struct TtLate {
+    k1: QubitId,
+    k2: QubitId,
+    q: QubitId,
+    need: crate::circuit::BitId,
+}
+impl TtLate {
+    fn build(&self, c: &mut Builder) {
+        lin_and_into(c, self.q, &l(self.k1), &l(self.k2));
+        c.bit_store1(self.need);
+    }
+}
+/// [`lean_clear_y`]; with `late` the AND of the shift letter (the wire in gates[2] and gates[0]) is not built yet: it
+/// is built here on the branches that read it (y5's bit set; y5's clear and y3's set), once on any shot.
+#[allow(clippy::too_many_arguments)]
+/// With `l45` (y28, card s2-5) acc[4] and acc[5] hold their sums: y5's branch builds both carries and y4's the lower
+/// one, the chains read the old bits through them, and the complements of y5's and y4's bits are kept in `l45`.
+#[allow(clippy::too_many_arguments)]
+fn lean_clear_y_t(c: &mut Builder, acc: &[QubitId], src: &[QubitId], nm: [QubitId; 3], b01: &Lin, pre: &[Lin; 2], yq: &[QubitId; 3], gates: &[Lin; 3], top: usize, late: Option<TtLate>, l45: &mut Option<Late45>) {
     let m = c.alloc_bit();
     c.hmr(yq[top - 3], m);
     c.push_condition(m);
     {
+        if let Some(s) = l45.as_ref() {
+            if top >= 4 {
+                s.build4(c);
+            }
+            if top == 5 {
+                s.build5(c);
+            }
+        }
+        // top = 5: y5's own fix reads the AND; top = 3: y3's does (and nothing built it on this branch)
+        if let (Some(t), true) = (late, top != 4) {
+            t.build(c);
+        }
         let mut r2: Vec<Rec> = Vec::new();
-        let (w, _) = w_mod64_pre(c, &mut r2, acc, src, nm, b01, top, Some(pre));
+        let (w, _) = w_mod64_pre_x(c, &mut r2, acc, src, nm, b01, top, Some(pre), l45.as_ref().map(|s| s.x45()));
         lin_cz(c, &gates[top - 3], &w[top]); // the phase the measurement left
         for i in (3..top).rev() {
             let mi = c.alloc_bit();
             c.hmr(yq[i - 3], mi);
             c.push_condition(mi);
+            // top = 4: y5's bit is clear and y4's fix read k2 alone; y3's fix is the first to read the AND
+            if let (Some(t), true) = (late, top == 4 && i == 3) {
+                t.build(c);
+            }
             lin_cz(c, &gates[i - 3], &w[i]);
             c.pop_condition();
             c.free_bit(mi);
@@ -936,9 +1204,14 @@ fn lean_clear_y(c: &mut Builder, acc: &[QubitId], src: &[QubitId], nm: [QubitId;
         c.bit_store1(not_m);
         c.bit_xor_into(not_m, m);
         c.push_condition(not_m);
-        lean_clear_y(c, acc, src, nm, b01, pre, yq, gates, top - 1);
+        lean_clear_y_t(c, acc, src, nm, b01, pre, yq, gates, top - 1, late, l45);
         c.pop_condition();
-        c.free_bit(not_m);
+        match l45.as_mut() {
+            // kept for c6's erase (the caller frees them)
+            Some(s) if top == 5 => s.n5 = Some(not_m),
+            Some(s) if top == 4 => s.n4 = Some(not_m),
+            _ => c.free_bit(not_m),
+        }
     }
     c.free_bit(m);
 }
@@ -1274,10 +1547,26 @@ fn addend_prog(c: &mut Builder, recs: &mut Vec<Rec>, x: &[Lin], gates: &[(u32, u
 /// The ladder's plan on bits [6, MW) for the room left now, and whether it needs the two wires of [`Y15_LEAN45`]
 /// (the caller then erases the carries into bits 4 and 5 before the ladder and builds them again after it).
 fn fold_plan(c: &Builder, mw: usize, what: &str) -> (Vec<usize>, bool) {
+    let (plan, lean45, drops) = fold_plan_d(c, mw, what, 0);
+    assert!(drops.is_empty());
+    (plan, lean45)
+}
+/// [`fold_plan`] with up to `drop` kept carries dropped early (see [`Y28_DROP_FWD`]): the third value is the 0-based
+/// chunks whose kept carry leaves when the next chunk has read it (empty where a plan of [`merged_plan`] fits).
+fn fold_plan_d(c: &Builder, mw: usize, what: &str, drop: usize) -> (Vec<usize>, bool, Vec<usize>) {
     let budget = cells::cap().saturating_sub(c.active_qubits() as usize);
     let nbits = mw - 6;
     let lean45 = Y15_LEAN45 && merged_plan(nbits - 1, budget).is_none() && merged_plan(nbits, budget).is_none();
     let budget = budget + 2 * usize::from(lean45);
+    if drop > 0 && merged_plan(nbits - 1, budget).is_none() && merged_plan(nbits, budget).is_none() {
+        assert!(nbits == 50 && budget + drop >= 10 && (8..=9).contains(&budget), "y28: the {what} fold's ladder with {drop} dropped carries does not fit: budget {budget}, active {}, cap {}", c.active_qubits(), cells::cap());
+        return if budget == 9 { (Y28_PLAN9.0.to_vec(), lean45, Y28_PLAN9.1.to_vec()) } else { (Y28_PLAN8.0.to_vec(), lean45, Y28_PLAN8.1.to_vec()) };
+    }
+    let (plan, lean45) = fold_plan_0(c, mw, what, budget, lean45);
+    (plan, lean45, Vec::new())
+}
+fn fold_plan_0(c: &Builder, mw: usize, what: &str, budget: usize, lean45: bool) -> (Vec<usize>, bool) {
+    let nbits = mw - 6;
     let plan = match merged_plan(nbits - 1, budget) {
         Some(mut p) => {
             *p.last_mut().unwrap() += 1;
@@ -1297,11 +1586,64 @@ fn fold_undo(c: &mut Builder, recs: Vec<Rec>, acc: &[QubitId], e: [QubitId; 3], 
 }
 /// The first part of [`fold_undo`]: the helper wires, last built first (none of their forms reads E, c1 or c2 in the
 /// forward fold).
-fn fold_undo_recs(c: &mut Builder, mut recs: Vec<Rec>, acc: &[QubitId], a4: &Lin, a5: &Lin, cw: [QubitId; 3]) {
+fn fold_undo_recs(c: &mut Builder, recs: Vec<Rec>, acc: &[QubitId], a4: &Lin, a5: &Lin, cw: [QubitId; 3]) {
+    fold_undo_recs_t(c, recs, acc, a4, a5, cw, &mut None);
+}
+/// y28 (s2-4, step 2): the state of the forward fold's undo when the AND of the shift letter is built late: the
+/// wires of y5 and y3 (their erases read it) and, once y5 is measured, the complement of its bit.
+struct TtUndo {
+    t: TtLate,
+    y5: QubitId,
+    y3: QubitId,
+    n5: Option<crate::circuit::BitId>,
+}
+/// Erase one AND record of the forward fold's undo list. With `late`, y5 and y3 are measured here and the AND of the
+/// shift letter is built under the bit that reads it; its own record is erased under the OR of the two bits.
+fn tt_and_erase(c: &mut Builder, late: &mut Option<TtUndo>, q: QubitId, a: &Lin, b: &Lin) {
+    let Some(u) = late.as_mut() else {
+        lin_and_erase(c, q, a, b);
+        return;
+    };
+    if q == u.y5 {
+        let m = c.alloc_bit();
+        c.hmr(q, m);
+        c.push_condition(m);
+        u.t.build(c);
+        lin_cz(c, a, b);
+        c.pop_condition();
+        let n = c.alloc_bit();
+        c.bit_store1(n);
+        c.bit_xor_into(n, m);
+        u.n5 = Some(n);
+        c.free_bit(m);
+        c.release_clean(q);
+    } else if q == u.y3 {
+        let n = u.n5.take().expect("y28: y5 is erased before y3");
+        let m = c.alloc_bit();
+        c.hmr(q, m);
+        c.push_condition(m);
+        c.push_condition(n);
+        u.t.build(c);
+        c.pop_condition();
+        lin_cz(c, a, b);
+        c.pop_condition();
+        c.free_bit(m);
+        c.free_bit(n);
+        c.release_clean(q);
+    } else if q == u.t.q {
+        c.push_condition(u.t.need);
+        lin_and_erase(c, q, a, b);
+        c.pop_condition();
+        c.free_bit(u.t.need);
+    } else {
+        lin_and_erase(c, q, a, b);
+    }
+}
+fn fold_undo_recs_t(c: &mut Builder, mut recs: Vec<Rec>, acc: &[QubitId], a4: &Lin, a5: &Lin, cw: [QubitId; 3], late: &mut Option<TtUndo>) {
     let [c4, c5, c6] = cw;
     while let Some(r) = recs.pop() {
         match r {
-            Rec::And(q, a, b) => lin_and_erase(c, q, &a, &b),
+            Rec::And(q, a, b) => tt_and_erase(c, late, q, &a, &b),
             Rec::Maj(q, a, b, ci) => {
                 lin_xor_into(c, &ci, q);
                 lin_and_erase(c, q, &a, &b);
@@ -1319,10 +1661,66 @@ fn fold_undo_recs(c: &mut Builder, mut recs: Vec<Rec>, acc: &[QubitId], a4: &Lin
         }
     }
 }
+/// y28 (s2-2): [`fold_undo_recs`] for the forward fold whose sums 4 and 5 were written before the ladder and whose
+/// carries into bits 4 and 5 are gone (see [`Y28_LEAN_FWD`]); `cw` = two wires that hold 0 for them (taken where the
+/// head builds the two carries again, so every later wire keeps the head's id) and c6. Returns c6's measured bit: c4
+/// is built under it and still to be erased under it by the low section's undo.
+fn fold_undo_recs_m(c: &mut Builder, mut recs: Vec<Rec>, acc: &[QubitId], a4: &Lin, a5: &Lin, c3: QubitId, cw: [QubitId; 3], late: &mut Option<TtUndo>) -> crate::circuit::BitId {
+    let [c4, c5, c6] = cw;
+    let mut st: Option<crate::circuit::BitId> = None;
+    while let Some(r) = recs.pop() {
+        match r {
+            Rec::And(q, a, b) => tt_and_erase(c, late, q, &a, &b),
+            Rec::Maj(q, a, b, ci) => {
+                lin_xor_into(c, &ci, q);
+                lin_and_erase(c, q, &a, &b);
+            }
+            Rec::UndoC6 => {
+                let m = c.alloc_bit();
+                c.hmr(c6, m);
+                c.release_clean(c6);
+                c.push_condition(m);
+                lin_and_into(c, c4, &l(acc[3]), &l(c3));
+                // c5 = MAJ(X[4], a4, c4) with X[4] ^ c4 = acc[4] ^ a4 (acc[4] holds the sum)
+                lin_and_into(c, c5, &l(acc[4]).x(a4), &a4.x(&l(c4)));
+                c.cx(c4, c5);
+                // c6 = MAJ(X[5], a5, c5) = AND(acc[5] ^ a5, a5 ^ c5) ^ c5
+                lin_cz(c, &l(acc[5]).x(a5), &a5.x(&l(c5)));
+                lin_cz(c, &Lin::k(true), &l(c5));
+                c.pop_condition();
+                st = Some(m);
+            }
+            Rec::UndoC5 => {
+                let m = st.expect("y28: c6 is erased before c5");
+                c.push_condition(m);
+                c.cx(c4, c5);
+                lin_and_erase(c, c5, &l(acc[4]).x(a4), &a4.x(&l(c4)));
+                c.pop_condition();
+            }
+        }
+    }
+    st.expect("y28: the fold's undo list holds c6")
+}
+/// AND of two linear forms into a wire that holds 0 (one Toffoli): [`lin_and`] without its allocation.
+fn lin_and_into(c: &mut Builder, q: QubitId, a: &Lin, b: &Lin) {
+    let (ha, hb) = lin_pair_on(c, a, b);
+    c.ccx(ha, hb, q);
+    lin_pair_off(c, a, b);
+}
 /// The second part of [`fold_undo`]: the low section acc[0..4) += E.
 fn fold_undo_low(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], cw: [QubitId; 4]) {
+    fold_undo_low_c(c, acc, e, cw, None);
+}
+/// `c4m` (y28): c4 exists only under this bit (and is erased under it).
+fn fold_undo_low_c(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], cw: [QubitId; 4], c4m: Option<crate::circuit::BitId>) {
     let [c1, c2, c3, c4] = cw;
+    if let Some(m) = c4m {
+        c.push_condition(m);
+    }
     lin_and_erase(c, c4, &l(acc[3]), &l(c3));
+    if c4m.is_some() {
+        c.pop_condition();
+    }
     c.cx(c3, acc[3]);
     maj_wire_erase(c, c3, &l(acc[2]), &l(e[2]), &l(c2));
     c.cx(e[2], acc[2]);
@@ -1339,7 +1737,7 @@ fn fold_undo_low(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], cw: [QubitId
 /// k = (Nm + acc[0..3)) + 8 (y3 + 2 y4 + 4 y5 + r3 - c3): 3 ANDs for the sum, 3 for the chain that moves the upper
 /// part by one either way, 1 for its sign. 32 fixed wires (6 low carries, 4 gate wires, 22 core ANDs).
 #[allow(clippy::too_many_arguments)]
-fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3], k1: QubitId, k2: QubitId, fin: usize, mut esh: Option<&mut ESh>) -> Vec<usize> {
+fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3], k1: QubitId, k2: QubitId, fin: usize, mut esh: Option<&mut ESh>, ttm: bool, drop: usize) -> Vec<usize> {
     let mw = acc.len();
     let c1 = lin_and(c, &l(acc[0]), &l(e[0]));
     let c2 = maj_wire(c, &l(acc[1]), &l(e[1]), &l(c1));
@@ -1393,29 +1791,55 @@ fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     if Y15_TRACE {
         eprintln!("Y18_IDLE fwd recs={} idle={:?}", recs.len(), y18_idle(&recs, &add));
     }
-    // y18-next: the AND of the shift letter leaves for the ladder (see Y18_FIN)
+    // y18-next: the AND of the shift letter leaves for the ladder (see Y18_FIN); y28: also with `ttm` ([`Y28_TT_FWD`]),
+    // and then it comes back only under the measured bits of y5 and y3
     let tt_q = tt.w[0];
-    if fin >= 3 {
+    let (y5_q, y3_q) = (y5.w[0], y3.w[0]);
+    if fin >= 3 || ttm {
         lin_and_erase(c, tt_q, &l(k1), &l(k2));
     }
-    let (plan, lean45) = fold_plan(c, mw, "forward");
+    let (plan, lean45, drops) = fold_plan_d(c, mw, "forward", drop);
+    // y28 (s2-2): sums 4 and 5 are written here and the two carries come back only under c6's measured bit
+    let lean_m = lean45 && Y28_LEAN_FWD;
     if lean45 {
+        if lean_m {
+            lin_xor_into(c, &a5, acc[5]);
+            c.cx(c5, acc[5]);
+        }
         maj_wire_erase(c, c5, &l(acc[4]), &a4, &l(c4));
+        if lean_m {
+            lin_xor_into(c, &a4, acc[4]);
+            c.cx(c4, acc[4]);
+        }
         lin_and_erase(c, c4, &l(acc[3]), &l(c3));
     }
-    ladder(c, acc, &add, 6, c6, &plan);
-    let (c4, c5) = if lean45 {
+    ladder_d(c, acc, &add, 6, c6, &plan, &drops);
+    let (c4, c5) = if lean_m {
+        (c.alloc_qubit(), c.alloc_qubit())
+    } else if lean45 {
         let c4 = lin_and(c, &l(acc[3]), &l(c3));
         let c5 = maj_wire(c, &l(acc[4]), &a4, &l(c4));
         (c4, c5)
     } else {
         (c4, c5)
     };
-    if fin >= 3 {
+    let mut late: Option<TtUndo> = None;
+    if ttm {
+        let q = c.alloc_qubit();
+        let need = c.alloc_bit();
+        c.bit_store0(need);
+        y18_subst(&mut recs, tt_q, q);
+        late = Some(TtUndo { t: TtLate { k1, k2, q, need }, y5: y5_q, y3: y3_q, n5: None });
+    } else if fin >= 3 {
         let q = lin_and(c, &l(k1), &l(k2));
         y18_subst(&mut recs, tt_q, q);
     }
-    fold_undo_recs(c, recs, acc, &a4, &a5, [c4, c5, c6]);
+    let c4m = if lean_m {
+        Some(fold_undo_recs_m(c, recs, acc, &a4, &a5, c3, [c4, c5, c6], &mut late))
+    } else {
+        fold_undo_recs_t(c, recs, acc, &a4, &a5, [c4, c5, c6], &mut late);
+        None
+    };
     // the top wires again, once the helper wires are gone (fresh wires: the low section's undo reads the new ones)
     let e = match esh.as_deref_mut() {
         Some(st) => {
@@ -1426,7 +1850,10 @@ fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     };
     let c1 = if fin >= 2 { lin_and(c, &l(acc[0]), &l(e[0])) } else { c1 };
     let c2 = if fin >= 1 { maj_wire(c, &l(acc[1]), &l(e[1]), &l(c1)) } else { c2 };
-    fold_undo_low(c, acc, e, [c1, c2, c3, c4]);
+    fold_undo_low_c(c, acc, e, [c1, c2, c3, c4], c4m);
+    if let Some(m) = c4m {
+        c.free_bit(m);
+    }
     plan
 }
 
@@ -1483,7 +1910,7 @@ fn low_keep_add(c: &mut Builder, b: &[QubitId], acc: &[QubitId], proxy: usize, r
 /// `wc` (y15-pack): empty, or four wires holding bits 2..5 of W (the copies of [`Y15_REV_COPY`]); they are read in
 /// place of the borrow chains and returned clear, as in [`fold_rev`]. `kept` may then hold only add 0's first carry.
 #[allow(clippy::too_many_arguments)]
-fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3], k1: QubitId, k2: QubitId, src: &[QubitId], kept: &[Vec<QubitId>; 3], wc: &[QubitId], lean: bool, order: [usize; 3], yg: &[QubitId], fin: usize) -> Vec<usize> {
+fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3], k1: QubitId, k2: QubitId, src: &[QubitId], kept: &[Vec<QubitId>; 3], wc: &[QubitId], lean: bool, order: [usize; 3], yg: &[QubitId], fin: usize, drop: usize) -> Vec<usize> {
     let mw = acc.len();
     let one = Lin::k(true);
     let c1 = lin_and(c, &l(acc[0]), &l(e[0]));
@@ -1599,13 +2026,31 @@ fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     if fin >= 2 {
         lin_and_erase(c, c1, &l(acc[0]), &l(e[0]));
     }
-    let (plan, lean45) = fold_plan(c, mw, "reverse");
+    let (plan, lean45, drops) = fold_plan_d(c, mw, "reverse", drop);
+    // y28 (s2-5): sums 4 and 5 are written here; the two carries come back only on the branches that read them
+    let lean_r = lean45 && Y28_LEAN_REV && (ygate.is_some() || lean_y.is_some());
     if lean45 {
+        if lean_r {
+            lin_xor_into(c, &n1, acc[5]);
+            c.cx(c5, acc[5]);
+        }
         maj_wire_erase(c, c5, &l(acc[4]), &n0, &l(c4));
+        if lean_r {
+            lin_xor_into(c, &n0, acc[4]);
+            c.cx(c4, acc[4]);
+        }
         lin_and_erase(c, c4, &l(acc[3]), &l(c3));
     }
-    ladder(c, acc, &add, 6, c6, &plan);
-    let (c4, c5) = if lean45 {
+    ladder_d(c, acc, &add, 6, c6, &plan, &drops);
+    let mut l45: Option<Late45> = None;
+    let (c4, c5) = if lean_r {
+        let (c4, c5) = (c.alloc_qubit(), c.alloc_qubit());
+        let (need4, need5) = (c.alloc_bit(), c.alloc_bit());
+        c.bit_store0(need4);
+        c.bit_store0(need5);
+        l45 = Some(Late45 { acc3: acc[3], acc4: acc[4], acc5: acc[5], c3, c4, c5, n0: n0.clone(), n1: n1.clone(), need4, need5, n5: None, n4: None });
+        (c4, c5)
+    } else if lean45 {
         let c4 = lin_and(c, &l(acc[3]), &l(c3));
         let c5 = maj_wire(c, &l(acc[4]), &n0, &l(c4));
         (c4, c5)
@@ -1634,10 +2079,23 @@ fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
         // as the lean form below; the AND of the shift letter is built here only for the gate forms
         let mut tail = recs.split_off(mark2);
         pop_chain(c, &mut tail);
-        let tt = lin_and(c, &l(k1), &l(k2));
-        let gates = [Lin::of(&[k1, k2, tt]), l(k2), l(tt)];
-        lean_clear_y(c, acc, src, nm, &b01, &pre, &yq, &gates, 5);
-        lin_and_erase(c, tt, &l(k1), &l(k2));
+        if Y28_TT_REV {
+            // y28 (s2-4): the AND comes only where y5's or y3's measured bit reads it
+            let tt = c.alloc_qubit();
+            let need = c.alloc_bit();
+            c.bit_store0(need);
+            let gates = [Lin::of(&[k1, k2, tt]), l(k2), l(tt)];
+            lean_clear_y_t(c, acc, src, nm, &b01, &pre, &yq, &gates, 5, Some(TtLate { k1, k2, q: tt, need }), &mut l45);
+            c.push_condition(need);
+            lin_and_erase(c, tt, &l(k1), &l(k2));
+            c.pop_condition();
+            c.free_bit(need);
+        } else {
+            let tt = lin_and(c, &l(k1), &l(k2));
+            let gates = [Lin::of(&[k1, k2, tt]), l(k2), l(tt)];
+            lean_clear_y_t(c, acc, src, nm, &b01, &pre, &yq, &gates, 5, None, &mut l45);
+            lin_and_erase(c, tt, &l(k1), &l(k2));
+        }
         for q in yq {
             c.release_clean(q);
         }
@@ -1647,12 +2105,50 @@ fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
         // acc[0..6) still holds low(X_r) and the two borrows into bit 2 are live
         let mut tail = recs.split_off(mark2);
         pop_chain(c, &mut tail);
-        lean_clear_y(c, acc, src, nm, &b01, &pre, &yq, &gates, 5);
+        lean_clear_y_t(c, acc, src, nm, &b01, &pre, &yq, &gates, 5, None, &mut l45);
         for q in yq {
             c.release_clean(q);
         }
     }
-    fold_undo(c, recs, acc, e, &n0, &n1, [c1, c2, c3, c4, c5, c6]);
+    if let Some(s) = l45 {
+        // y28 (s2-5): [`fold_undo`] with c6 measured as it is and the two carries where they were built
+        let (n5, n4) = (s.n5.expect("y28: y5's bit is kept"), s.n4.expect("y28: y4's bit is kept"));
+        let mut recs = recs;
+        while let Some(r) = recs.pop() {
+            match r {
+                Rec::And(q, a, b) => lin_and_erase(c, q, &a, &b),
+                Rec::Maj(q, a, b, ci) => {
+                    lin_xor_into(c, &ci, q);
+                    lin_and_erase(c, q, &a, &b);
+                }
+                Rec::UndoC6 => {
+                    let m = c.alloc_bit();
+                    c.hmr(c6, m);
+                    c.release_clean(c6);
+                    c.push_condition(m);
+                    // c5 is still to build where y5's bit was clear, and c4 under it where y4's was clear too
+                    c.push_condition(n5);
+                    c.push_condition(n4);
+                    s.build4(c);
+                    c.pop_condition();
+                    s.build5(c);
+                    c.pop_condition();
+                    // c6 = MAJ(X[5], n1, c5) = AND(acc[5] ^ n1, n1 ^ c5) ^ c5
+                    lin_cz(c, &l(acc[5]).x(&n1), &n1.x(&l(c5)));
+                    lin_cz(c, &Lin::k(true), &l(c5));
+                    c.pop_condition();
+                    c.free_bit(m);
+                }
+                Rec::UndoC5 => s.erase5(c),
+            }
+        }
+        fold_undo_low_c(c, acc, e, [c1, c2, c3, c4], Some(s.need4));
+        for b in [s.need4, s.need5, n5, n4] {
+            c.free_bit(b);
+        }
+    } else {
+        fold_undo(c, recs, acc, e, &n0, &n1, [c1, c2, c3, c4, c5, c6]);
+    }
     plan
 }
 
@@ -1712,7 +2208,9 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     let close = !swap01 && late && Y15_JOINT_M && y20_close_on(t, rev);
     // y21: add 1's chunked part to the top on this pass (no h1; m1 is then x257)
     let top1 = cut && !close && y21_top_on(t, rev);
-    let deep = cut && !close && y21_deep_on(t, rev);
+    // y28 (s2-1): the ladder's dropped carries on this pass (then no deep shed)
+    let drop_n = if cut && !close && !swap01 && Y15_CORE_V2 { y28_drop(t, rev) } else { 0 };
+    let deep = cut && !close && y21_deep_on(t, rev) && drop_n == 0;
     let mut pads18: Vec<QubitId> = Vec::new();
     let _ = y18_log();
     let a_pre0 = c.active_qubits();
@@ -1867,25 +2365,48 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     // own shed); with the closed ripple as well the carry under the top one is m2 itself
     let fmax = (if rev { 2 } else if top1 { 4 } else if cut { 5 } else { 6 }) + usize::from(deep);
     let tops_max = if cut { if close { 1 } else { 2 } } else { Y17_TOPS_MAX };
-    let (shed, tops, c3m, gsh, fin) = y16_shed(
-        shed_on,
-        if !rev {
-            Y16_FIXED_FWD
-        } else if lean_here {
-            Y17_FIXED_REV_LEAN
-        } else if yg_here {
-            Y17_FIXED_REV_YGATE
+    let shed_fixed = if !rev {
+        Y16_FIXED_FWD
+    } else if lean_here {
+        Y17_FIXED_REV_LEAN
+    } else if yg_here {
+        Y17_FIXED_REV_YGATE
+    } else {
+        Y16_FIXED_REV_COPY
+    };
+    let shed_for = |fixed: usize, fmax: usize| {
+        y16_shed(
+            shed_on,
+            fixed,
+            room_now,
+            cells::cap().saturating_sub(a_start as usize + live_m),
+            if swap01 { kk1 + Y15_GUARD + kk1 - 1 } else { k0 + Y15_GUARD + k0 - 1 + if close { kwin + Y20_G2 } else { 0 } },
+            (N - 4).saturating_sub(sp2),
+            fmax,
+            tops_max,
+            (rev, t),
+            drop_n,
+        )
+    };
+    let shed0 = shed_for(shed_fixed, fmax);
+    // y28 (s2-4, step 2): forward, the AND of the shift letter leaves first where the fold sheds at all and that takes
+    // one wire off the shed (`fin` then counts c2, c1 and the top wires: the head's numbering skips its third)
+    let (ttm, (shed, tops, c3m, gsh, fin)) = if Y28_TT_FWD && !rev && !swap01 && Y15_CORE_V2 && Y18_FIN {
+        if shed0.4 >= 3 {
+            (true, shed0)
+        } else if shed0.0 + shed0.1 + shed0.4 > 0 {
+            let r = shed_for(shed_fixed - 1, fmax - 1);
+            if r.0 + r.1 + r.4 < shed0.0 + shed0.1 + shed0.4 {
+                (true, (r.0, r.1, r.2, r.3, if r.4 >= 3 { r.4 + 1 } else { r.4 }))
+            } else {
+                (false, shed0)
+            }
         } else {
-            Y16_FIXED_REV_COPY
-        },
-        room_now,
-        cells::cap().saturating_sub(a_start as usize + live_m),
-        if swap01 { kk1 + Y15_GUARD + kk1 - 1 } else { k0 + Y15_GUARD + k0 - 1 + if close { kwin + Y20_G2 } else { 0 } },
-        (N - 4).saturating_sub(sp2),
-        fmax,
-        tops_max,
-        (rev, t),
-    );
+            (false, shed0)
+        }
+    } else {
+        (false, shed0)
+    };
     assert!(!close || ((shed, c3m, gsh) == (0, 0, 0) && fin <= 3), "y20: the closed ripple on {} t={t} needs a shed it does not have: {:?}", if rev { "rev" } else { "fwd" }, (shed, tops, c3m, gsh, fin));
     // the top carry: cq(N - 1) = MAJ(x256', S'2[N - 2], cq(N - 2)), and x256 holds its sum x256' ^ S'2[N - 2] ^ cq(N - 2)
     // y18-next: with the top wires leaving inside the forward fold (fin 4 to 6) the top carries are not shed here
@@ -1937,7 +2458,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
             c.cx(s[2], b[j]);
         }
         let plan = if Y15_CORE_V2 {
-            fold_rev_v2(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, &b[..6], &kept, &wc, lean_here, if swap01 { [2, 0, 1] } else { [2, 1, 0] }, &yg, fin.min(2))
+            fold_rev_v2(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, &b[..6], &kept, &wc, lean_here, if swap01 { [2, 0, 1] } else { [2, 1, 0] }, &yg, fin.min(2), drop_n)
         } else {
             fold_rev(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, &b[..6], &wc)
         };
@@ -1964,7 +2485,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
                 ph.finish(c);
             }
         }
-        fold_fwd_v2(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, fin, esh.as_mut())
+        fold_fwd_v2(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, fin, esh.as_mut(), ttm, drop_n)
     } else {
         fold_fwd(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2)
     };
@@ -2057,6 +2578,14 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         for i in (sh_lo..sh_hi).rev() {
             m_carry_erase(c, cc[i - sp2], acc2[i - 1], &l(b[i - 1]), cc[i - 1 - sp2]);
         }
+    }
+    // y28 DIAGNOSTIC, never for an entry (see [`Y28_PADS_FWD`]): the aligned copy's idle measurements
+    for _ in 0..y28_pads(t, rev) {
+        let q = c.alloc_qubit();
+        let m = c.alloc_bit();
+        c.hmr(q, m);
+        c.free_bit(m);
+        c.release_clean(q);
     }
     let e_tops = c.expected_total();
     // y17-edge: cq(N - 3) is idle until the ripple is closed; its inputs are shed, so it is measured now and its phase

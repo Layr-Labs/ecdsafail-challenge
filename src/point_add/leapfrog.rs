@@ -65,7 +65,7 @@ pub(crate) fn install_recipe() {
         // room-split rail adds) and a payload-only pass over the taped letters (-5.9k T)
         ("LF_REORDER", "76"),
         // y15-room: the divide's and the multiply's boundary set apart (each overrides LF_REORDER for its direction)
-        ("LF_REORDER_DIV", "82"),
+        ("LF_REORDER_DIV", "42"),
         ("LF_REORDER_MUL", "77"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
         // with the coordinate seams
@@ -144,7 +144,7 @@ pub(crate) fn install_recipe() {
         // the combined point, the divide's boundary 76 -> 82 (-40.5 T model; MUL 76 stays optimal) and the square's
         // retained-AND lend mask 3 -> 4 (-9 T). Combined model 770,787 at Q 1236; 512-nonce eval mean 770,692.40,
         // score ~952.58M; λ paired vs glam_base 512 fails -0.777 +- 0.158, proj+2se 19.193 (vs T3 -0.143 +- 0.101).
-        ("LF_REORDER_DIV", "82"),
+        ("LF_REORDER_DIV", "42"),
         ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "4"),
         // C1 spend of the combined point's λ margin (192-nonce screens paired vs the combined point, then 512):
         // T6 seed fusion on (-46.6 T, phase-only), merged window 56 -> 54 (-128 T, mism +0.057), late rule windows
@@ -219,6 +219,72 @@ pub(crate) fn prof_dump() {
             }
         });
     }
+}
+
+// ---- y28: a deferred phase for the divide's rail boundary carries ----
+/// `Y28_DEFER`: in the divide's fused forward pass a split rail add erases its kept boundary carry by a measurement
+/// plus an exact compare on the outcome-1 shots ([`capped_add`], [`rail_add`], [`rail_add_mid`] forward). The mirrored
+/// subtract of the divide's reverse rail pass rebuilds the same carry on a wire of one whole ladder (the rails are back
+/// at the same values; everything in between permutes the basis or is an X measurement with its own fix), so the
+/// outcome bit is kept and the phase is one Z under it on that wire: no compare. `false` = the gate list without the
+/// change, byte for byte.
+/// Measured (y28-loop b2, a copy with the top's measurements in the top's order): the Z's phase differs from the
+/// compare's only on shots the top already gets wrong, where the reverse pass does not see the forward pass's rails.
+const Y28_DEFER: bool = true;
+thread_local! {
+    /// the divide's fused forward pass is running (outcome bits are kept) / its reverse rail pass is (they are applied)
+    static Y28_KEEP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static Y28_USE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// the rail step now running, tick * 4 + step (0, 1: forced moves; 2: choice); usize::MAX outside a rail step
+    static Y28_KEY: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+    /// kept outcome bits: step key -> (boundary position, target width, bit)
+    static Y28_BITS: std::cell::RefCell<std::collections::BTreeMap<usize, (usize, usize, crate::circuit::BitId)>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// the kept bit handed to the next whole ladder: (boundary position, bit)
+    static Y28_HOOK: std::cell::Cell<Option<(usize, crate::circuit::BitId)>> = const { std::cell::Cell::new(None) };
+    /// (kept, applied) in this divide
+    static Y28_COUNT: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+fn y28_key(k: usize) {
+    Y28_KEY.with(|x| x.set(k));
+}
+/// Forward: keep the measured boundary carry's outcome bit `m` (boundary at position `delta` of a target of `n` wires)
+/// for the mirrored subtract. true = kept: the caller runs no compare and does not free the bit.
+fn y28_store(delta: usize, n: usize, m: crate::circuit::BitId) -> bool {
+    let key = Y28_KEY.with(|k| k.get());
+    if !(Y28_DEFER && Y28_KEEP.with(|d| d.get()) && key != usize::MAX) {
+        return false;
+    }
+    let old = Y28_BITS.with(|b| b.borrow_mut().insert(key, (delta, n, m)));
+    assert!(old.is_none(), "y28: two boundaries under one step key {key}");
+    Y28_COUNT.with(|x| x.set((x.get().0 + 1, x.get().1)));
+    true
+}
+/// Is a kept bit waiting for the rail step now running?
+fn y28_pending() -> bool {
+    let key = Y28_KEY.with(|k| k.get());
+    Y28_DEFER && Y28_USE.with(|d| d.get()) && key != usize::MAX && Y28_BITS.with(|b| b.borrow().contains_key(&key))
+}
+/// Reverse: the kept bit of this step's boundary, if any, for a subtract on a target of `n` wires.
+fn y28_fetch(n: usize) -> Option<(usize, crate::circuit::BitId)> {
+    if !y28_pending() {
+        return None;
+    }
+    let key = Y28_KEY.with(|k| k.get());
+    let (delta, kn, m) = Y28_BITS.with(|b| b.borrow_mut().remove(&key)).unwrap();
+    assert_eq!(kn, n, "y28: step {key}: the mirrored subtract's target width differs from the add's");
+    Some((delta, m))
+}
+/// Inside a whole ladder's carry sweep: `t` holds the carry into position `pos`. If the handed bit's boundary is here,
+/// its phase goes on as a Z under the bit, and the bit is returned.
+fn y28_apply(c: &mut Builder, hook: &mut Option<(usize, crate::circuit::BitId)>, pos: usize, t: QubitId) {
+    let Some((d, m)) = *hook else { return };
+    if pos != d {
+        return;
+    }
+    c.z_if(t, m);
+    c.free_bit(m);
+    *hook = None;
+    Y28_COUNT.with(|x| x.set((x.get().0, x.get().1 + 1)));
 }
 
 // ---- y16 trace (no effect on the gates): exclusive expected-Toffoli counters by kind ----
@@ -509,6 +575,7 @@ fn gidney_add_lean(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<Qu
     }
     let mut carry: Vec<Option<QubitId>> = vec![None; n];
     carry[0] = cin;
+    let mut y28h = Y28_HOOK.with(|x| x.take());
     for i in 0..n - 1 {
         if let Some(ci) = carry[i] {
             c.cx(ci, a[i]);
@@ -525,8 +592,10 @@ fn gidney_add_lean(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<Qu
                 c.cx(ci, t);
             }
             carry[i + 1] = Some(t);
+            y28_apply(c, &mut y28h, i + 1, t);
         }
     }
+    assert!(y28h.is_none(), "y28: the kept bit's boundary carry is on no wire of this ladder");
     c.cx(a[n - 1], b[n - 1]);
     for i in (0..n - 1).rev() {
         if let Some(next) = carry[i + 1] {
@@ -589,10 +658,13 @@ fn capped_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId
         let m = c.alloc_bit();
         c.hmr(cq, m);
         c.release_clean(cq);
-        c.push_condition(m);
-        carry_out_xor(c, &a[..delta], &b[..delta], ncin, None);
-        c.pop_condition();
-        c.free_bit(m);
+        // y28: in the divide's fused pass the outcome is kept and its phase applied in the mirrored subtract
+        if !y28_store(delta, n, m) {
+            c.push_condition(m);
+            carry_out_xor(c, &a[..delta], &b[..delta], ncin, None);
+            c.pop_condition();
+            c.free_bit(m);
+        }
     } else {
         carry_out_xor(c, &a[..delta], &b[..delta], ncin, Some(cq));
         c.x(cq);
@@ -716,6 +788,22 @@ fn rail_capped() -> bool {
 fn rail_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>) {
     let n = b.len();
     let room = cells::cap().saturating_sub(c.active_qubits() as usize);
+    if let Some(h) = y28_fetch(n) {
+        // y28: the mirrored subtract of a split forward add. It is one whole ladder here (the same gates as below),
+        // which holds the carry into the forward boundary on a wire: the kept outcome's phase goes on there.
+        assert!(n <= 3 || n - 2 <= room, "y28: the mirrored subtract must be one whole ladder");
+        assert!(h.0 >= 1 && h.0 + 2 <= n, "y28: boundary {} outside the ladder of {n}", h.0);
+        Y28_HOOK.with(|x| x.set(Some(h)));
+        if a.len() >= b.len() {
+            gidney_add_lean(c, a, b, cin);
+        } else {
+            let sg = *a.last().unwrap();
+            let add: Vec<Vec<QubitId>> = (0..b.len()).map(|i| vec![if i < a.len() { a[i] } else { sg }]).collect();
+            ladder_parity_add(c, b, &add, cin);
+        }
+        assert!(Y28_HOOK.with(|x| x.take()).is_none(), "y28: kept bit not taken by the ladder");
+        return;
+    }
     let off = std::env::var("LF_RAIL_SPLIT").is_ok_and(|v| v == "0");
     // LF_RAIL_CAPPED=1: an add whose two-way split does not fit either (n > ~2 room) goes through the recursive
     // room-sized split of the fold ladders ([`lpa_capped`]) instead of a full-width ladder that overruns the cap
@@ -766,10 +854,13 @@ fn rail_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>)
     let m = c.alloc_bit();
     c.hmr(cq, m);
     c.release_clean(cq);
-    c.push_condition(m);
-    carry_out_parity_xor(c, &b[..delta], &add[..delta], true, ncin, None);
-    c.pop_condition();
-    c.free_bit(m);
+    // y28: as in [`capped_add`]
+    if !y28_store(delta, n, m) {
+        c.push_condition(m);
+        carry_out_parity_xor(c, &b[..delta], &add[..delta], true, ncin, None);
+        c.pop_condition();
+        c.free_bit(m);
+    }
     pacc(c, "split.rail_erase", q0);
     match cin {
         Some(q) => c.x(q),
@@ -1635,6 +1726,7 @@ fn v_off(c: &mut Builder, list: &[QubitId], comp: bool, ci: Option<QubitId>) {
 /// (possibly none). Carries that are provably 0 are skipped; carries are measurement-uncomputed.
 fn ladder_parity_add(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], cin: Option<QubitId>) {
     let n = acc.len();
+    let mut y28h = Y28_HOOK.with(|x| x.take());
     let mut carry: Vec<Option<QubitId>> = vec![None; n];
     carry[0] = cin;
     for i in 0..n - 1 {
@@ -1664,7 +1756,9 @@ fn ladder_parity_add(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], cin
             c.cx(ci, acc[i]);
         }
         carry[i + 1] = Some(t);
+        y28_apply(c, &mut y28h, i + 1, t);
     }
+    assert!(y28h.is_none(), "y28: the kept bit's boundary carry is on no wire of this ladder");
     for i in (0..n).rev() {
         let ci = carry[i];
         if i + 1 < n {
@@ -3057,6 +3151,7 @@ fn unseed(c: &mut Builder, r: [Vec<QubitId>; 2], d: &[QubitId]) {
 /// Move d's bits (the low N wires of `cur`) back onto d's own wires (SWAPs are Clifford); free the extension.
 fn restore_onto(c: &mut Builder, cur: Vec<QubitId>, d: &[QubitId]) {
     let mut cur = cur;
+    let mut resets = cur.len() - N;
     for i in 0..N {
         let want = d[i];
         if cur[i] == want {
@@ -3070,9 +3165,36 @@ fn restore_onto(c: &mut Builder, cur: Vec<QubitId>, d: &[QubitId]) {
             c.swap(cur[i], want);
             c.free(cur[i]);
             cur[i] = want;
+            resets += 1;
         }
     }
     c.free_vec(&cur[N..]);
+    // y28 DIAGNOSTIC, never for an entry (see [`Y28_ALIGNED`]); the log line has no effect on the gates
+    if Y28_ALIGNED {
+        let call = Y28_RESTORES.with(|x| x.replace(x.get() + 1));
+        eprintln!("Y28_RESTORE call={call} resets={resets}");
+        for _ in 0..Y28_ALIGN_PADS.get(call).copied().unwrap_or(0) {
+            let q = c.alloc_qubit();
+            let m = c.alloc_bit();
+            c.hmr(q, m);
+            c.free_bit(m);
+            c.release_clean(q);
+        }
+    }
+}
+/// y28 DIAGNOSTIC, false in every entry: the ALIGNED COPY of the y28-loop fold cards. true adds idle measurements (of
+/// a wire that holds 0) where the cards' gate list draws fewer random words than entry Y: [`Y28_ALIGN_PADS`] here and
+/// `Y28_PADS_FWD` / `Y28_PADS_REV` in y15_onefold.rs (20 in all for the kept set). The copy then has entry Y's number
+/// of measurements and resets at every place outside the changed blocks, the checker hands every measurement the
+/// random word it has in Y, and a paired run compares phase flags shot by shot. It costs no Toffoli.
+const Y28_ALIGNED: bool = false;
+/// Idle measurements after the i-th call of [`restore_onto`], with [`Y28_ALIGNED`]. That function resets one wire for
+/// every register bit whose home wire is not held by another bit of the register, so its number of resets moves with
+/// the wire ids, and a change that hands out wires in another order than the head shifts the checker's random words
+/// from there on (the kept set: 204 resets at the end of the divide for Y's 205).
+const Y28_ALIGN_PADS: &[usize] = &[1];
+thread_local! {
+    static Y28_RESTORES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Seed e: R0 = d (d odd) or d - p (d even, negative), on d's wires + extension; R1 = (R0 + s p)/2 with s = +1 iff
@@ -3609,7 +3731,9 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
             resize(c, br, bw(nk) - o);
             let trio = (c.alloc_qubit(), c.alloc_qubit(), c.alloc_qubit());
             let q0 = pmark(c);
+            y28_key(t * 4 + 1);
             yp8_add_halve_forced_choice(c, s, br, tr, trio.0, trio.1, trio.2, t);
+            y28_key(usize::MAX);
             pacc(c, &format!("fwd{fk}.yp8_forced"), q0);
             yp8_trio = Some(trio);
             letter.push(s);
@@ -3620,11 +3744,13 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
         let s = c.alloc_qubit();
         pp_sign_into1(c, tr[1 - o], br[1 - o], s);
         let q0 = pmark(c);
+        y28_key(t * 4 + letter.len());
         if lr {
             fast_add_halve_forced_lr(c, s, br, tr);
         } else {
             fast_add_halve_forced(c, s, br, tr);
         }
+        y28_key(usize::MAX);
         pacc(c, &format!("fwd{fk}.rail_forced"), q0);
         let q0 = pmark(c);
         if let Some(p) = pay.as_deref_mut() {
@@ -3674,11 +3800,13 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     }
     pacc(c, &format!("fwd{fk}.choice"), q0);
     let q0 = pmark(c);
+    y28_key(t * 4 + 2);
     if lr {
         fast_add_halve_choice_lr(c, s3, br, tr);
     } else {
         fast_add_halve_choice(c, s3, br, tr);
     }
+    y28_key(usize::MAX);
     pacc(c, &format!("fwd{fk}.rail_choice"), q0);
     if trim {
         let wb = br.len() + o;
@@ -3882,11 +4010,13 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     fast_k_erase(c, tr, k1, k2);
     pacc(c, &format!("rev{fk}.k_erase"), q0);
     let q0 = pmark(c);
+    y28_key(t * 4 + 2);
     if lr {
         fast_double_sub_choice_lr(c, s3, br, tr);
     } else {
         fast_double_sub_choice(c, s3, br, tr);
     }
+    y28_key(usize::MAX);
     pacc(c, &format!("rev{fk}.rail_choice"), q0);
     let q0 = pmark(c);
     // LF_YP8: the choice letter is measured here; its phase fix runs inside the reversal of forced move 2's add
@@ -3929,6 +4059,7 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
             c.x(s);
         }
         let q0 = pmark(c);
+        y28_key(t * 4 + y17_slot);
         if let (Some(m), true) = (yp8_m, s == s1) {
             yp8_double_sub_forced_erase(c, s, br, tr, m, t);
             c.free_bit(m);
@@ -3938,6 +4069,7 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
         } else {
             fast_double_sub_forced(c, s, br, tr);
         }
+        y28_key(usize::MAX);
         pacc(c, &format!("rev{fk}.rail_forced"), q0);
         pp_sign_into1(c, tr[1 - o], br[1 - o], s);
         c.free(s);
@@ -4051,6 +4183,7 @@ fn yp8() -> Option<usize> {
 /// position i (carry[0] = cin). `mid` must leave every wire as it found it.
 fn ladder_parity_add_mid(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], cin: Option<QubitId>, mid: &mut dyn FnMut(&mut Builder, &[Option<QubitId>])) {
     let n = acc.len();
+    let mut y28h = Y28_HOOK.with(|x| x.take());
     let mut carry: Vec<Option<QubitId>> = vec![None; n];
     carry[0] = cin;
     for i in 0..n - 1 {
@@ -4069,7 +4202,9 @@ fn ladder_parity_add_mid(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>],
             c.cx(ci, acc[i]);
         }
         carry[i + 1] = Some(t);
+        y28_apply(c, &mut y28h, i + 1, t);
     }
+    assert!(y28h.is_none(), "y28: the kept bit's boundary carry is on no wire of this paused ladder");
     mid(c, &carry);
     for i in (0..n).rev() {
         let ci = carry[i];
@@ -4138,8 +4273,19 @@ fn rail_add_mid(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, res
     let whole = |c: &mut Builder, mid: &mut dyn FnMut(&mut Builder, &[Vec<QubitId>], usize, &[Option<QubitId>])| {
         ladder_parity_add_mid(c, b, &add, Some(cin), &mut |c, carry| mid(c, &add, 0, carry));
     };
+    // y28: the mirrored subtract of a split forward add: one whole paused ladder, the kept outcome's phase on its
+    // carry into the forward boundary (the carry sweep runs before the pause, under no condition)
+    let y28h = y28_fetch(n);
+    if let Some(h) = y28h {
+        assert!(!fwd, "y28: a kept bit is applied in the reverse pass only");
+        assert!(n <= 3 || n - 1 + reserve <= room, "y28: the mirrored paused subtract must be one whole ladder");
+        assert!(h.0 >= 1 && h.0 + 1 <= n, "y28: boundary {} outside the paused ladder of {n}", h.0);
+        Y28_HOOK.with(|x| x.set(Some(h)));
+    }
     if n <= 3 || n - 1 + reserve <= room {
-        return whole(c, mid);
+        whole(c, mid);
+        assert!(Y28_HOOK.with(|x| x.take()).is_none(), "y28: kept bit not taken by the paused ladder");
+        return;
     }
     let mut delta = n + reserve - room;
     // backward, low part first: k - 1 more wires at the pause
@@ -4191,10 +4337,13 @@ fn rail_add_mid(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, res
         let m = c.alloc_bit();
         c.hmr(cq, m);
         c.release_clean(cq);
-        c.push_condition(m);
-        carry_out_parity_xor(c, &b[..delta], &add[..delta], true, cin, None);
-        c.pop_condition();
-        c.free_bit(m);
+        // y28: as in [`capped_add`]
+        if !y28_store(delta, n, m) {
+            c.push_condition(m);
+            carry_out_parity_xor(c, &b[..delta], &add[..delta], true, cin, None);
+            c.pop_condition();
+            c.free_bit(m);
+        }
         pacc(c, "split.yp8_erase", q0);
         c.x(cin);
     } else if let Some((k, _)) = low_first {
@@ -4531,6 +4680,7 @@ fn yp8_double_sub_forced_erase(c: &mut Builder, sign: QubitId, b: &[QubitId], t:
     if n > 3 && n - 1 + reserve > room {
         // The paused add would be split deeper than the plain one, and the pause is only needed on shots whose
         // outcome is 1: run the plain add on the others.
+        assert!(!y28_pending(), "y28: a kept bit's Z would sit under the choice outcome here");
         let nm = c.alloc_bit();
         c.bit_store1(nm);
         c.bit_xor_into(nm, m);
@@ -5080,11 +5230,16 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
         loan_pad = parity_tape_out(c, &wk, ahead);
     }
     let dphrot = div_phrot() && !keep_p1;
+    assert!(Y28_BITS.with(|b| b.borrow().is_empty()), "y28: kept bits from an earlier walk");
+    Y28_COUNT.with(|x| x.set((0, 0)));
     for t in ahead..rounds() {
         if dphrot && t + 1 == rounds() {
             SKIP_PAY_ROT_AT.with(|s| s.set(t));
         }
+        // y28: this pass keeps the outcome bits of its split rail adds' boundary carries for the reverse rail pass
+        Y28_KEEP.with(|d| d.set(true));
         fwd_tick(c, &mut wk, t, Some(&mut pay));
+        Y28_KEEP.with(|d| d.set(false));
         SKIP_PAY_ROT_AT.with(|s| s.set(usize::MAX));
     }
     let q0 = pmark(c);
@@ -5139,7 +5294,16 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
                 t0_in(c, &mut wk, bits);
             }
         }
+        Y28_USE.with(|d| d.set(true));
         rev_tick(c, &mut wk, t, None);
+        Y28_USE.with(|d| d.set(false));
+    }
+    // y28: every kept outcome bit was consumed by exactly one Z (a key is inserted once and removed once)
+    assert!(Y28_BITS.with(|b| b.borrow().is_empty()), "y28: kept bits left over at the end of the divide");
+    let (y28_kept, y28_applied) = Y28_COUNT.with(|x| x.get());
+    assert_eq!(y28_kept, y28_applied, "y28: kept and applied bits differ");
+    if Y28_DEFER {
+        eprintln!("Y28_DEFER kept={y28_kept} applied={y28_applied}");
     }
     T0_PLAIN.with(|p| p.set(false));
     let q0 = pmark(c);
