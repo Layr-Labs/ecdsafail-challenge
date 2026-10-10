@@ -3544,6 +3544,7 @@ pub(super) fn t0_phase_forms(c: &mut Builder, letter: &[QubitId], h: &[QubitId],
     let ((), peak) = c.r3_peak(|c| t0_forms_body(c, s, k1, k2, h, bits));
     assert!(peak as usize <= cells::cap(), "y26: the phase block on forms peaks at {peak}, over the walk cap {}", cells::cap());
 }
+#[allow(unused)] // rustc 1.93.0 panics in check_liveness on this function otherwise
 fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: &[QubitId], bits: Vec<crate::circuit::BitId>) {
     assert_eq!(h.len(), N);
     let (e_start, a_start) = (c.expected_total(), c.active_qubits());
@@ -3621,7 +3622,7 @@ fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: 
         a_mid = a_mid.max(c.active_qubits());
         for i in (lo + 1..=hi).filter(|&i| i >= Y15_WIN && i < N) {
             // Y26_FAULT (a control of the test, never a build): two positions of the layer swapped
-            let at = if Y26_FAULT && (i == 100 || i == 101) { i ^ 1 } else { i };
+            let at = if (Y26_FAULT || t0one_fault()) && (i == 100 || i == 101) { i ^ 1 } else { i };
             ph.z(c, vpos(at), &st.xf(i));
         }
         for p in (lo + 1..hi).rev() {
@@ -3633,7 +3634,8 @@ fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: 
         st.build(c, p);
     }
     for i in (lo_top + 1..N).filter(|&i| i >= Y15_WIN) {
-        ph.z(c, vpos(i), &st.xf(i));
+        let at = if t0one_fault() && (i == 100 || i == 101) { i ^ 1 } else { i };
+        ph.z(c, vpos(at), &st.xf(i));
     }
     let e_adds = c.expected_total();
     // the fold on forms
@@ -3712,4 +3714,513 @@ fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: 
         c.expected_total() - e_start
     );
     }
+}
+
+
+// ==================================================================================================================
+// spooky-leapfrog-v1 research levers RT0 / T0ONE (patch_rt0.py). Off (byte-identical) unless SL_RT0 / SL_T0ONE set.
+// ==================================================================================================================
+
+/// `SL_RT0`: 0 off; 1 RT0 with its one chunk boundary closed exactly; 2 the boundary closed by a seeded 22-bit
+/// window (approximate); 9 = 1 with two positions of the Z layer swapped (a deliberate fault, a control of the test).
+pub(super) fn sl_rt0() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("SL_RT0").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
+}
+/// `SL_T0ONE` (with SL_RT0): 1 = the multiply's R0' is measured before the tick-0 phase block, whose chunk plan then
+/// sees 256 more wires of room; 9 = 1 with the block's Z layer positions 100 and 101 swapped (a deliberate fault).
+pub(super) fn sl_t0one() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("SL_T0ONE").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
+}
+fn t0one_fault() -> bool {
+    sl_t0one() == 9
+}
+fn rt0_trace() -> bool {
+    std::env::var("SL_RT0_TRACE").is_ok_and(|v| v == "1")
+}
+
+/// RT0: MAJ(x, y, z) of forms. Ok(form) where it is linear (two operands equal or complementary, or constants), else
+/// Err((a, b, ci)) with MAJ = AND(a, b) ^ ci (a constant operand, if any, taken as ci).
+fn rt0_maj_dec(x: &Lin, y: &Lin, z: &Lin) -> Result<Lin, (Lin, Lin, Lin)> {
+    let k = |f: &Lin| if f.w.is_empty() { Some(f.one) } else { None };
+    let (p, q, r) = if k(z).is_some() {
+        (x, y, z)
+    } else if k(x).is_some() {
+        (y, z, x)
+    } else if k(y).is_some() {
+        (z, x, y)
+    } else {
+        (x, y, z)
+    };
+    let (a, b) = (p.x(r), q.x(r));
+    match (k(&a), k(&b), k(&a.x(&b))) {
+        (Some(false), _, _) | (_, Some(false), _) => Ok(r.clone()),
+        (Some(true), _, _) => Ok(q.clone()),
+        (_, Some(true), _) => Ok(p.clone()),
+        (_, _, Some(false)) => Ok(p.clone()),
+        (_, _, Some(true)) => Ok(r.clone()),
+        _ => Err((a, b, r.clone())),
+    }
+}
+/// MAJ of forms on a fresh wire where it is not linear (1 Toffoli), with its erase record.
+fn rt0_maj(c: &mut Builder, x: &Lin, y: &Lin, z: &Lin) -> (Lin, Option<MRec>) {
+    match rt0_maj_dec(x, y, z) {
+        Ok(f) => (f, None),
+        Err((a, b, ci)) => {
+            let q = lin_and(c, &a, &b);
+            lin_xor_into(c, &ci, q);
+            (l(q), Some(MRec { q, a, b, ci }))
+        }
+    }
+}
+/// (-1)^F of a form F (under the conditions in force); `spare` hosts a constant -1 (Z X Z X).
+fn rt0_z(c: &mut Builder, f: &Lin, spare: QubitId) {
+    if f.w.is_empty() {
+        if f.one {
+            c.z_if(spare, crate::circuit::NO_BIT);
+            c.x(spare);
+            c.z_if(spare, crate::circuit::NO_BIT);
+            c.x(spare);
+        }
+    } else {
+        lin_cz(c, &Lin::k(true), f);
+    }
+}
+/// (-1)^MAJ(x, y, z) of forms: the phase of one AND (CZ of two forms) and Z of the carry-in form.
+fn rt0_maj_phase(c: &mut Builder, x: &Lin, y: &Lin, z: &Lin, spare: QubitId) {
+    match rt0_maj_dec(x, y, z) {
+        Ok(f) => rt0_z(c, &f, spare),
+        Err((a, b, ci)) => {
+            lin_cz(c, &a, &b);
+            rt0_z(c, &ci, spare);
+        }
+    }
+}
+/// (-1)^(m F) under the kept bit m.
+fn rt0_z_if(c: &mut Builder, f: &Lin, m: crate::circuit::BitId, spare: QubitId) {
+    c.push_condition(m);
+    rt0_z(c, f, spare);
+    c.pop_condition();
+}
+
+/// RT0's Z layer: the phase (-1)^(sum_j m_j R0'_j), j = 1..=256, R0'_j = X_min(j + 3 + e, top) (the rail barrel's
+/// sign-filled shift by 3 + e, e = k1 + 2 k2), expanded over e in the ANF monomials {1, k1, k2, k1 k2} as
+/// [`rot4_phase`] does (one AND for k1 k2), one X position at a time and on forms.
+struct Rt0Phase {
+    k1: QubitId,
+    k2: QubitId,
+    t: QubitId,
+    at: Vec<Vec<(usize, crate::circuit::BitId)>>,
+    done: Vec<bool>,
+    bits: Vec<crate::circuit::BitId>,
+}
+impl Rt0Phase {
+    fn new(c: &mut Builder, k1: QubitId, k2: QubitId, top: usize, bits: Vec<crate::circuit::BitId>, fault: bool) -> Rt0Phase {
+        let anf: [&[usize]; 4] = [&[0, 1, 2, 3], &[1, 3], &[2, 3], &[3]];
+        let mut acc: std::collections::BTreeMap<(usize, usize), Vec<usize>> = std::collections::BTreeMap::new();
+        for j in 1..=bits.len() {
+            for (val, monos) in anf.iter().enumerate() {
+                let i = (j + 3 + val).min(top);
+                for &mono in monos.iter() {
+                    let lst = acc.entry((i, mono)).or_default();
+                    if let Some(p) = lst.iter().position(|&x| x == j - 1) {
+                        lst.remove(p);
+                    } else {
+                        lst.push(j - 1);
+                    }
+                }
+            }
+        }
+        let t = and_new(c, k1, k2);
+        let mut at: Vec<Vec<(usize, crate::circuit::BitId)>> = vec![Vec::new(); top + 1];
+        for (&(i, mono), lst) in acc.iter() {
+            // SL_RT0=9 (a control of the test, never a build): two positions of the layer swapped
+            let i = if fault && (i == 100 || i == 101) { i ^ 1 } else { i };
+            for &bi in lst {
+                at[i].push((mono, bits[bi]));
+            }
+        }
+        Rt0Phase { k1, k2, t, at, done: vec![false; top + 1], bits }
+    }
+    /// X position i holds the value of the form `f`.
+    fn z(&mut self, c: &mut Builder, i: usize, f: &Lin) {
+        assert!(!self.done[i], "RT0: position {i} twice");
+        self.done[i] = true;
+        for &(mono, bit) in &self.at[i] {
+            let ctl = match mono {
+                0 => None,
+                1 => Some(self.k1),
+                2 => Some(self.k2),
+                _ => Some(self.t),
+            };
+            for &q in &f.w {
+                match ctl {
+                    None => c.z_if(q, bit),
+                    Some(k) => c.cz_if(k, q, bit),
+                }
+            }
+            if f.one {
+                match ctl {
+                    None => {
+                        c.z_if(self.k1, bit);
+                        c.x(self.k1);
+                        c.z_if(self.k1, bit);
+                        c.x(self.k1);
+                    }
+                    Some(k) => c.z_if(k, bit),
+                }
+            }
+        }
+    }
+    fn finish(self, c: &mut Builder) {
+        for (i, a) in self.at.iter().enumerate() {
+            assert!(a.is_empty() || self.done[i], "RT0: X position {i} of the Z layer was left out");
+        }
+        and_erase(c, self.t, self.k1, self.k2);
+        for b in self.bits {
+            c.free_bit(b);
+        }
+    }
+}
+
+/// RT0's carry-save forms of X = op0 + op1 + op2 + op3 (forms of each operand's bits at positions 0..=top): three
+/// wires a position p (k1[p], k2[p] of the two 3:2 layers, r[p] of the one ripple chain), as 113bf38's CsForms.
+struct Rt0Cs {
+    ops: [Vec<Lin>; 4],
+    k1: Vec<Lin>,
+    k2: Vec<Lin>,
+    r: Vec<Lin>,
+    rec: Vec<[Option<MRec>; 3]>,
+    live: Vec<bool>,
+}
+impl Rt0Cs {
+    fn op(&self, k: usize, i: isize) -> Lin {
+        if i < 0 { Lin::k(false) } else { self.ops[k][i as usize].clone() }
+    }
+    fn at(&self, v: &[Lin], p: isize) -> Lin {
+        if p < 1 {
+            return Lin::k(false);
+        }
+        assert!(self.live[p as usize], "RT0: position {p} is read while its wires are gone");
+        v[p as usize].clone()
+    }
+    fn s1f(&self, i: isize) -> Lin {
+        self.op(0, i).x(&self.op(1, i)).x(&self.op(2, i))
+    }
+    fn s2f(&self, i: isize) -> Lin {
+        self.s1f(i).x(&self.at(&self.k1, i)).x(&self.op(3, i))
+    }
+    fn xf(&self, i: usize) -> Lin {
+        let i = i as isize;
+        self.s2f(i).x(&self.at(&self.k2, i)).x(&self.at(&self.r, i))
+    }
+    fn build(&mut self, c: &mut Builder, p: usize) {
+        assert!(p >= 1 && !self.live[p]);
+        let q = p as isize;
+        let (a, ra) = rt0_maj(c, &self.op(0, q - 1), &self.op(1, q - 1), &self.op(2, q - 1));
+        let (b, rb) = rt0_maj(c, &self.s1f(q - 1), &self.at(&self.k1, q - 1), &self.op(3, q - 1));
+        let (d, rd) = rt0_maj(c, &self.s2f(q - 1), &self.at(&self.k2, q - 1), &self.at(&self.r, q - 1));
+        self.k1[p] = a;
+        self.k2[p] = b;
+        self.r[p] = d;
+        self.rec[p] = [ra, rb, rd];
+        self.live[p] = true;
+    }
+    /// Erase position p's wires with their build forms (position p - 1 as it was at the build).
+    fn erase(&mut self, c: &mut Builder, p: usize) {
+        assert!(self.live[p]);
+        let [ra, rb, rd] = std::mem::take(&mut self.rec[p]);
+        f_erase(c, rd);
+        f_erase(c, rb);
+        f_erase(c, ra);
+        self.live[p] = false;
+    }
+    /// Close the boundary position `hi` (positions 1..hi gone): k1[hi] from the operands; k2[hi] over k1[hi - 1] built
+    /// again (1 Toffoli); r[hi] measured, and on outcome 1 its phase from positions built again: all of 1..hi (`win`
+    /// None: exact, 113bf38's rule) or the `win` positions below hi with the carry into them taken as 0 (approximate).
+    fn close(&mut self, c: &mut Builder, hi: usize, win: Option<usize>, spare: QubitId) {
+        assert!(hi >= 2 && self.live[hi] && (1..hi).all(|p| !self.live[p]));
+        let [ra, rb, rd] = std::mem::take(&mut self.rec[hi]);
+        let q = hi as isize;
+        if let Some(rb) = rb {
+            let (k1m, r1) = rt0_maj(c, &self.op(0, q - 2), &self.op(1, q - 2), &self.op(2, q - 2));
+            match rt0_maj_dec(&self.s1f(q - 1), &k1m, &self.op(3, q - 1)) {
+                Err((a, b, ci)) => {
+                    lin_xor_into(c, &ci, rb.q);
+                    lin_and_erase(c, rb.q, &a, &b);
+                }
+                Ok(_) => panic!("RT0: k2 of the boundary is linear"),
+            }
+            f_erase(c, r1);
+        }
+        if let Some(rd) = rd {
+            let m = c.alloc_bit();
+            c.hmr(rd.q, m);
+            c.release_clean(rd.q);
+            c.push_condition(m);
+            let lo = match win {
+                Some(k) if hi > k + 2 => hi - k,
+                _ => 0,
+            };
+            let mut low: Vec<Option<MRec>> = Vec::new();
+            if lo > 0 {
+                // the window's lowest position, seeded: k1[lo], k2[lo] exact (k1[lo - 1] built again), r[lo] := 0
+                let ql = lo as isize;
+                let (k1p, r1p) = rt0_maj(c, &self.op(0, ql - 2), &self.op(1, ql - 2), &self.op(2, ql - 2));
+                let (k1l, r1l) = rt0_maj(c, &self.op(0, ql - 1), &self.op(1, ql - 1), &self.op(2, ql - 1));
+                let (k2l, r2l) = rt0_maj(c, &self.s1f(ql - 1), &k1p, &self.op(3, ql - 1));
+                self.k1[lo] = k1l;
+                self.k2[lo] = k2l;
+                self.r[lo] = Lin::k(false);
+                self.live[lo] = true;
+                low = vec![r1p, r1l, r2l];
+            }
+            for p in lo + 1..hi {
+                self.build(c, p);
+            }
+            rt0_maj_phase(c, &self.s2f(q - 1), &self.at(&self.k2, q - 1), &self.at(&self.r, q - 1), spare);
+            for p in (lo + 1..hi).rev() {
+                self.erase(c, p);
+            }
+            if lo > 0 {
+                self.live[lo] = false;
+                while let Some(r) = low.pop() {
+                    f_erase(c, r);
+                }
+            }
+            c.pop_condition();
+            c.free_bit(m);
+        }
+        f_erase(c, ra);
+        self.live[hi] = false;
+    }
+}
+
+/// RT0 (SL_RT0): the walk's last rails reverse tick as measure + phase oracle. In: `r1` = R1's held wires (bit i + 1 on
+/// wire i, i < 256; bit 0 is the constant 1), the tick-0 letter (s0, s1, s3, k1, k2) re-derived by t0_in, and the
+/// kept bits of R0' (bit j on wire j - 1 of the measured register). Out: R0 at width `w0` with its bit-0 wire (the
+/// value lr_walk_restore + unseed_r1 return); R1's wires carry it, the letter is erased, the bits are freed.
+///
+/// Tick 0 changes only R0: R0' = X >> (3 + e) exactly (sign filled), X = R0 + c R1, c = (-1)^s0 + 2 (-1)^s1 +
+/// 4 (-1)^s3; both rails odd, so (-1)^s R1 = R1 ^ s on bits >= 1 with bit 0 = 1. R0 is a function of R1: the exact
+/// inverse of seed_r1's windowed map (LF_SEAMS) with selector NOT sign(R1) (unseed_r1's ops): bits [0, fs] of
+/// 2 R1 + (sign(R1) ? -f : f) mod 2^(fs + 1) through that window's carries g, bits fs+1..=255 = R1's bits shifted up
+/// one, bits >= 256 = NOT R1 bit 255. So the measurement's phase is a Z layer on forms of X's bits (carry-save: two
+/// local AND layers and one ripple chain), and every AND is erased by measurement with its build forms.
+pub(super) fn rt0_finish(c: &mut Builder, r1: Vec<QubitId>, letter: Vec<QubitId>, bits: Vec<crate::circuit::BitId>, w0: usize) -> Vec<QubitId> {
+    let (r0, peak) = c.r3_peak(|c| rt0_body(c, r1, letter, bits, w0));
+    assert!(peak as usize <= cells::cap(), "RT0 peaks at {peak}, over the walk cap {}", cells::cap());
+    r0
+}
+fn rt0_body(c: &mut Builder, r1: Vec<QubitId>, letter: Vec<QubitId>, bits: Vec<crate::circuit::BitId>, w0: usize) -> Vec<QubitId> {
+    assert_eq!(r1.len(), N, "RT0: R1 held on 256 wires (bits 1..=256)");
+    assert_eq!(letter.len(), 5);
+    assert_eq!(bits.len(), N);
+    let mode = sl_rt0();
+    let (e0, a0) = (c.expected_total(), c.active_qubits());
+    let sw = r1[N - 1];
+    let fs = go_fs("GO_FG_P");
+    let fc = f();
+    let top = N + 3; // X's sign position: |X| < 8 * 2^256
+    let r1b = |i: usize| -> Lin {
+        if i == 0 {
+            Lin::k(true)
+        } else if i <= N {
+            l(r1[i - 1])
+        } else {
+            l(sw)
+        }
+    };
+    let yv = |i: usize| -> Lin { if i == 0 { Lin::k(false) } else { r1b(i - 1) } };
+    let av = |i: usize| -> Lin { if i == 0 { Lin::k(true) } else { Lin { w: vec![sw], one: fc.bit(i) } } };
+    // the window's carries: g[i + 1] = MAJ(y_i, A_i, g_i), the carry off bit fs dropped
+    let mut g: Vec<Lin> = vec![Lin::k(false); fs + 1];
+    let mut grec: Vec<Option<MRec>> = (0..=fs).map(|_| None).collect();
+    for i in 0..fs {
+        let gi = g[i].clone();
+        let (gf, gr) = rt0_maj(c, &yv(i), &av(i), &gi);
+        g[i + 1] = gf;
+        grec[i + 1] = gr;
+    }
+    let e_g = c.expected_total();
+    let r0v: Vec<Lin> = (0..=top)
+        .map(|i| {
+            if i <= fs {
+                yv(i).x(&av(i)).x(&g[i])
+            } else if i < N {
+                r1b(i - 1)
+            } else {
+                r1b(N - 1).x(&Lin::k(true))
+            }
+        })
+        .collect();
+    let (s0, s1, s3, k1, k2) = (letter[0], letter[1], letter[2], letter[3], letter[4]);
+    let bj = |s: QubitId, i: usize| -> Lin { if i == 0 { Lin::k(true) } else { r1b(i).x(&l(s)) } };
+    let ops: [Vec<Lin>; 4] = [
+        r0v.clone(),
+        (0..=top).map(|i| bj(s0, i)).collect(),
+        (0..=top).map(|i| if i == 0 { Lin::k(false) } else { bj(s1, i - 1) }).collect(),
+        (0..=top).map(|i| if i < 2 { Lin::k(false) } else { bj(s3, i - 2) }).collect(),
+    ];
+    let mut ph = Rt0Phase::new(c, k1, k2, top, bits, mode == 9);
+    let zero = Lin::k(false);
+    let mut cs = Rt0Cs {
+        ops,
+        k1: vec![zero.clone(); top + 1],
+        k2: vec![zero.clone(); top + 1],
+        r: vec![zero.clone(); top + 1],
+        rec: (0..=top).map(|_| [None, None, None]).collect(),
+        live: vec![false; top + 1],
+    };
+    // the chunk plan: the high chunk [hi, top] as long as the room allows (3 wires a position), the low chunk [1, hi]
+    // erased below its top position hi, the one boundary
+    let room = cells::cap().saturating_sub(c.active_qubits() as usize);
+    let fit = room.saturating_sub(4) / 3;
+    let hi = if fit >= top { 0 } else { top + 1 - fit };
+    let e_cs0 = c.expected_total();
+    if hi == 0 {
+        for p in 1..=top {
+            cs.build(c, p);
+        }
+        for i in 1..=top {
+            ph.z(c, i, &cs.xf(i));
+        }
+        for p in (1..=top).rev() {
+            cs.erase(c, p);
+        }
+    } else {
+        for p in 1..=hi {
+            cs.build(c, p);
+        }
+        for i in 1..=hi {
+            ph.z(c, i, &cs.xf(i));
+        }
+        for p in (1..hi).rev() {
+            cs.erase(c, p);
+        }
+        for p in hi + 1..=top {
+            cs.build(c, p);
+        }
+        for i in hi + 1..=top {
+            ph.z(c, i, &cs.xf(i));
+        }
+        for p in (hi + 1..=top).rev() {
+            cs.erase(c, p);
+        }
+    }
+    let a_cs = c.active_qubits();
+    let e_cs = c.expected_total();
+    if hi > 0 {
+        cs.close(c, hi, if mode == 2 { Some(22) } else { None }, k1);
+    }
+    let e_b = c.expected_total();
+    ph.finish(c);
+    rt0_letter_erase(c, &r1, &r0v, &letter);
+    let e_l = c.expected_total();
+    // R0 over R1's wires: bit i (2 <= i <= 256) on the wire of R1's bit i - 1; the window's carries erased as they are
+    // passed (g[i] reads y_{i-1}, still unwritten), as 113bf38's fused doubling does
+    let q0w = c.alloc_qubit();
+    c.x(q0w);
+    let q1w = c.alloc_qubit();
+    lin_xor_into(c, &r0v[1], q1w);
+    for i in (2..=fs).rev() {
+        lin_xor_into(c, &av(i).x(&g[i]), r1[i - 2]);
+        f_erase(c, grec[i].take());
+    }
+    f_erase(c, grec[1].take());
+    assert!(grec.iter().all(|r| r.is_none()));
+    c.x(r1[N - 2]);
+    // sign(R1) = NOT R0 bit 1
+    c.cx(q1w, sw);
+    c.x(sw);
+    c.free(sw);
+    let mut r0 = vec![q0w, q1w];
+    r0.extend_from_slice(&r1[..N - 1]);
+    resize(c, &mut r0, w0);
+    assert_eq!(c.active_qubits() + 1, a0, "RT0: a wire was left behind");
+    if rt0_trace() {
+        eprintln!(
+            "RT0 mode={mode} live={a0} room={room} boundary={hi} fit={fit} active_csa={a_cs} window={:.1} csa={:.1} boundary={:.1} letter={:.1} all={:.1}",
+            e_g - e0,
+            e_cs - e_cs0 + (e_cs0 - e_g),
+            e_b - e_cs,
+            e_l - e_b,
+            c.expected_total() - e0
+        );
+    }
+    r0
+}
+
+/// RT0: erase the tick-0 letter by measurement. Its phase is fixed from the state it is a function of (t0_derive's):
+/// a 7-bit scratch of (R0 >> 1) (forms of R0 at hand), the two forced steps on it under s0, s1 (as t0_derive), then
+/// k1 = s3 ^ !z2 ^ dq ^ !z2 !z3 (s3 live: no Toffoli), s3 = dq ^ k2 ^ z2 ^ z2 (mh ^ dq ^ 1) (k2 live; the veto mh of
+/// t0_m_on built only on outcome 1), k2 = !z2 ^ !z2 !z3 !z4 (one AND on outcome 1); the forced steps undone, s1 and s0
+/// erased by their CNOT forms.
+fn rt0_letter_erase(c: &mut Builder, r1: &[QubitId], r0v: &[Lin], letter: &[QubitId]) {
+    assert!(t0_plain(0), "RT0: tick 0 takes the plain rule (LF_T0_FREE)");
+    let b = r1;
+    let mut ts = c.alloc_qubits(7);
+    for i in 0..7 {
+        lin_xor_into(c, &r0v[i + 1], ts[i]);
+    }
+    for (n, i) in [(7usize, 0usize), (6, 1)] {
+        fast_add_halve_forced_lr(c, letter[i], &b[..n], &mut ts);
+    }
+    lr_restore(c, &mut ts);
+    let one = c.alloc_qubit();
+    c.x(one);
+    let mut bb = vec![one];
+    bb.extend_from_slice(&b[..5]);
+    let (s3, k1, k2) = (letter[2], letter[3], letter[4]);
+    zlin_on(c, &ts, &bb);
+    let (dq, z2, z3, z4) = (ts[1], ts[2], ts[3], ts[4]);
+    // k1
+    let m = c.alloc_bit();
+    c.hmr(k1, m);
+    c.release_clean(k1);
+    rt0_z_if(c, &Lin { w: vec![s3, z2, dq], one: true }, m, one);
+    c.x(z2);
+    c.x(z3);
+    c.cz_if(z2, z3, m);
+    c.x(z3);
+    c.x(z2);
+    c.free_bit(m);
+    // s3
+    let m = c.alloc_bit();
+    c.hmr(s3, m);
+    c.release_clean(s3);
+    rt0_z_if(c, &Lin { w: vec![dq, k2, z2], one: false }, m, one);
+    c.push_condition(m);
+    let t0m = t0_m_on(c, b, letter[0], letter[1]);
+    lin_cz(c, &l(z2), &Lin { w: vec![t0m.mh, dq], one: true });
+    t0_m_off(c, t0m);
+    c.pop_condition();
+    c.free_bit(m);
+    // k2
+    let m = c.alloc_bit();
+    c.hmr(k2, m);
+    c.release_clean(k2);
+    rt0_z_if(c, &Lin { w: vec![z2], one: true }, m, one);
+    c.x(z2);
+    c.x(z3);
+    c.x(z4);
+    ccz_if(c, z2, z3, z4, m);
+    c.x(z4);
+    c.x(z3);
+    c.x(z2);
+    c.free_bit(m);
+    zlin_off(c, &ts, &bb);
+    c.x(one);
+    c.free(one);
+    lr_drop(c, &mut ts);
+    for (i, n) in [(1usize, 6usize), (0, 7)] {
+        fast_double_sub_forced_lr(c, letter[i], &b[..n], &mut ts);
+        pp_sign_into1(c, ts[0], b[0], letter[i]);
+        c.free(letter[i]);
+    }
+    for i in 0..7 {
+        lin_xor_into(c, &r0v[i + 1], ts[i]);
+    }
+    c.free_vec(&ts);
 }

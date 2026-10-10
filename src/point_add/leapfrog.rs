@@ -67,6 +67,9 @@ pub(crate) fn install_recipe() {
         // y15-room: the divide's and the multiply's boundary set apart (each overrides LF_REORDER for its direction)
         ("LF_REORDER_DIV", "42"),
         ("LF_REORDER_MUL", "77"),
+        // spookyfrog: N1 split-carry phase deferral, N2 tail batch with a terminal sign-copy loan, RT0 + T0 one boundary
+        ("SL_RT0", "1"),
+        ("SL_T0ONE", "1"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
         // with the coordinate seams
         ("LF_TIE_SEED", "1"),
@@ -5285,6 +5288,7 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
         p1
     };
     pacc(c, "div.endpoint", q0);
+    let mut rt0_r0: Option<Vec<QubitId>> = None;
     for t in (0..rounds()).rev() {
         if loan && t + 1 == ahead {
             parity_tape_in(c, &mut wk, ahead, loan_pad.take()); // back at the boundary: the relation it left by
@@ -5293,6 +5297,13 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
             if let Some(bits) = t0_bits.take() {
                 t0_in(c, &mut wk, bits);
             }
+        }
+        if t == 0 && rt0_walk_on() {
+            // spooky-leapfrog-v1 RT0 (SL_RT0): R0' measured, its phase paid by an oracle; R0 rebuilt
+            let q0 = pmark(c);
+            rt0_r0 = Some(rt0_walk(c, &mut wk, None));
+            pacc(c, "rt0.div", q0);
+            continue;
         }
         Y28_USE.with(|d| d.set(true));
         rev_tick(c, &mut wk, t, None);
@@ -5309,12 +5320,20 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
     let q0 = pmark(c);
     match SEAM_OPS.with(|s| s.borrow().clone()) {
         Some((_, c3)) => {
-            let rr = lr_walk_restore(c, wk.r);
-            let r0 = unseed_r1(c, rr);
+            let r0 = match rt0_r0.take() {
+                Some(r0) => r0,
+                None => {
+                    let rr = lr_walk_restore(c, wk.r);
+                    unseed_r1(c, rr)
+                }
+            };
             let low = seam_add_reduce(c, r0, &c3, &c3);
             restore_onto(c, low, x);
         }
-        None => unseed(c, wk.r, x),
+        None => {
+            assert!(rt0_r0.is_none(), "RT0 needs the seam");
+            unseed(c, wk.r, x)
+        }
     }
     pacc(c, "div.unseed", q0);
     p1
@@ -5394,6 +5413,8 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
         cells::mod_halve(c, &p1); // P0
     }
     let mut junk_bits = Vec::new();
+    let mut rt0_r0: Option<Vec<QubitId>> = None;
+    let mut rt0_pre: Option<Vec<crate::circuit::BitId>> = None;
     if t0f {
         // p1 holds the product (2 y R1 = y R0 mod p); pay[0] holds y R2, a function of the product and tick 0's
         // letter: measured away, the phase fixed at the walk's end. The product moves onto y's wires.
@@ -5413,6 +5434,10 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
         if t == 0 {
             if let Some(bits) = t0_bits.take() {
                 t0_in(c, &mut wk, bits);
+                if rt0_walk_on() && y15::sl_t0one() != 0 {
+                    // spooky-leapfrog-v1 T0ONE: R0' out first, the phase block below gets its 256 wires
+                    rt0_pre = Some(rt0_measure(c, &mut wk));
+                }
                 let q1 = pmark(c);
                 if t0dbl && y15::t0_forms_on(t0_phrot()) {
                     // y26: the same phase on forms over P/2 alone (nothing written, no copy), then the product doubled
@@ -5460,19 +5485,33 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
                 pacc(c, "t0.mul_phase", q1);
             }
         }
+        if t == 0 && rt0_walk_on() {
+            let q0 = pmark(c);
+            rt0_r0 = Some(rt0_walk(c, &mut wk, rt0_pre.take()));
+            pacc(c, "rt0.mul", q0);
+            continue;
+        }
         rev_tick(c, &mut wk, t, None);
     }
     T0_PLAIN.with(|p| p.set(false));
     match SEAM_MUL.with(|s| s.borrow().clone()) {
         Some((ox, p1c)) => {
             // ox - R = (-R) + ox: complement R (= -R - 1) and add ox + 1
-            let rr = lr_walk_restore(c, wk.r);
-            let r0 = unseed_r1(c, rr);
+            let r0 = match rt0_r0.take() {
+                Some(r0) => r0,
+                None => {
+                    let rr = lr_walk_restore(c, wk.r);
+                    unseed_r1(c, rr)
+                }
+            };
             c.x_all(&r0);
             let low = seam_add_reduce(c, r0, &p1c, &ox);
             restore_onto(c, low, x);
         }
-        None => unseed(c, wk.r, x),
+        None => {
+            assert!(rt0_r0.is_none(), "RT0 needs the seam");
+            unseed(c, wk.r, x)
+        }
     }
     pacc(c, "mul.p1_unseed", q0);
 }
@@ -6308,4 +6347,148 @@ mod prof {
             std::panic::catch_unwind(|| super::tests::run_pub(k, 2)).ok();
         }
     }
+}
+
+// ==================================================================================================================
+// spooky-leapfrog-v1 research levers RT0 / T0ONE (patch_rt0.py). Off (byte-identical) unless SL_RT0 is set.
+// ==================================================================================================================
+/// RT0 (SL_RT0, see [`y15::rt0_finish`]) at this walk's last rails reverse tick.
+fn rt0_walk_on() -> bool {
+    y15::sl_rt0() != 0
+}
+/// RT0: measure R0' away (X basis): the held wires of tick 0's output, bit j + 1 on wire j. The bits are kept.
+fn rt0_measure(c: &mut Builder, wk: &mut Walk) -> Vec<crate::circuit::BitId> {
+    let r0p = std::mem::take(&mut wk.r[0]);
+    assert_eq!(r0p.len(), N, "RT0: R0' is held on W(1) - 1 = 256 wires");
+    r0p.iter()
+        .map(|&q| {
+            let m = c.alloc_bit();
+            c.hmr(q, m);
+            c.release_clean(q);
+            m
+        })
+        .collect()
+}
+/// RT0 in place of `rev_tick(0)`: returns R0 at the seed width w0 with its bit-0 wire (what lr_walk_restore and
+/// unseed_r1 return); R1 and the tick-0 letter are consumed. `pre`: R0' already measured (SL_T0ONE).
+fn rt0_walk(c: &mut Builder, wk: &mut Walk, pre: Option<Vec<crate::circuit::BitId>>) -> Vec<QubitId> {
+    assert!(lf_fast() && lowrel() && seed_half() && lf_seams() && t0_plain(0), "RT0 needs LF_FAST, LF_LOWREL, LF_SEED=half, LF_SEAMS and LF_T0_FREE");
+    let bits = match pre {
+        Some(b) => b,
+        None => rt0_measure(c, wk),
+    };
+    let r1 = std::mem::take(&mut wk.r[1]);
+    let letter = wk.tape.pop().expect("RT0: tick 0's letter");
+    assert!(wk.tape.is_empty(), "RT0: tape not empty at tick 0");
+    assert_eq!(letter.len(), 5);
+    let w0 = envelope()[0].max(N + 4);
+    y15::rt0_finish(c, r1, letter, bits, w0)
+}
+/// The rest of [`unseed_half_rails`] after unseed_r1 (the pilot's unseed of RT0's R0).
+fn unseed_half_tail(c: &mut Builder, r0: Vec<QubitId>, d: &[QubitId]) {
+    let w0 = r0.len();
+    let fs = go_fs("GO_FG_P");
+    let ev = c.alloc_qubit();
+    c.cx(r0[w0 - 1], ev);
+    for i in N..w0 {
+        c.cx(ev, r0[i]);
+    }
+    csub_const_trunc(c, &r0[..fs], f(), ev);
+    c.x(ev);
+    c.cx(r0[0], ev);
+    c.free(ev);
+    restore_onto(c, r0, d);
+}
+/// `RESEARCH_PILOT=rt0`: a one-tick rails walk (seed, tick 0, its letter out and in, then RT0 when SL_RT0 is set or
+/// else the head's reverse tick 0, then the unseed), simulated on random inputs. RT0_PILOT_PAD idle wires (default
+/// 256, the payload register of the real walks) give RT0 the room it has in the circuit.
+pub(crate) fn rt0_pilot() {
+    use crate::circuit::{analyze_ops, QubitOrBit};
+    use crate::sim::Simulator;
+    use ruint::aliases::U256;
+    use sha3::digest::{ExtendableOutput, Update};
+    let p = U256::MAX - U256::from((1u64 << 32) + 976);
+    let batches: usize = std::env::var("RT0_BATCHES").ok().and_then(|v| v.parse().ok()).unwrap_or(64);
+    let pad: usize = std::env::var("RT0_PILOT_PAD").ok().and_then(|v| v.parse().ok()).unwrap_or(256);
+    let mut c = Builder::new();
+    let x = c.alloc_qubits(N);
+    let idle = c.alloc_qubits(pad);
+    T0_PLAIN.with(|q| q.set(true));
+    let r = seed(&mut c, &x);
+    let mut wk = Walk { r, tape: Vec::new() };
+    fwd_tick(&mut c, &mut wk, 0, None);
+    let bits = t0_out(&mut c, &wk);
+    t0_in(&mut c, &mut wk, bits);
+    let e1 = c.expected_total();
+    let a1 = c.active_qubits();
+    let rt0 = rt0_walk_on();
+    if rt0 {
+        let r0 = rt0_walk(&mut c, &mut wk, None);
+        eprintln!("RT0PILOT rt0 block expected T {:.1} (live before {a1})", c.expected_total() - e1);
+        unseed_half_tail(&mut c, r0, &x);
+    } else {
+        rev_tick(&mut c, &mut wk, 0, None);
+        eprintln!("RT0PILOT head rev_tick(0) expected T {:.1} (live before {a1})", c.expected_total() - e1);
+        let rr = lr_walk_restore(&mut c, wk.r);
+        let e2 = c.expected_total();
+        let r0 = unseed_r1(&mut c, rr);
+        eprintln!("RT0PILOT head unseed_r1 expected T {:.1}", c.expected_total() - e2);
+        unseed_half_tail(&mut c, r0, &x);
+    }
+    T0_PLAIN.with(|q| q.set(false));
+    c.free_vec(&idle);
+    c.declare_qubit_register(&x);
+    let peak = c.peak_total();
+    let ops = c.take_ops();
+    let (nq, nb, _, regs) = analyze_ops(ops.iter());
+    let mut h = sha3::Shake256::default();
+    h.update(b"rt0-pilot");
+    let mut xof = h.finalize_xof();
+    let mut sim = Simulator::new(nq as usize, nb as usize, &mut xof);
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64 ^ std::env::var("RT0_SEED").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+    let mut rnd = move || {
+        let mut v = U256::ZERO;
+        for i in 0..4 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            v |= U256::from(seed) << (64 * i);
+        }
+        v
+    };
+    let (mut bad, mut phb, mut anc, mut shots) = (0usize, 0usize, 0usize, 0usize);
+    for _ in 0..batches {
+        sim.clear_for_shot();
+        let mut ins = Vec::new();
+        for shot in 0..64 {
+            let xv = rnd().reduce_mod(p).max(U256::from(1u8));
+            sim.set_register(&regs[0], xv, shot);
+            ins.push(xv);
+        }
+        sim.apply_iter(ops.iter());
+        for (shot, xv) in ins.iter().enumerate() {
+            if sim.get_register(&regs[0], shot) != *xv {
+                bad += 1;
+            }
+            if (sim.phase >> shot) & 1 == 1 {
+                phb += 1;
+            }
+        }
+        for r in &regs {
+            for qb in r {
+                if let QubitOrBit::Qubit(q) = *qb {
+                    *sim.qubit_mut(q) = 0;
+                }
+            }
+        }
+        if (0..nq).any(|q| sim.qubit(QubitId(q)) != 0) {
+            anc += 1;
+        }
+        shots += 64;
+    }
+    eprintln!(
+        "RT0PILOT {}: shots={shots} wrong={bad} phase_bad={phb} ancilla_bad_batches={anc} avgT={:.1} peak={peak} qubits={nq}",
+        if rt0 { format!("SL_RT0={}", y15::sl_rt0()) } else { "head".to_string() },
+        sim.stats.toffoli_gates as f64 / shots as f64
+    );
 }
