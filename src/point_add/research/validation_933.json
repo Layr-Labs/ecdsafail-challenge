@@ -1,0 +1,22 @@
+{
+  "qubits": 933,
+  "average_executed_toffoli": 4470782.17,
+  "average_executed_clifford": 23847042.297,
+  "analytical_expected_toffoli": 4470791.5,
+  "native_toffoli": 4882018,
+  "total_executed_toffoli": 40344338301,
+  "emitted_ops": 36374520,
+  "nonce": 2,
+  "validation": {
+    "shots": 9024,
+    "classical_failures": 0,
+    "phase_batches": 0,
+    "ancilla_batches": 0
+  },
+  "ops_sha256": "89a9a75190ce8cde7ede8b9c8863a77b1b841ad0c9138e32561605070b74d2ac",
+  "score": 4171239606,
+  "metrics": {
+    "toffoli": 4470782,
+    "qubits": 933
+  }
+}
