@@ -1100,8 +1100,9 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
         }
     }
     for &q in &loans{circ.release_clean(q);}
+    if g2 { eprintln!("G4_SQ_OWNER {policy_name} data=512 product={} cross={} carry=1 held={} flat_sum={} loans={} fold_base={} fold_room={}", product.len(), retained.cross.len(), retained.held.len()+retained.xkept.len(), retained.flat_sum_carries.len(), loans.len(), circ.active_qubits(), super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits() as usize)); }
     if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() || super::native_sfuse_b::mode()>0 {SQ_LOANS.with(|l|*l.borrow_mut()=loans.clone());}
-    folds(circ, &consumer_product);
+    if std::env::var_os("PORT_SQ_EMPTY_CONSUMER").is_none() { folds(circ, &consumer_product); }
     let (t2,p2)=(g2t(circ),circ.take_win_peak());
     if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() || super::native_sfuse_b::mode()>0 {SQ_LOANS.with(|l|l.borrow_mut().clear());}
     // Every consumer restores its temporary work and source. Reclaim the same
