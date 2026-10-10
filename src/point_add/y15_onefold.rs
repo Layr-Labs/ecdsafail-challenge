@@ -1949,6 +1949,21 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         }
         plan
     } else if Y15_CORE_V2 {
+        // y26, stage b (a test): the fold as carries only under the Z layer, then the written fold as today
+        if Y26_T0 == 2 && t == 0 {
+            if let Some(bits) = Y26_BITS.with(|p| p.borrow_mut().take()) {
+                assert!(shed == 0 && tops_pre == 0 && esh.is_none() && fin == 0);
+                let mut ph = T0Phase::new(c, k1, k2, N, bits);
+                // X's bits: written below add 2's open ripple, a form of register, source and carry in it
+                let xf: Vec<Lin> = (0..N).map(|i| if i < sp2 + 2 { l(tg[i]) } else { Lin::of(&[tg[i], b[i - 2], cc[i - 2 - sp2]]) }).collect();
+                let (w, mut recs) = fold_fwd_forms(c, &xf[..Y15_WIN], &[l(x256), l(x257), l(x258)], s, k1, k2);
+                for i in 0..N {
+                    ph.z(c, (i + N - 3) % N, if i < Y15_WIN { &w[i] } else { &xf[i] });
+                }
+                pop_chain(c, &mut recs);
+                ph.finish(c);
+            }
+        }
         fold_fwd_v2(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, fin, esh.as_mut())
     } else {
         fold_fwd(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2)
@@ -2597,5 +2612,575 @@ pub(super) fn rev_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [V
     }
     if Y15_TRACE {
         eprintln!("Y15_TICK rev t={t} active={a0} cost={:.1}", c.expected_total() - e0);
+    }
+}
+
+/// y26-loop (10 October 2026), measure-1: the multiply's tick-0 phase block (payload tick 0 forward on (P, P/2), the
+/// Z layer of [`rot4_phase`], the tick back) in one call. The block only applies a phase, so what the forward tick
+/// writes and the reverse tick unwrites can be evaluated as carries only: each AND built once on a fresh wire, the Z
+/// layer put on XOR forms of live wires, every AND erased by measurement with its build forms.
+///   0: off (the head byte for byte).
+///   1: the same gates by explicit calls (stage a).
+///   2: a test: the forward fold as carries only under the Z layer, inside the forward tick's body just before its
+///      written fold; the tick then goes on and the reverse tick runs as today (stage b; 80 Toffoli more).
+///   5: the form (m3): all three adds as forms over the one register P/2 (carry-save: two local AND layers and one
+///      ripple chain), T = 2 (P/2) as forms through the doubling's window carries, the fold as carries only.
+///      Nothing is written: no copy of P/2, no reverse tick, one mod_double fewer. See [`t0_phase_forms`].
+/// Builder counts at peak 1236 on the head (767599.9, gate list 26775814), 10 October 2026:
+///   1: expected=767599.9 (26775814, the head's bytes)
+///   2: expected=767679.9 (bffe61d1; against the head 0 outputs differ on 30 draws, phase shots 339 / 349)
+///   5, Y26_FUSE_DBL off: expected=766850.1 (8b18b6bb; 0 differ on 30 draws, phase shots 339 / 330)
+///   5, Y26_FUSE_DBL on:  expected=766802.1 (954104ba; 0 differ on 30 draws, phase shots 339 / 369, of them on a
+///      right output 116 / 114; on the denominator stress file 1 output differs, wrong only in the head)
+/// The block at 5: window 48 + 1, the three AND layers 768, the fold 80, two boundaries 219.5, in all 1117.5 for the
+/// head's 907.0 + 910.2 + 2 and two doublings of 48.
+pub(super) const Y26_T0: u8 = 5;
+pub(super) fn t0_carries_on(phrot: bool) -> bool {
+    (Y26_T0 == 1 || Y26_T0 == 2) && phrot && fwd_on(0) && rev_on(0)
+}
+/// Research knob, a control of the paired test: the Z layer's positions 100 and 101 swapped (a wrong phase function).
+/// false in every build that is kept.
+const Y26_FAULT: bool = false;
+/// y26, with the larger form: the product's doubling (P/2 -> P, [`cells::mod_double`]'s map) is written at the end
+/// of the block from the window's carries, which the block holds anyway: the register is rotated up, the window's sum
+/// bits are written top down and each carry is erased by measurement as it is passed. 0 Toffoli for the doubling's
+/// own carry ladder. Same value on every input (the same truncated sum). false: [`cells::mod_double`] after the block.
+pub(super) const Y26_FUSE_DBL: bool = true;
+/// Research knob, a diagnostic of the paired test (0 in every build that is kept): this many idle X measurements on
+/// a clean wire at the end of the block. The checker hands one random word to every measurement and reset in the
+/// order of the gate list, so a block with another number of them moves the outcomes of every later measurement.
+/// 2767 = the head's block's count less this block's (917,134 against 914,367 random words): with it the outcomes
+/// outside the block are the head's, and a phase flag that moves is the block's own. Measured with 2767 (gate list
+/// a7a0a4b9, expected=766802.1): on 90 draws 1 output differs (wrong only in the head) and the phase shots are the
+/// head's less 4 (339 / 339 and 705 / 701), none new; slope stress file 7176 / 7176; denominator 4451 / 4450.
+const Y26_PAD_RNG: usize = 0;
+pub(super) fn t0_forms_on(phrot: bool) -> bool {
+    Y26_T0 == 5 && phrot && fwd_on(0) && Y15_CORE_V2 && Y16_CORE
+}
+thread_local! {
+    /// y26, stage b: the kept bits of the phase block, taken by the hook in the forward tick 0's [`body`].
+    static Y26_BITS: std::cell::RefCell<Option<Vec<crate::circuit::BitId>>> = const { std::cell::RefCell::new(None) };
+}
+/// y26: the Z layer of [`rot4_phase`] (forward side), one position at a time and on forms.
+struct T0Phase {
+    k1: QubitId,
+    k2: QubitId,
+    t: QubitId,
+    /// per position j of the register the layer is on: (monomial, kept bit)
+    at: Vec<Vec<(usize, crate::circuit::BitId)>>,
+    done: Vec<bool>,
+    bits: Vec<crate::circuit::BitId>,
+}
+impl T0Phase {
+    /// The plan of [`rot4_phase`] (`inv` = false) for an n-wire register; builds the AND of the shift letter.
+    fn new(c: &mut Builder, k1: QubitId, k2: QubitId, n: usize, bits: Vec<crate::circuit::BitId>) -> T0Phase {
+        assert_eq!(bits.len(), n);
+        let maps: Vec<Vec<usize>> = (0..4).map(|e| rot4_map(n, e)).collect();
+        let anf: [&[usize]; 4] = [&[0, 1, 2, 3], &[1, 3], &[2, 3], &[3]];
+        let mut acc: std::collections::BTreeMap<(usize, usize), Vec<usize>> = std::collections::BTreeMap::new();
+        for i in 0..n {
+            for val in 0..4 {
+                let (j, bi) = (maps[val][i], i);
+                for &mono in anf[val] {
+                    let l = acc.entry((j, mono)).or_default();
+                    if let Some(p) = l.iter().position(|&x| x == bi) {
+                        l.remove(p);
+                    } else {
+                        l.push(bi);
+                    }
+                }
+            }
+        }
+        let t = and_new(c, k1, k2);
+        let mut at: Vec<Vec<(usize, crate::circuit::BitId)>> = vec![Vec::new(); n];
+        for (&(j, mono), l) in acc.iter() {
+            for &i in l {
+                at[j].push((mono, bits[i]));
+            }
+        }
+        T0Phase { k1, k2, t, at, done: vec![false; n], bits }
+    }
+    /// Position j of the register holds the value of the form `f`.
+    fn z(&mut self, c: &mut Builder, j: usize, f: &Lin) {
+        assert!(!self.done[j], "y26: position {j} twice");
+        self.done[j] = true;
+        for &(mono, bit) in &self.at[j] {
+            let ctl = match mono {
+                0 => None,
+                1 => Some(self.k1),
+                2 => Some(self.k2),
+                _ => Some(self.t),
+            };
+            for &q in &f.w {
+                match ctl {
+                    None => c.z_if(q, bit),
+                    Some(k) => c.cz_if(k, q, bit),
+                }
+            }
+            if f.one {
+                match ctl {
+                    // -1 under the bit: Z X Z X on any wire
+                    None => {
+                        c.z_if(self.k1, bit);
+                        c.x(self.k1);
+                        c.z_if(self.k1, bit);
+                        c.x(self.k1);
+                    }
+                    Some(k) => c.z_if(k, bit),
+                }
+            }
+        }
+    }
+    /// Clear the AND of the shift letter as [`rot4_phase`] does and free the bits.
+    fn finish(self, c: &mut Builder) {
+        assert!(self.done.iter().all(|&d| d), "y26: a position of the Z layer was left out");
+        if std::env::var("LF_PHROT_TOF").is_ok_and(|v| v == "1") {
+            c.ccx(self.k1, self.k2, self.t);
+            c.release_clean(self.t);
+        } else {
+            and_erase(c, self.t, self.k1, self.k2);
+        }
+        for b in self.bits {
+            c.free_bit(b);
+        }
+    }
+}
+/// y26: the forward fold of [`fold_fwd_v2`] over forms, nothing written. `x`: forms of X's bits [0, MW); `e`: forms of
+/// its three top bits. The same ANDs (4 low carries, 27 of the core, and the ladder's carries into bits 7..MW - 1,
+/// the last on a wire of its own here). Returns the forms of W's bits [0, MW) and the undo list: every wire is erased
+/// by measurement with its build forms, last built first ([`pop_chain`]).
+fn fold_fwd_forms(c: &mut Builder, x: &[Lin], e: &[Lin; 3], nm: [QubitId; 3], k1: QubitId, k2: QubitId) -> (Vec<Lin>, Vec<Rec>) {
+    assert!(Y15_CORE_V2 && Y16_CORE);
+    let mw = x.len();
+    let mut recs: Vec<Rec> = Vec::new();
+    // low section: X[0..4) + E, carries only
+    let c1 = r_and(c, &mut recs, x[0].clone(), e[0].clone());
+    let c2 = r_maj(c, &mut recs, x[1].clone(), e[1].clone(), c1.clone());
+    let c3 = r_maj(c, &mut recs, x[2].clone(), e[2].clone(), c2.clone());
+    let c4 = r_and(c, &mut recs, x[3].clone(), c3.clone());
+    let v3 = x[3].x(&c3);
+    let tt = r_and(c, &mut recs, l(k1), l(k2));
+    let g1 = Lin::of(&[k1, k2]).x(&tt);
+    // r = Nm + X[0..3)
+    let r1 = r_and(c, &mut recs, l(nm[0]), x[0].clone());
+    let mut k = vec![l(nm[0]).x(&x[0]), l(nm[1]).x(&x[1]).x(&r1)];
+    let r2 = r_maj(c, &mut recs, l(nm[1]), x[1].clone(), r1);
+    k.push(l(nm[2]).x(&x[2]).x(&r2));
+    let r3 = r_maj(c, &mut recs, l(nm[2]), x[2].clone(), r2);
+    let (a4, a5) = (k[0].clone(), k[1].x(&k[0]));
+    let y3 = r_and(c, &mut recs, g1, v3);
+    let sum4 = x[4].x(&c4).x(&a4);
+    let y4 = r_and(c, &mut recs, l(k2), sum4.clone());
+    let c5 = r_maj(c, &mut recs, x[4].clone(), a4, c4);
+    let sum5 = x[5].x(&c5).x(&a5);
+    let y5 = r_and(c, &mut recs, tt.clone(), sum5.clone());
+    let c6 = r_maj(c, &mut recs, x[5].clone(), a5, c5);
+    let fc3 = c3.clone();
+    let p = r3.x(&fc3);
+    k.push(y3.x(&p));
+    let mut t = r_and(c, &mut recs, p, y3.x(&fc3));
+    k.push(y4.x(&t));
+    t = r_and(c, &mut recs, t, y4.x(&fc3));
+    k.push(y5.x(&t));
+    t = r_and(c, &mut recs, t, y5.x(&fc3));
+    k.push(t.clone());
+    let k7 = r_and(c, &mut recs, t, fc3);
+    k.push(k7);
+    let add = addend_prog(c, &mut recs, &k, &Y16_FWD_GATES, &Y16_FWD_OUT, mw);
+    let mut w = vec![x[0].x(&e[0]), x[1].x(&e[1]).x(&c1), x[2].x(&e[2]).x(&c2), x[3].x(&c3), sum4, sum5];
+    let mut f = c6;
+    for i in 6..mw {
+        w.push(x[i].x(&add[i]).x(&f));
+        if i + 1 < mw {
+            f = r_maj(c, &mut recs, x[i].clone(), add[i].clone(), f);
+        }
+    }
+    (w, recs)
+}
+/// The phase (-1)^(m . y R2) on (P, P/2) = (`p[0]`, `p[1]`), both restored; frees `bits`.
+pub(super) fn t0_phase(c: &mut Builder, letter: &[QubitId], p: &[Vec<QubitId>; 2], bits: Vec<crate::circuit::BitId>) {
+    let t = 0usize;
+    let [w, ..] = steps()[t];
+    let (s, k1, k2) = ([letter[0], letter[1], letter[2]], letter[3], letter[4]);
+    let (tg, b) = (p[0].clone(), p[1].clone());
+    let shift = cmp_shift_at(t);
+    let shift = (shift.0 + Y15_CMP_EXTRA, shift.1);
+    let (_, proxy_f) = proxy_fold(w, false);
+    let (_, proxy_r) = proxy_fold(w, true);
+    // stages a and b: the forward tick without its 4-way rotation, the Z layer, the reverse tick without its rotation
+    let (e0, a0) = (c.expected_total(), c.active_qubits());
+    let mut bits = Some(bits);
+    if Y26_T0 == 2 {
+        Y26_BITS.with(|p| *p.borrow_mut() = bits.take());
+    }
+    cells::with_tie(None, || cells::with_cmp_shift(shift, || cells::with_bridge(proxy_f, false, || body_capped(c, t, s, k1, k2, &b, &tg, proxy_f, false))));
+    assert!(Y26_BITS.with(|p| p.borrow().is_none()), "y26: the forward tick did not take the kept bits");
+    for _ in 0..3 {
+        rot1(c, &tg, true);
+    }
+    if Y15_TRACE {
+        eprintln!("Y15_TICK fwd t={t} active={a0} cost={:.1}", c.expected_total() - e0);
+    }
+    if let Some(bits) = bits.take() {
+        rot4_phase(c, k1, k2, &tg, bits, false);
+    }
+    let (e0, a0) = (c.expected_total(), c.active_qubits());
+    for _ in 0..3 {
+        rot1(c, &tg, false);
+    }
+    for q in s {
+        c.x(q);
+    }
+    cells::with_tie(None, || cells::with_cmp_shift(shift, || cells::with_bridge(proxy_r, true, || body_capped(c, t, s, k1, k2, &b, &tg, proxy_r, true))));
+    for q in s {
+        c.x(q);
+    }
+    if Y15_TRACE {
+        eprintln!("Y15_TICK rev t={t} active={a0} cost={:.1}", c.expected_total() - e0);
+    }
+}
+
+/// y26: the forms (a, b, ci) with MAJ(x, y, z) = AND(a, b) ^ ci; None where two of the three are identically 0 (the
+/// majority is then 0). One of them 0: the AND of the other two.
+fn maj_forms(x: &Lin, y: &Lin, z: &Lin) -> Option<(Lin, Lin, Lin)> {
+    let zero = |f: &Lin| f.w.is_empty() && !f.one;
+    let zs = [zero(x), zero(y), zero(z)];
+    if zs.iter().filter(|&&b| b).count() >= 2 {
+        return None;
+    }
+    Some(if zs[2] {
+        (x.clone(), y.clone(), Lin::k(false))
+    } else if zs[0] {
+        (y.clone(), z.clone(), Lin::k(false))
+    } else if zs[1] {
+        (x.clone(), z.clone(), Lin::k(false))
+    } else {
+        (x.x(z), y.x(z), z.clone())
+    })
+}
+/// A wire holding AND(a, b) ^ ci.
+#[derive(Clone)]
+struct MRec {
+    q: QubitId,
+    a: Lin,
+    b: Lin,
+    ci: Lin,
+}
+/// y26: MAJ(x, y, z) over forms, on a fresh wire where it needs one (1 Toffoli), with its erase record.
+fn f_maj(c: &mut Builder, x: &Lin, y: &Lin, z: &Lin) -> (Lin, Option<MRec>) {
+    match maj_forms(x, y, z) {
+        None => (Lin::k(false), None),
+        Some((a, b, ci)) => {
+            let q = lin_and(c, &a, &b);
+            lin_xor_into(c, &ci, q);
+            (l(q), Some(MRec { q, a, b, ci }))
+        }
+    }
+}
+/// Erase by measurement with the build forms (0 Toffoli).
+fn f_erase(c: &mut Builder, r: Option<MRec>) {
+    if let Some(r) = r {
+        lin_xor_into(c, &r.ci, r.q);
+        lin_and_erase(c, r.q, &r.a, &r.b);
+    }
+}
+/// y26, the larger form: X = T + S'0 + 2 S'1 + 4 S'2 as forms over the one register H = P/2 (S'k = H ^ s_k, 256 bits).
+/// T = 2 H mod p as [`cells::mod_double`] computes it: H rotated up, plus f under H's top bit on the low `wf` bits
+/// (the carry off the window dropped): forms through the window's carries g. Carry-save, three wires a position p:
+///   k1[p] = MAJ(T[p - 1], S'0[p - 1], S'1[p - 2])        (register only)
+///   k2[p] = MAJ(s1[p - 1], k1[p - 1], S'2[p - 3])        s1[i] = T[i] ^ S'0[i] ^ S'1[i - 1]
+///   r[p]  = MAJ(s2[p - 1], k2[p - 1], r[p - 1])          s2[i] = s1[i] ^ k1[i] ^ S'2[i - 2]; the one ripple chain
+///   X[i]  = s2[i] ^ k2[i] ^ r[i],  i in [0, 259)
+struct CsForms<'a> {
+    h: &'a [QubitId],
+    s: [QubitId; 3],
+    wf: usize,
+    fbit: Vec<bool>,
+    g: Vec<Lin>,
+    k1: Vec<Lin>,
+    k2: Vec<Lin>,
+    r: Vec<Lin>,
+    rec: Vec<[Option<MRec>; 3]>,
+    live: Vec<bool>,
+}
+const CS_TOP: usize = N + 2;
+impl CsForms<'_> {
+    fn hf(&self, i: isize) -> Lin {
+        if i >= 0 && (i as usize) < N { l(self.h[i as usize]) } else { Lin::k(false) }
+    }
+    fn sf(&self, k: usize, j: isize) -> Lin {
+        if j >= 0 && (j as usize) < N { Lin::of(&[self.h[j as usize], self.s[k]]) } else { Lin::k(false) }
+    }
+    fn tf(&self, i: isize) -> Lin {
+        if i < 0 || i as usize >= N {
+            Lin::k(false)
+        } else if i as usize >= self.wf {
+            self.hf(i - 1)
+        } else {
+            let t = self.hf(i - 1).x(&self.g[i as usize]);
+            if self.fbit[i as usize] { t.x(&l(self.h[N - 1])) } else { t }
+        }
+    }
+    fn at(&self, v: &[Lin], p: isize) -> Lin {
+        if p < 1 || p as usize > CS_TOP {
+            return Lin::k(false);
+        }
+        assert!(self.live[p as usize], "y26: position {p} is read while its wires are gone");
+        v[p as usize].clone()
+    }
+    fn s1f(&self, i: isize) -> Lin {
+        self.tf(i).x(&self.sf(0, i)).x(&self.sf(1, i - 1))
+    }
+    fn s2f(&self, i: isize) -> Lin {
+        self.s1f(i).x(&self.at(&self.k1, i)).x(&self.sf(2, i - 2))
+    }
+    fn xf(&self, i: usize) -> Lin {
+        let i = i as isize;
+        self.s2f(i).x(&self.at(&self.k2, i)).x(&self.at(&self.r, i))
+    }
+    fn build(&mut self, c: &mut Builder, p: usize) {
+        assert!(p >= 1 && p <= CS_TOP && !self.live[p]);
+        let q = p as isize;
+        let (a, ra) = f_maj(c, &self.tf(q - 1), &self.sf(0, q - 1), &self.sf(1, q - 2));
+        let (b, rb) = f_maj(c, &self.s1f(q - 1), &self.at(&self.k1, q - 1), &self.sf(2, q - 3));
+        let (d, rd) = f_maj(c, &self.s2f(q - 1), &self.at(&self.k2, q - 1), &self.at(&self.r, q - 1));
+        self.k1[p] = a;
+        self.k2[p] = b;
+        self.r[p] = d;
+        self.rec[p] = [ra, rb, rd];
+        self.live[p] = true;
+    }
+    /// Erase position p's wires with their build forms (position p - 1 must be as it was at the build).
+    fn erase(&mut self, c: &mut Builder, p: usize) {
+        assert!(self.live[p]);
+        let [ra, rb, rd] = std::mem::take(&mut self.rec[p]);
+        f_erase(c, rd);
+        f_erase(c, rb);
+        f_erase(c, ra);
+        self.live[p] = false;
+    }
+    /// Erase the boundary position `hi` of the chunk (lo, hi], whose positions lo + 1 .. hi - 1 are gone. k1[hi] is
+    /// register only. k2[hi] reads k1[hi - 1]: built again (1 Toffoli). r[hi] is measured; with its bit set the
+    /// chunk's positions below it are built again (3 Toffoli a position on half the shots), the measurement's phase
+    /// is fixed on the forms of r[hi], and they are erased again. Exact.
+    fn close_boundary(&mut self, c: &mut Builder, lo: usize, hi: usize) {
+        assert!(self.live[hi] && self.live[lo] && hi > lo);
+        let [ra, rb, rd] = std::mem::take(&mut self.rec[hi]);
+        if hi - 1 == lo {
+            f_erase(c, rd);
+            f_erase(c, rb);
+            f_erase(c, ra);
+            self.live[hi] = false;
+            return;
+        }
+        let q = hi as isize;
+        if let Some(rb) = rb {
+            let (k1m, r1) = f_maj(c, &self.tf(q - 2), &self.sf(0, q - 2), &self.sf(1, q - 3));
+            let (a, b, ci) = maj_forms(&self.s1f(q - 1), &k1m, &self.sf(2, q - 3)).expect("y26: k2 of a boundary");
+            lin_xor_into(c, &ci, rb.q);
+            lin_and_erase(c, rb.q, &a, &b);
+            f_erase(c, r1);
+        }
+        if let Some(rd) = rd {
+            let m = c.alloc_bit();
+            c.hmr(rd.q, m);
+            c.release_clean(rd.q);
+            c.push_condition(m);
+            for p in lo + 1..hi {
+                self.build(c, p);
+            }
+            let (a, b, ci) = maj_forms(&self.s2f(q - 1), &self.at(&self.k2, q - 1), &self.at(&self.r, q - 1)).expect("y26: r of a boundary");
+            lin_cz(c, &a, &b);
+            assert!(!ci.one);
+            for &w in &ci.w {
+                c.cz(w, w);
+            }
+            for p in (lo + 1..hi).rev() {
+                self.erase(c, p);
+            }
+            c.pop_condition();
+            c.free_bit(m);
+        }
+        f_erase(c, ra);
+        self.live[hi] = false;
+    }
+}
+/// y26, the larger form of the multiply's tick-0 phase block: the phase (-1)^(m . y R2) with `h` = P/2 on the wires
+/// (before the product is doubled), nothing written, `h` left as found; frees `bits`. The Z layer goes on forms, a
+/// chunk at a time: the low chunk (positions 1..55, what the fold's window reads) is kept to the end, the middle chunks
+/// are erased once the layer has read them (each leaves its top position, a boundary: [`CsForms::close_boundary`]),
+/// the top chunk is open through the fold ([`fold_fwd_forms`]). The chunk plan is taken from the room.
+pub(super) fn t0_phase_forms(c: &mut Builder, letter: &[QubitId], h: &[QubitId], bits: Vec<crate::circuit::BitId>) {
+    let (s, k1, k2) = ([letter[0], letter[1], letter[2]], letter[3], letter[4]);
+    let ((), peak) = c.r3_peak(|c| t0_forms_body(c, s, k1, k2, h, bits));
+    assert!(peak as usize <= cells::cap(), "y26: the phase block on forms peaks at {peak}, over the walk cap {}", cells::cap());
+}
+fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: &[QubitId], bits: Vec<crate::circuit::BitId>) {
+    assert_eq!(h.len(), N);
+    let (e_start, a_start) = (c.expected_total(), c.active_qubits());
+    let mut ph = T0Phase::new(c, k1, k2, N, bits);
+    let vpos = |i: usize| (i + N - 3) % N; // W[i] is the layer's position (i - 3) mod N (the three rot1)
+    let wf = go_fs("GO_FG_P");
+    let fc = f();
+    let zero = Lin::k(false);
+    let mut st = CsForms {
+        h,
+        s,
+        wf,
+        fbit: (0..wf).map(|i| fc.bit(i)).collect(),
+        g: vec![zero.clone(); wf],
+        k1: vec![zero.clone(); CS_TOP + 1],
+        k2: vec![zero.clone(); CS_TOP + 1],
+        r: vec![zero.clone(); CS_TOP + 1],
+        rec: (0..=CS_TOP).map(|_| [None, None, None]).collect(),
+        live: vec![false; CS_TOP + 1],
+    };
+    assert!((0..N).all(|i| i < wf || !fc.bit(i)) && wf < Y15_WIN);
+    // the doubling's window: g[i] = the carry into bit i of (2 H) + ov f, ov = H's top bit; bit 0 of 2 H is 0
+    let mut grec: Vec<Option<MRec>> = vec![None; wf];
+    for i in 0..wf - 1 {
+        let add = if st.fbit[i] { l(h[N - 1]) } else { zero.clone() };
+        let (gf, gr) = f_maj(c, &st.hf(i as isize - 1), &add, &st.g[i].clone());
+        st.g[i + 1] = gf;
+        grec[i + 1] = gr;
+    }
+    let e_g = c.expected_total();
+    // the low chunk: every position the fold's window reads
+    const B0: usize = Y15_WIN - 1;
+    for p in 1..=B0 {
+        st.build(c, p);
+    }
+    // the chunk plan: the top chunk (open through the fold) as long as the room allows, the rest in the fewest
+    // middle chunks
+    let fold_wires = 31 + (Y15_WIN - 7);
+    let room = cells::cap().saturating_sub(c.active_qubits() as usize);
+    let (mut nb, mut top_len) = (0usize, 0usize);
+    let mut mids: Vec<usize> = Vec::new();
+    loop {
+        // the top chunk's positions hold 3 wires each, less the three that are identically 0
+        let avail = room.checked_sub(3 * nb + fold_wires).unwrap_or_else(|| panic!("y26: no room for the fold: {room}"));
+        top_len = ((avail + 3) / 3).min(CS_TOP - B0);
+        let rest = CS_TOP - B0 - top_len;
+        // middle chunk j is built over j boundaries
+        let caps: Vec<usize> = (0..nb).map(|j| (room - 3 * j) / 3).collect();
+        if caps.iter().sum::<usize>() >= rest && (rest == 0) == (nb == 0) {
+            let mut left = rest;
+            mids = (0..nb)
+                .map(|j| {
+                    let take = left.div_ceil(nb - j).min(caps[j]);
+                    left -= take;
+                    take
+                })
+                .collect();
+            assert_eq!(left, 0, "y26: the middle chunks do not cover the register");
+            break;
+        }
+        nb += 1;
+        assert!(nb < 40, "y26: no chunk plan at room {room}");
+    }
+    let mut edges = vec![B0];
+    for &w in &mids {
+        edges.push(edges.last().unwrap() + w);
+    }
+    assert_eq!(edges.last().unwrap() + top_len, CS_TOP);
+    let mut a_mid = 0;
+    for j in 1..edges.len() {
+        let (lo, hi) = (edges[j - 1], edges[j]);
+        for p in lo + 1..=hi {
+            st.build(c, p);
+        }
+        a_mid = a_mid.max(c.active_qubits());
+        for i in (lo + 1..=hi).filter(|&i| i >= Y15_WIN && i < N) {
+            // Y26_FAULT (a control of the test, never a build): two positions of the layer swapped
+            let at = if Y26_FAULT && (i == 100 || i == 101) { i ^ 1 } else { i };
+            ph.z(c, vpos(at), &st.xf(i));
+        }
+        for p in (lo + 1..hi).rev() {
+            st.erase(c, p);
+        }
+    }
+    let lo_top = *edges.last().unwrap();
+    for p in lo_top + 1..=CS_TOP {
+        st.build(c, p);
+    }
+    for i in (lo_top + 1..N).filter(|&i| i >= Y15_WIN) {
+        ph.z(c, vpos(i), &st.xf(i));
+    }
+    let e_adds = c.expected_total();
+    // the fold on forms
+    let x: Vec<Lin> = (0..Y15_WIN).map(|i| st.xf(i)).collect();
+    let e = [st.xf(N), st.xf(N + 1), st.xf(N + 2)];
+    let (w, mut recs) = fold_fwd_forms(c, &x, &e, s, k1, k2);
+    let a_fold = c.active_qubits();
+    assert!(a_fold as usize <= cells::cap(), "y26: the fold on forms is over the walk cap: {a_fold} > {}", cells::cap());
+    for (i, f) in w.iter().enumerate() {
+        ph.z(c, vpos(i), f);
+    }
+    pop_chain(c, &mut recs);
+    let e_fold = c.expected_total();
+    for p in (lo_top + 1..=CS_TOP).rev() {
+        st.erase(c, p);
+    }
+    for j in (1..edges.len()).rev() {
+        st.close_boundary(c, edges[j - 1], edges[j]);
+    }
+    let e_bound = c.expected_total();
+    for p in (1..=B0).rev() {
+        st.erase(c, p);
+    }
+    if Y26_FUSE_DBL {
+        // as start_doubling: the top bit out onto a wire of its own, the register rotated up (h[0] is then clear)
+        assert!(st.fbit[0] && wf <= N);
+        let out = c.alloc_qubit();
+        c.swap(h[N - 1], out);
+        for i in (0..N - 1).rev() {
+            c.swap(h[i], h[i + 1]);
+        }
+        // h[i] now holds (2 H)[i] and `out` the bit ov. Bit i of the window's sum is (2 H)[i] ^ f[i] ov ^ g[i];
+        // g[i] = MAJ((2 H)[i - 1], f[i - 1] ov, g[i - 1]) is erased while bit i - 1 is still unsummed
+        for i in (1..wf).rev() {
+            if st.fbit[i] {
+                c.cx(out, h[i]);
+            }
+            lin_xor_into(c, &st.g[i], h[i]);
+            if let Some(r) = grec[i].take() {
+                let d = if i >= 2 { l(h[i - 1]) } else { zero.clone() };
+                let add = if st.fbit[i - 1] { l(out) } else { zero.clone() };
+                let (a, b, ci) = maj_forms(&d, &add, &st.g[i - 1]).expect("y26: a window carry");
+                lin_xor_into(c, &ci, r.q);
+                lin_and_erase(c, r.q, &a, &b);
+            }
+        }
+        c.cx(out, h[0]);
+        // as mod_double_pm: bit 0 of the sum is ov itself
+        c.cx(h[0], out);
+        c.free(out);
+    } else {
+        for i in (1..wf).rev() {
+            f_erase(c, grec[i].take());
+        }
+    }
+    assert!(grec.iter().all(|r| r.is_none()));
+    ph.finish(c);
+    if Y26_PAD_RNG > 0 {
+        let q = c.alloc_qubit();
+        for _ in 0..Y26_PAD_RNG {
+            let m = c.alloc_bit();
+            c.hmr(q, m);
+            c.free_bit(m);
+        }
+        c.release_clean(q);
+    }
+    assert_eq!(c.active_qubits(), a_start, "y26: a wire was left behind");
+    if Y15_TRACE {
+    eprintln!(
+        "Y26_FORMS active={a_start} cap={} room_after_low={room} wf={wf} edges={edges:?} top={top_len} mid_active={a_mid} fold_active={a_fold} window={:.1} adds={:.1} fold={:.1} boundaries={:.1} all={:.1}",
+        cells::cap(),
+        e_g - e_start,
+        e_adds - e_g,
+        e_fold - e_adds,
+        e_bound - e_fold,
+        c.expected_total() - e_start
+    );
     }
 }

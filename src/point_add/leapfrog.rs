@@ -5250,6 +5250,14 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
             if let Some(bits) = t0_bits.take() {
                 t0_in(c, &mut wk, bits);
                 let q1 = pmark(c);
+                if t0dbl && y15::t0_forms_on(t0_phrot()) {
+                    // y26: the same phase on forms over P/2 alone (nothing written, no copy), then the product doubled
+                    let letter = wk.tape[0].clone();
+                    y15::t0_phase_forms(c, &letter, &pay[0], std::mem::take(&mut junk_bits));
+                    if !y15::Y26_FUSE_DBL {
+                        cells::mod_double(c, &pay[0]);
+                    }
+                } else {
                 // (-1)^(m . y R2): payload tick 0 forward on (product, product / 2), Z under the kept bits, and back
                 let p1 = c.alloc_qubits(N);
                 c.cx_pairs(&pay[0], &p1);
@@ -5261,6 +5269,10 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
                 let mut pay2 = [pay[0].clone(), p1];
                 let letter = wk.tape[0].clone();
                 let phrot = t0_phrot();
+                if y15::t0_carries_on(phrot) {
+                    // y26: the phase block in one call (see Y26_T0)
+                    y15::t0_phase(c, &letter, &pay2, std::mem::take(&mut junk_bits));
+                } else {
                 SKIP_ROT4.with(|s| s.set(phrot));
                 pay_fwd_tick(c, 0, &letter, &mut pay2);
                 SKIP_ROT4.with(|s| s.set(false));
@@ -5275,10 +5287,12 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
                 SKIP_ROT4.with(|s| s.set(phrot));
                 pay_rev_tick(c, 0, &letter, &mut pay2);
                 SKIP_ROT4.with(|s| s.set(false));
+                }
                 let p1 = std::mem::take(&mut pay2[1]);
                 cells::mod_double(c, &p1);
                 c.cx_pairs(&pay2[0], &p1);
                 c.free_vec(&p1);
+                }
                 pacc(c, "t0.mul_phase", q1);
             }
         }
