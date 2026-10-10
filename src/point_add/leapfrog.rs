@@ -66,7 +66,7 @@ pub(crate) fn install_recipe() {
         ("LF_REORDER", "76"),
         // y15-room: the divide's and the multiply's boundary set apart (each overrides LF_REORDER for its direction)
         ("LF_REORDER_DIV", "82"),
-        ("LF_REORDER_MUL", "76"),
+        ("LF_REORDER_MUL", "77"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
         // with the coordinate seams
         ("LF_TIE_SEED", "1"),
@@ -313,6 +313,8 @@ const Y17_PLAN: &[(usize, usize, usize, isize, isize, bool)] = &[
     // Y17_PLAN_END
 ];
 fn y17_plan(dir: usize, t: usize, slot: usize) -> (isize, isize, bool) {
+    if t == 136 && dir == 1 && slot < 2 { return (0, 0, true); }
+
     if !(117..=136).contains(&t) {
         return (0, -1, false);
     }
