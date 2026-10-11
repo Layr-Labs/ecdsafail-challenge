@@ -198,7 +198,7 @@ pub(crate) fn direct_add_phase_transport(c:&mut Builder,map:&[Vec<QubitId>],b:&[
     assert!(recover.iter().all(|(hi,_)|stages.iter().any(|(_,end,_,_)|hi==end)));
     let mut pending=Vec::new();
     for(lo,hi,cin,q)in stages.into_iter().rev(){let m=c.alloc_bit();c.hmr(q,m);c.release_clean(q);
-        if defer{pending.push((hi,m));}else{c.push_condition(m);mapped_compare(c,&map[lo..hi],&b[lo..hi],cin);c.pop_condition();c.free_bit(m);}
+        if defer{pending.push((hi,m));}else{c.push_condition(m);if !super::leapfrog::C35_SQ_FX.with(|x|x.get()){mapped_compare(c,&map[lo..hi],&b[lo..hi],cin);}c.pop_condition();c.free_bit(m);}
     }
     assert_eq!(c.active_qubits(),base);
     pending
