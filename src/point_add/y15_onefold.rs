@@ -3134,6 +3134,177 @@ pub(super) fn fwd_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [V
     }
 }
 
+/// y33-t0 (p3-2, 11 October 2026): the divide's payload tick 0 with one add. There the registers hold T = y and
+/// S = y/2 (mod p) (`divide_dbg`: P1 is a copy of y put through `mod_halve`), so T + c S = d S with
+/// d = 9 - 2 n0 - 4 n1 - 8 n2 = sigma (2^(j+1) + tau): X = 2^j T' + S' (T', S' = the register or its complement),
+/// one shift of T by j = 0, 1, 2 on a ring of 258 wires and one add in place of three adds. The same fold
+/// ([`fold_fwd_v2`]) with E = X >> 256 (0..4) and Nm' = sc + 2^j tc (0..3); the same rotation by 3 + e after it.
+///   j = 1 iff n1; j = 0 iff n2 and not n1 (wire a0); j = 2 otherwise;
+///   sc (S complemented) = n0 ^ a0; tc (T complemented) = n2 ^ a0 ^ a1, a1 = a0 n0.
+/// The bits of T the shift puts on the two top wires are S's own bits (T[i] = S[i - 1] above the halving's window:
+/// the halving is a rotation down), so they are erased by measurement against S[254] and S[253].
+/// false: the head's tick (three adds). Notes: experiments/y33-stack/b4 in the Pensieve repo.
+pub(super) const P3_T0_ONE_ADD: bool = true;
+/// The one-add tick's open top ripple (positions [N - OPEN, N) of the add stay open through the fold).
+const P3_T0_OPEN: usize = 20;
+/// DIAGNOSTIC of the paired test (0 in every build that is kept): idle X measurements of a clean wire right after
+/// the divide's payload tick 0, in either form (the form with fewer measurements gets the difference).
+pub(super) const P3_T0_PADS: usize = 0;
+/// DIAGNOSTIC planted faults of the paired test (0 in every build that is kept):
+///   1: T is not complemented for the letter (-, +, -);
+///   2: the erase of the lower top wire reads S[252] in place of S[253].
+///   3, 4, 5: a census, not a test: bit 100 of the result flipped where sign letter 0, 1 or 2 is set.
+const P3_T0_FAULT: u8 = 0;
+/// DIAGNOSTIC of the paired test's control (0 in every build that is kept): idle X measurements of a clean wire right
+/// BEFORE the divide's payload tick 0. A base with PRE = n against a base with PADS = n draws the same number of
+/// random words, the same word at every measurement outside the tick, and other words inside it.
+pub(super) const P3_T0_PRE: usize = 0;
+pub(super) fn t0_pads(c: &mut Builder, pre: bool) {
+    for _ in 0..(if pre { P3_T0_PRE } else { P3_T0_PADS }) {
+        let q = c.alloc_qubit();
+        let m = c.alloc_bit();
+        c.hmr(q, m);
+        c.free_bit(m);
+        c.release_clean(q);
+    }
+}
+fn body_t0_one(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, b: &[QubitId], tg: &[QubitId], proxy: usize) {
+    let a_start = c.active_qubits();
+    let e_start = c.expected_total();
+    let one = Lin::k(true);
+    let n1not = l(s[1]).x(&one);
+    // the decode
+    let a0 = lin_and(c, &l(s[2]), &n1not); // [j = 0]
+    let a1 = lin_and(c, &l(a0), &l(s[0]));
+    // T' = T ^ tc
+    if P3_T0_FAULT == 1 {
+        c.cx(s[2], a0);
+        c.cx_all(a0, tg);
+        c.cx(s[2], a0);
+    } else {
+        c.cx(s[2], a1);
+        c.cx(a0, a1);
+        c.cx_all(a1, tg);
+        c.cx(a0, a1);
+        c.cx(s[2], a1);
+    }
+    // the shift up by j on the ring (register, two clean top wires)
+    let z = c.alloc_qubits(2);
+    let mut ring: Vec<QubitId> = tg.to_vec();
+    ring.push(z[0]);
+    ring.push(z[1]);
+    assert!(!SKIP_ROT4.with(|x| x.get()), "y33-t0: the shift must be written");
+    c.cx(s[1], a0);
+    c.x(a0); // a0 = [j = 2]
+    rot4(c, s[1], a0, &ring, true);
+    c.x(a0);
+    c.cx(s[1], a0);
+    let e_shift = c.expected_total();
+    // the add: S' = S ^ sc into bits [0, 256); the chunked part to `sp`, the top ripple open
+    c.cx(a0, s[0]); // s[0] = sc
+    c.cx_all(s[0], b);
+    let sp = N - P3_T0_OPEN;
+    let m = cells::chunked_add(c, &b[..sp], &tg[..sp], proxy, false);
+    let mut cc = vec![m]; // cc[i - sp] = the carry into bit i
+    for i in sp..N {
+        let q = m_carry(c, tg[i], &l(b[i]), cc[i - sp]);
+        cc.push(q);
+    }
+    let cq = |i: usize| cc[i - sp];
+    let c257 = lin_and(c, &l(z[0]), &l(cq(N)));
+    let x258 = lin_and(c, &l(z[1]), &l(c257));
+    c.cx(cq(N), z[0]);
+    c.cx(c257, z[1]);
+    let e_add = c.expected_total();
+    let a_fold = c.active_qubits();
+    // the fold: Nm' bit 0 = sc ^ a1 (on a1), bit 1 = n2 ^ a0 (on a0), bit 2 = 0
+    c.cx(s[0], a1);
+    c.cx(s[2], a0);
+    let zz = c.alloc_qubit();
+    let _ = fold_fwd_v2(c, &tg[..Y15_WIN], [z[0], z[1], x258], [a1, a0, zz], k1, k2, 0, None, false, 0);
+    c.release_clean(zz); // never written
+    c.cx(s[2], a0);
+    c.cx(s[0], a1);
+    let e_fold = c.expected_total();
+    // the top wires: the two carries, then the bits of T' (z1 = [j = 2] T[255], z0 = [j = 1] (T[255] ^ n2) ^ [j = 2] T[254])
+    c.cx(c257, z[1]);
+    c.cx(cq(N), z[0]);
+    lin_and_erase(c, x258, &l(z[1]), &l(c257));
+    lin_and_erase(c, c257, &l(z[0]), &l(cq(N)));
+    let j2 = Lin::of(&[s[1], a0]).x(&one);
+    let s254 = Lin::of(&[b[N - 2], s[0]]);
+    let s253 = Lin::of(&[b[if P3_T0_FAULT == 2 { N - 4 } else { N - 3 }], s[0]]);
+    lin_and_erase(c, z[1], &j2, &s254);
+    let mb = c.alloc_bit();
+    c.hmr(z[0], mb);
+    for (fa, fb) in [(l(s[1]), s254.x(&l(s[2]))), (j2.clone(), s253.clone())] {
+        let (ha, hb) = lin_pair_on(c, &fa, &fb);
+        c.cz_if(ha, hb, mb);
+        lin_pair_off(c, &fa, &fb);
+    }
+    c.free_bit(mb);
+    c.release_clean(z[0]);
+    // close the ripple, top down, then the chunked part's carry by the cells' chunk compare
+    m_carry_erase(c, cq(N), tg[N - 1], &l(b[N - 1]), cq(N - 1));
+    for i in (sp..N).rev() {
+        c.cx(b[i], tg[i]);
+        c.cx(cq(i), tg[i]);
+        if i > sp {
+            m_carry_erase(c, cq(i), tg[i - 1], &l(b[i - 1]), cq(i - 1));
+        }
+    }
+    let (kk, seed) = cells::y15_split_spec(proxy, false, sp);
+    cells::y15_erase_cmp(c, m, &tg[sp - kk..sp], &b[sp - kk..sp], seed.map(|sd| b[sd]));
+    c.free(m);
+    c.cx_all(s[0], b);
+    c.cx(a0, s[0]);
+    lin_and_erase(c, a1, &l(a0), &l(s[0]));
+    lin_and_erase(c, a0, &l(s[2]), &n1not);
+    // DIAGNOSTIC (faults 3, 4, 5): bit 100 of the result flipped where sign letter 0, 1 or 2 is set: the share of
+    // shots with a wrong output is that letter's share at tick 0
+    if (3..=5).contains(&P3_T0_FAULT) {
+        c.cx(s[usize::from(P3_T0_FAULT).saturating_sub(3)], tg[100]);
+    }
+    assert_eq!(c.active_qubits(), a_start, "y33-t0: a wire was left behind");
+    let e_end = c.expected_total();
+    eprintln!(
+        "P3_T0 body active={a_start} room={} at_fold={a_fold} sp={sp} kk={kk} seed={seed:?} shift={:.1} add={:.1} fold={:.1} close={:.1} body={:.1}",
+        cells::cap().saturating_sub(a_start as usize),
+        e_shift - e_start,
+        e_add - e_shift,
+        e_fold - e_add,
+        e_end - e_fold,
+        e_end - e_start
+    );
+}
+/// y33-t0: the divide's payload tick 0 in the one-add form (see [`P3_T0_ONE_ADD`]); the same map as [`fwd_tick`] at
+/// t = 0 on registers that hold (y, y/2).
+pub(super) fn fwd_tick0_one(c: &mut Builder, letter: &[QubitId], p: &mut [Vec<QubitId>; 2]) {
+    let t = 0usize;
+    assert!(seed_half() && Y15_CORE_V2 && Y16_CORE && fwd_on(0), "y33-t0: needs P1 = y/2 and the v2 fold");
+    // the halving of P1 writes a low window and rotates down: above the window S[i - 1] = T[i] on every basis state
+    assert!(go_fs("GO_FG_P") + 3 <= N && Y26_T0 == 5, "y33-t0: the top wires are erased against S[254] and S[253]");
+    let [w, ..] = steps()[t];
+    let (_, proxy) = proxy_fold(w, false);
+    let (s, k1, k2) = ([letter[0], letter[1], letter[2]], letter[3], letter[4]);
+    let (tg, b) = (p[0].clone(), p[1].clone());
+    let (e0, a0, o0) = (c.expected_total(), c.active_qubits(), c.op_count());
+    let shift = cmp_shift_at(t);
+    cells::with_tie(None, || {
+        cells::with_cmp_shift((shift.0 + Y15_CMP_EXTRA + super::n2_cmpx(), shift.1), || {
+            cells::with_bridge(proxy, false, || {
+                let ((), peak) = c.r3_peak(|c| body_t0_one(c, s, k1, k2, &b, &tg, proxy));
+                assert!(peak as usize <= cells::cap(), "y33-t0: the one-add tick peaks at {peak}, over the walk cap {}", cells::cap());
+            })
+        })
+    });
+    for _ in 0..3 {
+        rot1(c, &tg, true);
+    }
+    rot4(c, k1, k2, &tg, false);
+    eprintln!("P3_T0 tick one-add active={a0} cost={:.1} ops={}..{}", c.expected_total() - e0, o0, c.op_count());
+}
+
 /// Reverse one-fold payload tick (the inverse map of [`fwd_tick`]): `tgt <- 2^(3 + e) tgt - ((-1)^s0 + 2 (-1)^s1 +
 /// 4 (-1)^s2) src (mod p)`: the map of the reverse merged op and two `double_add` cells.
 pub(super) fn rev_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<QubitId>; 2]) {

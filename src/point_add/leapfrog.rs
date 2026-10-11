@@ -5844,7 +5844,23 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
     for t in 0..ahead {
         let letter = wk.tape[t].clone();
         let pads = lr_pad(c, 2 * lowrel() as usize);
-        pay_fwd_tick(c, t, &letter, &mut pay);
+        if t == 0 {
+            y15::t0_pads(c, true);
+        }
+        if t == 0 && y15::P3_T0_ONE_ADD {
+            y15::fwd_tick0_one(c, &letter, &mut pay);
+        } else {
+            if t == 0 {
+                eprintln!("P3_T0 tick head ops from {}", c.op_count());
+            }
+            pay_fwd_tick(c, t, &letter, &mut pay);
+            if t == 0 {
+                eprintln!("P3_T0 tick head ops to {}", c.op_count());
+            }
+        }
+        if t == 0 {
+            y15::t0_pads(c, false);
+        }
         lr_unpad(c, pads);
         if t0f && t == 0 {
             parity_rail_in(c, &mut wk, ahead, loan_pad.take());
