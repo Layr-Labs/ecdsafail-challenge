@@ -139,10 +139,6 @@ fn y21_top_on(t: usize, rev: bool) -> bool {
 const Y21_DEEP_FWD: &[(usize, usize)] = &[(130, 131)];
 const Y21_DEEP_REV: &[(usize, usize)] = &[(126, 127)];
 fn y21_deep_on(t: usize, rev: bool) -> bool {
-    // N2 (research patch): the payload-only batches at room 39 (None outside them)
-    if let Some(on) = super::n2_deep(t, rev) {
-        return on;
-    }
     (if rev { Y21_DEEP_REV } else { Y21_DEEP_FWD }).iter().any(|&(a, b)| t >= a && t < b)
 }
 /// y18-next (9 October 2026), "late tops": the three wires at the top of adds 0 and 1 (x256 = add 0's carry out of bit
@@ -344,81 +340,6 @@ const Y15_REV_COPY_MBU: bool = true;
 /// y15-room: where the fold's ladder does not fit its room, the carries into bits 4 and 5 are erased before the ladder
 /// (measured, 0 Toffoli) and built again after it: 2 ANDs for 2 wires, paid only on those ticks.
 const Y15_LEAN45: bool = true;
-/// y28-loop (card s2-2), forward fold on the ticks where [`Y15_LEAN45`] fires: sums 4 and 5 are written before the
-/// ladder (the carries into bits 4 and 5 are still measured away there, with today's forms), and after the ladder
-/// nothing reads those two carries as values but the erase of the carry into bit 6. That carry is X-measured and the
-/// two are built again only under its bit: c4 = AND(acc[3], c3), c5 = AND(acc[4] ^ a4, a4 ^ c4) ^ c4 on the written
-/// sum, the phase is CZ(acc[5] ^ a5, a5 ^ c5) and Z(c5), and both are measured away again under the same bit at the
-/// places today's undo measures them (the gate list keeps the head's measurements in the head's order).
-/// 1 expected Toffoli for 2 on each such pass. false = the head, gate for gate.
-const Y28_LEAN_FWD: bool = true;
-/// y28-loop (card s2-4, step 1), reverse fold with the gate wires built first: the AND of the shift letter is read
-/// only by the clearing of y5 (its gate form is that AND) and of y3 (k1 ^ k2 ^ the AND), each under that wire's
-/// measured bit. It is built into a wire that holds 0 only where one of those bits is set (y5's, or with y5's clear
-/// y3's: 3/4 of the shots) and measured away at the head's place under the OR of the two. 0.75 expected Toffoli for 1
-/// on each such pass; the gate list keeps the head's measurements in the head's order. false = the head, gate for gate.
-const Y28_TT_REV: bool = true;
-/// y28-loop (card s2-4, step 2), forward fold: the same for the AND of the shift letter where it leaves for the
-/// ladder. After the ladder only the erases of y5 (forms: the AND, sum 5) and y3 (k1 ^ k2 ^ the AND, sum 3) read it,
-/// each under its own measured bit: it is built under y5's bit, or with that clear under y3's (0.75 expected Toffoli
-/// for the 1 of [`Y18_FIN`]'s third wire), and measured away at the head's place under the OR of the two.
-/// At that price it is the first wire to leave on a pass that sheds for the fold: one carry fewer in the block (or
-/// one top wire fewer), 0.75 for 1. false = the head, gate for gate.
-const Y28_TT_FWD: bool = true;
-/// y28-loop (card s2-5), reverse fold on the passes where [`Y15_LEAN45`] fires (gate wires first or lean chains): as
-/// [`Y28_LEAN_FWD`], sums 4 and 5 are written before the ladder. After it the register's old bits 4 and 5 are the
-/// forms acc[4] ^ n0 ^ c4 and acc[5] ^ n1 ^ c5, read by the clearing of the gate wires (y5's branch reads both, y4's
-/// reads bit 4, y3's neither) and by the erase of the carry into bit 6. The two carries are built into wires that
-/// hold 0 only on the branches that read them: c4 where y5's bit, y4's or c6's is set (7/8 of the shots), c5 where
-/// y5's or c6's is (3/4); each is measured away at the head's place under the OR of those bits. 1.625 expected
-/// Toffoli for 2 on each such pass. false = the head, gate for gate.
-const Y28_LEAN_REV: bool = true;
-/// y28-loop (card s2-1): on these ticks ([from, to), wires) the fold's ladder runs on 1 or 2 wires fewer than
-/// [`merged_plan`]'s least budget of 10. A kept carry named in the plan's drop list is X-measured as soon as the next
-/// chunk has read it (its exact compare on its own chunk, the carry below still live: the cost it has at the end
-/// today). At the end the erase of the kept carry above it lacks its carry-in: under that carry's measured bit the
-/// dropped one is built again as a value (its chunk's carry chain on the written sums, one AND a bit; the chain's
-/// lower carries are measured away at once), the compare runs, and the rebuilt carry is X-measured again with its own
-/// compare under its bit. One wire for 2.75 expected Toffoli, two for 10.0 (netlist model: 0 wrong windows, 0 unclean
-/// wires on 262,144 forward and 1,048,576 reverse inputs). On such a tick the deep shed ([`Y21_DEEP_FWD`]) is off.
-/// Empty: off (the head, gate for gate).
-/// Kept: one wire on the last one-fold tick of each direction (card s2-1). NOT kept: card s2-3, the one-fold range
-/// one tick wider with two wires dropped there ([`Y15_FUSED_FWD_TO`] = 132 and [`Y15_FUSED_REV_TO`] = 128 with
-/// (131, 132, 2) and (127, 128, 2) added here). It builds at peak 1,236 and is 73.75 Toffoli cheaper, but a one-fold
-/// pass in place of a three-fold pass fails on other inputs: on 90 draws 3 shots pass in entry Y and fail there, 8
-/// the other way, 1 output differs. An error trade, not an exact change.
-const Y28_DROP_FWD: &[(usize, usize, usize)] = &[(130, 131, 1)];
-const Y28_DROP_REV: &[(usize, usize, usize)] = &[(126, 127, 1)];
-fn y28_drop(t: usize, rev: bool) -> usize {
-    // N2 (research patch): SL_N2_DROP / SL_N2_MDROP batch ticks run the dropped-carry ladder (None elsewhere)
-    if let Some(n) = super::n2_drop(t, rev) {
-        return n;
-    }
-    (if rev { Y28_DROP_REV } else { Y28_DROP_FWD }).iter().find(|&&(a, b, _)| t >= a && t < b).map_or(0, |&(_, _, n)| n)
-}
-/// y28 DIAGNOSTIC, used only with leapfrog.rs's `Y28_ALIGNED` (the aligned copy, never an entry): (tick, n) = n idle
-/// measurements (of a wire that holds 0) on that one-fold pass, between the erase of the top wires and the erases of
-/// the held carries. A pass that runs the dropped-carry ladder in place of the deep shed has fewer measurements than
-/// the head's (the deep shed measures its block three times); with the difference put back the gate list draws the
-/// head's number of random words from there on, and a paired run compares phase flags shot by shot. Every measurement
-/// between the adds and this point is an exact erase in both gate lists, so which random word each one draws does
-/// not matter.
-const Y28_PADS_FWD: &[(usize, usize)] = &[(130, 9)];
-const Y28_PADS_REV: &[(usize, usize)] = &[(126, 10)];
-fn y28_pads(t: usize, rev: bool) -> usize {
-    // N2 (research patch, diagnostic): SL_N2_PADS idle measurements on the batch's drop ticks (None elsewhere)
-    if let Some(n) = super::n2_pads(t, rev) {
-        return n;
-    }
-    if !Y28_ALIGNED {
-        return 0;
-    }
-    (if rev { Y28_PADS_REV } else { Y28_PADS_FWD }).iter().find(|&&(a, _)| a == t).map_or(0, |&(_, n)| n)
-}
-/// The ladder's plans on bits [6, 56) for budgets 9 and 8 with the 0-based chunks whose kept carry is dropped
-/// (experiments/y28-loop/s2/ladder_drop.py: the cheapest of each kind).
-const Y28_PLAN9: ([usize; 10], [usize; 1]) = ([4, 8, 8, 7, 6, 5, 4, 3, 2, 3], [0]);
-const Y28_PLAN8: ([usize; 10], [usize; 2]) = ([7, 7, 7, 6, 6, 5, 4, 3, 2, 3], [0, 2]);
 /// y15-pack: with Y15_CORE_V2, Y15_KEEP_LOW and Y15_REV_COPY all on, the way a reverse tick-pass gets W's low bits is
 /// chosen by its room (the walk cap less the wires live when the tick's body starts): the adds' kept carries (no AND,
 /// 12 wires at the fold) where the room is Y15_KEEP_ROOM or more, the four CX copies (9.25 ANDs with the first
@@ -585,15 +506,14 @@ const Y17_FIXED_REV_LEAN: usize = Y16_FIXED_REV_COPY + 2;
 /// m0's erase will have with nothing shed; `need_m`: what it takes (its rebuilt chain and its compare); `pool`: the
 /// carries of the block; `fixed`: the wires the fold holds beside its ladder's carries.
 #[allow(clippy::too_many_arguments)]
-fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usize, pool: usize, fmax: usize, tops_max: usize, at: (bool, usize), drop: usize) -> (usize, usize, usize, usize, usize) {
+fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usize, pool: usize, fmax: usize, tops_max: usize, at: (bool, usize)) -> (usize, usize, usize, usize, usize) {
     if !Y16_SHED || !Y15_CORE_V2 || !Y15_JOINT_M || !on {
         return (0, 0, 0, 0, 0);
     }
     // the ladder's least budget on bits [6, MW): 10 at window 57 (as [`fold_plan`] finds it)
     let nbits = Y15_WIN - 6;
     let min_budget = (1..=nbits).find(|&b| merged_plan(nbits - 1, b).is_some() || merged_plan(nbits, b).is_some()).expect("y16: a ladder budget");
-    // y28: the ladder with `drop` kept carries dropped early runs on that many wires fewer
-    let need = fixed + min_budget - drop - 2 * usize::from(Y15_LEAN45);
+    let need = fixed + min_budget - 2 * usize::from(Y15_LEAN45);
     let (short_f, short_m) = (need.saturating_sub(room_fold), need_m.saturating_sub(room_m));
     // y18-next: the guard carries of m0's rebuilt chain come first for its erase (see Y18_GSHED)
     let gmax = if Y18_GSHED { Y15_GUARD.saturating_sub(1) } else { 0 };
@@ -744,14 +664,6 @@ fn addend_from_n(c: &mut Builder, recs: &mut Vec<Rec>, n: &[Lin], mw: usize) -> 
 /// The upper ladder of [`m_fold`] from bit `lo0` with carry-in `cin0`: acc[lo0..) += add[lo0..) + cin0 (mod 2^len),
 /// in chunks; a non-final chunk keeps its carry-out, erased at the end by an exact compare on half the shots.
 fn ladder(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: QubitId, plan: &[usize]) {
-    ladder_d(c, acc, add, lo0, cin0, plan, &[]);
-}
-/// [`ladder`]; `drops` (y28, card s2-1) = the 0-based chunks whose kept carry is measured away as soon as the next
-/// chunk has read it and built again under the measured bit of the kept carry above it (see [`Y28_DROP_FWD`]).
-fn ladder_d(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: QubitId, plan: &[usize], drops: &[usize]) {
-    if !drops.is_empty() {
-        return ladder_drop(c, acc, add, lo0, cin0, plan, drops);
-    }
     let mw = acc.len();
     assert_eq!(plan.iter().sum::<usize>(), mw - lo0, "y15 fold plan covers bits [lo, MW)");
     let mut kept: Vec<(usize, usize, QubitId, QubitId)> = Vec::new();
@@ -797,113 +709,6 @@ fn ladder_d(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: Qub
         c.release_clean(out);
         c.push_condition(m);
         lin_lt_phase(c, &acc[lo..hi], &add[lo..hi], cin);
-        c.pop_condition();
-        c.free_bit(m);
-    }
-}
-
-/// One chunk of the fold's ladder, as [`ladder`] runs it: carries, sums written back, the carries erased. Returns the
-/// chunk's carry-out wire (a non-final chunk keeps it).
-fn ladder_chunk(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo: usize, w: usize, cin: QubitId, last: bool) -> Option<QubitId> {
-    let hi = lo + w;
-    let direct = last && w >= 2;
-    let mut cc = vec![cin];
-    for i in lo..(if last { hi - 1 - direct as usize } else { hi }) {
-        let t = m_carry(c, acc[i], &add[i], cc[i - lo]);
-        cc.push(t);
-    }
-    if direct {
-        let (i, ci) = (hi - 2, cc[w - 2]);
-        let (a, b) = (Lin::of(&[acc[i], ci]), add[i].x(&Lin::of(&[ci])));
-        let (ha, hb) = lin_pair_on(c, &a, &b);
-        c.ccx(ha, hb, acc[hi - 1]);
-        lin_pair_off(c, &a, &b);
-        c.cx(ci, acc[hi - 1]);
-    }
-    assert!(c.active_qubits() as usize <= cells::cap(), "y15 fold over the walk cap: {} > {}", c.active_qubits(), cells::cap());
-    for i in (lo..hi).rev() {
-        lin_xor_into(c, &add[i], acc[i]);
-        if direct && i == hi - 1 {
-            continue;
-        }
-        c.cx(cc[i - lo], acc[i]);
-        if i > lo {
-            m_carry_erase(c, cc[i - lo], acc[i - 1], &add[i - 1], cc[i - lo - 1]);
-        }
-    }
-    (!last).then(|| cc[w])
-}
-/// X-measure a kept carry of the ladder and fix its phase by the exact compare on its chunk [lo, hi) (carry-in `cin`),
-/// under the measured bit.
-fn kept_erase(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo: usize, hi: usize, cin: QubitId, out: QubitId) {
-    let m = c.alloc_bit();
-    c.hmr(out, m);
-    c.release_clean(out);
-    c.push_condition(m);
-    lin_lt_phase(c, &acc[lo..hi], &add[lo..hi], cin);
-    c.pop_condition();
-    c.free_bit(m);
-}
-/// y28 (card s2-1): [`ladder`] with the kept carries of the chunks in `drops` dropped early.
-fn ladder_drop(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: QubitId, plan: &[usize], drops: &[usize]) {
-    let mw = acc.len();
-    assert_eq!(plan.iter().sum::<usize>(), mw - lo0, "y15 fold plan covers bits [lo, MW)");
-    // (lo, hi, carry-in wire, carry-out wire, still live)
-    let mut kept: Vec<(usize, usize, QubitId, QubitId, bool)> = Vec::new();
-    let (mut lo, mut cin) = (lo0, cin0);
-    for (j, &w) in plan.iter().enumerate() {
-        let last = j + 1 == plan.len();
-        if let Some(out) = ladder_chunk(c, acc, add, lo, w, cin, last) {
-            kept.push((lo, lo + w, cin, out, true));
-            cin = out;
-        }
-        // the carry below the one this chunk read: nothing reads it as a value any more
-        if j >= 1 && drops.contains(&(j - 1)) {
-            assert!(!last && (j < 2 || kept[j - 2].4), "y28: a dropped carry needs the next kept carry and its own carry-in live");
-            let (l0, h0, c0, o0, _) = kept[j - 1];
-            kept_erase(c, acc, add, l0, h0, c0, o0);
-            kept[j - 1].4 = false;
-        }
-        lo += w;
-    }
-    for idx in (0..kept.len()).rev() {
-        let (lo, hi, cin, out, live) = kept[idx];
-        if !live {
-            continue;
-        }
-        if idx == 0 || kept[idx - 1].4 {
-            kept_erase(c, acc, add, lo, hi, cin, out);
-            continue;
-        }
-        // its carry-in was dropped: under this carry's measured bit, build it again on the written sums
-        let (l0, h0, c0, _, _) = kept[idx - 1];
-        let m = c.alloc_bit();
-        c.hmr(out, m);
-        c.release_clean(out);
-        c.push_condition(m);
-        // the carry out of bit i is MAJ(X_i, add_i, d_i) with X_i ^ d_i = acc_i ^ add_i (acc holds the sum)
-        let forms = |i: usize, di: QubitId| (l(acc[i]).x(&add[i]), add[i].x(&l(di)));
-        let mut d = vec![c0];
-        for i in l0..h0 {
-            let di = d[i - l0];
-            let (a, b) = forms(i, di);
-            let q = lin_and(c, &a, &b);
-            c.cx(di, q);
-            d.push(q);
-        }
-        // the chain's lower carries leave at once (measured, each from the carry below it)
-        for i in (l0 + 1..h0).rev() {
-            let (q, di) = (d[i - l0], d[i - l0 - 1]);
-            let (a, b) = forms(i - 1, di);
-            c.cx(di, q);
-            lin_and_erase(c, q, &a, &b);
-        }
-        let back = d[h0 - l0];
-        // N2 (research patch): SL_N2_FX=z<t> leaves this phase fix out on divide batch tick t (deliberate fault)
-        if !super::n2_fx_skip_drop_z() {
-            lin_lt_phase(c, &acc[lo..hi], &add[lo..hi], back);
-        }
-        kept_erase(c, acc, add, l0, h0, c0, back);
         c.pop_condition();
         c.free_bit(m);
     }
@@ -1051,19 +856,10 @@ fn w_mod64(c: &mut Builder, recs: &mut Vec<Rec>, acc: &[QubitId], src: &[QubitId
 /// from `pre` in place of their ANDs where it is given. Needs top >= 2.
 #[allow(clippy::too_many_arguments)]
 fn w_mod64_pre(c: &mut Builder, recs: &mut Vec<Rec>, acc: &[QubitId], src: &[QubitId], nm: [QubitId; 3], b01: &Lin, top: usize, pre: Option<&[Lin; 2]>) -> (Vec<Lin>, [Lin; 2]) {
-    w_mod64_pre_x(c, recs, acc, src, nm, b01, top, pre, None)
-}
-/// `x45` (y28, card s2-5): the forms of low(X_r)'s bits 4 and 5 where acc[4] and acc[5] already hold their sums.
-#[allow(clippy::too_many_arguments)]
-fn w_mod64_pre_x(c: &mut Builder, recs: &mut Vec<Rec>, acc: &[QubitId], src: &[QubitId], nm: [QubitId; 3], b01: &Lin, top: usize, pre: Option<&[Lin; 2]>, x45: Option<[Lin; 2]>) -> (Vec<Lin>, [Lin; 2]) {
     assert!((2..=5).contains(&top));
     let one = Lin::k(true);
     let sb = |j: usize, sh: usize| Lin::of(&[src[j], nm[sh]]);
     let mut w: Vec<Lin> = (0..6).map(|i| l(acc[i])).collect();
-    if let Some([x4, x5]) = x45 {
-        w[4] = x4;
-        w[5] = x5;
-    }
     let mut got: [Option<Lin>; 2] = [None, None];
     for sh in [2usize, 1, 0] {
         let mut bo: Option<Lin> = None;
@@ -1117,96 +913,17 @@ fn w_mod64_pre_x(c: &mut Builder, recs: &mut Vec<Rec>, acc: &[QubitId], src: &[Q
 /// measurement bit or its complement.
 #[allow(clippy::too_many_arguments)]
 fn lean_clear_y(c: &mut Builder, acc: &[QubitId], src: &[QubitId], nm: [QubitId; 3], b01: &Lin, pre: &[Lin; 2], yq: &[QubitId; 3], gates: &[Lin; 3], top: usize) {
-    lean_clear_y_t(c, acc, src, nm, b01, pre, yq, gates, top, None, &mut None);
-}
-/// y28 (card s2-5): the reverse fold's carries into bits 4 and 5 built late (see [`Y28_LEAN_REV`]). `c4`, `c5`: wires
-/// that hold 0 until built; `need4`, `need5`: bits that hold 0 until then; `n5`, `n4`: the complements of y5's measured
-/// bit and (where that is clear) of y4's, kept from the clearing of the gate wires for c6's erase.
-struct Late45 {
-    acc3: QubitId,
-    acc4: QubitId,
-    acc5: QubitId,
-    c3: QubitId,
-    c4: QubitId,
-    c5: QubitId,
-    n0: Lin,
-    n1: Lin,
-    need4: crate::circuit::BitId,
-    need5: crate::circuit::BitId,
-    n5: Option<crate::circuit::BitId>,
-    n4: Option<crate::circuit::BitId>,
-}
-impl Late45 {
-    fn build4(&self, c: &mut Builder) {
-        lin_and_into(c, self.c4, &l(self.acc3), &l(self.c3));
-        c.bit_store1(self.need4);
-    }
-    /// c5 = MAJ(X[4], n0, c4) with X[4] ^ c4 = acc[4] ^ n0 (acc[4] holds the sum); needs c4
-    fn build5(&self, c: &mut Builder) {
-        lin_and_into(c, self.c5, &l(self.acc4).x(&self.n0), &self.n0.x(&l(self.c4)));
-        c.cx(self.c4, self.c5);
-        c.bit_store1(self.need5);
-    }
-    fn erase5(&self, c: &mut Builder) {
-        c.push_condition(self.need5);
-        c.cx(self.c4, self.c5);
-        lin_and_erase(c, self.c5, &l(self.acc4).x(&self.n0), &self.n0.x(&l(self.c4)));
-        c.pop_condition();
-    }
-    /// low(X_r)'s bits 4 and 5 from the written sums
-    fn x45(&self) -> [Lin; 2] {
-        [l(self.acc4).x(&self.n0).x(&l(self.c4)), l(self.acc5).x(&self.n1).x(&l(self.c5))]
-    }
-}
-/// The AND of the shift letter built late (y28, card s2-4): into `q` (a wire that holds 0) under the conditions in
-/// force, and `need` (a bit that holds 0 until then) is set: the wire is measured away under it.
-#[derive(Clone, Copy)]
-struct TtLate {
-    k1: QubitId,
-    k2: QubitId,
-    q: QubitId,
-    need: crate::circuit::BitId,
-}
-impl TtLate {
-    fn build(&self, c: &mut Builder) {
-        lin_and_into(c, self.q, &l(self.k1), &l(self.k2));
-        c.bit_store1(self.need);
-    }
-}
-/// [`lean_clear_y`]; with `late` the AND of the shift letter (the wire in gates[2] and gates[0]) is not built yet: it
-/// is built here on the branches that read it (y5's bit set; y5's clear and y3's set), once on any shot.
-#[allow(clippy::too_many_arguments)]
-/// With `l45` (y28, card s2-5) acc[4] and acc[5] hold their sums: y5's branch builds both carries and y4's the lower
-/// one, the chains read the old bits through them, and the complements of y5's and y4's bits are kept in `l45`.
-#[allow(clippy::too_many_arguments)]
-fn lean_clear_y_t(c: &mut Builder, acc: &[QubitId], src: &[QubitId], nm: [QubitId; 3], b01: &Lin, pre: &[Lin; 2], yq: &[QubitId; 3], gates: &[Lin; 3], top: usize, late: Option<TtLate>, l45: &mut Option<Late45>) {
     let m = c.alloc_bit();
     c.hmr(yq[top - 3], m);
     c.push_condition(m);
     {
-        if let Some(s) = l45.as_ref() {
-            if top >= 4 {
-                s.build4(c);
-            }
-            if top == 5 {
-                s.build5(c);
-            }
-        }
-        // top = 5: y5's own fix reads the AND; top = 3: y3's does (and nothing built it on this branch)
-        if let (Some(t), true) = (late, top != 4) {
-            t.build(c);
-        }
         let mut r2: Vec<Rec> = Vec::new();
-        let (w, _) = w_mod64_pre_x(c, &mut r2, acc, src, nm, b01, top, Some(pre), l45.as_ref().map(|s| s.x45()));
+        let (w, _) = w_mod64_pre(c, &mut r2, acc, src, nm, b01, top, Some(pre));
         lin_cz(c, &gates[top - 3], &w[top]); // the phase the measurement left
         for i in (3..top).rev() {
             let mi = c.alloc_bit();
             c.hmr(yq[i - 3], mi);
             c.push_condition(mi);
-            // top = 4: y5's bit is clear and y4's fix read k2 alone; y3's fix is the first to read the AND
-            if let (Some(t), true) = (late, top == 4 && i == 3) {
-                t.build(c);
-            }
             lin_cz(c, &gates[i - 3], &w[i]);
             c.pop_condition();
             c.free_bit(mi);
@@ -1219,14 +936,9 @@ fn lean_clear_y_t(c: &mut Builder, acc: &[QubitId], src: &[QubitId], nm: [QubitI
         c.bit_store1(not_m);
         c.bit_xor_into(not_m, m);
         c.push_condition(not_m);
-        lean_clear_y_t(c, acc, src, nm, b01, pre, yq, gates, top - 1, late, l45);
+        lean_clear_y(c, acc, src, nm, b01, pre, yq, gates, top - 1);
         c.pop_condition();
-        match l45.as_mut() {
-            // kept for c6's erase (the caller frees them)
-            Some(s) if top == 5 => s.n5 = Some(not_m),
-            Some(s) if top == 4 => s.n4 = Some(not_m),
-            _ => c.free_bit(not_m),
-        }
+        c.free_bit(not_m);
     }
     c.free_bit(m);
 }
@@ -1562,26 +1274,10 @@ fn addend_prog(c: &mut Builder, recs: &mut Vec<Rec>, x: &[Lin], gates: &[(u32, u
 /// The ladder's plan on bits [6, MW) for the room left now, and whether it needs the two wires of [`Y15_LEAN45`]
 /// (the caller then erases the carries into bits 4 and 5 before the ladder and builds them again after it).
 fn fold_plan(c: &Builder, mw: usize, what: &str) -> (Vec<usize>, bool) {
-    let (plan, lean45, drops) = fold_plan_d(c, mw, what, 0);
-    assert!(drops.is_empty());
-    (plan, lean45)
-}
-/// [`fold_plan`] with up to `drop` kept carries dropped early (see [`Y28_DROP_FWD`]): the third value is the 0-based
-/// chunks whose kept carry leaves when the next chunk has read it (empty where a plan of [`merged_plan`] fits).
-fn fold_plan_d(c: &Builder, mw: usize, what: &str, drop: usize) -> (Vec<usize>, bool, Vec<usize>) {
     let budget = cells::cap().saturating_sub(c.active_qubits() as usize);
     let nbits = mw - 6;
     let lean45 = Y15_LEAN45 && merged_plan(nbits - 1, budget).is_none() && merged_plan(nbits, budget).is_none();
     let budget = budget + 2 * usize::from(lean45);
-    if drop > 0 && merged_plan(nbits - 1, budget).is_none() && merged_plan(nbits, budget).is_none() {
-        assert!(nbits == 50 && budget + drop >= 10 && (8..=9).contains(&budget), "y28: the {what} fold's ladder with {drop} dropped carries does not fit: budget {budget}, active {}, cap {}", c.active_qubits(), cells::cap());
-        return if budget == 9 { (Y28_PLAN9.0.to_vec(), lean45, Y28_PLAN9.1.to_vec()) } else { (Y28_PLAN8.0.to_vec(), lean45, Y28_PLAN8.1.to_vec()) };
-    }
-    let (plan, lean45) = fold_plan_0(c, mw, what, budget, lean45);
-    (plan, lean45, Vec::new())
-}
-fn fold_plan_0(c: &Builder, mw: usize, what: &str, budget: usize, lean45: bool) -> (Vec<usize>, bool) {
-    let nbits = mw - 6;
     let plan = match merged_plan(nbits - 1, budget) {
         Some(mut p) => {
             *p.last_mut().unwrap() += 1;
@@ -1601,64 +1297,11 @@ fn fold_undo(c: &mut Builder, recs: Vec<Rec>, acc: &[QubitId], e: [QubitId; 3], 
 }
 /// The first part of [`fold_undo`]: the helper wires, last built first (none of their forms reads E, c1 or c2 in the
 /// forward fold).
-fn fold_undo_recs(c: &mut Builder, recs: Vec<Rec>, acc: &[QubitId], a4: &Lin, a5: &Lin, cw: [QubitId; 3]) {
-    fold_undo_recs_t(c, recs, acc, a4, a5, cw, &mut None);
-}
-/// y28 (s2-4, step 2): the state of the forward fold's undo when the AND of the shift letter is built late: the
-/// wires of y5 and y3 (their erases read it) and, once y5 is measured, the complement of its bit.
-struct TtUndo {
-    t: TtLate,
-    y5: QubitId,
-    y3: QubitId,
-    n5: Option<crate::circuit::BitId>,
-}
-/// Erase one AND record of the forward fold's undo list. With `late`, y5 and y3 are measured here and the AND of the
-/// shift letter is built under the bit that reads it; its own record is erased under the OR of the two bits.
-fn tt_and_erase(c: &mut Builder, late: &mut Option<TtUndo>, q: QubitId, a: &Lin, b: &Lin) {
-    let Some(u) = late.as_mut() else {
-        lin_and_erase(c, q, a, b);
-        return;
-    };
-    if q == u.y5 {
-        let m = c.alloc_bit();
-        c.hmr(q, m);
-        c.push_condition(m);
-        u.t.build(c);
-        lin_cz(c, a, b);
-        c.pop_condition();
-        let n = c.alloc_bit();
-        c.bit_store1(n);
-        c.bit_xor_into(n, m);
-        u.n5 = Some(n);
-        c.free_bit(m);
-        c.release_clean(q);
-    } else if q == u.y3 {
-        let n = u.n5.take().expect("y28: y5 is erased before y3");
-        let m = c.alloc_bit();
-        c.hmr(q, m);
-        c.push_condition(m);
-        c.push_condition(n);
-        u.t.build(c);
-        c.pop_condition();
-        lin_cz(c, a, b);
-        c.pop_condition();
-        c.free_bit(m);
-        c.free_bit(n);
-        c.release_clean(q);
-    } else if q == u.t.q {
-        c.push_condition(u.t.need);
-        lin_and_erase(c, q, a, b);
-        c.pop_condition();
-        c.free_bit(u.t.need);
-    } else {
-        lin_and_erase(c, q, a, b);
-    }
-}
-fn fold_undo_recs_t(c: &mut Builder, mut recs: Vec<Rec>, acc: &[QubitId], a4: &Lin, a5: &Lin, cw: [QubitId; 3], late: &mut Option<TtUndo>) {
+fn fold_undo_recs(c: &mut Builder, mut recs: Vec<Rec>, acc: &[QubitId], a4: &Lin, a5: &Lin, cw: [QubitId; 3]) {
     let [c4, c5, c6] = cw;
     while let Some(r) = recs.pop() {
         match r {
-            Rec::And(q, a, b) => tt_and_erase(c, late, q, &a, &b),
+            Rec::And(q, a, b) => lin_and_erase(c, q, &a, &b),
             Rec::Maj(q, a, b, ci) => {
                 lin_xor_into(c, &ci, q);
                 lin_and_erase(c, q, &a, &b);
@@ -1676,66 +1319,10 @@ fn fold_undo_recs_t(c: &mut Builder, mut recs: Vec<Rec>, acc: &[QubitId], a4: &L
         }
     }
 }
-/// y28 (s2-2): [`fold_undo_recs`] for the forward fold whose sums 4 and 5 were written before the ladder and whose
-/// carries into bits 4 and 5 are gone (see [`Y28_LEAN_FWD`]); `cw` = two wires that hold 0 for them (taken where the
-/// head builds the two carries again, so every later wire keeps the head's id) and c6. Returns c6's measured bit: c4
-/// is built under it and still to be erased under it by the low section's undo.
-fn fold_undo_recs_m(c: &mut Builder, mut recs: Vec<Rec>, acc: &[QubitId], a4: &Lin, a5: &Lin, c3: QubitId, cw: [QubitId; 3], late: &mut Option<TtUndo>) -> crate::circuit::BitId {
-    let [c4, c5, c6] = cw;
-    let mut st: Option<crate::circuit::BitId> = None;
-    while let Some(r) = recs.pop() {
-        match r {
-            Rec::And(q, a, b) => tt_and_erase(c, late, q, &a, &b),
-            Rec::Maj(q, a, b, ci) => {
-                lin_xor_into(c, &ci, q);
-                lin_and_erase(c, q, &a, &b);
-            }
-            Rec::UndoC6 => {
-                let m = c.alloc_bit();
-                c.hmr(c6, m);
-                c.release_clean(c6);
-                c.push_condition(m);
-                lin_and_into(c, c4, &l(acc[3]), &l(c3));
-                // c5 = MAJ(X[4], a4, c4) with X[4] ^ c4 = acc[4] ^ a4 (acc[4] holds the sum)
-                lin_and_into(c, c5, &l(acc[4]).x(a4), &a4.x(&l(c4)));
-                c.cx(c4, c5);
-                // c6 = MAJ(X[5], a5, c5) = AND(acc[5] ^ a5, a5 ^ c5) ^ c5
-                lin_cz(c, &l(acc[5]).x(a5), &a5.x(&l(c5)));
-                lin_cz(c, &Lin::k(true), &l(c5));
-                c.pop_condition();
-                st = Some(m);
-            }
-            Rec::UndoC5 => {
-                let m = st.expect("y28: c6 is erased before c5");
-                c.push_condition(m);
-                c.cx(c4, c5);
-                lin_and_erase(c, c5, &l(acc[4]).x(a4), &a4.x(&l(c4)));
-                c.pop_condition();
-            }
-        }
-    }
-    st.expect("y28: the fold's undo list holds c6")
-}
-/// AND of two linear forms into a wire that holds 0 (one Toffoli): [`lin_and`] without its allocation.
-fn lin_and_into(c: &mut Builder, q: QubitId, a: &Lin, b: &Lin) {
-    let (ha, hb) = lin_pair_on(c, a, b);
-    c.ccx(ha, hb, q);
-    lin_pair_off(c, a, b);
-}
 /// The second part of [`fold_undo`]: the low section acc[0..4) += E.
 fn fold_undo_low(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], cw: [QubitId; 4]) {
-    fold_undo_low_c(c, acc, e, cw, None);
-}
-/// `c4m` (y28): c4 exists only under this bit (and is erased under it).
-fn fold_undo_low_c(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], cw: [QubitId; 4], c4m: Option<crate::circuit::BitId>) {
     let [c1, c2, c3, c4] = cw;
-    if let Some(m) = c4m {
-        c.push_condition(m);
-    }
     lin_and_erase(c, c4, &l(acc[3]), &l(c3));
-    if c4m.is_some() {
-        c.pop_condition();
-    }
     c.cx(c3, acc[3]);
     maj_wire_erase(c, c3, &l(acc[2]), &l(e[2]), &l(c2));
     c.cx(e[2], acc[2]);
@@ -1752,7 +1339,7 @@ fn fold_undo_low_c(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], cw: [Qubit
 /// k = (Nm + acc[0..3)) + 8 (y3 + 2 y4 + 4 y5 + r3 - c3): 3 ANDs for the sum, 3 for the chain that moves the upper
 /// part by one either way, 1 for its sign. 32 fixed wires (6 low carries, 4 gate wires, 22 core ANDs).
 #[allow(clippy::too_many_arguments)]
-fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3], k1: QubitId, k2: QubitId, fin: usize, mut esh: Option<&mut ESh>, ttm: bool, drop: usize) -> Vec<usize> {
+fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3], k1: QubitId, k2: QubitId, fin: usize, mut esh: Option<&mut ESh>) -> Vec<usize> {
     let mw = acc.len();
     let c1 = lin_and(c, &l(acc[0]), &l(e[0]));
     let c2 = maj_wire(c, &l(acc[1]), &l(e[1]), &l(c1));
@@ -1806,55 +1393,29 @@ fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     if Y15_TRACE {
         eprintln!("Y18_IDLE fwd recs={} idle={:?}", recs.len(), y18_idle(&recs, &add));
     }
-    // y18-next: the AND of the shift letter leaves for the ladder (see Y18_FIN); y28: also with `ttm` ([`Y28_TT_FWD`]),
-    // and then it comes back only under the measured bits of y5 and y3
+    // y18-next: the AND of the shift letter leaves for the ladder (see Y18_FIN)
     let tt_q = tt.w[0];
-    let (y5_q, y3_q) = (y5.w[0], y3.w[0]);
-    if fin >= 3 || ttm {
+    if fin >= 3 {
         lin_and_erase(c, tt_q, &l(k1), &l(k2));
     }
-    let (plan, lean45, drops) = fold_plan_d(c, mw, "forward", drop);
-    // y28 (s2-2): sums 4 and 5 are written here and the two carries come back only under c6's measured bit
-    let lean_m = lean45 && Y28_LEAN_FWD;
+    let (plan, lean45) = fold_plan(c, mw, "forward");
     if lean45 {
-        if lean_m {
-            lin_xor_into(c, &a5, acc[5]);
-            c.cx(c5, acc[5]);
-        }
         maj_wire_erase(c, c5, &l(acc[4]), &a4, &l(c4));
-        if lean_m {
-            lin_xor_into(c, &a4, acc[4]);
-            c.cx(c4, acc[4]);
-        }
         lin_and_erase(c, c4, &l(acc[3]), &l(c3));
     }
-    ladder_d(c, acc, &add, 6, c6, &plan, &drops);
-    let (c4, c5) = if lean_m {
-        (c.alloc_qubit(), c.alloc_qubit())
-    } else if lean45 {
+    ladder(c, acc, &add, 6, c6, &plan);
+    let (c4, c5) = if lean45 {
         let c4 = lin_and(c, &l(acc[3]), &l(c3));
         let c5 = maj_wire(c, &l(acc[4]), &a4, &l(c4));
         (c4, c5)
     } else {
         (c4, c5)
     };
-    let mut late: Option<TtUndo> = None;
-    if ttm {
-        let q = c.alloc_qubit();
-        let need = c.alloc_bit();
-        c.bit_store0(need);
-        y18_subst(&mut recs, tt_q, q);
-        late = Some(TtUndo { t: TtLate { k1, k2, q, need }, y5: y5_q, y3: y3_q, n5: None });
-    } else if fin >= 3 {
+    if fin >= 3 {
         let q = lin_and(c, &l(k1), &l(k2));
         y18_subst(&mut recs, tt_q, q);
     }
-    let c4m = if lean_m {
-        Some(fold_undo_recs_m(c, recs, acc, &a4, &a5, c3, [c4, c5, c6], &mut late))
-    } else {
-        fold_undo_recs_t(c, recs, acc, &a4, &a5, [c4, c5, c6], &mut late);
-        None
-    };
+    fold_undo_recs(c, recs, acc, &a4, &a5, [c4, c5, c6]);
     // the top wires again, once the helper wires are gone (fresh wires: the low section's undo reads the new ones)
     let e = match esh.as_deref_mut() {
         Some(st) => {
@@ -1865,10 +1426,7 @@ fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     };
     let c1 = if fin >= 2 { lin_and(c, &l(acc[0]), &l(e[0])) } else { c1 };
     let c2 = if fin >= 1 { maj_wire(c, &l(acc[1]), &l(e[1]), &l(c1)) } else { c2 };
-    fold_undo_low_c(c, acc, e, [c1, c2, c3, c4], c4m);
-    if let Some(m) = c4m {
-        c.free_bit(m);
-    }
+    fold_undo_low(c, acc, e, [c1, c2, c3, c4]);
     plan
 }
 
@@ -1925,7 +1483,7 @@ fn low_keep_add(c: &mut Builder, b: &[QubitId], acc: &[QubitId], proxy: usize, r
 /// `wc` (y15-pack): empty, or four wires holding bits 2..5 of W (the copies of [`Y15_REV_COPY`]); they are read in
 /// place of the borrow chains and returned clear, as in [`fold_rev`]. `kept` may then hold only add 0's first carry.
 #[allow(clippy::too_many_arguments)]
-fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3], k1: QubitId, k2: QubitId, src: &[QubitId], kept: &[Vec<QubitId>; 3], wc: &[QubitId], lean: bool, order: [usize; 3], yg: &[QubitId], fin: usize, drop: usize) -> Vec<usize> {
+fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3], k1: QubitId, k2: QubitId, src: &[QubitId], kept: &[Vec<QubitId>; 3], wc: &[QubitId], lean: bool, order: [usize; 3], yg: &[QubitId], fin: usize) -> Vec<usize> {
     let mw = acc.len();
     let one = Lin::k(true);
     let c1 = lin_and(c, &l(acc[0]), &l(e[0]));
@@ -2041,31 +1599,13 @@ fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     if fin >= 2 {
         lin_and_erase(c, c1, &l(acc[0]), &l(e[0]));
     }
-    let (plan, lean45, drops) = fold_plan_d(c, mw, "reverse", drop);
-    // y28 (s2-5): sums 4 and 5 are written here; the two carries come back only on the branches that read them
-    let lean_r = lean45 && Y28_LEAN_REV && (ygate.is_some() || lean_y.is_some());
+    let (plan, lean45) = fold_plan(c, mw, "reverse");
     if lean45 {
-        if lean_r {
-            lin_xor_into(c, &n1, acc[5]);
-            c.cx(c5, acc[5]);
-        }
         maj_wire_erase(c, c5, &l(acc[4]), &n0, &l(c4));
-        if lean_r {
-            lin_xor_into(c, &n0, acc[4]);
-            c.cx(c4, acc[4]);
-        }
         lin_and_erase(c, c4, &l(acc[3]), &l(c3));
     }
-    ladder_d(c, acc, &add, 6, c6, &plan, &drops);
-    let mut l45: Option<Late45> = None;
-    let (c4, c5) = if lean_r {
-        let (c4, c5) = (c.alloc_qubit(), c.alloc_qubit());
-        let (need4, need5) = (c.alloc_bit(), c.alloc_bit());
-        c.bit_store0(need4);
-        c.bit_store0(need5);
-        l45 = Some(Late45 { acc3: acc[3], acc4: acc[4], acc5: acc[5], c3, c4, c5, n0: n0.clone(), n1: n1.clone(), need4, need5, n5: None, n4: None });
-        (c4, c5)
-    } else if lean45 {
+    ladder(c, acc, &add, 6, c6, &plan);
+    let (c4, c5) = if lean45 {
         let c4 = lin_and(c, &l(acc[3]), &l(c3));
         let c5 = maj_wire(c, &l(acc[4]), &n0, &l(c4));
         (c4, c5)
@@ -2094,23 +1634,10 @@ fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
         // as the lean form below; the AND of the shift letter is built here only for the gate forms
         let mut tail = recs.split_off(mark2);
         pop_chain(c, &mut tail);
-        if Y28_TT_REV {
-            // y28 (s2-4): the AND comes only where y5's or y3's measured bit reads it
-            let tt = c.alloc_qubit();
-            let need = c.alloc_bit();
-            c.bit_store0(need);
-            let gates = [Lin::of(&[k1, k2, tt]), l(k2), l(tt)];
-            lean_clear_y_t(c, acc, src, nm, &b01, &pre, &yq, &gates, 5, Some(TtLate { k1, k2, q: tt, need }), &mut l45);
-            c.push_condition(need);
-            lin_and_erase(c, tt, &l(k1), &l(k2));
-            c.pop_condition();
-            c.free_bit(need);
-        } else {
-            let tt = lin_and(c, &l(k1), &l(k2));
-            let gates = [Lin::of(&[k1, k2, tt]), l(k2), l(tt)];
-            lean_clear_y_t(c, acc, src, nm, &b01, &pre, &yq, &gates, 5, None, &mut l45);
-            lin_and_erase(c, tt, &l(k1), &l(k2));
-        }
+        let tt = lin_and(c, &l(k1), &l(k2));
+        let gates = [Lin::of(&[k1, k2, tt]), l(k2), l(tt)];
+        lean_clear_y(c, acc, src, nm, &b01, &pre, &yq, &gates, 5);
+        lin_and_erase(c, tt, &l(k1), &l(k2));
         for q in yq {
             c.release_clean(q);
         }
@@ -2120,50 +1647,12 @@ fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
         // acc[0..6) still holds low(X_r) and the two borrows into bit 2 are live
         let mut tail = recs.split_off(mark2);
         pop_chain(c, &mut tail);
-        lean_clear_y_t(c, acc, src, nm, &b01, &pre, &yq, &gates, 5, None, &mut l45);
+        lean_clear_y(c, acc, src, nm, &b01, &pre, &yq, &gates, 5);
         for q in yq {
             c.release_clean(q);
         }
     }
-    if let Some(s) = l45 {
-        // y28 (s2-5): [`fold_undo`] with c6 measured as it is and the two carries where they were built
-        let (n5, n4) = (s.n5.expect("y28: y5's bit is kept"), s.n4.expect("y28: y4's bit is kept"));
-        let mut recs = recs;
-        while let Some(r) = recs.pop() {
-            match r {
-                Rec::And(q, a, b) => lin_and_erase(c, q, &a, &b),
-                Rec::Maj(q, a, b, ci) => {
-                    lin_xor_into(c, &ci, q);
-                    lin_and_erase(c, q, &a, &b);
-                }
-                Rec::UndoC6 => {
-                    let m = c.alloc_bit();
-                    c.hmr(c6, m);
-                    c.release_clean(c6);
-                    c.push_condition(m);
-                    // c5 is still to build where y5's bit was clear, and c4 under it where y4's was clear too
-                    c.push_condition(n5);
-                    c.push_condition(n4);
-                    s.build4(c);
-                    c.pop_condition();
-                    s.build5(c);
-                    c.pop_condition();
-                    // c6 = MAJ(X[5], n1, c5) = AND(acc[5] ^ n1, n1 ^ c5) ^ c5
-                    lin_cz(c, &l(acc[5]).x(&n1), &n1.x(&l(c5)));
-                    lin_cz(c, &Lin::k(true), &l(c5));
-                    c.pop_condition();
-                    c.free_bit(m);
-                }
-                Rec::UndoC5 => s.erase5(c),
-            }
-        }
-        fold_undo_low_c(c, acc, e, [c1, c2, c3, c4], Some(s.need4));
-        for b in [s.need4, s.need5, n5, n4] {
-            c.free_bit(b);
-        }
-    } else {
-        fold_undo(c, recs, acc, e, &n0, &n1, [c1, c2, c3, c4, c5, c6]);
-    }
+    fold_undo(c, recs, acc, e, &n0, &n1, [c1, c2, c3, c4, c5, c6]);
     plan
 }
 
@@ -2223,9 +1712,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     let close = !swap01 && late && Y15_JOINT_M && y20_close_on(t, rev);
     // y21: add 1's chunked part to the top on this pass (no h1; m1 is then x257)
     let top1 = cut && !close && y21_top_on(t, rev);
-    // y28 (s2-1): the ladder's dropped carries on this pass (then no deep shed)
-    let drop_n = if cut && !close && !swap01 && Y15_CORE_V2 { y28_drop(t, rev) } else { 0 };
-    let deep = cut && !close && y21_deep_on(t, rev) && drop_n == 0;
+    let deep = cut && !close && y21_deep_on(t, rev);
     let mut pads18: Vec<QubitId> = Vec::new();
     let _ = y18_log();
     let a_pre0 = c.active_qubits();
@@ -2380,48 +1867,25 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     // own shed); with the closed ripple as well the carry under the top one is m2 itself
     let fmax = (if rev { 2 } else if top1 { 4 } else if cut { 5 } else { 6 }) + usize::from(deep);
     let tops_max = if cut { if close { 1 } else { 2 } } else { Y17_TOPS_MAX };
-    let shed_fixed = if !rev {
-        Y16_FIXED_FWD
-    } else if lean_here {
-        Y17_FIXED_REV_LEAN
-    } else if yg_here {
-        Y17_FIXED_REV_YGATE
-    } else {
-        Y16_FIXED_REV_COPY
-    };
-    let shed_for = |fixed: usize, fmax: usize| {
-        y16_shed(
-            shed_on,
-            fixed,
-            room_now,
-            cells::cap().saturating_sub(a_start as usize + live_m),
-            if swap01 { kk1 + Y15_GUARD + kk1 - 1 } else { k0 + Y15_GUARD + k0 - 1 + if close { kwin + Y20_G2 } else { 0 } },
-            (N - 4).saturating_sub(sp2),
-            fmax,
-            tops_max,
-            (rev, t),
-            drop_n,
-        )
-    };
-    let shed0 = shed_for(shed_fixed, fmax);
-    // y28 (s2-4, step 2): forward, the AND of the shift letter leaves first where the fold sheds at all and that takes
-    // one wire off the shed (`fin` then counts c2, c1 and the top wires: the head's numbering skips its third)
-    let (ttm, (shed, tops, c3m, gsh, fin)) = if Y28_TT_FWD && !rev && !swap01 && Y15_CORE_V2 && Y18_FIN {
-        if shed0.4 >= 3 {
-            (true, shed0)
-        } else if shed0.0 + shed0.1 + shed0.4 > 0 {
-            let r = shed_for(shed_fixed - 1, fmax - 1);
-            if r.0 + r.1 + r.4 < shed0.0 + shed0.1 + shed0.4 {
-                (true, (r.0, r.1, r.2, r.3, if r.4 >= 3 { r.4 + 1 } else { r.4 }))
-            } else {
-                (false, shed0)
-            }
+    let (shed, tops, c3m, gsh, fin) = y16_shed(
+        shed_on,
+        if !rev {
+            Y16_FIXED_FWD
+        } else if lean_here {
+            Y17_FIXED_REV_LEAN
+        } else if yg_here {
+            Y17_FIXED_REV_YGATE
         } else {
-            (false, shed0)
-        }
-    } else {
-        (false, shed0)
-    };
+            Y16_FIXED_REV_COPY
+        },
+        room_now,
+        cells::cap().saturating_sub(a_start as usize + live_m),
+        if swap01 { kk1 + Y15_GUARD + kk1 - 1 } else { k0 + Y15_GUARD + k0 - 1 + if close { kwin + Y20_G2 } else { 0 } },
+        (N - 4).saturating_sub(sp2),
+        fmax,
+        tops_max,
+        (rev, t),
+    );
     assert!(!close || ((shed, c3m, gsh) == (0, 0, 0) && fin <= 3), "y20: the closed ripple on {} t={t} needs a shed it does not have: {:?}", if rev { "rev" } else { "fwd" }, (shed, tops, c3m, gsh, fin));
     // the top carry: cq(N - 1) = MAJ(x256', S'2[N - 2], cq(N - 2)), and x256 holds its sum x256' ^ S'2[N - 2] ^ cq(N - 2)
     // y18-next: with the top wires leaving inside the forward fold (fin 4 to 6) the top carries are not shed here
@@ -2473,7 +1937,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
             c.cx(s[2], b[j]);
         }
         let plan = if Y15_CORE_V2 {
-            fold_rev_v2(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, &b[..6], &kept, &wc, lean_here, if swap01 { [2, 0, 1] } else { [2, 1, 0] }, &yg, fin.min(2), drop_n)
+            fold_rev_v2(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, &b[..6], &kept, &wc, lean_here, if swap01 { [2, 0, 1] } else { [2, 1, 0] }, &yg, fin.min(2))
         } else {
             fold_rev(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, &b[..6], &wc)
         };
@@ -2485,22 +1949,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         }
         plan
     } else if Y15_CORE_V2 {
-        // y26, stage b (a test): the fold as carries only under the Z layer, then the written fold as today
-        if Y26_T0 == 2 && t == 0 {
-            if let Some(bits) = Y26_BITS.with(|p| p.borrow_mut().take()) {
-                assert!(shed == 0 && tops_pre == 0 && esh.is_none() && fin == 0);
-                let mut ph = T0Phase::new(c, k1, k2, N, bits);
-                // X's bits: written below add 2's open ripple, a form of register, source and carry in it
-                let xf: Vec<Lin> = (0..N).map(|i| if i < sp2 + 2 { l(tg[i]) } else { Lin::of(&[tg[i], b[i - 2], cc[i - 2 - sp2]]) }).collect();
-                let (w, mut recs) = fold_fwd_forms(c, &xf[..Y15_WIN], &[l(x256), l(x257), l(x258)], s, k1, k2);
-                for i in 0..N {
-                    ph.z(c, (i + N - 3) % N, if i < Y15_WIN { &w[i] } else { &xf[i] });
-                }
-                pop_chain(c, &mut recs);
-                ph.finish(c);
-            }
-        }
-        fold_fwd_v2(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, fin, esh.as_mut(), ttm, drop_n)
+        fold_fwd_v2(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, fin, esh.as_mut())
     } else {
         fold_fwd(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2)
     };
@@ -2593,14 +2042,6 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         for i in (sh_lo..sh_hi).rev() {
             m_carry_erase(c, cc[i - sp2], acc2[i - 1], &l(b[i - 1]), cc[i - 1 - sp2]);
         }
-    }
-    // y28 DIAGNOSTIC, never for an entry (see [`Y28_PADS_FWD`]): the aligned copy's idle measurements
-    for _ in 0..y28_pads(t, rev) {
-        let q = c.alloc_qubit();
-        let m = c.alloc_bit();
-        c.hmr(q, m);
-        c.free_bit(m);
-        c.release_clean(q);
     }
     let e_tops = c.expected_total();
     // y17-edge: cq(N - 3) is idle until the ripple is closed; its inputs are shed, so it is measured now and its phase
@@ -3123,8 +2564,7 @@ pub(super) fn fwd_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [V
     let (tg, b) = (p[ti].clone(), p[si].clone());
     let (e0, a0) = (c.expected_total(), c.active_qubits());
     let shift = cmp_shift_at(t);
-    // N2 (research patch): SL_N2_CMPX more chunk-boundary compare bits on the divide's batch ticks (0 elsewhere)
-    cells::with_tie(None, || cells::with_cmp_shift((shift.0 + Y15_CMP_EXTRA + super::n2_cmpx(), shift.1), || cells::with_bridge(proxy, false, || body_capped(c, t, s, k1, k2, &b, &tg, proxy, false))));
+    cells::with_tie(None, || cells::with_cmp_shift((shift.0 + Y15_CMP_EXTRA, shift.1), || cells::with_bridge(proxy, false, || body_capped(c, t, s, k1, k2, &b, &tg, proxy, false))));
     for _ in 0..3 {
         rot1(c, &tg, true);
     }
@@ -3158,1100 +2598,4 @@ pub(super) fn rev_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [V
     if Y15_TRACE {
         eprintln!("Y15_TICK rev t={t} active={a0} cost={:.1}", c.expected_total() - e0);
     }
-}
-
-/// y26-loop (10 October 2026), measure-1: the multiply's tick-0 phase block (payload tick 0 forward on (P, P/2), the
-/// Z layer of [`rot4_phase`], the tick back) in one call. The block only applies a phase, so what the forward tick
-/// writes and the reverse tick unwrites can be evaluated as carries only: each AND built once on a fresh wire, the Z
-/// layer put on XOR forms of live wires, every AND erased by measurement with its build forms.
-///   0: off (the head byte for byte).
-///   1: the same gates by explicit calls (stage a).
-///   2: a test: the forward fold as carries only under the Z layer, inside the forward tick's body just before its
-///      written fold; the tick then goes on and the reverse tick runs as today (stage b; 80 Toffoli more).
-///   5: the form (m3): all three adds as forms over the one register P/2 (carry-save: two local AND layers and one
-///      ripple chain), T = 2 (P/2) as forms through the doubling's window carries, the fold as carries only.
-///      Nothing is written: no copy of P/2, no reverse tick, one mod_double fewer. See [`t0_phase_forms`].
-/// Builder counts at peak 1236 on the head (767599.9, gate list 26775814), 10 October 2026:
-///   1: expected=767599.9 (26775814, the head's bytes)
-///   2: expected=767679.9 (bffe61d1; against the head 0 outputs differ on 30 draws, phase shots 339 / 349)
-///   5, Y26_FUSE_DBL off: expected=766850.1 (8b18b6bb; 0 differ on 30 draws, phase shots 339 / 330)
-///   5, Y26_FUSE_DBL on:  expected=766802.1 (954104ba; 0 differ on 30 draws, phase shots 339 / 369, of them on a
-///      right output 116 / 114; on the denominator stress file 1 output differs, wrong only in the head)
-/// The block at 5: window 48 + 1, the three AND layers 768, the fold 80, two boundaries 219.5, in all 1117.5 for the
-/// head's 907.0 + 910.2 + 2 and two doublings of 48.
-pub(super) const Y26_T0: u8 = 5;
-pub(super) fn t0_carries_on(phrot: bool) -> bool {
-    (Y26_T0 == 1 || Y26_T0 == 2) && phrot && fwd_on(0) && rev_on(0)
-}
-/// Research knob, a control of the paired test: the Z layer's positions 100 and 101 swapped (a wrong phase function).
-/// false in every build that is kept.
-const Y26_FAULT: bool = false;
-/// y26, with the larger form: the product's doubling (P/2 -> P, [`cells::mod_double`]'s map) is written at the end
-/// of the block from the window's carries, which the block holds anyway: the register is rotated up, the window's sum
-/// bits are written top down and each carry is erased by measurement as it is passed. 0 Toffoli for the doubling's
-/// own carry ladder. Same value on every input (the same truncated sum). false: [`cells::mod_double`] after the block.
-pub(super) const Y26_FUSE_DBL: bool = true;
-/// Research knob, a diagnostic of the paired test (0 in every build that is kept): this many idle X measurements on
-/// a clean wire at the end of the block. The checker hands one random word to every measurement and reset in the
-/// order of the gate list, so a block with another number of them moves the outcomes of every later measurement.
-/// 2767 = the head's block's count less this block's (917,134 against 914,367 random words): with it the outcomes
-/// outside the block are the head's, and a phase flag that moves is the block's own. Measured with 2767 (gate list
-/// a7a0a4b9, expected=766802.1): on 90 draws 1 output differs (wrong only in the head) and the phase shots are the
-/// head's less 4 (339 / 339 and 705 / 701), none new; slope stress file 7176 / 7176; denominator 4451 / 4450.
-const Y26_PAD_RNG: usize = 0;
-pub(super) fn t0_forms_on(phrot: bool) -> bool {
-    Y26_T0 == 5 && phrot && fwd_on(0) && Y15_CORE_V2 && Y16_CORE
-}
-thread_local! {
-    /// y26, stage b: the kept bits of the phase block, taken by the hook in the forward tick 0's [`body`].
-    static Y26_BITS: std::cell::RefCell<Option<Vec<crate::circuit::BitId>>> = const { std::cell::RefCell::new(None) };
-}
-/// y26: the Z layer of [`rot4_phase`] (forward side), one position at a time and on forms.
-struct T0Phase {
-    k1: QubitId,
-    k2: QubitId,
-    t: QubitId,
-    /// per position j of the register the layer is on: (monomial, kept bit)
-    at: Vec<Vec<(usize, crate::circuit::BitId)>>,
-    done: Vec<bool>,
-    bits: Vec<crate::circuit::BitId>,
-}
-impl T0Phase {
-    /// The plan of [`rot4_phase`] (`inv` = false) for an n-wire register; builds the AND of the shift letter.
-    fn new(c: &mut Builder, k1: QubitId, k2: QubitId, n: usize, bits: Vec<crate::circuit::BitId>) -> T0Phase {
-        assert_eq!(bits.len(), n);
-        let maps: Vec<Vec<usize>> = (0..4).map(|e| rot4_map(n, e)).collect();
-        let anf: [&[usize]; 4] = [&[0, 1, 2, 3], &[1, 3], &[2, 3], &[3]];
-        let mut acc: std::collections::BTreeMap<(usize, usize), Vec<usize>> = std::collections::BTreeMap::new();
-        for i in 0..n {
-            for val in 0..4 {
-                let (j, bi) = (maps[val][i], i);
-                for &mono in anf[val] {
-                    let l = acc.entry((j, mono)).or_default();
-                    if let Some(p) = l.iter().position(|&x| x == bi) {
-                        l.remove(p);
-                    } else {
-                        l.push(bi);
-                    }
-                }
-            }
-        }
-        let t = and_new(c, k1, k2);
-        let mut at: Vec<Vec<(usize, crate::circuit::BitId)>> = vec![Vec::new(); n];
-        for (&(j, mono), l) in acc.iter() {
-            for &i in l {
-                at[j].push((mono, bits[i]));
-            }
-        }
-        T0Phase { k1, k2, t, at, done: vec![false; n], bits }
-    }
-    /// Position j of the register holds the value of the form `f`.
-    fn z(&mut self, c: &mut Builder, j: usize, f: &Lin) {
-        assert!(!self.done[j], "y26: position {j} twice");
-        self.done[j] = true;
-        for &(mono, bit) in &self.at[j] {
-            let ctl = match mono {
-                0 => None,
-                1 => Some(self.k1),
-                2 => Some(self.k2),
-                _ => Some(self.t),
-            };
-            for &q in &f.w {
-                match ctl {
-                    None => c.z_if(q, bit),
-                    Some(k) => c.cz_if(k, q, bit),
-                }
-            }
-            if f.one {
-                match ctl {
-                    // -1 under the bit: Z X Z X on any wire
-                    None => {
-                        c.z_if(self.k1, bit);
-                        c.x(self.k1);
-                        c.z_if(self.k1, bit);
-                        c.x(self.k1);
-                    }
-                    Some(k) => c.z_if(k, bit),
-                }
-            }
-        }
-    }
-    /// Clear the AND of the shift letter as [`rot4_phase`] does and free the bits.
-    fn finish(self, c: &mut Builder) {
-        assert!(self.done.iter().all(|&d| d), "y26: a position of the Z layer was left out");
-        y29_phrot_clear(c, self.t, self.k1, self.k2);
-        for b in self.bits {
-            c.free_bit(b);
-        }
-    }
-}
-/// y26: the forward fold of [`fold_fwd_v2`] over forms, nothing written. `x`: forms of X's bits [0, MW); `e`: forms of
-/// its three top bits. The same ANDs (4 low carries, 27 of the core, and the ladder's carries into bits 7..MW - 1,
-/// the last on a wire of its own here). Returns the forms of W's bits [0, MW) and the undo list: every wire is erased
-/// by measurement with its build forms, last built first ([`pop_chain`]).
-fn fold_fwd_forms(c: &mut Builder, x: &[Lin], e: &[Lin; 3], nm: [QubitId; 3], k1: QubitId, k2: QubitId) -> (Vec<Lin>, Vec<Rec>) {
-    assert!(Y15_CORE_V2 && Y16_CORE);
-    let mw = x.len();
-    let mut recs: Vec<Rec> = Vec::new();
-    // low section: X[0..4) + E, carries only
-    let c1 = r_and(c, &mut recs, x[0].clone(), e[0].clone());
-    let c2 = r_maj(c, &mut recs, x[1].clone(), e[1].clone(), c1.clone());
-    let c3 = r_maj(c, &mut recs, x[2].clone(), e[2].clone(), c2.clone());
-    let c4 = r_and(c, &mut recs, x[3].clone(), c3.clone());
-    let v3 = x[3].x(&c3);
-    let tt = r_and(c, &mut recs, l(k1), l(k2));
-    let g1 = Lin::of(&[k1, k2]).x(&tt);
-    // r = Nm + X[0..3)
-    let r1 = r_and(c, &mut recs, l(nm[0]), x[0].clone());
-    let mut k = vec![l(nm[0]).x(&x[0]), l(nm[1]).x(&x[1]).x(&r1)];
-    let r2 = r_maj(c, &mut recs, l(nm[1]), x[1].clone(), r1);
-    k.push(l(nm[2]).x(&x[2]).x(&r2));
-    let r3 = r_maj(c, &mut recs, l(nm[2]), x[2].clone(), r2);
-    let (a4, a5) = (k[0].clone(), k[1].x(&k[0]));
-    let y3 = r_and(c, &mut recs, g1, v3);
-    let sum4 = x[4].x(&c4).x(&a4);
-    let y4 = r_and(c, &mut recs, l(k2), sum4.clone());
-    let c5 = r_maj(c, &mut recs, x[4].clone(), a4, c4);
-    let sum5 = x[5].x(&c5).x(&a5);
-    let y5 = r_and(c, &mut recs, tt.clone(), sum5.clone());
-    let c6 = r_maj(c, &mut recs, x[5].clone(), a5, c5);
-    let fc3 = c3.clone();
-    let p = r3.x(&fc3);
-    k.push(y3.x(&p));
-    let mut t = r_and(c, &mut recs, p, y3.x(&fc3));
-    k.push(y4.x(&t));
-    t = r_and(c, &mut recs, t, y4.x(&fc3));
-    k.push(y5.x(&t));
-    t = r_and(c, &mut recs, t, y5.x(&fc3));
-    k.push(t.clone());
-    let k7 = r_and(c, &mut recs, t, fc3);
-    k.push(k7);
-    let add = addend_prog(c, &mut recs, &k, &Y16_FWD_GATES, &Y16_FWD_OUT, mw);
-    let mut w = vec![x[0].x(&e[0]), x[1].x(&e[1]).x(&c1), x[2].x(&e[2]).x(&c2), x[3].x(&c3), sum4, sum5];
-    let mut f = c6;
-    for i in 6..mw {
-        w.push(x[i].x(&add[i]).x(&f));
-        if i + 1 < mw {
-            f = r_maj(c, &mut recs, x[i].clone(), add[i].clone(), f);
-        }
-    }
-    (w, recs)
-}
-/// The phase (-1)^(m . y R2) on (P, P/2) = (`p[0]`, `p[1]`), both restored; frees `bits`.
-pub(super) fn t0_phase(c: &mut Builder, letter: &[QubitId], p: &[Vec<QubitId>; 2], bits: Vec<crate::circuit::BitId>) {
-    let t = 0usize;
-    let [w, ..] = steps()[t];
-    let (s, k1, k2) = ([letter[0], letter[1], letter[2]], letter[3], letter[4]);
-    let (tg, b) = (p[0].clone(), p[1].clone());
-    let shift = cmp_shift_at(t);
-    let shift = (shift.0 + Y15_CMP_EXTRA, shift.1);
-    let (_, proxy_f) = proxy_fold(w, false);
-    let (_, proxy_r) = proxy_fold(w, true);
-    // stages a and b: the forward tick without its 4-way rotation, the Z layer, the reverse tick without its rotation
-    let (e0, a0) = (c.expected_total(), c.active_qubits());
-    let mut bits = Some(bits);
-    if Y26_T0 == 2 {
-        Y26_BITS.with(|p| *p.borrow_mut() = bits.take());
-    }
-    cells::with_tie(None, || cells::with_cmp_shift(shift, || cells::with_bridge(proxy_f, false, || body_capped(c, t, s, k1, k2, &b, &tg, proxy_f, false))));
-    assert!(Y26_BITS.with(|p| p.borrow().is_none()), "y26: the forward tick did not take the kept bits");
-    for _ in 0..3 {
-        rot1(c, &tg, true);
-    }
-    if Y15_TRACE {
-        eprintln!("Y15_TICK fwd t={t} active={a0} cost={:.1}", c.expected_total() - e0);
-    }
-    if let Some(bits) = bits.take() {
-        rot4_phase(c, k1, k2, &tg, bits, false);
-    }
-    let (e0, a0) = (c.expected_total(), c.active_qubits());
-    for _ in 0..3 {
-        rot1(c, &tg, false);
-    }
-    for q in s {
-        c.x(q);
-    }
-    cells::with_tie(None, || cells::with_cmp_shift(shift, || cells::with_bridge(proxy_r, true, || body_capped(c, t, s, k1, k2, &b, &tg, proxy_r, true))));
-    for q in s {
-        c.x(q);
-    }
-    if Y15_TRACE {
-        eprintln!("Y15_TICK rev t={t} active={a0} cost={:.1}", c.expected_total() - e0);
-    }
-}
-
-/// y26: the forms (a, b, ci) with MAJ(x, y, z) = AND(a, b) ^ ci; None where two of the three are identically 0 (the
-/// majority is then 0). One of them 0: the AND of the other two.
-fn maj_forms(x: &Lin, y: &Lin, z: &Lin) -> Option<(Lin, Lin, Lin)> {
-    let zero = |f: &Lin| f.w.is_empty() && !f.one;
-    let zs = [zero(x), zero(y), zero(z)];
-    if zs.iter().filter(|&&b| b).count() >= 2 {
-        return None;
-    }
-    Some(if zs[2] {
-        (x.clone(), y.clone(), Lin::k(false))
-    } else if zs[0] {
-        (y.clone(), z.clone(), Lin::k(false))
-    } else if zs[1] {
-        (x.clone(), z.clone(), Lin::k(false))
-    } else {
-        (x.x(z), y.x(z), z.clone())
-    })
-}
-/// A wire holding AND(a, b) ^ ci.
-#[derive(Clone)]
-struct MRec {
-    q: QubitId,
-    a: Lin,
-    b: Lin,
-    ci: Lin,
-}
-/// y26: MAJ(x, y, z) over forms, on a fresh wire where it needs one (1 Toffoli), with its erase record.
-fn f_maj(c: &mut Builder, x: &Lin, y: &Lin, z: &Lin) -> (Lin, Option<MRec>) {
-    match maj_forms(x, y, z) {
-        None => (Lin::k(false), None),
-        Some((a, b, ci)) => {
-            let q = lin_and(c, &a, &b);
-            lin_xor_into(c, &ci, q);
-            (l(q), Some(MRec { q, a, b, ci }))
-        }
-    }
-}
-/// Erase by measurement with the build forms (0 Toffoli).
-fn f_erase(c: &mut Builder, r: Option<MRec>) {
-    if let Some(r) = r {
-        lin_xor_into(c, &r.ci, r.q);
-        lin_and_erase(c, r.q, &r.a, &r.b);
-    }
-}
-/// y26, the larger form: X = T + S'0 + 2 S'1 + 4 S'2 as forms over the one register H = P/2 (S'k = H ^ s_k, 256 bits).
-/// T = 2 H mod p as [`cells::mod_double`] computes it: H rotated up, plus f under H's top bit on the low `wf` bits
-/// (the carry off the window dropped): forms through the window's carries g. Carry-save, three wires a position p:
-///   k1[p] = MAJ(T[p - 1], S'0[p - 1], S'1[p - 2])        (register only)
-///   k2[p] = MAJ(s1[p - 1], k1[p - 1], S'2[p - 3])        s1[i] = T[i] ^ S'0[i] ^ S'1[i - 1]
-///   r[p]  = MAJ(s2[p - 1], k2[p - 1], r[p - 1])          s2[i] = s1[i] ^ k1[i] ^ S'2[i - 2]; the one ripple chain
-///   X[i]  = s2[i] ^ k2[i] ^ r[i],  i in [0, 259)
-struct CsForms<'a> {
-    h: &'a [QubitId],
-    s: [QubitId; 3],
-    wf: usize,
-    fbit: Vec<bool>,
-    g: Vec<Lin>,
-    k1: Vec<Lin>,
-    k2: Vec<Lin>,
-    r: Vec<Lin>,
-    rec: Vec<[Option<MRec>; 3]>,
-    live: Vec<bool>,
-}
-const CS_TOP: usize = N + 2;
-impl CsForms<'_> {
-    fn hf(&self, i: isize) -> Lin {
-        if i >= 0 && (i as usize) < N { l(self.h[i as usize]) } else { Lin::k(false) }
-    }
-    fn sf(&self, k: usize, j: isize) -> Lin {
-        if j >= 0 && (j as usize) < N { Lin::of(&[self.h[j as usize], self.s[k]]) } else { Lin::k(false) }
-    }
-    fn tf(&self, i: isize) -> Lin {
-        if i < 0 || i as usize >= N {
-            Lin::k(false)
-        } else if i as usize >= self.wf {
-            self.hf(i - 1)
-        } else {
-            let t = self.hf(i - 1).x(&self.g[i as usize]);
-            if self.fbit[i as usize] { t.x(&l(self.h[N - 1])) } else { t }
-        }
-    }
-    fn at(&self, v: &[Lin], p: isize) -> Lin {
-        if p < 1 || p as usize > CS_TOP {
-            return Lin::k(false);
-        }
-        assert!(self.live[p as usize], "y26: position {p} is read while its wires are gone");
-        v[p as usize].clone()
-    }
-    fn s1f(&self, i: isize) -> Lin {
-        self.tf(i).x(&self.sf(0, i)).x(&self.sf(1, i - 1))
-    }
-    fn s2f(&self, i: isize) -> Lin {
-        self.s1f(i).x(&self.at(&self.k1, i)).x(&self.sf(2, i - 2))
-    }
-    fn xf(&self, i: usize) -> Lin {
-        let i = i as isize;
-        self.s2f(i).x(&self.at(&self.k2, i)).x(&self.at(&self.r, i))
-    }
-    fn build(&mut self, c: &mut Builder, p: usize) {
-        assert!(p >= 1 && p <= CS_TOP && !self.live[p]);
-        let q = p as isize;
-        let (a, ra) = f_maj(c, &self.tf(q - 1), &self.sf(0, q - 1), &self.sf(1, q - 2));
-        let (b, rb) = f_maj(c, &self.s1f(q - 1), &self.at(&self.k1, q - 1), &self.sf(2, q - 3));
-        let (d, rd) = f_maj(c, &self.s2f(q - 1), &self.at(&self.k2, q - 1), &self.at(&self.r, q - 1));
-        self.k1[p] = a;
-        self.k2[p] = b;
-        self.r[p] = d;
-        self.rec[p] = [ra, rb, rd];
-        self.live[p] = true;
-    }
-    /// Erase position p's wires with their build forms (position p - 1 must be as it was at the build).
-    fn erase(&mut self, c: &mut Builder, p: usize) {
-        assert!(self.live[p]);
-        let [ra, rb, rd] = std::mem::take(&mut self.rec[p]);
-        f_erase(c, rd);
-        f_erase(c, rb);
-        f_erase(c, ra);
-        self.live[p] = false;
-    }
-    /// Erase the boundary position `hi` of the chunk (lo, hi], whose positions lo + 1 .. hi - 1 are gone. k1[hi] is
-    /// register only. k2[hi] reads k1[hi - 1]: built again (1 Toffoli). r[hi] is measured; with its bit set the
-    /// chunk's positions below it are built again (3 Toffoli a position on half the shots), the measurement's phase
-    /// is fixed on the forms of r[hi], and they are erased again. Exact.
-    fn close_boundary(&mut self, c: &mut Builder, lo: usize, hi: usize) {
-        assert!(self.live[hi] && self.live[lo] && hi > lo);
-        let [ra, rb, rd] = std::mem::take(&mut self.rec[hi]);
-        if hi - 1 == lo {
-            f_erase(c, rd);
-            f_erase(c, rb);
-            f_erase(c, ra);
-            self.live[hi] = false;
-            return;
-        }
-        let q = hi as isize;
-        if let Some(rb) = rb {
-            let (k1m, r1) = f_maj(c, &self.tf(q - 2), &self.sf(0, q - 2), &self.sf(1, q - 3));
-            let (a, b, ci) = maj_forms(&self.s1f(q - 1), &k1m, &self.sf(2, q - 3)).expect("y26: k2 of a boundary");
-            lin_xor_into(c, &ci, rb.q);
-            lin_and_erase(c, rb.q, &a, &b);
-            f_erase(c, r1);
-        }
-        if let Some(rd) = rd {
-            let m = c.alloc_bit();
-            c.hmr(rd.q, m);
-            c.release_clean(rd.q);
-            c.push_condition(m);
-            for p in lo + 1..hi {
-                self.build(c, p);
-            }
-            let (a, b, ci) = maj_forms(&self.s2f(q - 1), &self.at(&self.k2, q - 1), &self.at(&self.r, q - 1)).expect("y26: r of a boundary");
-            lin_cz(c, &a, &b);
-            assert!(!ci.one);
-            for &w in &ci.w {
-                c.cz(w, w);
-            }
-            for p in (lo + 1..hi).rev() {
-                self.erase(c, p);
-            }
-            c.pop_condition();
-            c.free_bit(m);
-        }
-        f_erase(c, ra);
-        self.live[hi] = false;
-    }
-}
-/// y26, the larger form of the multiply's tick-0 phase block: the phase (-1)^(m . y R2) with `h` = P/2 on the wires
-/// (before the product is doubled), nothing written, `h` left as found; frees `bits`. The Z layer goes on forms, a
-/// chunk at a time: the low chunk (positions 1..55, what the fold's window reads) is kept to the end, the middle chunks
-/// are erased once the layer has read them (each leaves its top position, a boundary: [`CsForms::close_boundary`]),
-/// the top chunk is open through the fold ([`fold_fwd_forms`]). The chunk plan is taken from the room.
-pub(super) fn t0_phase_forms(c: &mut Builder, letter: &[QubitId], h: &[QubitId], bits: Vec<crate::circuit::BitId>) {
-    let (s, k1, k2) = ([letter[0], letter[1], letter[2]], letter[3], letter[4]);
-    let ((), peak) = c.r3_peak(|c| t0_forms_body(c, s, k1, k2, h, bits));
-    assert!(peak as usize <= cells::cap(), "y26: the phase block on forms peaks at {peak}, over the walk cap {}", cells::cap());
-}
-#[allow(unused)] // rustc 1.93.0 panics in check_liveness on this function otherwise
-#[allow(unused)] // rustc 1.93.0 panics in check_liveness on this function otherwise
-fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: &[QubitId], bits: Vec<crate::circuit::BitId>) {
-    assert_eq!(h.len(), N);
-    let (e_start, a_start) = (c.expected_total(), c.active_qubits());
-    let mut ph = T0Phase::new(c, k1, k2, N, bits);
-    let vpos = |i: usize| (i + N - 3) % N; // W[i] is the layer's position (i - 3) mod N (the three rot1)
-    let wf = go_fs("GO_FG_P");
-    let fc = f();
-    let zero = Lin::k(false);
-    let mut st = CsForms {
-        h,
-        s,
-        wf,
-        fbit: (0..wf).map(|i| fc.bit(i)).collect(),
-        g: vec![zero.clone(); wf],
-        k1: vec![zero.clone(); CS_TOP + 1],
-        k2: vec![zero.clone(); CS_TOP + 1],
-        r: vec![zero.clone(); CS_TOP + 1],
-        rec: (0..=CS_TOP).map(|_| [None, None, None]).collect(),
-        live: vec![false; CS_TOP + 1],
-    };
-    assert!((0..N).all(|i| i < wf || !fc.bit(i)) && wf < Y15_WIN);
-    // the doubling's window: g[i] = the carry into bit i of (2 H) + ov f, ov = H's top bit; bit 0 of 2 H is 0
-    let mut grec: Vec<Option<MRec>> = vec![None; wf];
-    for i in 0..wf - 1 {
-        let add = if st.fbit[i] { l(h[N - 1]) } else { zero.clone() };
-        let (gf, gr) = f_maj(c, &st.hf(i as isize - 1), &add, &st.g[i].clone());
-        st.g[i + 1] = gf;
-        grec[i + 1] = gr;
-    }
-    let e_g = c.expected_total();
-    // the low chunk: every position the fold's window reads
-    const B0: usize = Y15_WIN - 1;
-    for p in 1..=B0 {
-        st.build(c, p);
-    }
-    // the chunk plan: the top chunk (open through the fold) as long as the room allows, the rest in the fewest
-    // middle chunks
-    let fold_wires = 31 + (Y15_WIN - 7);
-    let room = cells::cap().saturating_sub(c.active_qubits() as usize);
-    let (mut nb, mut top_len) = (0usize, 0usize);
-    let mut mids: Vec<usize> = Vec::new();
-    loop {
-        // the top chunk's positions hold 3 wires each, less the three that are identically 0
-        let avail = room.checked_sub(3 * nb + fold_wires).unwrap_or_else(|| panic!("y26: no room for the fold: {room}"));
-        top_len = ((avail + 3) / 3).min(CS_TOP - B0);
-        let rest = CS_TOP - B0 - top_len;
-        // middle chunk j is built over j boundaries
-        let caps: Vec<usize> = (0..nb).map(|j| (room - 3 * j) / 3).collect();
-        if caps.iter().sum::<usize>() >= rest && (rest == 0) == (nb == 0) {
-            let mut left = rest;
-            mids = (0..nb)
-                .map(|j| {
-                    let take = left.div_ceil(nb - j).min(caps[j]);
-                    left -= take;
-                    take
-                })
-                .collect();
-            assert_eq!(left, 0, "y26: the middle chunks do not cover the register");
-            break;
-        }
-        nb += 1;
-        assert!(nb < 40, "y26: no chunk plan at room {room}");
-    }
-    let mut edges = vec![B0];
-    for &w in &mids {
-        edges.push(edges.last().unwrap() + w);
-    }
-    assert_eq!(edges.last().unwrap() + top_len, CS_TOP);
-    let mut a_mid = 0;
-    for j in 1..edges.len() {
-        let (lo, hi) = (edges[j - 1], edges[j]);
-        for p in lo + 1..=hi {
-            st.build(c, p);
-        }
-        a_mid = a_mid.max(c.active_qubits());
-        for i in (lo + 1..=hi).filter(|&i| i >= Y15_WIN && i < N) {
-            // Y26_FAULT (a control of the test, never a build): two positions of the layer swapped
-            let at = if (Y26_FAULT || t0one_fault()) && (i == 100 || i == 101) { i ^ 1 } else { i };
-            ph.z(c, vpos(at), &st.xf(i));
-        }
-        for p in (lo + 1..hi).rev() {
-            st.erase(c, p);
-        }
-    }
-    let lo_top = *edges.last().unwrap();
-    for p in lo_top + 1..=CS_TOP {
-        st.build(c, p);
-    }
-    for i in (lo_top + 1..N).filter(|&i| i >= Y15_WIN) {
-        let at = if t0one_fault() && (i == 100 || i == 101) { i ^ 1 } else { i };
-        ph.z(c, vpos(at), &st.xf(i));
-    }
-    let e_adds = c.expected_total();
-    // the fold on forms
-    let x: Vec<Lin> = (0..Y15_WIN).map(|i| st.xf(i)).collect();
-    let e = [st.xf(N), st.xf(N + 1), st.xf(N + 2)];
-    let (w, mut recs) = fold_fwd_forms(c, &x, &e, s, k1, k2);
-    let a_fold = c.active_qubits();
-    assert!(a_fold as usize <= cells::cap(), "y26: the fold on forms is over the walk cap: {a_fold} > {}", cells::cap());
-    for (i, f) in w.iter().enumerate() {
-        ph.z(c, vpos(i), f);
-    }
-    pop_chain(c, &mut recs);
-    let e_fold = c.expected_total();
-    for p in (lo_top + 1..=CS_TOP).rev() {
-        st.erase(c, p);
-    }
-    for j in (1..edges.len()).rev() {
-        st.close_boundary(c, edges[j - 1], edges[j]);
-    }
-    let e_bound = c.expected_total();
-    for p in (1..=B0).rev() {
-        st.erase(c, p);
-    }
-    if Y26_FUSE_DBL {
-        // as start_doubling: the top bit out onto a wire of its own, the register rotated up (h[0] is then clear)
-        assert!(st.fbit[0] && wf <= N);
-        let out = c.alloc_qubit();
-        c.swap(h[N - 1], out);
-        for i in (0..N - 1).rev() {
-            c.swap(h[i], h[i + 1]);
-        }
-        // h[i] now holds (2 H)[i] and `out` the bit ov. Bit i of the window's sum is (2 H)[i] ^ f[i] ov ^ g[i];
-        // g[i] = MAJ((2 H)[i - 1], f[i - 1] ov, g[i - 1]) is erased while bit i - 1 is still unsummed
-        for i in (1..wf).rev() {
-            if st.fbit[i] {
-                c.cx(out, h[i]);
-            }
-            lin_xor_into(c, &st.g[i], h[i]);
-            if let Some(r) = grec[i].take() {
-                let d = if i >= 2 { l(h[i - 1]) } else { zero.clone() };
-                let add = if st.fbit[i - 1] { l(out) } else { zero.clone() };
-                let (a, b, ci) = maj_forms(&d, &add, &st.g[i - 1]).expect("y26: a window carry");
-                lin_xor_into(c, &ci, r.q);
-                lin_and_erase(c, r.q, &a, &b);
-            }
-        }
-        c.cx(out, h[0]);
-        // as mod_double_pm: bit 0 of the sum is ov itself
-        c.cx(h[0], out);
-        c.free(out);
-    } else {
-        for i in (1..wf).rev() {
-            f_erase(c, grec[i].take());
-        }
-    }
-    assert!(grec.iter().all(|r| r.is_none()));
-    ph.finish(c);
-    if Y26_PAD_RNG > 0 {
-        let q = c.alloc_qubit();
-        for _ in 0..Y26_PAD_RNG {
-            let m = c.alloc_bit();
-            c.hmr(q, m);
-            c.free_bit(m);
-        }
-        c.release_clean(q);
-    }
-    assert_eq!(c.active_qubits(), a_start, "y26: a wire was left behind");
-    if Y15_TRACE {
-    eprintln!(
-        "Y26_FORMS active={a_start} cap={} room_after_low={room} wf={wf} edges={edges:?} top={top_len} mid_active={a_mid} fold_active={a_fold} window={:.1} adds={:.1} fold={:.1} boundaries={:.1} all={:.1}",
-        cells::cap(),
-        e_g - e_start,
-        e_adds - e_g,
-        e_fold - e_adds,
-        e_bound - e_fold,
-        c.expected_total() - e_start
-    );
-    }
-}
-
-
-// ==================================================================================================================
-// spooky-leapfrog-v1 research levers RT0 / T0ONE (patch_rt0.py). Off (byte-identical) unless SL_RT0 / SL_T0ONE set.
-// ==================================================================================================================
-
-/// `SL_RT0`: 0 off; 1 RT0 with its one chunk boundary closed exactly; 2 the boundary closed by a seeded 22-bit
-/// window (approximate); 9 = 1 with two positions of the Z layer swapped (a deliberate fault, a control of the test).
-pub(super) fn sl_rt0() -> u8 {
-    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("SL_RT0").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
-}
-/// `SL_T0ONE` (with SL_RT0): 1 = the multiply's R0' is measured before the tick-0 phase block, whose chunk plan then
-/// sees 256 more wires of room; 9 = 1 with the block's Z layer positions 100 and 101 swapped (a deliberate fault).
-pub(super) fn sl_t0one() -> u8 {
-    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("SL_T0ONE").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
-}
-fn t0one_fault() -> bool {
-    sl_t0one() == 9
-}
-fn rt0_trace() -> bool {
-    std::env::var("SL_RT0_TRACE").is_ok_and(|v| v == "1")
-}
-
-/// RT0: MAJ(x, y, z) of forms. Ok(form) where it is linear (two operands equal or complementary, or constants), else
-/// Err((a, b, ci)) with MAJ = AND(a, b) ^ ci (a constant operand, if any, taken as ci).
-fn rt0_maj_dec(x: &Lin, y: &Lin, z: &Lin) -> Result<Lin, (Lin, Lin, Lin)> {
-    let k = |f: &Lin| if f.w.is_empty() { Some(f.one) } else { None };
-    let (p, q, r) = if k(z).is_some() {
-        (x, y, z)
-    } else if k(x).is_some() {
-        (y, z, x)
-    } else if k(y).is_some() {
-        (z, x, y)
-    } else {
-        (x, y, z)
-    };
-    let (a, b) = (p.x(r), q.x(r));
-    match (k(&a), k(&b), k(&a.x(&b))) {
-        (Some(false), _, _) | (_, Some(false), _) => Ok(r.clone()),
-        (Some(true), _, _) => Ok(q.clone()),
-        (_, Some(true), _) => Ok(p.clone()),
-        (_, _, Some(false)) => Ok(p.clone()),
-        (_, _, Some(true)) => Ok(r.clone()),
-        _ => Err((a, b, r.clone())),
-    }
-}
-/// MAJ of forms on a fresh wire where it is not linear (1 Toffoli), with its erase record.
-fn rt0_maj(c: &mut Builder, x: &Lin, y: &Lin, z: &Lin) -> (Lin, Option<MRec>) {
-    match rt0_maj_dec(x, y, z) {
-        Ok(f) => (f, None),
-        Err((a, b, ci)) => {
-            let q = lin_and(c, &a, &b);
-            lin_xor_into(c, &ci, q);
-            (l(q), Some(MRec { q, a, b, ci }))
-        }
-    }
-}
-/// (-1)^F of a form F (under the conditions in force); `spare` hosts a constant -1 (Z X Z X).
-fn rt0_z(c: &mut Builder, f: &Lin, spare: QubitId) {
-    if f.w.is_empty() {
-        if f.one {
-            c.z_if(spare, crate::circuit::NO_BIT);
-            c.x(spare);
-            c.z_if(spare, crate::circuit::NO_BIT);
-            c.x(spare);
-        }
-    } else {
-        lin_cz(c, &Lin::k(true), f);
-    }
-}
-/// (-1)^MAJ(x, y, z) of forms: the phase of one AND (CZ of two forms) and Z of the carry-in form.
-fn rt0_maj_phase(c: &mut Builder, x: &Lin, y: &Lin, z: &Lin, spare: QubitId) {
-    match rt0_maj_dec(x, y, z) {
-        Ok(f) => rt0_z(c, &f, spare),
-        Err((a, b, ci)) => {
-            lin_cz(c, &a, &b);
-            rt0_z(c, &ci, spare);
-        }
-    }
-}
-/// (-1)^(m F) under the kept bit m.
-fn rt0_z_if(c: &mut Builder, f: &Lin, m: crate::circuit::BitId, spare: QubitId) {
-    c.push_condition(m);
-    rt0_z(c, f, spare);
-    c.pop_condition();
-}
-
-/// RT0's Z layer: the phase (-1)^(sum_j m_j R0'_j), j = 1..=256, R0'_j = X_min(j + 3 + e, top) (the rail barrel's
-/// sign-filled shift by 3 + e, e = k1 + 2 k2), expanded over e in the ANF monomials {1, k1, k2, k1 k2} as
-/// [`rot4_phase`] does (one AND for k1 k2), one X position at a time and on forms.
-struct Rt0Phase {
-    k1: QubitId,
-    k2: QubitId,
-    t: QubitId,
-    at: Vec<Vec<(usize, crate::circuit::BitId)>>,
-    done: Vec<bool>,
-    bits: Vec<crate::circuit::BitId>,
-}
-impl Rt0Phase {
-    fn new(c: &mut Builder, k1: QubitId, k2: QubitId, top: usize, bits: Vec<crate::circuit::BitId>, fault: bool) -> Rt0Phase {
-        let anf: [&[usize]; 4] = [&[0, 1, 2, 3], &[1, 3], &[2, 3], &[3]];
-        let mut acc: std::collections::BTreeMap<(usize, usize), Vec<usize>> = std::collections::BTreeMap::new();
-        for j in 1..=bits.len() {
-            for (val, monos) in anf.iter().enumerate() {
-                let i = (j + 3 + val).min(top);
-                for &mono in monos.iter() {
-                    let lst = acc.entry((i, mono)).or_default();
-                    if let Some(p) = lst.iter().position(|&x| x == j - 1) {
-                        lst.remove(p);
-                    } else {
-                        lst.push(j - 1);
-                    }
-                }
-            }
-        }
-        let t = and_new(c, k1, k2);
-        let mut at: Vec<Vec<(usize, crate::circuit::BitId)>> = vec![Vec::new(); top + 1];
-        for (&(i, mono), lst) in acc.iter() {
-            // SL_RT0=9 (a control of the test, never a build): two positions of the layer swapped
-            let i = if fault && (i == 100 || i == 101) { i ^ 1 } else { i };
-            for &bi in lst {
-                at[i].push((mono, bits[bi]));
-            }
-        }
-        Rt0Phase { k1, k2, t, at, done: vec![false; top + 1], bits }
-    }
-    /// X position i holds the value of the form `f`.
-    fn z(&mut self, c: &mut Builder, i: usize, f: &Lin) {
-        assert!(!self.done[i], "RT0: position {i} twice");
-        self.done[i] = true;
-        for &(mono, bit) in &self.at[i] {
-            let ctl = match mono {
-                0 => None,
-                1 => Some(self.k1),
-                2 => Some(self.k2),
-                _ => Some(self.t),
-            };
-            for &q in &f.w {
-                match ctl {
-                    None => c.z_if(q, bit),
-                    Some(k) => c.cz_if(k, q, bit),
-                }
-            }
-            if f.one {
-                match ctl {
-                    None => {
-                        c.z_if(self.k1, bit);
-                        c.x(self.k1);
-                        c.z_if(self.k1, bit);
-                        c.x(self.k1);
-                    }
-                    Some(k) => c.z_if(k, bit),
-                }
-            }
-        }
-    }
-    fn finish(self, c: &mut Builder) {
-        for (i, a) in self.at.iter().enumerate() {
-            assert!(a.is_empty() || self.done[i], "RT0: X position {i} of the Z layer was left out");
-        }
-        and_erase(c, self.t, self.k1, self.k2);
-        for b in self.bits {
-            c.free_bit(b);
-        }
-    }
-}
-
-/// RT0's carry-save forms of X = op0 + op1 + op2 + op3 (forms of each operand's bits at positions 0..=top): three
-/// wires a position p (k1[p], k2[p] of the two 3:2 layers, r[p] of the one ripple chain), as 113bf38's CsForms.
-struct Rt0Cs {
-    ops: [Vec<Lin>; 4],
-    k1: Vec<Lin>,
-    k2: Vec<Lin>,
-    r: Vec<Lin>,
-    rec: Vec<[Option<MRec>; 3]>,
-    live: Vec<bool>,
-}
-impl Rt0Cs {
-    fn op(&self, k: usize, i: isize) -> Lin {
-        if i < 0 { Lin::k(false) } else { self.ops[k][i as usize].clone() }
-    }
-    fn at(&self, v: &[Lin], p: isize) -> Lin {
-        if p < 1 {
-            return Lin::k(false);
-        }
-        assert!(self.live[p as usize], "RT0: position {p} is read while its wires are gone");
-        v[p as usize].clone()
-    }
-    fn s1f(&self, i: isize) -> Lin {
-        self.op(0, i).x(&self.op(1, i)).x(&self.op(2, i))
-    }
-    fn s2f(&self, i: isize) -> Lin {
-        self.s1f(i).x(&self.at(&self.k1, i)).x(&self.op(3, i))
-    }
-    fn xf(&self, i: usize) -> Lin {
-        let i = i as isize;
-        self.s2f(i).x(&self.at(&self.k2, i)).x(&self.at(&self.r, i))
-    }
-    fn build(&mut self, c: &mut Builder, p: usize) {
-        assert!(p >= 1 && !self.live[p]);
-        let q = p as isize;
-        let (a, ra) = rt0_maj(c, &self.op(0, q - 1), &self.op(1, q - 1), &self.op(2, q - 1));
-        let (b, rb) = rt0_maj(c, &self.s1f(q - 1), &self.at(&self.k1, q - 1), &self.op(3, q - 1));
-        let (d, rd) = rt0_maj(c, &self.s2f(q - 1), &self.at(&self.k2, q - 1), &self.at(&self.r, q - 1));
-        self.k1[p] = a;
-        self.k2[p] = b;
-        self.r[p] = d;
-        self.rec[p] = [ra, rb, rd];
-        self.live[p] = true;
-    }
-    /// Erase position p's wires with their build forms (position p - 1 as it was at the build).
-    fn erase(&mut self, c: &mut Builder, p: usize) {
-        assert!(self.live[p]);
-        let [ra, rb, rd] = std::mem::take(&mut self.rec[p]);
-        f_erase(c, rd);
-        f_erase(c, rb);
-        f_erase(c, ra);
-        self.live[p] = false;
-    }
-    /// Close the boundary position `hi` (positions 1..hi gone): k1[hi] from the operands; k2[hi] over k1[hi - 1] built
-    /// again (1 Toffoli); r[hi] measured, and on outcome 1 its phase from positions built again: all of 1..hi (`win`
-    /// None: exact, 113bf38's rule) or the `win` positions below hi with the carry into them taken as 0 (approximate).
-    fn close(&mut self, c: &mut Builder, hi: usize, win: Option<usize>, spare: QubitId) {
-        assert!(hi >= 2 && self.live[hi] && (1..hi).all(|p| !self.live[p]));
-        let [ra, rb, rd] = std::mem::take(&mut self.rec[hi]);
-        let q = hi as isize;
-        if let Some(rb) = rb {
-            let (k1m, r1) = rt0_maj(c, &self.op(0, q - 2), &self.op(1, q - 2), &self.op(2, q - 2));
-            match rt0_maj_dec(&self.s1f(q - 1), &k1m, &self.op(3, q - 1)) {
-                Err((a, b, ci)) => {
-                    lin_xor_into(c, &ci, rb.q);
-                    lin_and_erase(c, rb.q, &a, &b);
-                }
-                Ok(_) => panic!("RT0: k2 of the boundary is linear"),
-            }
-            f_erase(c, r1);
-        }
-        if let Some(rd) = rd {
-            let m = c.alloc_bit();
-            c.hmr(rd.q, m);
-            c.release_clean(rd.q);
-            c.push_condition(m);
-            let lo = match win {
-                Some(k) if hi > k + 2 => hi - k,
-                _ => 0,
-            };
-            let mut low: Vec<Option<MRec>> = Vec::new();
-            if lo > 0 {
-                // the window's lowest position, seeded: k1[lo], k2[lo] exact (k1[lo - 1] built again), r[lo] := 0
-                let ql = lo as isize;
-                let (k1p, r1p) = rt0_maj(c, &self.op(0, ql - 2), &self.op(1, ql - 2), &self.op(2, ql - 2));
-                let (k1l, r1l) = rt0_maj(c, &self.op(0, ql - 1), &self.op(1, ql - 1), &self.op(2, ql - 1));
-                let (k2l, r2l) = rt0_maj(c, &self.s1f(ql - 1), &k1p, &self.op(3, ql - 1));
-                self.k1[lo] = k1l;
-                self.k2[lo] = k2l;
-                self.r[lo] = Lin::k(false);
-                self.live[lo] = true;
-                low = vec![r1p, r1l, r2l];
-            }
-            for p in lo + 1..hi {
-                self.build(c, p);
-            }
-            rt0_maj_phase(c, &self.s2f(q - 1), &self.at(&self.k2, q - 1), &self.at(&self.r, q - 1), spare);
-            for p in (lo + 1..hi).rev() {
-                self.erase(c, p);
-            }
-            if lo > 0 {
-                self.live[lo] = false;
-                while let Some(r) = low.pop() {
-                    f_erase(c, r);
-                }
-            }
-            c.pop_condition();
-            c.free_bit(m);
-        }
-        f_erase(c, ra);
-        self.live[hi] = false;
-    }
-}
-
-/// RT0 (SL_RT0): the walk's last rails reverse tick as measure + phase oracle. In: `r1` = R1's held wires (bit i + 1 on
-/// wire i, i < 256; bit 0 is the constant 1), the tick-0 letter (s0, s1, s3, k1, k2) re-derived by t0_in, and the
-/// kept bits of R0' (bit j on wire j - 1 of the measured register). Out: R0 at width `w0` with its bit-0 wire (the
-/// value lr_walk_restore + unseed_r1 return); R1's wires carry it, the letter is erased, the bits are freed.
-///
-/// Tick 0 changes only R0: R0' = X >> (3 + e) exactly (sign filled), X = R0 + c R1, c = (-1)^s0 + 2 (-1)^s1 +
-/// 4 (-1)^s3; both rails odd, so (-1)^s R1 = R1 ^ s on bits >= 1 with bit 0 = 1. R0 is a function of R1: the exact
-/// inverse of seed_r1's windowed map (LF_SEAMS) with selector NOT sign(R1) (unseed_r1's ops): bits [0, fs] of
-/// 2 R1 + (sign(R1) ? -f : f) mod 2^(fs + 1) through that window's carries g, bits fs+1..=255 = R1's bits shifted up
-/// one, bits >= 256 = NOT R1 bit 255. So the measurement's phase is a Z layer on forms of X's bits (carry-save: two
-/// local AND layers and one ripple chain), and every AND is erased by measurement with its build forms.
-pub(super) fn rt0_finish(c: &mut Builder, r1: Vec<QubitId>, letter: Vec<QubitId>, bits: Vec<crate::circuit::BitId>, w0: usize) -> Vec<QubitId> {
-    let (r0, peak) = c.r3_peak(|c| rt0_body(c, r1, letter, bits, w0));
-    assert!(peak as usize <= cells::cap(), "RT0 peaks at {peak}, over the walk cap {}", cells::cap());
-    r0
-}
-fn rt0_body(c: &mut Builder, r1: Vec<QubitId>, letter: Vec<QubitId>, bits: Vec<crate::circuit::BitId>, w0: usize) -> Vec<QubitId> {
-    assert_eq!(r1.len(), N, "RT0: R1 held on 256 wires (bits 1..=256)");
-    assert_eq!(letter.len(), 5);
-    assert_eq!(bits.len(), N);
-    let mode = sl_rt0();
-    let (e0, a0) = (c.expected_total(), c.active_qubits());
-    let a0 = a0 - super::t0h_held() as u32; // defer T0H: the held wires are freed by the letter erase
-    let sw = r1[N - 1];
-    let fs = go_fs("GO_FG_P");
-    let fc = f();
-    let top = N + 3; // X's sign position: |X| < 8 * 2^256
-    let r1b = |i: usize| -> Lin {
-        if i == 0 {
-            Lin::k(true)
-        } else if i <= N {
-            l(r1[i - 1])
-        } else {
-            l(sw)
-        }
-    };
-    let yv = |i: usize| -> Lin { if i == 0 { Lin::k(false) } else { r1b(i - 1) } };
-    let av = |i: usize| -> Lin { if i == 0 { Lin::k(true) } else { Lin { w: vec![sw], one: fc.bit(i) } } };
-    // the window's carries: g[i + 1] = MAJ(y_i, A_i, g_i), the carry off bit fs dropped
-    let mut g: Vec<Lin> = vec![Lin::k(false); fs + 1];
-    let mut grec: Vec<Option<MRec>> = (0..=fs).map(|_| None).collect();
-    for i in 0..fs {
-        let gi = g[i].clone();
-        let (gf, gr) = rt0_maj(c, &yv(i), &av(i), &gi);
-        g[i + 1] = gf;
-        grec[i + 1] = gr;
-    }
-    let e_g = c.expected_total();
-    let r0v: Vec<Lin> = (0..=top)
-        .map(|i| {
-            if i <= fs {
-                yv(i).x(&av(i)).x(&g[i])
-            } else if i < N {
-                r1b(i - 1)
-            } else {
-                r1b(N - 1).x(&Lin::k(true))
-            }
-        })
-        .collect();
-    let (s0, s1, s3, k1, k2) = (letter[0], letter[1], letter[2], letter[3], letter[4]);
-    let bj = |s: QubitId, i: usize| -> Lin { if i == 0 { Lin::k(true) } else { r1b(i).x(&l(s)) } };
-    let ops: [Vec<Lin>; 4] = [
-        r0v.clone(),
-        (0..=top).map(|i| bj(s0, i)).collect(),
-        (0..=top).map(|i| if i == 0 { Lin::k(false) } else { bj(s1, i - 1) }).collect(),
-        (0..=top).map(|i| if i < 2 { Lin::k(false) } else { bj(s3, i - 2) }).collect(),
-    ];
-    let mut ph = Rt0Phase::new(c, k1, k2, top, bits, mode == 9);
-    let zero = Lin::k(false);
-    let mut cs = Rt0Cs {
-        ops,
-        k1: vec![zero.clone(); top + 1],
-        k2: vec![zero.clone(); top + 1],
-        r: vec![zero.clone(); top + 1],
-        rec: (0..=top).map(|_| [None, None, None]).collect(),
-        live: vec![false; top + 1],
-    };
-    // the chunk plan: the high chunk [hi, top] as long as the room allows (3 wires a position), the low chunk [1, hi]
-    // erased below its top position hi, the one boundary
-    let room = cells::cap().saturating_sub(c.active_qubits() as usize);
-    let fit = room.saturating_sub(4) / 3;
-    let hi = if fit >= top { 0 } else { top + 1 - fit };
-    let e_cs0 = c.expected_total();
-    if hi == 0 {
-        for p in 1..=top {
-            cs.build(c, p);
-        }
-        for i in 1..=top {
-            ph.z(c, i, &cs.xf(i));
-        }
-        for p in (1..=top).rev() {
-            cs.erase(c, p);
-        }
-    } else {
-        for p in 1..=hi {
-            cs.build(c, p);
-        }
-        for i in 1..=hi {
-            ph.z(c, i, &cs.xf(i));
-        }
-        for p in (1..hi).rev() {
-            cs.erase(c, p);
-        }
-        for p in hi + 1..=top {
-            cs.build(c, p);
-        }
-        for i in hi + 1..=top {
-            ph.z(c, i, &cs.xf(i));
-        }
-        for p in (hi + 1..=top).rev() {
-            cs.erase(c, p);
-        }
-    }
-    let a_cs = c.active_qubits();
-    let e_cs = c.expected_total();
-    if hi > 0 {
-        cs.close(c, hi, if mode == 2 { Some(22) } else { None }, k1);
-    }
-    let e_b = c.expected_total();
-    ph.finish(c);
-    rt0_letter_erase(c, &r1, &r0v, &letter);
-    let e_l = c.expected_total();
-    // R0 over R1's wires: bit i (2 <= i <= 256) on the wire of R1's bit i - 1; the window's carries erased as they are
-    // passed (g[i] reads y_{i-1}, still unwritten), as 113bf38's fused doubling does
-    let q0w = c.alloc_qubit();
-    c.x(q0w);
-    let q1w = c.alloc_qubit();
-    lin_xor_into(c, &r0v[1], q1w);
-    for i in (2..=fs).rev() {
-        lin_xor_into(c, &av(i).x(&g[i]), r1[i - 2]);
-        f_erase(c, grec[i].take());
-    }
-    f_erase(c, grec[1].take());
-    assert!(grec.iter().all(|r| r.is_none()));
-    c.x(r1[N - 2]);
-    // sign(R1) = NOT R0 bit 1
-    c.cx(q1w, sw);
-    c.x(sw);
-    c.free(sw);
-    let mut r0 = vec![q0w, q1w];
-    r0.extend_from_slice(&r1[..N - 1]);
-    resize(c, &mut r0, w0);
-    assert_eq!(c.active_qubits() + 1, a0, "RT0: a wire was left behind");
-    if rt0_trace() {
-        eprintln!(
-            "RT0 mode={mode} live={a0} room={room} boundary={hi} fit={fit} active_csa={a_cs} window={:.1} csa={:.1} boundary={:.1} letter={:.1} all={:.1}",
-            e_g - e0,
-            e_cs - e_cs0 + (e_cs0 - e_g),
-            e_b - e_cs,
-            e_l - e_b,
-            c.expected_total() - e0
-        );
-    }
-    r0
-}
-
-/// RT0: erase the tick-0 letter by measurement. Its phase is fixed from the state it is a function of (t0_derive's):
-/// a 7-bit scratch of (R0 >> 1) (forms of R0 at hand), the two forced steps on it under s0, s1 (as t0_derive), then
-/// k1 = s3 ^ !z2 ^ dq ^ !z2 !z3 (s3 live: no Toffoli), s3 = dq ^ k2 ^ z2 ^ z2 (mh ^ dq ^ 1) (k2 live; the veto mh of
-/// t0_m_on built only on outcome 1), k2 = !z2 ^ !z2 !z3 !z4 (one AND on outcome 1); the forced steps undone, s1 and s0
-/// erased by their CNOT forms.
-fn rt0_letter_erase(c: &mut Builder, r1: &[QubitId], r0v: &[Lin], letter: &[QubitId]) {
-    assert!(t0_plain(0), "RT0: tick 0 takes the plain rule (LF_T0_FREE)");
-    let b = r1;
-    // defer T0H: t0_derive's scratch after the same two forced steps, and its q, when held
-    let held = super::t0h_take();
-    let mut ts = match &held {
-        Some((ts, _)) => ts.clone(),
-        None => {
-            let mut ts = c.alloc_qubits(7);
-            for i in 0..7 {
-                lin_xor_into(c, &r0v[i + 1], ts[i]);
-            }
-            for (n, i) in [(7usize, 0usize), (6, 1)] {
-                fast_add_halve_forced_lr(c, letter[i], &b[..n], &mut ts);
-            }
-            ts
-        }
-    };
-    lr_restore(c, &mut ts);
-    let one = c.alloc_qubit();
-    c.x(one);
-    let mut bb = vec![one];
-    bb.extend_from_slice(&b[..5]);
-    let (s3, k1, k2) = (letter[2], letter[3], letter[4]);
-    zlin_on(c, &ts, &bb);
-    let (dq, z2, z3, z4) = (ts[1], ts[2], ts[3], ts[4]);
-    // k1
-    let m = c.alloc_bit();
-    c.hmr(k1, m);
-    c.release_clean(k1);
-    rt0_z_if(c, &Lin { w: vec![s3, z2, dq], one: true }, m, one);
-    c.x(z2);
-    c.x(z3);
-    c.cz_if(z2, z3, m);
-    c.x(z3);
-    c.x(z2);
-    c.free_bit(m);
-    // s3
-    let m = c.alloc_bit();
-    c.hmr(s3, m);
-    c.release_clean(s3);
-    rt0_z_if(c, &Lin { w: vec![dq, k2, z2], one: false }, m, one);
-    c.push_condition(m);
-    if let Some((_, q)) = &held {
-        let mh = super::t0_mh_on(c, letter[1], *q);
-        let w = if super::defer_t0_fault() == 11 { *q } else { mh };
-        lin_cz(c, &l(z2), &Lin { w: vec![w, dq], one: true });
-        super::t0_mh_off(c, mh, letter[1], *q);
-    } else {
-        let t0m = t0_m_on(c, b, letter[0], letter[1]);
-        lin_cz(c, &l(z2), &Lin { w: vec![t0m.mh, dq], one: true });
-        t0_m_off(c, t0m);
-    }
-    c.pop_condition();
-    c.free_bit(m);
-    if let Some((_, q)) = &held {
-        super::t0_q_erase(c, b, letter[0], *q);
-    }
-    // k2
-    let m = c.alloc_bit();
-    c.hmr(k2, m);
-    c.release_clean(k2);
-    rt0_z_if(c, &Lin { w: vec![z2], one: true }, m, one);
-    c.x(z2);
-    c.x(z3);
-    c.x(z4);
-    ccz_if(c, z2, z3, z4, m);
-    c.x(z4);
-    c.x(z3);
-    c.x(z2);
-    c.free_bit(m);
-    zlin_off(c, &ts, &bb);
-    c.x(one);
-    c.free(one);
-    lr_drop(c, &mut ts);
-    for (i, n) in [(1usize, 6usize), (0, 7)] {
-        fast_double_sub_forced_lr(c, letter[i], &b[..n], &mut ts);
-        pp_sign_into1(c, ts[0], b[0], letter[i]);
-        c.free(letter[i]);
-    }
-    for i in 0..7 {
-        lin_xor_into(c, &r0v[i + 1], ts[i]);
-    }
-    c.free_vec(&ts);
 }
