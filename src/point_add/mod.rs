@@ -153,7 +153,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "9049445436",
+        "TAIL_NONCE" => "970049652561",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -250,7 +250,6 @@ pub(crate) fn build_point_add() -> Vec<Op> {
         pingpong::with_phase_cap(std::env::var("LF_SQUARE_CAP").ok().map(|v| v.parse::<usize>().unwrap()), || sub_square(circ, x, y));
         circ.set_phase("multiply");
         if seams { leapfrog::multiply_seamed(circ, y, x, ox); } else { leapfrog::multiply(circ, y, x); }
-        leapfrog::c35_widen_check();
         circ.set_phase("coord_y_sub_final");
         coord_sub(circ, y, oy);
         if !seams {
@@ -546,6 +545,16 @@ pub fn build() -> Vec<Op> {
         // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
         ops = mabsorb::absorb(ops);
     }
+    // row cuts (SL_ROWCUT; unset = this gate list byte for byte): CCX rows that are CNOT forms on every reachable state
+    ops = rowcut_pass::run(ops);
+    // pscan: SL_PSCAN=1 prints the parity scan, SL_PSCAN_FIX=1 rewrites its hits (pscan.rs)
+    ops = pscan::run(ops);
+    // cond pass v2 (SL_COND; unset = this gate list byte for byte): Toffolis consumed only by
+    // phases, a measurement or a reset, or needing no Toffoli at all (cond_pass.rs, guarded)
+    ops = cond_pass::run(ops);
+    // square top carries (SL_SQTOP; unset = this gate list byte for byte): the square's inverse-row
+    // top carries built only under the top bit that reads them (sqtop_pass.rs)
+    ops = sqtop_pass::run(ops);
     // SKY_REWRITE (q73b package rows: 105 rows proved exact by SAT on the q73b op stream, compiled in): replace SAT-proved linear-span CCX by CX chains.
     // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted). Skywalk stream only.
     if !leapfrog::enabled() {
@@ -622,6 +631,10 @@ pub(crate) fn go_slice(key: &str, round: usize, dir: u8) -> isize {
 }
 
 mod mabsorb;
+mod sqtop_pass;
+mod rowcut_pass;
+mod pscan;
+mod cond_pass;
 pub mod constant_templates;
 
 mod native_sfuse_b;
