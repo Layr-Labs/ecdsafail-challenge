@@ -354,4 +354,3 @@ fn simplify_with_products(ops: Vec<Op>, use_products: bool) -> Vec<Op> {
     }
     result
 }
-

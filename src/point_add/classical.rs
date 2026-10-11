@@ -22,6 +22,56 @@ fn copy_into(circ: &mut Builder, dst: &[BitId], src: &[BitId]) {
     }
 }
 
+fn exact_coordinate_cbits() -> bool {
+    std::env::var_os("COORD_EXACT_CBITS").is_some()
+}
+
+/// Exact `dst += coord (mod p)` without a quantum copy of the classical word.
+/// The full-width fold and compare make this valid on every canonical input;
+/// keeping `coord` classical leaves enough room for both ladders below 1000Q.
+fn mod_add_cbits_exact(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
+    let overflow = circ.alloc_qubit();
+    super::modular::r5_ripple_add_cbits(circ, coord, dst, overflow);
+    super::const_arith::cadd_const_trunc(circ, dst, super::modular::f(), overflow, false);
+    super::compare::erase_with_compare_cbits(circ, overflow, dst, coord);
+    circ.free(overflow);
+}
+
+/// Exact `dst -= coord (mod p)` using the same runtime-classical carry ABI.
+fn mod_sub_cbits_exact(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
+    circ.x_all(dst);
+    let borrow = circ.alloc_qubit();
+    super::modular::r5_ripple_add_cbits(circ, coord, dst, borrow);
+    super::const_arith::cadd_const_trunc(circ, dst, super::modular::f(), borrow, false);
+    // In this complemented frame the exact post-fold borrow predicate is
+    //   z < coord + f,
+    // not z < coord.  The fitted shell can ignore `f` only while the fold is
+    // guaranteed not to reach its top comparison window.  Canonical coord is
+    // below p=2^256-f, so coord+f never overflows and is cheap to derive in
+    // the classical controller.
+    let threshold = classical_add_const_mod2n_at(circ, coord, C);
+    super::compare::erase_with_compare_cbits(circ, borrow, dst, &threshold);
+    zero(circ, &threshold);
+    circ.free_bit_vec(&threshold);
+    circ.free(borrow);
+    circ.x_all(dst);
+}
+
+/// Exact `dst = coord - dst (mod p)`.  `coord_p1` is `coord+1 mod 2^256`,
+/// matching `mod_rsub_vented_loaded`'s complemented-frame convention.
+fn mod_rsub_cbits_exact(circ: &mut Builder, dst: &[QubitId], coord_p1: &[BitId]) {
+    circ.x_all(dst);
+    let carry = circ.alloc_qubit();
+    super::modular::r5_ripple_add_cbits(circ, coord_p1, dst, carry);
+    circ.x(carry);
+    circ.x_all(dst);
+    super::const_arith::cadd_const_trunc(circ, dst, super::modular::f(), carry, false);
+    circ.x_all(dst);
+    circ.x(carry);
+    super::compare::erase_with_compare_cbits(circ, carry, dst, coord_p1);
+    circ.free(carry);
+}
+
 /// Loads a classical coordinate into a fresh ancilla register, runs one
 /// modular operation against it, then unitarily uncomputes the register back
 /// to |0> and releases it. When the coordinate was *derived* here rather than
@@ -52,21 +102,32 @@ fn against_coord(
 pub fn coord_sub(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
     assert_eq!(dst.len(), N);
     assert_eq!(coord.len(), N);
+    if exact_coordinate_cbits() {
+        mod_sub_cbits_exact(circ, dst, coord);
+        return;
+    }
     if super::modular::r5_cbits(16) {
         // R5_CBITS bit 16: mod_sub_vented with the classical operand folded into the carry wires.
-        let (fs, k) = (super::modular::go_fs("GO_FG_M"), super::modular::erase_compare());
+        let (fs, k) = (
+            super::modular::go_fs("GO_FG_M"),
+            super::modular::erase_compare(),
+        );
         circ.x_all(dst);
         let ov = circ.alloc_qubit();
         super::modular::r5_ripple_add_cbits(circ, coord, dst, ov);
         super::const_arith::cadd_const_trunc(circ, &dst[..fs], super::modular::f(), ov, false);
         let tv = circ.alloc_qubits(k);
-        for i in 0..k { circ.x_if_bit(tv[i], coord[N - k + i]); }
+        for i in 0..k {
+            circ.x_if_bit(tv[i], coord[N - k + i]);
+        }
         if super::modular::r5_ccmp(8) {
             super::compare::erase_with_compare_v0(circ, ov, &dst[N - k..], &tv, coord[N - k]);
         } else {
             super::compare::erase_with_compare(circ, ov, &dst[N - k..], &tv, None);
         }
-        for i in 0..k { circ.x_if_bit(tv[i], coord[N - k + i]); }
+        for i in 0..k {
+            circ.x_if_bit(tv[i], coord[N - k + i]);
+        }
         circ.free_vec(&tv);
         circ.free(ov);
         circ.x_all(dst);
@@ -102,19 +163,35 @@ pub fn coord_rsub(circ: &mut Builder, x: &[QubitId], coord: &[BitId]) {
     assert_eq!(x.len(), N);
     assert_eq!(coord.len(), N);
     let coord_p1 = classical_plus1_mod_2n(circ, coord);
+    if exact_coordinate_cbits() {
+        mod_rsub_cbits_exact(circ, x, &coord_p1);
+        zero(circ, &coord_p1);
+        circ.free_bit_vec(&coord_p1);
+        return;
+    }
     let stash = super::j_fuse::take_r0();
     if super::back_seam::mul_fused() {
         // I-2 back seam: `x` arrives uncorrected from the multiply's FD unseed (see `back_seam`).
-        assert!(stash.is_none(), "back seam: r0-fused reverse subtraction is not the seam's consumer");
-        super::back_seam::coord_op_at(circ, x, &coord_p1, super::back_seam::Leg::Mul, N,
-            super::modular::f(), super::modular::go_fs("GO_FG_M"), super::modular::erase_compare(), true);
+        assert!(
+            stash.is_none(),
+            "back seam: r0-fused reverse subtraction is not the seam's consumer"
+        );
+        super::back_seam::coord_op_at(
+            circ,
+            x,
+            &coord_p1,
+            super::back_seam::Leg::Mul,
+            N,
+            super::modular::f(),
+            super::modular::go_fs("GO_FG_M"),
+            super::modular::erase_compare(),
+            true,
+        );
         return;
     }
-    against_coord(circ, &coord_p1, true, |circ, temp| {
-        match stash {
-            Some((a0, n)) => super::j_fuse::mod_rsub_r0fused(circ, temp, x, a0, n),
-            None => mod_rsub_vented_loaded(circ, temp, x),
-        }
+    against_coord(circ, &coord_p1, true, |circ, temp| match stash {
+        Some((a0, n)) => super::j_fuse::mod_rsub_r0fused(circ, temp, x, a0, n),
+        None => mod_rsub_vented_loaded(circ, temp, x),
     });
 }
 
@@ -131,42 +208,36 @@ pub fn coord_add3x(circ: &mut Builder, dst: &[QubitId], coord: &[BitId]) {
         circ.free_bit_vec(&three_coord);
         three_coord = shifted;
     }
+    if exact_coordinate_cbits() {
+        mod_add_cbits_exact(circ, dst, &three_coord);
+        zero(circ, &three_coord);
+        circ.free_bit_vec(&three_coord);
+        return;
+    }
     let stash = super::j_fuse::take_r0();
     if super::back_seam::div_fused() {
         // I-2 back seam: `dst` arrives uncorrected from the divide's FD unseed (see `back_seam`).
-        assert!(stash.is_none(), "back seam: r0-fused coordinate add is not the seam's consumer");
-        super::back_seam::coord_op_at(circ, dst, &three_coord, super::back_seam::Leg::Div, N,
-            super::modular::f(), super::modular::go_fs("GO_FG_M"), super::modular::erase_compare(), true);
+        assert!(
+            stash.is_none(),
+            "back seam: r0-fused coordinate add is not the seam's consumer"
+        );
+        super::back_seam::coord_op_at(
+            circ,
+            dst,
+            &three_coord,
+            super::back_seam::Leg::Div,
+            N,
+            super::modular::f(),
+            super::modular::go_fs("GO_FG_M"),
+            super::modular::erase_compare(),
+            true,
+        );
         return;
     }
-    against_coord(circ, &three_coord, true, |circ, temp| {
-        match stash {
-            Some((a0, n)) => super::j_fuse::mod_add_r0fused(circ, temp, dst, a0, n),
-            None => mod_add(circ, temp, dst),
-        }
+    against_coord(circ, &three_coord, true, |circ, temp| match stash {
+        Some((a0, n)) => super::j_fuse::mod_add_r0fused(circ, temp, dst, a0, n),
+        None => mod_add(circ, temp, dst),
     });
-}
-
-/// Leapfrog `LF_SEAMS`: the classical operand [`coord_add3x`] adds (3 coord + the square's offset, mod p), in fresh
-/// bits (release with [`release_operand`]).
-pub(crate) fn add3x_operand(circ: &mut Builder, coord: &[BitId]) -> Vec<BitId> {
-    let three_coord = classical_times3_mod_q(circ, coord);
-    let offset = super::square::sub_square_offset();
-    if offset.is_zero() {
-        return three_coord;
-    }
-    let shifted = classical_add_const_mod_q(circ, &three_coord, offset);
-    zero(circ, &three_coord);
-    circ.free_bit_vec(&three_coord);
-    shifted
-}
-/// Leapfrog `LF_SEAMS`: `coord + 1 mod 2^N` in fresh bits (the operand [`coord_rsub`] loads).
-pub(crate) fn plus1_operand(circ: &mut Builder, coord: &[BitId]) -> Vec<BitId> {
-    classical_plus1_mod_2n(circ, coord)
-}
-pub(crate) fn release_operand(circ: &mut Builder, bits: &[BitId]) {
-    zero(circ, bits);
-    circ.free_bit_vec(bits);
 }
 
 /// `(v + k) mod 2^len` in freshly allocated classical bits, `k < 2^128`.
@@ -232,14 +303,24 @@ fn classical_add_const_mod_q(circ: &mut Builder, v: &[BitId], k: U256) -> Vec<Bi
 }
 
 /// [`classical_add_const_mod_q`] at width `n` with `p = 2^n - cc`.
-pub(crate) fn classical_add_const_mod_at(circ: &mut Builder, v: &[BitId], k: U256, n: usize, cc: u128) -> Vec<BitId> {
+pub(crate) fn classical_add_const_mod_at(
+    circ: &mut Builder,
+    v: &[BitId],
+    k: U256,
+    n: usize,
+    cc: u128,
+) -> Vec<BitId> {
     assert_eq!(v.len(), n);
     let r = circ.alloc_bits(n + 1);
     copy_into(circ, &r, v);
     circ.bit_store0(r[n]);
     let addend = circ.alloc_bits(n);
     for (i, &b) in addend.iter().enumerate() {
-        if k.bit(i) { circ.bit_store1(b); } else { circ.bit_store0(b); }
+        if k.bit(i) {
+            circ.bit_store1(b);
+        } else {
+            circ.bit_store0(b);
+        }
     }
     classical_add_into(circ, &r, &addend);
     zero(circ, &addend);

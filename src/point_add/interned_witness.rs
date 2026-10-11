@@ -78,7 +78,7 @@ pub(super) struct Support {
     base_condition: Affine,
     condition_stack: Vec<Affine>,
     next_atom: u64,
-    products: std::collections::HashMap<(Vec<u64>,Vec<u64>),u64>,
+    products: std::collections::HashMap<(Vec<u64>, Vec<u64>), u64>,
 }
 
 impl Support {
@@ -164,22 +164,48 @@ impl Support {
             // Keys denote complete immutable Boolean expressions, never wire
             // slots. HashMap checks exact key equality, not just a hash value.
             // (A^ca)(B^cb) = AB ^ ca*B ^ cb*A ^ ca*cb.
-            let ca=a.constant; let cb=b.constant;
-            let aa=Affine {constant:false, atoms:a.atoms.clone()};
-            let bb=Affine {constant:false, atoms:b.atoms.clone()};
-            let mut linear=Affine::constant(ca && cb);
-            if ca {linear=self.xor(&linear,&bb);}
-            if cb {linear=self.xor(&linear,&aa);}
-            let mut left=aa.atoms;let mut right=bb.atoms;
-            if left>right {std::mem::swap(&mut left,&mut right);}
-            let key=(left,right);
-            let id=if let Some(&id)=self.products.get(&key){id}else{
+            let ca = a.constant;
+            let cb = b.constant;
+            let aa = Affine {
+                constant: false,
+                atoms: a.atoms.clone(),
+            };
+            let bb = Affine {
+                constant: false,
+                atoms: b.atoms.clone(),
+            };
+            let mut linear = Affine::constant(ca && cb);
+            if ca {
+                linear = self.xor(&linear, &bb);
+            }
+            if cb {
+                linear = self.xor(&linear, &aa);
+            }
+            let mut left = aa.atoms;
+            let mut right = bb.atoms;
+            if left > right {
+                std::mem::swap(&mut left, &mut right);
+            }
+            let key = (left, right);
+            let id = if let Some(&id) = self.products.get(&key) {
+                id
+            } else {
                 // Forgetting cache entries only loses proofs. No atom ID is
                 // recycled, and all live expressions keep their old meaning.
-                if self.products.len()>=PRODUCT_CAP {self.products.clear();}
-                let id=self.fresh().atoms[0];self.products.insert(key,id);id
+                if self.products.len() >= PRODUCT_CAP {
+                    self.products.clear();
+                }
+                let id = self.fresh().atoms[0];
+                self.products.insert(key, id);
+                id
             };
-            self.xor(&linear,&Affine{constant:false,atoms:vec![id]})
+            self.xor(
+                &linear,
+                &Affine {
+                    constant: false,
+                    atoms: vec![id],
+                },
+            )
         }
     }
 
@@ -305,47 +331,83 @@ pub(crate) fn simplify(ops: Vec<Op>) -> Vec<Op> {
     result
 }
 
-
 /// Exact CCX-to-CX witnesses. No new measurement, reset, or phase gate.
-pub(crate) fn witnesses(ops:Vec<Op>)->Vec<Op>{
-    use std::collections::{HashMap,BTreeSet};
-    let mut state=Support::new(&ops);
-    let mut index:HashMap<Affine,BTreeSet<usize>>=HashMap::new();
-    for (q,v) in state.qubits.iter().enumerate(){index.entry(v.clone()).or_default().insert(q);}
-    let(mut self_n,mut witness_n,mut self_t,mut witness_t,mut depth)=(0,0,0.0,0.0,0i32);
-    let mut examples=Vec::new();
-    let mut out=Vec::with_capacity(ops.len());
-    for (at,op) in ops.iter().enumerate(){
-        let mut replacement=None;
-        if op.kind==OperationType::PushCondition{depth+=1;}
-        if op.kind==OperationType::PopCondition{depth-=1;}
-        if op.kind==OperationType::CCX{
-            let a=state.qubits[op.q_control1.0 as usize].clone();
-            let b=state.qubits[op.q_control2.0 as usize].clone();
-            let product=state.and(&a,&b);
-            let target=op.q_target.0 as usize;
-            if !product.is_zero() && !product.is_one(){
-                let weight=2f64.powi(-depth-i32::from(op.c_condition!=NO_BIT));
-                let self_hit=state.qubits[target]==product;
-                let witness=index.get(&product).and_then(|s|s.iter().copied().find(|&q|q!=target));
-                if self_hit{self_n+=1;self_t+=weight;}
-                if witness.is_some(){witness_n+=1;witness_t+=weight;replacement=witness;}
-                if examples.len()<64 && (self_hit||witness.is_some()){
+pub(crate) fn witnesses(ops: Vec<Op>) -> Vec<Op> {
+    use std::collections::{BTreeSet, HashMap};
+    let mut state = Support::new(&ops);
+    let mut index: HashMap<Affine, BTreeSet<usize>> = HashMap::new();
+    for (q, v) in state.qubits.iter().enumerate() {
+        index.entry(v.clone()).or_default().insert(q);
+    }
+    let (mut self_n, mut witness_n, mut self_t, mut witness_t, mut depth) = (0, 0, 0.0, 0.0, 0i32);
+    let mut examples = Vec::new();
+    let mut out = Vec::with_capacity(ops.len());
+    for (at, op) in ops.iter().enumerate() {
+        let mut replacement = None;
+        if op.kind == OperationType::PushCondition {
+            depth += 1;
+        }
+        if op.kind == OperationType::PopCondition {
+            depth -= 1;
+        }
+        if op.kind == OperationType::CCX {
+            let a = state.qubits[op.q_control1.0 as usize].clone();
+            let b = state.qubits[op.q_control2.0 as usize].clone();
+            let product = state.and(&a, &b);
+            let target = op.q_target.0 as usize;
+            if !product.is_zero() && !product.is_one() {
+                let weight = 2f64.powi(-depth - i32::from(op.c_condition != NO_BIT));
+                let self_hit = state.qubits[target] == product;
+                let witness = index
+                    .get(&product)
+                    .and_then(|s| s.iter().copied().find(|&q| q != target));
+                if self_hit {
+                    self_n += 1;
+                    self_t += weight;
+                }
+                if witness.is_some() {
+                    witness_n += 1;
+                    witness_t += weight;
+                    replacement = witness;
+                }
+                if examples.len() < 64 && (self_hit || witness.is_some()) {
                     examples.push(format!("{{\"op\":{at},\"target\":{target},\"self_uncompute\":{self_hit},\"witness\":{}}}",witness.map_or("null".to_string(),|q|q.to_string())));
                 }
             }
         }
-        let changed:Vec<usize>=match op.kind{
-            OperationType::CCX|OperationType::CX|OperationType::X|OperationType::R|OperationType::Hmr=>vec![op.q_target.0 as usize],
-            OperationType::Swap=>vec![op.q_control1.0 as usize,op.q_target.0 as usize],_=>vec![]};
-        for &q in &changed{let key=state.qubits[q].clone();let set=index.get_mut(&key).unwrap();assert!(set.remove(&q));if set.is_empty(){index.remove(&key);}}
+        let changed: Vec<usize> = match op.kind {
+            OperationType::CCX
+            | OperationType::CX
+            | OperationType::X
+            | OperationType::R
+            | OperationType::Hmr => vec![op.q_target.0 as usize],
+            OperationType::Swap => vec![op.q_control1.0 as usize, op.q_target.0 as usize],
+            _ => vec![],
+        };
+        for &q in &changed {
+            let key = state.qubits[q].clone();
+            let set = index.get_mut(&key).unwrap();
+            assert!(set.remove(&q));
+            if set.is_empty() {
+                index.remove(&key);
+            }
+        }
         state.step(op);
-        for &q in &changed{index.entry(state.qubits[q].clone()).or_default().insert(q);}
-        if let Some(q)=replacement{
-            assert_ne!(q,op.q_target.0 as usize);
-            let mut r=Op::empty();r.kind=OperationType::CX;r.q_control1=QubitId(q as u64);r.q_target=op.q_target;r.c_condition=op.c_condition;
-            r.validate();out.push(r);
-        }else{out.push(*op);}
+        for &q in &changed {
+            index.entry(state.qubits[q].clone()).or_default().insert(q);
+        }
+        if let Some(q) = replacement {
+            assert_ne!(q, op.q_target.0 as usize);
+            let mut r = Op::empty();
+            r.kind = OperationType::CX;
+            r.q_control1 = QubitId(q as u64);
+            r.q_target = op.q_target;
+            r.c_condition = op.c_condition;
+            r.validate();
+            out.push(r);
+        } else {
+            out.push(*op);
+        }
     }
     println!("I25_WITNESSES {{\"self_uncompute_native\":{self_n},\"self_uncompute_expected_T\":{self_t},\"witness_native\":{witness_n},\"witness_expected_T\":{witness_t},\"examples\":[{}]}}",examples.join(","));
     out
