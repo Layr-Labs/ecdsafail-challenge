@@ -300,21 +300,6 @@ impl Builder {
             self.free(q);
         }
     }
-    /// N2 research patch (sim/patch_n2_sf.py, SL_N2_REACQ): take back the free wire `q` itself, keeping the free list's
-    /// order (unlike [`Builder::reacquire`]); false (nothing done) when `q` is not free.
-    pub fn n2_take(&mut self, q: QubitId) -> bool {
-        let Some(pos) = self.free_qubits.iter().rposition(|&f| u64::from(f) == q.0) else {
-            return false;
-        };
-        self.free_qubits.remove(pos);
-        self.active_qubits += 1;
-        self.note_peak();
-        if self.peak_census.enabled() {
-            let at = self.at();
-            self.peak_census.on_alloc(at, q.0, "reacquire", 0);
-        }
-        true
-    }
     pub fn reacquire(&mut self, q: QubitId) {
         let pos = self
             .free_qubits
@@ -553,20 +538,6 @@ impl Builder {
         let p = 2.0_f64.powi(-(width as i32));
         if kind == 'B' { if pos != width { self.k3b_sites.0 += 1; self.k3b_sites.1 += p; } } else { self.k3b_sites.2 += 1; self.k3b_sites.3 += p; }
         self.replay_sites.record(at, kind, round, pos, width);
-    }
-
-    /// y33: the end-of-build sweep of [`super::y33_clears`] (Toffoli that only clear a wire before its reset become a
-    /// measurement and phase gates). Called once, by `build_point_add`, just before [`Builder::finalize_records`].
-    pub(crate) fn y33_clears(&mut self) {
-        if !super::y33_clears::Y33_CLEARS || self.model {
-            return;
-        }
-        let (sites, toffoli) = super::y33_clears::sweep(&mut self.ops, &mut self.next_bit);
-        if let Some(r) = self.report.as_deref_mut() {
-            r.total_native -= toffoli;
-            r.total_expected -= toffoli as f64;
-        }
-        eprintln!("Y33_CLEARS sites={sites} toffoli={toffoli}");
     }
 
     /// Emit all three recorders' output. Called once, at the end of
