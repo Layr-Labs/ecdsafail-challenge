@@ -139,11 +139,80 @@ fn carry_ladder(
     let n = acc.len();
     assert!(dead <= last && last < n);
     assert!(host.is_none_or(|h| !acc[dead..].contains(&h)));
-    let room=super::pingpong::heo_hooks::cap().saturating_sub(circ.active_qubits()as usize);
-    if std::env::var_os("CONST_BINDER_MODE").is_some() && last+1-dead-usize::from(host.is_some())>room {
-        let mut source=None;let mut valid=true;let mut bits=Vec::new();
-        for i in 0..n {match kctrl(i){Addend::Zero=>bits.push(false),Addend::One=>{valid=false;bits.push(true);},Addend::Wire(q)=>{if source.is_some_and(|s|s!=q){valid=false;}source=Some(q);bits.push(true);}}}
-        if valid && source.is_some() && super::constant_templates::try_ladder(circ,acc,source.unwrap(),&bits,dead,host,room){return;}
+    let room = super::pingpong::heo_hooks::cap().saturating_sub(circ.active_qubits() as usize);
+    if std::env::var_os("CONST_BINDER_MODE").is_some()
+        && last + 1 - dead - usize::from(host.is_some()) > room
+    {
+        let mut source = None;
+        let mut valid = true;
+        let mut bits = Vec::new();
+        for i in 0..n {
+            match kctrl(i) {
+                Addend::Zero => bits.push(false),
+                Addend::One => {
+                    valid = false;
+                    bits.push(true);
+                }
+                Addend::Wire(q) => {
+                    if source.is_some_and(|s| s != q) {
+                        valid = false;
+                    }
+                    source = Some(q);
+                    bits.push(true);
+                }
+            }
+        }
+        if valid
+            && source.is_some()
+            && super::constant_templates::try_ladder(
+                circ,
+                acc,
+                source.unwrap(),
+                &bits,
+                dead,
+                host,
+                room,
+            )
+        {
+            return;
+        }
+    }
+    if super::lowroom::enabled() && last + 1 - dead - usize::from(host.is_some()) > room {
+        // SQ_LOWROOM: the same add (positions dead..=last+1 wrapped, addend bits XORed elsewhere) as an
+        // exact chunked window at the current room. Only for addends that are wires or zero.
+        let hi = (last + 2).min(n);
+        let rows: Option<Vec<Vec<QubitId>>> = (dead..hi)
+            .map(|i| match kctrl(i) {
+                Addend::Zero => Some(Vec::new()),
+                Addend::Wire(q) => Some(vec![q]),
+                Addend::One => None,
+            })
+            .collect();
+        if let Some(rows) = rows {
+            if !rows.iter().flatten().any(|q| acc.contains(q)) {
+                let xor_only = |circ: &mut Builder, i: usize| match kctrl(i) {
+                    Addend::Zero => {}
+                    Addend::One => circ.x(acc[i]),
+                    Addend::Wire(kq) => circ.cx(kq, acc[i]),
+                };
+                let base = circ.active_qubits();
+                // A host wire is clean (|0>) for the whole ladder: hand it to the pool as room, take it back after.
+                if let Some(h) = host {
+                    circ.release_clean(h);
+                }
+                let done = super::lowroom::try_ladder(circ, &acc[dead..hi], &rows);
+                if let Some(h) = host {
+                    circ.reacquire(h);
+                }
+                if done {
+                    for i in (0..dead).chain(hi..n) {
+                        xor_only(circ, i);
+                    }
+                    assert_eq!(circ.active_qubits(), base);
+                    return;
+                }
+            }
+        }
     }
     let owned = circ.alloc_qubits(last + 1 - dead - usize::from(host.is_some()));
     let mut carries = owned.clone();

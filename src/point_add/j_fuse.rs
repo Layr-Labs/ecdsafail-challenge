@@ -57,7 +57,7 @@ pub fn mod_sub_halve(circ: &mut Builder, value: &[QubitId], acc: &[QubitId]) {
     let g = circ.alloc_qubit();
     circ.cx(a, g);
     circ.cx(b2, g); // k != 0
-    // Position 0: acc0 = ~a, addend a: sum 1, carry 0.
+                    // Position 0: acc0 = ~a, addend a: sum 1, carry 0.
     circ.cx(a, acc[0]);
     let width = super::modular::go_fs("GO_FG_J") + 1;
     let fc = f();
@@ -142,7 +142,6 @@ pub fn mod_double_sub(circ: &mut Builder, value: &[QubitId], acc: &[QubitId]) {
     }
 }
 
-
 // ---- PP_J_XFUSE: coord_x_sub's fold moved into the walk's round-0 lift ----
 //
 // `coord_x_sub` stops after its ripple: x holds D = x - ox (mod 2^256) and the
@@ -182,7 +181,12 @@ pub fn mod_sub_keep_borrow(
 
 /// Erase the kept borrow: `c = [~D_top < ox_top]`, the same predicate
 /// `mod_sub_vented` erases with. `d_top` are D's top `erase_compare()` bits.
-pub fn erase_x_carry(circ: &mut Builder, c: QubitId, d_top: &[QubitId], coord: &[crate::circuit::BitId]) {
+pub fn erase_x_carry(
+    circ: &mut Builder,
+    c: QubitId,
+    d_top: &[QubitId],
+    coord: &[crate::circuit::BitId],
+) {
     let k = d_top.len();
     assert_eq!(k, erase_compare());
     let ox_top = &coord[coord.len() - k..];
@@ -191,8 +195,10 @@ pub fn erase_x_carry(circ: &mut Builder, c: QubitId, d_top: &[QubitId], coord: &
         circ.x_if_bit(q, b);
     }
     circ.x_all(d_top);
-    if super::modular::r5_ccmp(1) { super::compare::erase_with_compare_v0(circ, c, d_top, &temp, ox_top[0]); } else {
-    erase_with_compare(circ, c, d_top, &temp, None);
+    if super::modular::r5_ccmp(1) {
+        super::compare::erase_with_compare_v0(circ, c, d_top, &temp, ox_top[0]);
+    } else {
+        erase_with_compare(circ, c, d_top, &temp, None);
     }
     circ.x_all(d_top);
     for (&q, &b) in temp.iter().zip(ox_top) {
@@ -207,7 +213,6 @@ pub fn erase_x_carry(circ: &mut Builder, c: QubitId, d_top: &[QubitId], coord: &
 pub fn x_erase_width() -> usize {
     erase_compare()
 }
-
 
 // ---- PP_J_AFUSE / PP_J_RFUSE: round0_reverse's fold moved into the next
 // coordinate op (coord_add3x after the divide, coord_rsub_final after the
@@ -248,7 +253,13 @@ pub fn take_r0() -> Option<(QubitId, QubitId)> {
 
 /// `acc[..f_slice()+1] -= M` if `neg` else `+= M`, with M = (alpha + gamma)*f,
 /// truncated to the window exactly like `round0_reverse`'s ladder.
-fn selected_f_or_2f(circ: &mut Builder, acc: &[QubitId], alpha: QubitId, gamma: QubitId, neg: QubitId) {
+fn selected_f_or_2f(
+    circ: &mut Builder,
+    acc: &[QubitId],
+    alpha: QubitId,
+    gamma: QubitId,
+    neg: QubitId,
+) {
     let b = circ.alloc_qubit();
     circ.ccx(alpha, gamma, b); // magnitude 2f
     let g = circ.alloc_qubit();
@@ -304,7 +315,13 @@ fn xor_low_maj(circ: &mut Builder, out: QubitId, x0: QubitId, q: QubitId, r: Qub
 }
 
 /// PP_J_AFUSE: `acc <- a + value (mod p)` where acc holds the deferred R.
-pub fn mod_add_r0fused(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], a0: QubitId, n: QubitId) {
+pub fn mod_add_r0fused(
+    circ: &mut Builder,
+    value: &[QubitId],
+    acc: &[QubitId],
+    a0: QubitId,
+    n: QubitId,
+) {
     let n_bits = acc.len();
     assert_eq!(n_bits, N);
     assert_eq!(value.len(), N);
@@ -339,7 +356,13 @@ pub fn mod_add_r0fused(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], a
 
 /// PP_J_RFUSE: `acc <- ox - a (mod p)` where acc holds the deferred R and
 /// `value` holds t1 = ox + 1.
-pub fn mod_rsub_r0fused(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], a0: QubitId, n: QubitId) {
+pub fn mod_rsub_r0fused(
+    circ: &mut Builder,
+    value: &[QubitId],
+    acc: &[QubitId],
+    a0: QubitId,
+    n: QubitId,
+) {
     let n_bits = acc.len();
     assert_eq!(n_bits, N);
     assert_eq!(value.len(), N);
@@ -379,7 +402,6 @@ pub fn mod_rsub_r0fused(circ: &mut Builder, value: &[QubitId], acc: &[QubitId], 
         eprintln!("J_RSUBFUSED {}", circ.i35_cost() - before);
     }
 }
-
 
 // ---- PP_J_SFUSE: the square's last subtraction + the multiply's round 0 ----
 //
@@ -432,7 +454,9 @@ pub fn j_bmerge() -> bool {
 
 pub fn wcin_w() -> usize {
     static SLOT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *SLOT.get_or_init(|| super::optional_env::<usize>("PP_J_WCIN_W").unwrap_or(super::fold_guard() + 1))
+    *SLOT.get_or_init(|| {
+        super::optional_env::<usize>("PP_J_WCIN_W").unwrap_or(super::fold_guard() + 1)
+    })
 }
 
 /// `acc <- acc - value (mod 2^256)`, the mod_addsub add; returns the live borrow.

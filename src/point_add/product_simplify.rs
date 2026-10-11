@@ -183,4 +183,3 @@ fn quantum_touches(op: &Op) -> Vec<usize> {
         _ => vec![],
     }
 }
-
