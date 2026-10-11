@@ -16,7 +16,10 @@ use crate::circuit::QubitId;
 /// starts clean, and after the first CX `u[0]` already holds what a clean
 /// carry-in wire would have held — so it serves as the first nonlinear control
 /// and no wire is needed either way.
+#[track_caller]
 pub(crate) fn cmp_lt_phase(circ: &mut Builder, u: &[QubitId], v: &[QubitId], borrow_in: Option<QubitId>) {
+    // C35_TRACE (no effect on the gates): the call site, width and seed of every phase compare.
+    if super::leapfrog::C35_TRACE { let l = std::panic::Location::caller(); eprintln!("C35_SITE\t{}:{}\t{}\t{}\t{}", l.file(), l.line(), u.len(), borrow_in.is_some() as u8, circ.op_count()); }
     cmp_lt_phase_v0(circ, u, v, borrow_in, None)
 }
 
@@ -48,7 +51,10 @@ pub(crate) fn cmp_lt_phase_v0(circ: &mut Builder, u: &[QubitId], v: &[QubitId], 
     assert!(!borrow_in.is_some_and(|q|u.contains(&q)),"seed cannot alias the accumulator");
     let last = n - 1;
 
-    let carries = circ.alloc_qubits(last);
+    // C35_WIDEN diagnostics (pads = 0 in every kept build): idle wires taken before the carries, measured after them
+    let pads = super::leapfrog::C35_PADS.with(|p| p.replace(0));
+    let all = circ.alloc_qubits(pads + last);
+    let carries = &all[pads..];
     circ.x_all(u);
 
     // Forward: borrow-prefix ladder over bits 0..last.
@@ -104,7 +110,8 @@ pub(crate) fn cmp_lt_phase_v0(circ: &mut Builder, u: &[QubitId], v: &[QubitId], 
     circ.free_bit(m0);
     circ.cx(u[0], v[0]);
 
-    circ.free_vec(&carries);
+    for i in (0..pads).rev() { let m = circ.alloc_bit(); circ.hmr(all[i], m); circ.free_bit(m); }
+    circ.free_vec(&all);
     circ.x_all(u);
 }
 
@@ -134,6 +141,7 @@ pub fn erase_with_compare_v0(circ: &mut Builder, target: QubitId, a: &[QubitId],
     circ.free_bit(bit);
 }
 
+#[track_caller]
 pub fn erase_with_compare(
     circ: &mut Builder,
     target: QubitId,

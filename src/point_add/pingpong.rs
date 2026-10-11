@@ -4067,6 +4067,7 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
         if let Some((carry, plo, phi)) = previous {
             let tie=tie_borrow();
             let(compare,seeded)=if tie.is_some(){(chunk_compare(round).min(phi-plo),false)}else{boundary_repair_spec(round,multiply,plo,phi)};
+            if super::leapfrog::C35_TRACE{eprintln!("C35_CMP\t{}\t{}\t{}\t{}\t{}\t{}\t{}",round,multiply as u8,plo,phi,compare,seeded as u8,tie.is_some() as u8);}
             let borrow = if tie.is_some() {
                 // B3b fix: a whole leading chunk is compared EXACTLY with its true
                 // carry-in, which is 0 (the cell has none); the sign seed there is
@@ -4078,9 +4079,14 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
             // Freeze the OLD predictor identity before widening the window.
             // The comparator supports that source wire as an interior alias.
             let compare=if seeded{refined_seeded_width(compare,phi-plo,"PP_REFINE_SEEDED_B")}else{compare};
+            // C35_WIDEN: a table compare reads 2 more bits, its predictor wire kept (leapfrog.rs)
+            let (compare,c35_pads)=super::leapfrog::c35_widen(multiply,round,plo,phi,compare,seeded);
             circ.record_replay_site('B', round, phi, compare);
             trace_replay_predictor('B',round,multiply,phi,compare,addend,borrow);
+            // y33-c35 diagnostic (inert at C35_FAULT = 0): faults 4 and 5 read 2 bits
+            let compare=if super::leapfrog::C35_CMP_FX.with(|x|x.get()){compare.min(2)}else{compare};
             let window = phi - compare..phi;
+            super::leapfrog::C35_PADS.with(|p|p.set(c35_pads));
             erase_with_compare(circ, carry, &acc[window.clone()], &addend[window], borrow);
             circ.free(carry);
         }

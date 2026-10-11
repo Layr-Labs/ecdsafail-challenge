@@ -387,8 +387,10 @@ const Y28_LEAN_REV: bool = true;
 /// (131, 132, 2) and (127, 128, 2) added here). It builds at peak 1,236 and is 73.75 Toffoli cheaper, but a one-fold
 /// pass in place of a three-fold pass fails on other inputs: on 90 draws 3 shots pass in entry Y and fail there, 8
 /// the other way, 1 output differs. An error trade, not an exact change.
-const Y28_DROP_FWD: &[(usize, usize, usize)] = &[(130, 131, 1)];
-const Y28_DROP_REV: &[(usize, usize, usize)] = &[(126, 127, 1)];
+/// y33-c35 ([`super::C35_DROPS`]): at cap 1,235 the ladder is dropped one tick earlier and two carries leave on the
+/// last fused one-fold tick of each direction (rooms 39 and 38 forward, 43 and 42 reverse).
+const Y28_DROP_FWD: &[(usize, usize, usize)] = if super::C35_DROPS { &[(129, 130, 1), (130, 131, 2)] } else { &[(130, 131, 1)] };
+const Y28_DROP_REV: &[(usize, usize, usize)] = if super::C35_DROPS { &[(125, 126, 1), (126, 127, 2)] } else { &[(126, 127, 1)] };
 fn y28_drop(t: usize, rev: bool) -> usize {
     // N2 (research patch): SL_N2_DROP / SL_N2_MDROP batch ticks run the dropped-carry ladder (None elsewhere)
     if let Some(n) = super::n2_drop(t, rev) {
@@ -551,7 +553,9 @@ const Y17_C3M_ALWAYS: bool = false;
 /// y18-next: priced again per tick on Y18_LATE_TOPS (three traces): gate wires are now cheaper than lean at ticks 89,
 /// 105, 115, 116 (0.5, 1.5, 3.5, 0.5); lean stays on 117..120 (gate wires are 5.5, 5.5, 4.0, 2.0 dearer); from tick 121
 /// the reverse pass takes gate wires (lean lacks 1 wire at the fold at tick 121).
-const Y17_LEAN: &[(usize, usize)] = &[(86, 89), (106, 110), (117, 121)];
+/// y33-c35b ([`super::C35B_LEAN`]): at cap 1,235 lean is also the cheaper form on ticks 105, 115 and 116 (2.3, 3.3 and
+/// 6.2 Toffoli a pass by the tick traces; the adds' windowed boundary compares do not change in number or width).
+const Y17_LEAN: &[(usize, usize)] = if super::C35B_LEAN { &[(86, 89), (105, 110), (115, 121)] } else { &[(86, 89), (106, 110), (117, 121)] };
 /// Research knob: idle wires held through the three adds of a lean tick-pass (4 = the adds see the room they have
 /// with the copies; the outputs must then be those of the copies).
 const Y17_LEAN_PAD: usize = 0;
@@ -900,7 +904,7 @@ fn ladder_drop(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: 
         }
         let back = d[h0 - l0];
         // N2 (research patch): SL_N2_FX=z<t> leaves this phase fix out on divide batch tick t (deliberate fault)
-        if !super::n2_fx_skip_drop_z() {
+        if !super::n2_fx_skip_drop_z() && !super::c35_fx_skip_drop() {
             lin_lt_phase(c, &acc[lo..hi], &add[lo..hi], back);
         }
         kept_erase(c, acc, add, l0, h0, c0, back);
@@ -3103,7 +3107,12 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
 #[allow(clippy::too_many_arguments)]
 fn body_capped(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b: &[QubitId], tg: &[QubitId], proxy: usize, rev: bool) {
     super::super::pingpong::Y17_EXTRA.with(|e| e.set(Y18_PRICE));
+    // y33-c35 diagnostics (inert at C35_FAULT = 0): the body's tick for faults 1 and 2; fault 4 on reverse tick 76
+    super::C35_AT.with(|x| x.set((t, rev, true)));
+    super::C35_CMP_FX.with(|x| x.set((super::C35_FAULT == 4 && rev && t == 76) || (super::C35B_FAULT == 3 && rev && t == 116)));
     let ((), peak) = c.r3_peak(|c| body(c, t, s, k1, k2, b, tg, proxy, rev));
+    super::C35_CMP_FX.with(|x| x.set(false));
+    super::C35_AT.with(|x| x.set((0, false, false)));
     super::super::pingpong::Y17_EXTRA.with(|e| e.set(Y18_PRICE + Y19_PRICE_FOLD));
     let dir = if rev { "rev" } else { "fwd" };
     if Y15_TRACE {

@@ -768,6 +768,10 @@ fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
     // SQ_ASM_TAIL=E: ripple the carry only E bits past the cross word. The
     // bits above hold b^2 and are random, so a carry reaches E bits in with
     // probability about 2^-E. An approximate cut, priced as a sell.
+    // y33-c35 (leapfrog::C35_SQ_REPLAN): a forward plan of one chunk with nothing held or deferred is not forced on
+    // the inverse, which then plans for its own room (as it does when the forward add took the plain ripple).
+    let replan=super::leapfrog::C35_SQ_REPLAN&&inverse&&held.is_empty()&&xkept.is_empty()&&recover.as_ref().is_some_and(|(p,f)|p.sizes.len()==1&&f.is_empty());
+    let recover=if replan{None}else{recover};
     let full=acc;
     let acc=match super::optional_env::<usize>("SQ_ASM_TAIL"){Some(e)=>&full[..full.len().min(cross.len()+e)],None=>full};
     let mut room=super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
@@ -810,7 +814,10 @@ fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
         }
         // bit0 of the source is zero, so acc[0] and the first carry stay put.
         let defer=!inverse && super::env_flag("SQ_DEFER_CROSS_PHASE");
+        // y33-c35 diagnostic (inert at C35_FAULT = 0): fault 3 on the re-planned inverse
+        super::leapfrog::C35_SQ_FX.with(|x|x.set(replan&&super::leapfrog::C35_FAULT==3));
         let pending=super::width_composition::direct_add_phase_transport(circ,&map,&acc[1..],cross[0],&plan,defer,&fixes);
+        super::leapfrog::C35_SQ_FX.with(|x|x.set(false));
         if inverse {circ.x_all(acc);}
         for &q in &tops{circ.reacquire(q);}
         if super::env_flag("SQ_FIT_CROSS_TRACE") {eprintln!("FIT_CROSS {} {} {} {} {}",acc.len(),room,plan.peak,plan.extra2,inverse as u8);}
