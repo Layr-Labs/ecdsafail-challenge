@@ -3279,12 +3279,7 @@ impl T0Phase {
     /// Clear the AND of the shift letter as [`rot4_phase`] does and free the bits.
     fn finish(self, c: &mut Builder) {
         assert!(self.done.iter().all(|&d| d), "y26: a position of the Z layer was left out");
-        if std::env::var("LF_PHROT_TOF").is_ok_and(|v| v == "1") {
-            c.ccx(self.k1, self.k2, self.t);
-            c.release_clean(self.t);
-        } else {
-            and_erase(c, self.t, self.k1, self.k2);
-        }
+        y29_phrot_clear(c, self.t, self.k1, self.k2);
         for b in self.bits {
             c.free_bit(b);
         }

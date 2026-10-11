@@ -4245,6 +4245,149 @@ fn ladder_parity_add_mid(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>],
     }
 }
 
+// ---- y33-stack b1 (11 October 2026): three small exact cards ported from our tree (36503d2), one switch each ----
+/// Card s3-2. In the back pass's paused form of forced move 2 ([`rail_add_mid`], low part first) the low ladder wrote
+/// positions 0..k and erased their carries, and the pause put the k positions back and rebuilt k - 1 carries (3 ANDs
+/// on outcome-1 shots). Here the low ladder stops before those sums ([`ladder_parity_add_head`]): the k positions are
+/// untouched at the pause, the k - 1 carries stay on the wires the branch already reserves, and the ladder's last
+/// k steps run after the pause ([`ladder_parity_add_tail`]). The same values on the same wires at the pause, on
+/// every basis state. false: the gate list of eea0346 byte for byte.
+const Y29_LOWKEEP: bool = true;
+/// Research knob (false in every build that is kept): k - 1 idle measurements where the old low ladder erased the
+/// carries into positions 1..k-1, so the copy draws the base's random word at every measurement.
+const Y29_LOWKEEP_PAD: bool = false;
+/// Card s1-3. The multiply's two endpoint negations ran their window subtracts with the second payload register's 256
+/// wires already allocated, where the divide's run at room. Here the first negation runs before the allocation and
+/// the second on the copy's low window before its upper wires are allocated. The same gates on the same values in
+/// another order. false: the base's gate list byte for byte.
+const Y29_ENDNEG: bool = true;
+/// Research knob (0 in every build that is kept): idle measurements after the endpoint, so the copy draws the base's
+/// number of random words there.
+const Y29_ENDNEG_PAD: usize = 0;
+/// Fault controls of the paired tests (0 in every build that is kept). 1: [`ladder_parity_add_tail`] erases its
+/// lowest kept carry without its carry-in term. 3: the letter AND of [`Y29_PHROT_MBU`] measured without its CZ.
+/// 4: the endpoint's second negation leaves its upper wires without their sign flip.
+const Y29_FAULT: u8 = 0;
+/// The leftover. The AND of the shift letter (k1 k2) that a Z layer under the letter builds ([`rot4_phase`], `T0Phase`
+/// in y15_onefold.rs) is cleared with a second Toffoli (`LF_PHROT_TOF=1` in the recipe). Here it is erased by
+/// measurement and a CZ on the two letter wires: 1 Toffoli a site. false: the base's gate list byte for byte.
+const Y29_PHROT_MBU: bool = true;
+/// Research knob (false in every build that is kept): with [`Y29_PHROT_MBU`] off, one idle measurement on another wire
+/// BEFORE each such Toffoli, so the old form draws the new form's number of random words (the pad is on the base's
+/// side here; before the Toffoli and on another wire so that the build's post-pass does not fuse the two).
+const Y29_PHROT_PAD: bool = false;
+/// n idle measurements on one fresh wire (a research pad; no Toffoli).
+fn y29_pad(c: &mut Builder, n: usize) {
+    if n > 0 {
+        let q = c.alloc_qubit();
+        for _ in 0..n {
+            let m = c.alloc_bit();
+            c.hmr(q, m);
+            c.free_bit(m);
+        }
+        c.release_clean(q);
+    }
+}
+/// The second Toffoli of a Z layer's letter AND, or its erasure by measurement ([`Y29_PHROT_MBU`]).
+fn y29_phrot_clear(c: &mut Builder, t: QubitId, k1: QubitId, k2: QubitId) {
+    if !Y29_PHROT_MBU && std::env::var("LF_PHROT_TOF").is_ok_and(|v| v == "1") {
+        // +1 Toffoli, no measurement: keeps the simulator's random stream aligned with the unrotated circuit
+        // (clean paired phase-failure comparison)
+        y29_pad(c, Y29_PHROT_PAD as usize);
+        c.ccx(k1, k2, t);
+        c.release_clean(t);
+    } else if Y29_FAULT == 3 {
+        // fault control: the measurement without its CZ
+        let m = c.alloc_bit();
+        c.hmr(t, m);
+        c.free_bit(m);
+        c.release_clean(t);
+    } else {
+        and_erase(c, t, k1, k2);
+    }
+}
+/// [`ladder_parity_add`] (live carry-in, top carry straight into the top wire) stopped before the sums of positions
+/// 0..k are written: returns the carry wires (carry[0] = cin); the carries into positions 1..k-1 are live, the carry
+/// into position k is erased, `acc[..k]` is untouched.
+fn ladder_parity_add_head(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], cin: QubitId, k: usize) -> Vec<Option<QubitId>> {
+    let n = acc.len();
+    assert!(k >= 1 && k + 1 < n, "y29: the kept low carries must be wires of the ladder");
+    let mut carry: Vec<Option<QubitId>> = vec![None; n];
+    carry[0] = Some(cin);
+    for i in 0..n - 1 {
+        let ci = carry[i].expect("live carry");
+        c.cx(ci, acc[i]);
+        let v = v_on(c, &add[i], false, Some(ci));
+        if i + 2 == n {
+            c.ccx(acc[i], v, acc[n - 1]);
+            v_off(c, &add[i], false, Some(ci));
+            c.cx(ci, acc[n - 1]);
+            c.cx(ci, acc[i]);
+            continue;
+        }
+        let t = and_new(c, acc[i], v);
+        v_off(c, &add[i], false, Some(ci));
+        c.cx(ci, t);
+        c.cx(ci, acc[i]);
+        carry[i + 1] = Some(t);
+    }
+    for i in (k - 1..n).rev() {
+        let ci = carry[i];
+        if i + 1 < n {
+            if let Some(next) = carry[i + 1] {
+                if let Some(ci) = ci {
+                    c.cx(ci, next);
+                    c.cx(ci, acc[i]);
+                }
+                let v = v_on(c, &add[i], false, ci);
+                and_erase(c, next, acc[i], v);
+                v_off(c, &add[i], false, ci);
+                if let Some(ci) = ci {
+                    c.cx(ci, acc[i]);
+                }
+            }
+        }
+        if i + 1 == k {
+            break; // position k - 1: its carry-out is erased, its sum waits for the tail
+        }
+        for &q in &add[i] {
+            c.cx(q, acc[i]);
+        }
+        if let Some(ci) = ci {
+            c.cx(ci, acc[i]);
+        }
+    }
+    carry
+}
+/// The rest of [`ladder_parity_add_head`]'s ladder: the sums of positions 0..k, the kept carries erased.
+fn ladder_parity_add_tail(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], carry: &[Option<QubitId>], k: usize) {
+    for i in (0..k).rev() {
+        let ci = carry[i];
+        if i + 1 < k {
+            if let Some(next) = carry[i + 1] {
+                if let Some(ci) = ci {
+                    if !(Y29_FAULT == 1 && i == 0) {
+                        c.cx(ci, next);
+                    }
+                    c.cx(ci, acc[i]);
+                }
+                let v = v_on(c, &add[i], false, ci);
+                and_erase(c, next, acc[i], v);
+                v_off(c, &add[i], false, ci);
+                if let Some(ci) = ci {
+                    c.cx(ci, acc[i]);
+                }
+            }
+        }
+        for &q in &add[i] {
+            c.cx(q, acc[i]);
+        }
+        if let Some(ci) = ci {
+            c.cx(ci, acc[i]);
+        }
+    }
+}
+
 /// `LF_YP8_CHUNK=1`: see [`rail_add_mid`] (both directions).
 fn yp8_chunk() -> bool {
     std::env::var("LF_YP8_CHUNK").is_ok_and(|v| v == "1")
@@ -4359,6 +4502,24 @@ fn rail_add_mid(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, res
             c.free_bit(m);
         }
         pacc(c, "split.yp8_erase", q0);
+        c.x(cin);
+    } else if let (Some((k, _)), true) = (low_first, Y29_LOWKEEP) {
+        // y29 (card s3-2): the low ladder stops before it writes positions 0..k, so they hold their pre-add values at
+        // the pause and the carries into positions 1..k-1 are the ladder's own, never erased and rebuilt
+        let lc = ladder_parity_add_head(c, &lo, &lo_add, cin, k);
+        y29_pad(c, if Y29_LOWKEEP_PAD { k - 1 } else { 0 });
+        ladder_parity_add_mid(c, &b[delta..], &add[delta..], Some(cq), &mut |c, carry| mid(c, &add, delta, carry));
+        ladder_parity_add_tail(c, &lo, &lo_add, &lc, k);
+        c.x(cin);
+        let q0 = pmark(c);
+        let m = c.alloc_bit();
+        c.hmr(cq, m);
+        c.release_clean(cq);
+        c.push_condition(m);
+        carry_out_parity_xor(c, &b[..delta], &add[..delta], true, cin, None);
+        c.pop_condition();
+        c.free_bit(m);
+        pacc(c, "split.yp8_erase_rev", q0);
         c.x(cin);
     } else if let Some((k, _)) = low_first {
         ladder_parity_add(c, &lo, &lo_add, Some(cin));
@@ -4893,14 +5054,7 @@ fn rot4_phase(c: &mut Builder, k1: QubitId, k2: QubitId, v: &[QubitId], bits: Ve
             }
         }
     }
-    if std::env::var("LF_PHROT_TOF").is_ok_and(|v| v == "1") {
-        // +1 Toffoli, no measurement: keeps the simulator's random stream aligned with the unrotated circuit
-        // (clean paired phase-failure comparison)
-        c.ccx(k1, k2, t);
-        c.release_clean(t);
-    } else {
-        and_erase(c, t, k1, k2);
-    }
+    y29_phrot_clear(c, t, k1, k2);
     for b in bits {
         c.free_bit(b);
     }
@@ -5845,16 +5999,42 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
     }
     let (s0, s1) = (*wk.r[0].last().unwrap(), *wk.r[1].last().unwrap());
     let q0 = pmark(c);
-    let mut pay = [y.to_vec(), c.alloc_qubits(N)];
-    cells::cond_negate(c, s0, &pay[0]);
-    c.cx_pairs(&pay[0], &pay[1]);
-    let x01 = c.alloc_qubit();
-    c.cx(s0, x01);
-    c.cx(s1, x01);
-    cells::cond_negate(c, x01, &pay[1]);
-    c.cx(s0, x01);
-    c.cx(s1, x01);
-    c.free(x01);
+    let mut pay = if Y29_ENDNEG {
+        // y29 (card s1-3): the same gates on the same values, ordered so that both window subtracts run before the
+        // second register's upper wires are allocated
+        let fs = go_fs("GO_FG_P");
+        let p0 = y.to_vec();
+        cells::cond_negate(c, s0, &p0);
+        let mut p1 = c.alloc_qubits(fs);
+        c.cx_pairs(&p0[..fs], &p1);
+        let x01 = c.alloc_qubit();
+        c.cx(s0, x01);
+        c.cx(s1, x01);
+        cells::cond_negate(c, x01, &p1);
+        let hi = c.alloc_qubits(N - fs);
+        c.cx_pairs(&p0[fs..], &hi);
+        if Y29_FAULT != 4 {
+            c.cx_all(x01, &hi);
+        }
+        c.cx(s0, x01);
+        c.cx(s1, x01);
+        c.free(x01);
+        p1.extend(hi);
+        [p0, p1]
+    } else {
+        let pay = [y.to_vec(), c.alloc_qubits(N)];
+        cells::cond_negate(c, s0, &pay[0]);
+        c.cx_pairs(&pay[0], &pay[1]);
+        let x01 = c.alloc_qubit();
+        c.cx(s0, x01);
+        c.cx(s1, x01);
+        cells::cond_negate(c, x01, &pay[1]);
+        c.cx(s0, x01);
+        c.cx(s1, x01);
+        c.free(x01);
+        pay
+    };
+    y29_pad(c, if Y29_ENDNEG { Y29_ENDNEG_PAD } else { 0 });
     pacc(c, "mul.endpoint", q0);
     // N2 (SL_N2): the batch runs ticks rounds - 1 .. n2_from first
     let fused_top = if n2_mul() {

@@ -555,6 +555,20 @@ impl Builder {
         self.replay_sites.record(at, kind, round, pos, width);
     }
 
+    /// y33: the end-of-build sweep of [`super::y33_clears`] (Toffoli that only clear a wire before its reset become a
+    /// measurement and phase gates). Called once, by `build_point_add`, just before [`Builder::finalize_records`].
+    pub(crate) fn y33_clears(&mut self) {
+        if !super::y33_clears::Y33_CLEARS || self.model {
+            return;
+        }
+        let (sites, toffoli) = super::y33_clears::sweep(&mut self.ops, &mut self.next_bit);
+        if let Some(r) = self.report.as_deref_mut() {
+            r.total_native -= toffoli;
+            r.total_expected -= toffoli as f64;
+        }
+        eprintln!("Y33_CLEARS sites={sites} toffoli={toffoli}");
+    }
+
     /// Emit all three recorders' output. Called once, at the end of
     /// `build_point_add`.
     pub fn finalize_records(&mut self) {

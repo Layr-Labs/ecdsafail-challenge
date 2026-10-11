@@ -27,6 +27,7 @@ mod const_arith;
 mod modular;
 mod pingpong;
 mod leapfrog;
+mod y33_clears;
 mod record;
 // B3a: HEO(S,u) walk research seam. Inert unless HEO_WALK / HEO_RESEARCH is set.
 pub mod heo;
@@ -152,7 +153,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "960153916007",
+        "TAIL_NONCE" => "9018232728",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -260,6 +261,7 @@ pub(crate) fn build_point_add() -> Vec<Op> {
         circ.declare_qubit_register(y);
         circ.declare_bit_register(ox);
         circ.declare_bit_register(oy);
+        circ.y33_clears();
         circ.finalize_records();
         return circ.take_ops();
     }
