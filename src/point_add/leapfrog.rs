@@ -24,169 +24,11 @@ pub fn enabled() -> bool {
     std::env::var("LEAPFROG").is_ok_and(|v| v == "1")
 }
 
-// ---- y33-c35: the walk cap at 1,235 (one qubit off the peak) with the settings re-fitted to it ----
-/// y33-c35 (11 October 2026, experiments/y33-stack/p5 and b5 in the Pensieve repo). On Z7's tree (762,474.9 x 1,236) a
-/// plain cap of 1,235 does not build (forward one-fold tick 129 is one wire short) and, once it builds, the square
-/// goes to 1,238 and two settings fitted to 1,236 sit on cliffs. With the six pieces below: 763,017.9 x 1,235 by the
-/// builder (+543.0 Toffoli for the qubit; 616.4 breaks even). No window, compare width or fold window is changed.
-/// `C35` = false: Z7's gate list byte for byte. Each piece has its own switch so that a port can take them one by one:
-/// - [`C35_CAP`]: HEO_PIN_PP_WALK_MAX_QUBITS 1235;
-/// - [`C35_DROPS`]: the dropped-carry ladder one tick earlier and two carries on the last fused one-fold tick of each
-///   direction (y15_onefold.rs `Y28_DROP_FWD` 129: 1, 130: 2; `Y28_DROP_REV` 125: 1, 126: 2);
-/// - [`C35_DROPN2`]: the divide batch's one-fold ticks drop two carries (SL_N2_DROPN 2; their room is 38);
-/// - [`C35_MD_PLAN`]: the multiply batch's cells of ticks 131..135 one wire lower, not two, and no offset on tick 136
-///   ([`N2_MD_PLAN`]);
-/// - [`C35_MUL76`]: LF_REORDER_MUL 76 (at 77 each of the 76 payload-only reverse ticks pays 6.2 Toffoli);
-/// - [`C35_SQ_REPLAN`]: square.rs `add_cross`, the inverse of a cross add whose forward plan had one chunk (nothing
-///   held, nothing deferred) plans for its own room, as it does when the forward add took the plain ripple; without
-///   it the square peaks at 1,238.
-pub(crate) const C35: bool = true;
-pub(crate) const C35_CAP: bool = C35;
-pub(crate) const C35_DROPS: bool = C35;
-pub(crate) const C35_DROPN2: bool = C35;
-pub(crate) const C35_MD_PLAN: bool = C35;
-pub(crate) const C35_MUL76: bool = C35;
-pub(crate) const C35_SQ_REPLAN: bool = C35;
-// ---- y33-c35b: per-tick tables re-picked at the cap of 1,235 (candidate Z9, on top of y33-c35) ----
-/// y33-c35b (11 October 2026, experiments/y33-stack/p6 and b6 in the Pensieve repo). Three tables of the tree were
-/// fitted on earlier trees at 1,236; with the pieces below re-picked per tick at 1,235: 762,986.1 x 1,235 by the
-/// builder (31.8 Toffoli under y33-c35; 762,975.1 with the piece that is off). No window, compare width or fold window is changed, and only the picks that
-/// add no windowed chunk-boundary compare are taken. `C35B` = false: y33-c35's gate list byte for byte. Each piece has
-/// its own switch so that a port can take them one by one:
-/// - [`C35B_LATE127`]: the two cells of the multiply's fused three-fold tick 127 run late, as [`Y17_PLAN`] already has
-///   them on ticks 128..130 (two rows the table lacked): -11.0;
-/// - [`C35B_BR_F132`]: no bridge budget on the divide's tick 132 (HEO_PIN_I35_PROFILE without 666:0:1): -3.0;
-/// - [`C35B_BR_R129`]: bridge budget 1 on the multiply's tick 129 (HEO_PIN_I35_PROFILE with 651:1:1): -6.0;
-/// - [`C35B_BR_R136`] (OFF: an error trade, not an exact pick): no bridge budget on the multiply's tick 136
-///   (HEO_PIN_I35_PROFILE without 687:1:2): -11.0, but each of the two cells then has 7 windowed boundary compares for 6
-///   (a 16-bit one in place of an exact 15-bit prefix compare; experiments/y33-stack/b6/elements_z8_z9_with136.txt);
-/// - [`C35B_LEAN`]: the reverse one-fold tick takes the lean form on ticks 105, 115 and 116 as well (y15_onefold.rs
-///   `Y17_LEAN` 86..89, 105..110, 115..121): -12.8 (2.3, 3.3, 6.2 by the tick traces; -11.8 by the builder's total).
-pub(crate) const C35B: bool = true;
-pub(crate) const C35B_LATE127: bool = C35B;
-pub(crate) const C35B_BR_F132: bool = C35B;
-pub(crate) const C35B_BR_R129: bool = C35B;
-pub(crate) const C35B_BR_R136: bool = false;
-pub(crate) const C35B_LEAN: bool = C35B;
-/// DIAGNOSTIC planted faults of the paired test (0 in every build that is kept), one in each piece of y33-c35b:
-///   1: the bridge of the multiply's tick 129 (round 651): the phase repair of the split bridge's boundary carry is
-///      left out (bridge.rs);
-///   2: the late cells of the multiply's tick 127: their boundary compares read 2 bits;
-///   3: the lean reverse tick 116: the boundary compares of its adds read 2 bits.
-pub(crate) const C35B_FAULT: u8 = 0;
-/// The I35 bridge profile of the recipe with the y33-c35b picks.
-fn c35b_profile() -> String {
-    let base = "437:1:1,440:0:1,446:0:2,528:1:1,550:0:1,550:1:1,581:1:1,588:1:2,611:1:1,627:1:1,636:0:2,646:1:1,655:1:1,666:0:1,670:0:2,670:1:1,675:0:2,681:0:2,681:1:1,687:0:3,687:1:2";
-    let mut v: Vec<&str> = base.split(',').filter(|e| !(C35B_BR_F132 && *e == "666:0:1") && !(C35B_BR_R136 && *e == "687:1:2")).collect();
-    if C35B_BR_R129 {
-        v.push("651:1:1");
-    }
-    v.join(",")
-}
-/// DIAGNOSTIC planted faults of the paired test (0 in every build that is kept), one in each piece of y33-c35:
-///   1: forward fused tick 130 (two dropped carries): the dropped ladder's phase fixes are left out;
-///   2: reverse fused tick 125 (one dropped carry, new at this cap): the dropped ladder's phase fix is left out;
-///   3: the square's re-planned inverse cross add: the phase compare of its chunk boundary is left out;
-///   4: reverse fused tick 76 (the tick LF_REORDER_MUL 76 moves into the fused pass): the boundary compares of its
-///      adds read 2 bits;
-///   5: the multiply batch's tick 133 (cells one wire lower): the cells' boundary compares read 2 bits.
-/// (A compare shift of -12 on those ticks does not build: the chunk layout follows the compare width.)
-pub(crate) const C35_FAULT: u8 = 0;
-/// DIAGNOSTIC trace (false in every build that is kept; no effect on the gates): one line for every chunk-boundary
-/// carry a payload add erases, "C35_CMP round multiply lo hi compare seeded tie": the chunk [lo, hi), the width of the
-/// compare that repairs its phase (approximate where compare < hi - lo) and whether a seed bit predicts the borrow.
-pub(crate) const C35_TRACE: bool = false;
-/// [`C35_WIDEN`]: the offset for the approximate boundary compares the lower cap adds. Each entry (multiply, round,
-/// lo, hi) names one chunk-boundary compare of a plain payload add: a 17-bit seeded compare of the chunk [lo, hi),
-/// the first with that key in the build. It reads 2 more bits with its predictor wire kept (one more bit with the
-/// same predictor is an identity): half the miss rate, that of an 18-bit seeded compare, and every miss is a miss of
-/// the 17-bit compare. 2 Toffoli under a measured condition each. The build panics if an entry meets a compare of
-/// another kind or is never met. Rounds 655, 661, 698 of the divide (each first add) and 661 of the multiply.
-pub(crate) const C35_WIDEN: bool = C35;
-const C35_WIDEN_AT: [(bool, usize, usize, usize); 21] = [
-    (false, 655, 0, 37), (false, 655, 37, 74), (false, 655, 74, 111), (false, 655, 111, 148), (false, 655, 148, 184), (false, 655, 184, 220),
-    (false, 661, 0, 37), (false, 661, 37, 74), (false, 661, 74, 111), (false, 661, 111, 148), (false, 661, 148, 184), (false, 661, 184, 220),
-    (false, 698, 0, 37), (false, 698, 37, 74), (false, 698, 74, 111), (false, 698, 111, 148), (false, 698, 148, 184), (false, 698, 184, 220),
-    (true, 661, 37, 74), (true, 661, 74, 111), (true, 661, 111, 148),
-];
-/// DIAGNOSTICS of the paired test (false / 0 in every kept build). PAD: the table's compares keep their 17 bits and
-/// 2 idle measurements follow each (Z8 with Z8c's random words). FAULT = i + 1: entry i reads 15 bits, with 4 idle
-/// measurements (Z8c's random words).
-pub(crate) const C35_WIDEN_PAD: bool = false;
-pub(crate) const C35_WIDEN_FAULT: usize = 0;
-thread_local! { static C35_WIDEN_HITS: std::cell::Cell<[u32; 21]> = const { std::cell::Cell::new([0; 21]) }; }
-/// [`C35_WIDEN_WIDE`]: the like-for-like part of the offset, on the wide-walk rounds. For every approximate boundary
-/// compare the lower cap adds against the cap of 1,236 on a round before 651, two seeded compares of the same round
-/// and width read 2 more bits with the predictor wire kept, as [`C35_WIDEN`]'s do on the last rounds (for the two
-/// added compares that are unseeded, divide 322 and multiply 636, two seeded compares of the round's own width).
-/// An entry is (multiply, round, lo, hi, width): the first compare with that key in the build; the build panics if
-/// it is not a seeded approximate compare of that width, or is never met.
-pub(crate) const C35_WIDEN_WIDE: bool = C35;
-const C35_WIDEN_WIDE_AT: [(bool, usize, usize, usize, usize); 32] = [
-    (false, 279, 20, 138, 19), (false, 279, 0, 86, 19), (false, 284, 0, 86, 19), (false, 284, 86, 171, 19),
-    (false, 322, 0, 86, 19), (false, 322, 86, 171, 19), (false, 462, 0, 64, 20), (false, 462, 64, 128, 20),
-    (false, 495, 0, 64, 20), (false, 495, 64, 128, 20), (false, 560, 0, 52, 21), (false, 560, 52, 103, 21),
-    (false, 571, 0, 52, 21), (false, 571, 52, 103, 21), (false, 607, 21, 68, 22), (false, 607, 68, 115, 22),
-    (false, 611, 0, 43, 22), (false, 611, 43, 86, 22), (false, 616, 0, 43, 18), (false, 616, 43, 86, 18),
-    (false, 642, 16, 56, 18), (false, 642, 56, 96, 18), (false, 646, 0, 37, 18), (false, 646, 37, 74, 18),
-    (true, 478, 0, 64, 21), (true, 478, 64, 128, 21), (true, 607, 21, 68, 23), (true, 607, 68, 115, 23),
-    (true, 631, 0, 37, 18), (true, 631, 37, 74, 18), (true, 636, 0, 37, 18), (true, 636, 37, 74, 18),
-];
-/// DIAGNOSTICS of the paired test (false / 0 in every kept build), as [`C35_WIDEN_PAD`] and [`C35_WIDEN_FAULT`] for
-/// this table; the fault's entry reads 13 bits.
-pub(crate) const C35_WIDEN_WIDE_PAD: bool = false;
-pub(crate) const C35_WIDEN_WIDE_FAULT: usize = 0;
-thread_local! { static C35_WIDEN_WIDE_HITS: std::cell::Cell<[u32; 32]> = const { std::cell::Cell::new([0; 32]) }; }
-thread_local! {
-    /// Diagnostic (0 in every kept build): idle wires the next phase compare takes before its carries and measures
-    /// after them, where a compare that many bits longer takes and measures its low carries (the same random words).
-    pub(crate) static C35_PADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-/// (bits the boundary compare of chunk [lo, hi) reads, idle measurements after it)
-pub(crate) fn c35_widen(multiply: bool, round: usize, lo: usize, hi: usize, compare: usize, seeded: bool) -> (usize, usize) {
-    if let Some(i) = C35_WIDEN_WIDE_AT.iter().position(|&e| C35_WIDEN_WIDE && (e.0, e.1, e.2, e.3) == (multiply, round, lo, hi)) {
-        let k = C35_WIDEN_WIDE_AT[i].4;
-        if C35_WIDEN_WIDE_HITS.with(|h| { let mut v = h.get(); v[i] += 1; h.set(v); v[i] }) > 1 { return (compare, 0); }
-        assert!(compare == k && seeded && hi - lo > k + 2, "C35_WIDEN_WIDE: entry {i} is not a {k}-bit seeded approximate boundary compare");
-        if C35_TRACE { eprintln!("C35_WIDE\t{round}\t{}\t{lo}\t{hi}", multiply as u8); }
-        return if C35_WIDEN_WIDE_PAD { (k, 2) } else if C35_WIDEN_WIDE_FAULT == i + 1 { (13, k + 2 - 13) } else { (k + 2, 0) };
-    }
-    let Some(i) = C35_WIDEN_AT.iter().position(|&e| C35_WIDEN && e == (multiply, round, lo, hi)) else { return (compare, 0) };
-    let n = C35_WIDEN_HITS.with(|h| { let mut v = h.get(); v[i] += 1; h.set(v); v[i] });
-    if n > 1 { return (compare, 0); }
-    assert!(compare == 17 && seeded && hi - lo > 19, "C35_WIDEN: entry {i} is not a 17-bit seeded approximate boundary compare");
-    if C35_TRACE { eprintln!("C35_WIDE\t{round}\t{}\t{lo}\t{hi}", multiply as u8); }
-    if C35_WIDEN_PAD { (compare, 2) } else if C35_WIDEN_FAULT == i + 1 { (compare - 2, 4) } else { (compare + 2, 0) }
-}
-/// Every entry of [`C35_WIDEN_AT`] was met (called once, after the multiply).
-pub(crate) fn c35_widen_check() {
-    C35_WIDEN_HITS.with(|h| assert!(!C35_WIDEN || h.get().iter().all(|&n| n > 0), "C35_WIDEN: an entry was never met: {:?}", h.get()));
-    C35_WIDEN_WIDE_HITS.with(|h| assert!(!C35_WIDEN_WIDE || h.get().iter().all(|&n| n > 0), "C35_WIDEN_WIDE: an entry was never met: {:?}", h.get()));
-}
-thread_local! {
-    /// The one-fold body now running: (tick, reverse, inside); for [`C35_FAULT`] 1 and 2.
-    pub(crate) static C35_AT: std::cell::Cell<(usize, bool, bool)> = const { std::cell::Cell::new((0, false, false)) };
-    /// Set while a payload add runs whose chunk-boundary compares read 2 bits ([`C35_FAULT`] 4 and 5; pingpong.rs).
-    pub(crate) static C35_CMP_FX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Set while the square's re-planned inverse cross add runs with [`C35_FAULT`] 3.
-    pub(crate) static C35_SQ_FX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-/// [`C35_FAULT`] 1 and 2: leave the dropped ladder's phase fix out on this one-fold body.
-pub(crate) fn c35_fx_skip_drop() -> bool {
-    let (t, rev, inside) = C35_AT.with(|x| x.get());
-    inside && ((C35_FAULT == 1 && !rev && t == 130) || (C35_FAULT == 2 && rev && t == 125))
-}
-/// [`C35_FAULT`] 5: on the multiply batch's three-fold cells of tick 133.
-fn c35_fx5(t: usize) -> bool {
-    C35_FAULT == 5 && t == 133 && N2_THREEFOLD_REV.with(|f| f.get())
-}
-
 /// Submission recipe, installed by `build()` on top of the Skywalk recipe (which still configures the shared
 /// replay cells, coordinate ops and square): Leapfrog m = 2, sign2 + window choice, fast rails, seed-half, walk
 /// cap 1237;
 /// the square's B fold stays plain (NATIVE_SFUSE_B=1) and the Skywalk back seam is off (both fuse into its walk).
 pub(crate) fn install_recipe() {
-    let c35b_prof = c35b_profile();
     for (k, v) in [
         ("LEAPFROG", "1"),
         ("LEAPFROG_M", "2"),
@@ -224,21 +66,19 @@ pub(crate) fn install_recipe() {
         ("LF_REORDER", "76"),
         // y15-room: the divide's and the multiply's boundary set apart (each overrides LF_REORDER for its direction)
         ("LF_REORDER_DIV", "42"),
-        ("LF_REORDER_MUL", if C35_MUL76 { "76" } else { "77" }),
+        ("LF_REORDER_MUL", "77"),
         // spookyfrog: N1 split-carry phase deferral, N2 tail batch with a terminal sign-copy loan, RT0 + T0 one boundary
         ("SL_N2", "2"),
         ("SL_N2_DROP", "all"),
-        // y33-c35: the batch's one-fold ticks drop two carries where the room is 38 (see [`C35`]); "1" is the code default
-        ("SL_N2_DROPN", if C35_DROPN2 { "2" } else { "1" }),
         ("SL_DEFER_T0", "3"),
         ("SL_DEFER_SQ", "1"),
         // spookyfrog: N1 split-carry phase deferral, N2 tail batch with a terminal sign-copy loan, RT0 + T0 one boundary
         ("SL_RT0", "1"),
         ("SL_T0ONE", "1"),
         // this entry's switches as recipe values
-        // ("FM_PARK_LEND", "0:2"),
+        ("FM_PARK_LEND", "0:2"),
         ("SL_PSCAN_FIX", "1"),
-        ("SL_ROWCUT", "0"),
+        ("SL_ROWCUT", "1"),
         // the square's inverse-row top carries under the top bit (sqtop_pass.rs)
         ("SL_SQTOP", "1"),
         // Toffolis consumed only by phases, a measurement or a reset (cond_pass.rs)
@@ -249,7 +89,7 @@ pub(crate) fn install_recipe() {
         ("LF_SIGNWIRE", "1"),
         ("LF_SEAMS", "1"),
         // peak cap, tuned together with LF_REORDER
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", if C35_CAP { "1235" } else { "1236" }),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1236"),
         // the merged step's shared core has 13 ANDs (the rank bound) where it had 14; every fit, split and plan rule
         // counts the wire it no longer holds
         ("LF_CORE_FREED", "all"),
@@ -306,8 +146,7 @@ pub(crate) fn install_recipe() {
         // ~956.29M (#1 957.29M); λ paired vs glam_base 512 nonces fails -0.773 +- 0.160, proj 18.88, proj+2se 19.20.
         ("LF_YP8_LATE", "1:13,6:17,11:22,90:20,100:18,112:16,118:14,124:12"),
         ("LF_G10_TABLE", "770"),
-        // y33-c35b: the same profile with the picks of [`C35B_BR_F132`], [`C35B_BR_R129`], [`C35B_BR_R136`]
-        ("HEO_PIN_I35_PROFILE", c35b_prof.as_str()),
+        ("HEO_PIN_I35_PROFILE", "437:1:1,440:0:1,446:0:2,528:1:1,550:0:1,550:1:1,581:1:1,588:1:2,611:1:1,627:1:1,636:0:2,646:1:1,655:1:1,666:0:1,670:0:2,670:1:1,675:0:2,681:0:2,681:1:1,687:0:3,687:1:2"),
         ("LF_CMP_FROM", "120"),
         // T3 (λ margin into T): boundary compare widened from tick 120 again (-207 T model), with Y15_GUARD 0 in
         // y15_onefold.rs (-742 T). Both are phase-only (classical mismatches identical per nonce to G12).
@@ -488,12 +327,8 @@ pub(crate) fn y16_leave(c: &Builder, kind: usize, st: (f64, f64)) {
 thread_local! { static Y17_LOG: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) }; }
 /// y17 trace (no effect on the gates): a detail line for the payload op being traced
 pub(crate) fn y17_log(_c: &Builder, f: impl FnOnce() -> String) {
-    if y15::trace() || C35_TRACE {
+    if y15::trace() {
         let s = f();
-        // y33-c35b diagnostic (C35_TRACE; no effect on the gates): every logged payload element in build order
-        if C35_TRACE {
-            eprintln!("C35B_LOG\t{s}");
-        }
         Y17_LOG.with(|l| l.borrow_mut().push(s));
     }
 }
@@ -570,10 +405,6 @@ fn y17_plan(dir: usize, t: usize, slot: usize) -> (isize, isize, bool) {
     }
     if !Y17_ON {
         return (0, -1, false);
-    }
-    // y33-c35b ([`C35B_LATE127`]): the two cells of reverse tick 127 run late, as on ticks 128..130
-    if C35B_LATE127 && dir == 1 && t == 127 && slot < 2 {
-        return (0, -1, true);
     }
     Y17_PLAN.iter().find(|e| e.0 == dir && e.1 == t && e.2 == slot).map_or((0, -1, false), |e| (e.3, e.4, e.5))
 }
@@ -4245,10 +4076,7 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
             let pr = tie_pred(c, t, s, *tr.last().unwrap(), *br.last().unwrap());
             assert!(pr.is_none(), "y17: late cells are not built for tie-safe ticks");
             let y16_m = y16_mark(c, t, 1, y17_slot);
-            // y33-c35b diagnostic (inert at C35B_FAULT = 0): fault 2 on the late cells of tick 127
-            C35_CMP_FX.with(|x| x.set(C35B_FAULT == 2 && t == 127));
             cells::with_cmp_shift(cmp_shift_at(t), || cells::double_add(c, s, &ps, &pt, fold, proxy));
-            C35_CMP_FX.with(|x| x.set(false));
             y16_note(c, &mut y16_ops, "cell", y16_m);
             c.x(s);
         }
@@ -5657,9 +5485,7 @@ fn pay_rev_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<Qubi
         c.x(s);
         let cp = lr_pad_c2(c, 2 * lowrel() as usize);
         n2_extra(t, if s == s0 { 0 } else if s == s1 { 1 } else { 2 });
-        C35_CMP_FX.with(|x| x.set(c35_fx5(t)));
         cells::with_tie(None, || cells::with_cmp_shift(cmp_shift_at(t), || cells::double_add(c, s, &ps, &pt, fold, proxy)));
-        C35_CMP_FX.with(|x| x.set(false));
         n2_extra_off();
         lr_unpad(c, cp);
         c.x(s);
@@ -5788,11 +5614,7 @@ fn n2_rev_y15(t: usize) -> bool {
 }
 /// The multiply batch's plan (t/slot/d) from 113bf38's sweeps (cells of 131..135 two wires lower, tick 136's merged op
 /// one lower). SL_N2_MD=none: no offsets.
-const N2_MD_PLAN: &str = if C35_MD_PLAN {
-    "131/0/-1,131/1/-1,132/0/-1,132/1/-1,133/0/-1,133/1/-1,134/0/-1,134/1/-1,135/0/-1,135/1/-1"
-} else {
-    "131/0/-2,131/1/-2,132/0/-2,132/1/-2,133/0/-2,133/1/-2,134/0/-2,134/1/-2,135/0/-2,135/1/-2,136/2/-1"
-};
+const N2_MD_PLAN: &str = "131/0/-2,131/1/-2,132/0/-2,132/1/-2,133/0/-2,133/1/-2,134/0/-2,134/1/-2,135/0/-2,135/1/-2,136/2/-1";
 /// Inside the multiply's batch: the room offset d <= 0 of payload op `slot` of tick t from SL_N2_MD (default
 /// [`N2_MD_PLAN`]), set as y17's Y17_EXTRA. Outside the batch: nothing.
 fn n2_extra(t: usize, slot: usize) {
@@ -6076,23 +5898,7 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
     for t in 0..ahead {
         let letter = wk.tape[t].clone();
         let pads = lr_pad(c, 2 * lowrel() as usize);
-        if t == 0 {
-            y15::t0_pads(c, true);
-        }
-        if t == 0 && y15::P3_T0_ONE_ADD {
-            y15::fwd_tick0_one(c, &letter, &mut pay);
-        } else {
-            if t == 0 {
-                eprintln!("P3_T0 tick head ops from {}", c.op_count());
-            }
-            pay_fwd_tick(c, t, &letter, &mut pay);
-            if t == 0 {
-                eprintln!("P3_T0 tick head ops to {}", c.op_count());
-            }
-        }
-        if t == 0 {
-            y15::t0_pads(c, false);
-        }
+        pay_fwd_tick(c, t, &letter, &mut pay);
         lr_unpad(c, pads);
         if t0f && t == 0 {
             parity_rail_in(c, &mut wk, ahead, loan_pad.take());
