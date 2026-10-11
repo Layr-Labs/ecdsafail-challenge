@@ -913,6 +913,7 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
     // top of the 2(hi+1)-bit cross word is zero after this subtraction.
     let first=if !flat_sum_carries.is_empty() && (go_b2()||super::env_flag("SQ_FLAT_SHARE_C0")){assert!(row0_copy());Carry0::Known(flat_sum_carries[0])}else if let Some(q)=k0{assert!(row0_copy());Carry0::Known(q)}else{Carry0::Full};
     let odd_tops = lo < m - lo && super::env_flag("SQ_ODD_NODE_TOPS");
+    super::modular::dsq_keep_scope(true, || {
     if odd_tops {
         let c1=if cut_sqident(){Carry1::CopiesCarry0}else{Carry1::Full};
         super::modular::addsub_wide_known_top(circ,a2,&cross,true,first,c1,false);
@@ -921,16 +922,19 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
     } else {
         addsub_wide_low(circ,a2,&cross,true,first,Carry1::Full);
     }
+    });
     // SQ_ROW0_COPY: b2 holds b^2 + Nb with Nb = 2 (mod 4), so its bit 1 is
     // always set. Clearing it subtracts b2 - 2, which keeps the bit-1 carry
     // identity below and adds 2 to this node's cross offset.
     if row0_copy() {circ.x(b2[1]);}
+    super::modular::dsq_keep_scope(true, || {
     if super::env_flag("SQ_ZERO_TOP_CROSS") {
         // 2ab < 2^(lo+hi+1), while cross has 2*(hi+1) bits: its top is zero.
         let (c0,c1)=if cut_sqident(){(Carry0::Zero,Carry1::CopiesCarry0)}else{(Carry0::Full,Carry1::Full)};
         super::modular::addsub_wide_known_top(circ,b2,&cross,true,c0,c1,false);
     } else if cut_sqident() {addsub_wide_low(circ,b2,&cross,true,Carry0::Zero,Carry1::CopiesCarry0);}
     else {sub_wide(circ,b2,&cross);}
+    });
     if row0_copy() {circ.x(b2[1]);}
     if let Some(q)=k0{circ.cx(cross[1],q);circ.release_clean(q);}
     // product += 2ab << lo, exact full ripple to the top (x^2 < 2^(2m), so the
@@ -1170,6 +1174,10 @@ thread_local! {
 }
 
 pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
+    sub_square_x(circ, out, y);
+    super::modular::dsq_check();
+}
+fn sub_square_x(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
     // G3_SQ_EXACT_SPLIT: every ladder the square splits to fit its cap erases its boundary carries exactly
     // (whole-chunk compares in reverse order) instead of through the HEO_FIT_K window, so a capped square
     // spends no lambda. Off in the default recipe.

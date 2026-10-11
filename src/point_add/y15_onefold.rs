@@ -139,6 +139,10 @@ fn y21_top_on(t: usize, rev: bool) -> bool {
 const Y21_DEEP_FWD: &[(usize, usize)] = &[(130, 131)];
 const Y21_DEEP_REV: &[(usize, usize)] = &[(126, 127)];
 fn y21_deep_on(t: usize, rev: bool) -> bool {
+    // N2 (research patch): the payload-only batches at room 39 (None outside them)
+    if let Some(on) = super::n2_deep(t, rev) {
+        return on;
+    }
     (if rev { Y21_DEEP_REV } else { Y21_DEEP_FWD }).iter().any(|&(a, b)| t >= a && t < b)
 }
 /// y18-next (9 October 2026), "late tops": the three wires at the top of adds 0 and 1 (x256 = add 0's carry out of bit
@@ -386,6 +390,10 @@ const Y28_LEAN_REV: bool = true;
 const Y28_DROP_FWD: &[(usize, usize, usize)] = &[(130, 131, 1)];
 const Y28_DROP_REV: &[(usize, usize, usize)] = &[(126, 127, 1)];
 fn y28_drop(t: usize, rev: bool) -> usize {
+    // N2 (research patch): SL_N2_DROP / SL_N2_MDROP batch ticks run the dropped-carry ladder (None elsewhere)
+    if let Some(n) = super::n2_drop(t, rev) {
+        return n;
+    }
     (if rev { Y28_DROP_REV } else { Y28_DROP_FWD }).iter().find(|&&(a, b, _)| t >= a && t < b).map_or(0, |&(_, _, n)| n)
 }
 /// y28 DIAGNOSTIC, used only with leapfrog.rs's `Y28_ALIGNED` (the aligned copy, never an entry): (tick, n) = n idle
@@ -398,6 +406,10 @@ fn y28_drop(t: usize, rev: bool) -> usize {
 const Y28_PADS_FWD: &[(usize, usize)] = &[(130, 9)];
 const Y28_PADS_REV: &[(usize, usize)] = &[(126, 10)];
 fn y28_pads(t: usize, rev: bool) -> usize {
+    // N2 (research patch, diagnostic): SL_N2_PADS idle measurements on the batch's drop ticks (None elsewhere)
+    if let Some(n) = super::n2_pads(t, rev) {
+        return n;
+    }
     if !Y28_ALIGNED {
         return 0;
     }
@@ -887,7 +899,10 @@ fn ladder_drop(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: 
             lin_and_erase(c, q, &a, &b);
         }
         let back = d[h0 - l0];
-        lin_lt_phase(c, &acc[lo..hi], &add[lo..hi], back);
+        // N2 (research patch): SL_N2_FX=z<t> leaves this phase fix out on divide batch tick t (deliberate fault)
+        if !super::n2_fx_skip_drop_z() {
+            lin_lt_phase(c, &acc[lo..hi], &add[lo..hi], back);
+        }
         kept_erase(c, acc, add, l0, h0, c0, back);
         c.pop_condition();
         c.free_bit(m);
@@ -3108,7 +3123,8 @@ pub(super) fn fwd_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [V
     let (tg, b) = (p[ti].clone(), p[si].clone());
     let (e0, a0) = (c.expected_total(), c.active_qubits());
     let shift = cmp_shift_at(t);
-    cells::with_tie(None, || cells::with_cmp_shift((shift.0 + Y15_CMP_EXTRA, shift.1), || cells::with_bridge(proxy, false, || body_capped(c, t, s, k1, k2, &b, &tg, proxy, false))));
+    // N2 (research patch): SL_N2_CMPX more chunk-boundary compare bits on the divide's batch ticks (0 elsewhere)
+    cells::with_tie(None, || cells::with_cmp_shift((shift.0 + Y15_CMP_EXTRA + super::n2_cmpx(), shift.1), || cells::with_bridge(proxy, false, || body_capped(c, t, s, k1, k2, &b, &tg, proxy, false))));
     for _ in 0..3 {
         rot1(c, &tg, true);
     }
@@ -3544,6 +3560,7 @@ pub(super) fn t0_phase_forms(c: &mut Builder, letter: &[QubitId], h: &[QubitId],
     let ((), peak) = c.r3_peak(|c| t0_forms_body(c, s, k1, k2, h, bits));
     assert!(peak as usize <= cells::cap(), "y26: the phase block on forms peaks at {peak}, over the walk cap {}", cells::cap());
 }
+#[allow(unused)] // rustc 1.93.0 panics in check_liveness on this function otherwise
 #[allow(unused)] // rustc 1.93.0 panics in check_liveness on this function otherwise
 fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: &[QubitId], bits: Vec<crate::circuit::BitId>) {
     assert_eq!(h.len(), N);
@@ -4019,6 +4036,7 @@ fn rt0_body(c: &mut Builder, r1: Vec<QubitId>, letter: Vec<QubitId>, bits: Vec<c
     assert_eq!(bits.len(), N);
     let mode = sl_rt0();
     let (e0, a0) = (c.expected_total(), c.active_qubits());
+    let a0 = a0 - super::t0h_held() as u32; // defer T0H: the held wires are freed by the letter erase
     let sw = r1[N - 1];
     let fs = go_fs("GO_FG_P");
     let fc = f();
@@ -4160,13 +4178,21 @@ fn rt0_body(c: &mut Builder, r1: Vec<QubitId>, letter: Vec<QubitId>, bits: Vec<c
 fn rt0_letter_erase(c: &mut Builder, r1: &[QubitId], r0v: &[Lin], letter: &[QubitId]) {
     assert!(t0_plain(0), "RT0: tick 0 takes the plain rule (LF_T0_FREE)");
     let b = r1;
-    let mut ts = c.alloc_qubits(7);
-    for i in 0..7 {
-        lin_xor_into(c, &r0v[i + 1], ts[i]);
-    }
-    for (n, i) in [(7usize, 0usize), (6, 1)] {
-        fast_add_halve_forced_lr(c, letter[i], &b[..n], &mut ts);
-    }
+    // defer T0H: t0_derive's scratch after the same two forced steps, and its q, when held
+    let held = super::t0h_take();
+    let mut ts = match &held {
+        Some((ts, _)) => ts.clone(),
+        None => {
+            let mut ts = c.alloc_qubits(7);
+            for i in 0..7 {
+                lin_xor_into(c, &r0v[i + 1], ts[i]);
+            }
+            for (n, i) in [(7usize, 0usize), (6, 1)] {
+                fast_add_halve_forced_lr(c, letter[i], &b[..n], &mut ts);
+            }
+            ts
+        }
+    };
     lr_restore(c, &mut ts);
     let one = c.alloc_qubit();
     c.x(one);
@@ -4192,11 +4218,21 @@ fn rt0_letter_erase(c: &mut Builder, r1: &[QubitId], r0v: &[Lin], letter: &[Qubi
     c.release_clean(s3);
     rt0_z_if(c, &Lin { w: vec![dq, k2, z2], one: false }, m, one);
     c.push_condition(m);
-    let t0m = t0_m_on(c, b, letter[0], letter[1]);
-    lin_cz(c, &l(z2), &Lin { w: vec![t0m.mh, dq], one: true });
-    t0_m_off(c, t0m);
+    if let Some((_, q)) = &held {
+        let mh = super::t0_mh_on(c, letter[1], *q);
+        let w = if super::defer_t0_fault() == 11 { *q } else { mh };
+        lin_cz(c, &l(z2), &Lin { w: vec![w, dq], one: true });
+        super::t0_mh_off(c, mh, letter[1], *q);
+    } else {
+        let t0m = t0_m_on(c, b, letter[0], letter[1]);
+        lin_cz(c, &l(z2), &Lin { w: vec![t0m.mh, dq], one: true });
+        t0_m_off(c, t0m);
+    }
     c.pop_condition();
     c.free_bit(m);
+    if let Some((_, q)) = &held {
+        super::t0_q_erase(c, b, letter[0], *q);
+    }
     // k2
     let m = c.alloc_bit();
     c.hmr(k2, m);

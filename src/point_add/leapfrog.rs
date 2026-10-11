@@ -68,6 +68,11 @@ pub(crate) fn install_recipe() {
         ("LF_REORDER_DIV", "42"),
         ("LF_REORDER_MUL", "77"),
         // spookyfrog: N1 split-carry phase deferral, N2 tail batch with a terminal sign-copy loan, RT0 + T0 one boundary
+        ("SL_N2", "2"),
+        ("SL_N2_DROP", "all"),
+        ("SL_DEFER_T0", "3"),
+        ("SL_DEFER_SQ", "1"),
+        // spookyfrog: N1 split-carry phase deferral, N2 tail batch with a terminal sign-copy loan, RT0 + T0 one boundary
         ("SL_RT0", "1"),
         ("SL_T0ONE", "1"),
         // plain seeded compares on would-be tie ticks; source-rail sign wire read by the rail adds; seed/unseed fused
@@ -3172,6 +3177,8 @@ fn restore_onto(c: &mut Builder, cur: Vec<QubitId>, d: &[QubitId]) {
         }
     }
     c.free_vec(&cur[N..]);
+    // N2 (research patch, diagnostic): SL_N2_RPAD idle measurements after the i-th call (aligned copy)
+    n2_rpads(c);
     // y28 DIAGNOSTIC, never for an entry (see [`Y28_ALIGNED`]); the log line has no effect on the gates
     if Y28_ALIGNED {
         let call = Y28_RESTORES.with(|x| x.replace(x.get() + 1));
@@ -3799,7 +3806,11 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
         }
     }
     if let Some(m) = t0m {
-        t0_m_off(c, m);
+        if defer_t0_dq() {
+            t0_m_off_keep(c, m); // defer: q's phase goes on at t0_derive
+        } else {
+            t0_m_off(c, m);
+        }
     }
     pacc(c, &format!("fwd{fk}.choice"), q0);
     let q0 = pmark(c);
@@ -4974,6 +4985,113 @@ fn t0_m_off(c: &mut Builder, m: T0M) {
     c.free_vec(&m.add);
     c.free(m.z);
 }
+// ---- defer (spooky-leapfrog-v1, SL_DEFER_T0): tick 0's veto q deferred (DQ) and t0_derive's state held (T0H) ----
+fn sl_defer_t0() -> u8 {
+    static V: OnceLock<u8> = OnceLock::new();
+    *V.get_or_init(|| std::env::var("SL_DEFER_T0").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
+}
+fn defer_t0_dq() -> bool {
+    let v = sl_defer_t0();
+    v == 1 || v == 3 || v >= 9
+}
+fn defer_t0_hold() -> bool {
+    let v = sl_defer_t0();
+    (v == 2 || v == 3 || v >= 9) && y15::sl_rt0() != 0
+}
+fn defer_t0_fault() -> u8 {
+    let v = sl_defer_t0();
+    if v >= 9 { v } else { 0 }
+}
+thread_local! {
+    /// DQ: the outcome bit of forward tick 0's q, until t0_derive builds q again
+    static T0Q_KEEP: std::cell::Cell<Option<crate::circuit::BitId>> = const { std::cell::Cell::new(None) };
+    /// T0H: t0_derive's scratch (after its two forced steps, bit-0 wire dropped) and its q, until RT0's letter erase
+    static T0H_STASH: std::cell::RefCell<Option<(Vec<QubitId>, QubitId)>> = const { std::cell::RefCell::new(None) };
+}
+/// [`t0_m_off`] with q measured and its outcome bit kept for t0_derive (no compare).
+fn t0_m_off_keep(c: &mut Builder, m: T0M) {
+    T0_M.with(|x| x.set(None));
+    c.x(m.s1);
+    and_erase(c, m.mh, m.s1, m.q);
+    c.x(m.s1);
+    let b = c.alloc_bit();
+    c.hmr(m.q, b);
+    c.release_clean(m.q);
+    assert!(T0Q_KEEP.with(|k| k.replace(Some(b))).is_none(), "defer DQ: a kept bit from an earlier walk");
+    t0_m_consts(c, &m.add, m.s0);
+    c.free_vec(&m.add);
+    c.free(m.z);
+}
+/// DQ, in t0_derive: q holds [V > C] again, so the kept bit's phase is one Z on it.
+fn defer_t0_apply_q(c: &mut Builder, q: QubitId) {
+    if let Some(b) = T0Q_KEEP.with(|k| k.take()) {
+        if defer_t0_fault() != 9 {
+            c.z_if(q, b);
+        }
+        c.free_bit(b);
+    }
+}
+/// T0H: [`t0_m_off`] that keeps q (the AND mh and the constants go; q stays for RT0).
+fn t0_m_off_hold(c: &mut Builder, m: T0M) -> QubitId {
+    T0_M.with(|x| x.set(None));
+    c.x(m.s1);
+    and_erase(c, m.mh, m.s1, m.q);
+    c.x(m.s1);
+    t0_m_consts(c, &m.add, m.s0);
+    c.free_vec(&m.add);
+    c.free(m.z);
+    m.q
+}
+/// T0H: the held state, taken by RT0's letter erase.
+fn t0h_take() -> Option<(Vec<QubitId>, QubitId)> {
+    T0H_STASH.with(|s| s.borrow_mut().take())
+}
+/// T0H: wires held for RT0 (0 when nothing is held).
+fn t0h_held() -> usize {
+    T0H_STASH.with(|s| s.borrow().as_ref().map_or(0, |(ts, _)| ts.len() + 1))
+}
+/// T0H: mh = AND(!s1, q), as t0_m_on builds it.
+fn t0_mh_on(c: &mut Builder, s1: QubitId, q: QubitId) -> QubitId {
+    c.x(s1);
+    let mh = and_new(c, s1, q);
+    c.x(s1);
+    mh
+}
+fn t0_mh_off(c: &mut Builder, mh: QubitId, s1: QubitId, q: QubitId) {
+    c.x(s1);
+    and_erase(c, mh, s1, q);
+    c.x(s1);
+}
+/// T0H: erase the held q = [V > C] by measurement, the compare of [`t0_m_off`] on the outcome-1 shots.
+fn t0_q_erase(c: &mut Builder, r1: &[QubitId], s0: QubitId, q: QubitId) {
+    let sg = r1[N - 1];
+    let v: Vec<QubitId> = (0..T0_KH).map(|i| r1[N - 1 - T0_KH + i]).collect();
+    let add = c.alloc_qubits(T0_KH);
+    t0_m_consts(c, &add, s0);
+    let z = c.alloc_qubit();
+    for &w in &v {
+        c.cx(sg, w);
+    }
+    let b = c.alloc_bit();
+    c.hmr(q, b);
+    c.release_clean(q);
+    if defer_t0_fault() != 10 {
+        c.push_condition(b);
+        carry_out_xor(c, &v, &add, z, None); // (-1)^(NOT carry)
+        c.x(z);
+        c.z_if(z, NO_BIT); // times -1
+        c.x(z);
+        c.pop_condition();
+    }
+    c.free_bit(b);
+    for &w in &v {
+        c.cx(sg, w);
+    }
+    t0_m_consts(c, &add, s0);
+    c.free_vec(&add);
+    c.free(z);
+}
+
 /// `LF_T0_FREE=1|div|mul`: tick 0's letter is kept off the tape wherever a walk sits at the qubit cap (both walks,
 /// the divide only, the multiply only).
 ///
@@ -5042,11 +5160,26 @@ fn t0_derive(c: &mut Builder, wk: &Walk) -> Vec<QubitId> {
     bb.extend_from_slice(&b[..5]);
     assert!(t0_plain(0));
     let t0m = t0_m_on(c, &b, letter[0], letter[1]);
+    defer_t0_apply_q(c, t0m.q);
     fast_choice(c, &ts, &bb, s3, k1, k2, 0);
-    t0_m_off(c, t0m);
+    let q_held = if defer_t0_hold() {
+        Some(t0_m_off_hold(c, t0m))
+    } else {
+        t0_m_off(c, t0m);
+        None
+    };
     c.x(one);
     c.free(one);
     lr_drop(c, &mut ts);
+    if let Some(q) = q_held {
+        // T0H: the scratch and q stay for RT0's letter erase, which reads exactly this state
+        T0H_STASH.with(|s| {
+            assert!(s.borrow().is_none(), "defer T0H: state from an earlier walk");
+            *s.borrow_mut() = Some((ts, q));
+        });
+        letter.extend([s3, k1, k2]);
+        return letter;
+    }
     for (i, n) in [(1usize, 6usize), (0, 7)] {
         fast_double_sub_forced_lr(c, letter[i], &b[..n], &mut ts);
     }
@@ -5113,7 +5246,7 @@ fn pay_fwd_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<Qubi
 
 /// Payload half of [`rev_tick_fast`] on a tick below the tie-safe ticks (the tape is read, not popped).
 fn pay_rev_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<QubitId>; 2]) {
-    if y15::rev_on(t) {
+    if y15::rev_on(t) && n2_rev_y15(t) {
         return y15::rev_tick(c, t, letter, p);
     }
     let (y15_e0, y15_a0) = (c.expected_total(), c.active_qubits());
@@ -5125,9 +5258,11 @@ fn pay_rev_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<Qubi
     let merged = merged_fits(c.active_qubits() as usize, t, true);
     if let Some(mw) = merged {
         let (pt, ps) = (p[ti].clone(), p[si].clone());
+        n2_extra(t, 2);
         cells::with_tie(None, || {
             cells::with_cmp_shift(cmp_shift_at(t), || cells::with_bridge(proxy, true, || merged_rev(c, s3, &ps, &pt, k1, k2, proxy, true, mw)))
         });
+        n2_extra_off();
         pacc(c, "revP.pay_merged", q0);
     } else {
         cmod_barrel(c, k1, k2, &p[ti], true);
@@ -5141,12 +5276,346 @@ fn pay_rev_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<Qubi
         let (pt, ps) = (p[ti].clone(), p[si].clone());
         c.x(s);
         let cp = lr_pad_c2(c, 2 * lowrel() as usize);
+        n2_extra(t, if s == s0 { 0 } else if s == s1 { 1 } else { 2 });
         cells::with_tie(None, || cells::with_cmp_shift(cmp_shift_at(t), || cells::double_add(c, s, &ps, &pt, fold, proxy)));
+        n2_extra_off();
         lr_unpad(c, cp);
         c.x(s);
         pacc(c, "revP.pay_cell", q0);
     }
     y15::trace_old_rev(c, t, y15_e0, y15_a0);
+}
+
+// ---- lever N2 on spookyfrog (research patch, sim/patch_n2_sf.py): trailing batch with a terminal sign-copy loan ----
+/// `SL_N2` (read once; 0 = off, the base byte for byte): 1 divide, 2 divide + multiply, 3 multiply; 6, 7, 8 and 9 are
+/// deliberate-fault controls (7 multiply / 8 divide: one lent wire not cleared; 6 divide: the terminal rotation
+/// applied although the endpoint's phase repair assumes it skipped; 9 divide: two of P1's positions swapped before the
+/// endpoint, a misplaced pair of Z's in its phase repair).
+fn sl_n2() -> u8 {
+    static V: OnceLock<u8> = OnceLock::new();
+    *V.get_or_init(|| std::env::var("SL_N2").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
+}
+fn n2_div() -> bool {
+    matches!(sl_n2(), 1 | 2 | 6 | 8 | 9)
+}
+fn n2_mul() -> bool {
+    matches!(sl_n2(), 2 | 3 | 7)
+}
+/// First batched tick of the divide / the multiply (default 131: the fused one-folds end at 130 / 126).
+fn n2_from(multiply: bool) -> usize {
+    static D: OnceLock<usize> = OnceLock::new();
+    static M: OnceLock<usize> = OnceLock::new();
+    let (cell, key) = if multiply { (&M, "SL_N2_MFROM") } else { (&D, "SL_N2_DFROM") };
+    let v = *cell.get_or_init(|| std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(131));
+    assert!(
+        lf_reorder(multiply) <= v && v < rounds(),
+        "N2: {key} = {v} must lie in [{}, {})",
+        lf_reorder(multiply),
+        rounds()
+    );
+    v
+}
+thread_local! {
+    /// Set while the divide's payload-only batch runs (y21's deep shed then follows [`n2_deep`]).
+    static N2_FWD_BATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while the multiply's payload-only batch runs: [`pay_rev_tick`] takes its three-fold path (except on the
+    /// ticks of SL_N2_MY15) and its ops may take a room offset ([`n2_extra`]).
+    static N2_THREEFOLD_REV: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The tick of the divide's batch now running (for SL_N2_FX).
+    static N2_TICK: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+/// A tick-list knob: 'all', 'none' or comma-separated ticks.
+fn n2_ticks(key: &str, dflt: &str, t: usize) -> bool {
+    let s = std::env::var(key).unwrap_or_else(|_| dflt.into());
+    match s.as_str() {
+        "all" => true,
+        "none" | "" => false,
+        l => l.split(',').any(|x| x.trim().parse::<usize>().ok() == Some(t)),
+    }
+}
+/// y21's deep shed on a payload-only tick of a batch: Some(on) inside a batch, None elsewhere (the base's ranges).
+pub(crate) fn n2_deep(t: usize, rev: bool) -> Option<bool> {
+    if rev {
+        return N2_THREEFOLD_REV.with(|f| f.get()).then(|| n2_ticks("SL_N2_MDEEP", "none", t));
+    }
+    N2_FWD_BATCH.with(|f| f.get()).then(|| n2_ticks("SL_N2_DEEP", "all", t))
+}
+/// y28's dropped-carry ladder on a payload-only tick of a batch (SL_N2_DROP forward, SL_N2_MDROP reverse; SL_N2_DROPN
+/// carries, default 1): Some(n) on a listed batch tick (the y15 body then runs no deep shed), None elsewhere.
+pub(crate) fn n2_drop(t: usize, rev: bool) -> Option<usize> {
+    let (inb, key) = if rev {
+        (N2_THREEFOLD_REV.with(|f| f.get()), "SL_N2_MDROP")
+    } else {
+        (N2_FWD_BATCH.with(|f| f.get()), "SL_N2_DROP")
+    };
+    if !inb || !n2_ticks(key, "none", t) {
+        return None;
+    }
+    Some(std::env::var("SL_N2_DROPN").ok().and_then(|v| v.parse().ok()).unwrap_or(1))
+}
+/// SL_N2_PADS (diagnostic, the aligned copy; never an entry): on the batch ticks where [`n2_drop`] runs the dropped-carry
+/// ladder, that many idle measurements at y28's aligned-copy place (y15 `y28_pads`), so that the stream draws the
+/// deep-shed stream's number of random words in its order (measured: 9 a tick). None elsewhere (the base's pads).
+pub(crate) fn n2_pads(t: usize, rev: bool) -> Option<usize> {
+    let n: usize = std::env::var("SL_N2_PADS").ok().and_then(|v| v.parse().ok())?;
+    n2_drop(t, rev).map(|_| n)
+}
+thread_local! {
+    /// Calls of restore_onto so far (for SL_N2_RPAD).
+    static N2_RESTORES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+/// SL_N2_RPAD (diagnostic, the aligned copy; never an entry): "call:n,..." = n idle measurements (of a fresh wire that
+/// holds 0) at the end of the call-th restore_onto (0-based), where two gate lists' wire histories leave different
+/// reset counts (measured: the deep-shed stream resets 2 wires fewer in the divide's restore than the drop stream).
+fn n2_rpads(c: &mut Builder) {
+    let call = N2_RESTORES.with(|x| x.replace(x.get() + 1));
+    let Ok(v) = std::env::var("SL_N2_RPAD") else { return };
+    let n: usize = v
+        .split(',')
+        .filter_map(|e| e.split_once(':'))
+        .filter(|(k, _)| k.trim().parse::<usize>().ok() == Some(call))
+        .filter_map(|(_, n)| n.trim().parse::<usize>().ok())
+        .sum();
+    for _ in 0..n {
+        let q = c.alloc_qubit();
+        let m = c.alloc_bit();
+        c.hmr(q, m);
+        c.free_bit(m);
+        c.release_clean(q);
+    }
+}
+/// SL_N2_FX (deliberate fault, diagnostic): 'z<t>' leaves out the dropped-carry ladder's phase fix on divide batch
+/// tick t.
+pub(crate) fn n2_fx_skip_drop_z() -> bool {
+    let Ok(v) = std::env::var("SL_N2_FX") else { return false };
+    let t = N2_TICK.with(|x| x.get());
+    N2_FWD_BATCH.with(|f| f.get()) && v.strip_prefix('z').and_then(|x| x.parse::<usize>().ok()) == Some(t)
+}
+/// λ buy-back knob of the divide's batch: SL_N2_CMPX extra bits on every chunk-boundary compare of the batch's
+/// one-fold ticks (default 0; 0 outside the batch).
+pub(crate) fn n2_cmpx() -> isize {
+    if !N2_FWD_BATCH.with(|f| f.get()) {
+        return 0;
+    }
+    std::env::var("SL_N2_CMPX").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+}
+/// [`pay_rev_tick`]: may tick t take the y15 reverse one-fold? Always outside the multiply's batch; inside it only on
+/// the ticks of SL_N2_MY15 (default none).
+fn n2_rev_y15(t: usize) -> bool {
+    !N2_THREEFOLD_REV.with(|f| f.get()) || n2_ticks("SL_N2_MY15", "none", t)
+}
+/// The multiply batch's plan (t/slot/d) from 113bf38's sweeps (cells of 131..135 two wires lower, tick 136's merged op
+/// one lower). SL_N2_MD=none: no offsets.
+const N2_MD_PLAN: &str = "131/0/-2,131/1/-2,132/0/-2,132/1/-2,133/0/-2,133/1/-2,134/0/-2,134/1/-2,135/0/-2,135/1/-2,136/2/-1";
+/// Inside the multiply's batch: the room offset d <= 0 of payload op `slot` of tick t from SL_N2_MD (default
+/// [`N2_MD_PLAN`]), set as y17's Y17_EXTRA. Outside the batch: nothing.
+fn n2_extra(t: usize, slot: usize) {
+    if !N2_THREEFOLD_REV.with(|f| f.get()) {
+        return;
+    }
+    let d = n2_offset("SL_N2_MD", N2_MD_PLAN, t, slot);
+    super::pingpong::Y17_EXTRA.with(|e| e.set(d));
+}
+/// The room offset d <= 0 of (t, slot) in plan knob `key` ("t/slot/d,..."; default `dflt`); 0 when not listed.
+fn n2_offset(key: &str, dflt: &str, t: usize, slot: usize) -> isize {
+    let s = std::env::var(key).unwrap_or_else(|_| dflt.into());
+    let d = s
+        .split(',')
+        .filter_map(|e| {
+            let v: Vec<isize> = e.split(|ch| ch == ':' || ch == '/').filter_map(|x| x.trim().parse().ok()).collect();
+            (v.len() == 3 && v[0] == t as isize && v[1] == slot as isize).then(|| v[2])
+        })
+        .last()
+        .unwrap_or(0);
+    assert!(d <= 0, "N2: a room offset is never positive");
+    d
+}
+/// SL_N2_FD (default none): room offsets on the divide batch's payload ticks ("t/0/d": the whole one-fold tick t;
+/// "137/2/d": the terminal kernel), and SL_N2_MD's "137/2/d" on the multiply's terminal kernel, through Y17_EXTRA
+/// (a plan for less room always fits). 0 when not listed: Y17_EXTRA is not touched, the stream is unchanged.
+/// `d` > 0 (the negation of an offset) ends the offset: Y17_EXTRA back to 0.
+fn n2_extra_set(d: isize) {
+    if d != 0 {
+        super::pingpong::Y17_EXTRA.with(|e| e.set(d.min(0)));
+    }
+}
+fn n2_extra_off() {
+    if N2_THREEFOLD_REV.with(|f| f.get()) {
+        super::pingpong::Y17_EXTRA.with(|e| e.set(0));
+    }
+}
+/// The loan: each parked rail (+-1, bit 0 not held) is 5 wires all equal to its sign; CX the sign onto the 4 others
+/// (|0> on every parked walk) and release them. SL_N2_LEND: bit mask of the rails lent (default 3 = both).
+fn n2_lend(ri: usize) -> bool {
+    let m: usize = std::env::var("SL_N2_LEND").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+    m >> ri & 1 == 1
+}
+thread_local! {
+    /// The wire ids each rail lent (for SL_N2_REACQ).
+    static N2_LENT: std::cell::RefCell<[Vec<QubitId>; 2]> = const { std::cell::RefCell::new([Vec::new(), Vec::new()]) };
+}
+/// SL_N2_REACQ (default 0): bit 0 the divide's loan, bit 1 the multiply's, returned on the lent ids where free.
+fn n2_reacq(mul: bool) -> bool {
+    static V: OnceLock<usize> = OnceLock::new();
+    *V.get_or_init(|| std::env::var("SL_N2_REACQ").ok().and_then(|v| v.parse().ok()).unwrap_or(0)) >> usize::from(mul) & 1 == 1
+}
+fn n2_loan_out(c: &mut Builder, wk: &mut Walk, fault: bool) {
+    for (ri, r) in wk.r.iter_mut().enumerate() {
+        assert_eq!(r.len(), 5, "N2: a parked rail holds 5 wires (bits 1..5)");
+        if !n2_lend(ri) {
+            continue;
+        }
+        let sg = r[4];
+        for i in 0..4 {
+            if !(fault && ri == 0 && i == 0) {
+                c.cx(sg, r[i]);
+            }
+            c.release_clean(r[i]);
+        }
+        N2_LENT.with(|l| l.borrow_mut()[ri] = r[0..4].to_vec());
+        r.drain(0..4);
+    }
+}
+/// Return the loan: 4 wires per rail (fresh, or with SL_N2_REACQ the lent ids where free), each a CX copy of its sign.
+fn n2_loan_in(c: &mut Builder, wk: &mut Walk, mul: bool) {
+    for (ri, r) in wk.r.iter_mut().enumerate() {
+        if !n2_lend(ri) {
+            continue;
+        }
+        assert_eq!(r.len(), 1, "N2: the rail is lent out");
+        let sg = r[0];
+        let lent = N2_LENT.with(|l| std::mem::take(&mut l.borrow_mut()[ri]));
+        let mut nr = Vec::with_capacity(5);
+        for i in 0..4 {
+            let q = match lent.get(i) {
+                Some(&w) if n2_reacq(mul) && c.n2_take(w) => w,
+                _ => c.alloc_qubit(),
+            };
+            c.cx(sg, q);
+            nr.push(q);
+        }
+        nr.push(sg);
+        *r = nr;
+    }
+}
+/// Terminal payload-only kernel, forward (tick 137: no forced steps, letter (s3, k1, k2)): [`fwd_tick_fast`]'s
+/// merged branch alone. `skip_rot`: the payload rotation is left out (LF_DIV_PHROT's endpoint repairs the phase).
+fn n2_pay_fwd_last(c: &mut Builder, letter: &[QubitId], p: &mut [Vec<QubitId>; 2], skip_rot: bool) {
+    let t = rounds() - 1;
+    assert_eq!(tail_forced(t), 0, "N2: the last tick has no forced steps");
+    assert_eq!(letter.len(), 3, "N2: the last tick's letter is (s3, k1, k2)");
+    let [w, ..] = steps()[t];
+    let (ti, si) = (t % 2, 1 - t % 2);
+    let (fold, proxy) = proxy_fold(w, false);
+    let (s3, k1, k2) = (letter[0], letter[1], letter[2]);
+    let (pt, ps) = (p[ti].clone(), p[si].clone());
+    let q0 = pmark(c);
+    let merged = merged_fits(c.active_qubits() as usize + usize::from(t >= tie_from() && !tie_seed()), t, false);
+    if merged.is_none() {
+        cells::with_tie(None, || cells::with_cmp_shift(cmp_shift_at(t), || cells::add_halve(c, s3, &ps, &pt, fold, proxy)));
+    }
+    SKIP_ROT4.with(|s| s.set(skip_rot));
+    if let Some(mw) = merged {
+        let fd = n2_offset("SL_N2_FD", "", t, 2);
+        n2_extra_set(fd);
+        cells::with_tie(None, || {
+            cells::with_cmp_shift(cmp_shift_at(t), || cells::with_bridge(proxy, false, || {
+                let split = merged_split(c, proxy, false, false);
+                merged_fwd(c, s3, &ps, &pt, k1, k2, proxy, split, mw)
+            }))
+        });
+        n2_extra_set(-fd);
+    } else {
+        cmod_barrel(c, k1, k2, &p[ti], false);
+    }
+    SKIP_ROT4.with(|s| s.set(false));
+    pacc(c, if merged.is_some() { "n2.fwd_last_merged" } else { "n2.fwd_last_barrel" }, q0);
+}
+/// Terminal payload-only kernel, reverse: [`rev_tick_fast`]'s merged branch alone ([`merged_rev`] rotates up itself).
+fn n2_pay_rev_last(c: &mut Builder, letter: &[QubitId], p: &mut [Vec<QubitId>; 2]) {
+    let t = rounds() - 1;
+    assert_eq!(tail_forced(t), 0, "N2: the last tick has no forced steps");
+    assert_eq!(letter.len(), 3, "N2: the last tick's letter is (s3, k1, k2)");
+    let [w, ..] = steps()[t];
+    let (ti, si) = (t % 2, 1 - t % 2);
+    let (fold, proxy) = proxy_fold(w, true);
+    let (s3, k1, k2) = (letter[0], letter[1], letter[2]);
+    let (pt, ps) = (p[ti].clone(), p[si].clone());
+    let q0 = pmark(c);
+    let merged = merged_fits(c.active_qubits() as usize + usize::from(t >= tie_from() && !tie_seed()), t, true);
+    if let Some(mw) = merged {
+        let md = n2_offset("SL_N2_MD", N2_MD_PLAN, t, 2);
+        n2_extra_set(md);
+        cells::with_tie(None, || {
+            cells::with_cmp_shift(cmp_shift_at(t), || cells::with_bridge(proxy, true, || merged_rev(c, s3, &ps, &pt, k1, k2, proxy, true, mw)))
+        });
+        n2_extra_set(-md);
+    } else {
+        cmod_barrel(c, k1, k2, &p[ti], true);
+        c.x(s3);
+        cells::with_tie(None, || cells::with_cmp_shift(cmp_shift_at(t), || cells::double_add(c, s3, &ps, &pt, fold, proxy)));
+        c.x(s3);
+    }
+    pacc(c, if merged.is_some() { "n2.rev_last_merged" } else { "n2.rev_last_barrel" }, q0);
+}
+/// The divide's batch, after the fused ticks below [`n2_from`]: rails-only ticks to the end (under Y28_KEEP, as the
+/// fused ticks they replace), the loan, the payload-only ticks (one-fold) and the terminal kernel, the loan returned.
+fn n2_div_batch(c: &mut Builder, wk: &mut Walk, pay: &mut [Vec<QubitId>; 2]) {
+    let from = n2_from(false);
+    let q0 = pmark(c);
+    for t in from..rounds() {
+        Y28_KEEP.with(|d| d.set(true));
+        fwd_tick(c, wk, t, None);
+        Y28_KEEP.with(|d| d.set(false));
+    }
+    pacc(c, "n2.div_rails", q0);
+    let q0 = pmark(c);
+    n2_loan_out(c, wk, sl_n2() == 8);
+    N2_FWD_BATCH.with(|f| f.set(true));
+    for t in from..rounds() - 1 {
+        let letter = wk.tape[t].clone();
+        let pads = lr_pad(c, 2 * lowrel() as usize);
+        N2_TICK.with(|x| x.set(t));
+        let fd = n2_offset("SL_N2_FD", "", t, 0);
+        n2_extra_set(fd);
+        pay_fwd_tick(c, t, &letter, pay);
+        n2_extra_set(-fd);
+        N2_TICK.with(|x| x.set(usize::MAX));
+        lr_unpad(c, pads);
+    }
+    N2_FWD_BATCH.with(|f| f.set(false));
+    pacc(c, "n2.div_pay", q0);
+    let letter = wk.tape[rounds() - 1].clone();
+    n2_pay_fwd_last(c, &letter, pay, sl_n2() != 6);
+    if sl_n2() == 9 {
+        // control: a relabelling (no gate); the endpoint measures P1 and repairs the phase with two Z's misplaced
+        pay[1].swap(100, 101);
+    }
+    n2_loan_in(c, wk, false);
+}
+/// The multiply's batch, after the endpoint: the loan, the terminal reverse kernel, the payload-only reverse ticks
+/// down to [`n2_from`] (three-fold), the loan returned, the rails-only reverse ticks down to [`n2_from`].
+fn n2_mul_batch(c: &mut Builder, wk: &mut Walk, pay: &mut [Vec<QubitId>; 2]) {
+    let from = n2_from(true);
+    n2_loan_out(c, wk, sl_n2() == 7);
+    let letter = wk.tape[rounds() - 1].clone();
+    n2_pay_rev_last(c, &letter, pay);
+    let q0 = pmark(c);
+    N2_THREEFOLD_REV.with(|f| f.set(true));
+    for t in (from..rounds() - 1).rev() {
+        let letter = wk.tape[t].clone();
+        let pads = lr_pad(c, 2 * lowrel() as usize);
+        pay_rev_tick(c, t, &letter, pay);
+        lr_unpad(c, pads);
+    }
+    N2_THREEFOLD_REV.with(|f| f.set(false));
+    pacc(c, "n2.mul_pay", q0);
+    n2_loan_in(c, wk, true);
+    let q0 = pmark(c);
+    for t in (from..rounds()).rev() {
+        rev_tick(c, wk, t, None);
+    }
+    pacc(c, "n2.mul_rails", q0);
 }
 
 /// `y <- y / x (mod p)`, x restored. Division payload fused into the forward walk; rails-only walkback.
@@ -5235,7 +5704,10 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
     let dphrot = div_phrot() && !keep_p1;
     assert!(Y28_BITS.with(|b| b.borrow().is_empty()), "y28: kept bits from an earlier walk");
     Y28_COUNT.with(|x| x.set((0, 0)));
-    for t in ahead..rounds() {
+    // N2 (SL_N2): the fused ticks end at the batch, which runs the rest (needs LF_DIV_PHROT's endpoint)
+    let n2d = dphrot && n2_div();
+    let fused_end = if n2d { n2_from(false) } else { rounds() };
+    for t in ahead..fused_end {
         if dphrot && t + 1 == rounds() {
             SKIP_PAY_ROT_AT.with(|s| s.set(t));
         }
@@ -5244,6 +5716,9 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
         fwd_tick(c, &mut wk, t, Some(&mut pay));
         Y28_KEEP.with(|d| d.set(false));
         SKIP_PAY_ROT_AT.with(|s| s.set(usize::MAX));
+    }
+    if n2d {
+        n2_div_batch(c, &mut wk, &mut pay);
     }
     let q0 = pmark(c);
     // endpoint: rails (+-1, +-1); P = (s0 lam, s1 lam)
@@ -5309,6 +5784,7 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
         rev_tick(c, &mut wk, t, None);
         Y28_USE.with(|d| d.set(false));
     }
+    assert!(T0Q_KEEP.with(|k| k.get()).is_none() && t0h_held() == 0, "defer: tick-0 state left at the divide's end");
     // y28: every kept outcome bit was consumed by exactly one Z (a key is inserted once and removed once)
     assert!(Y28_BITS.with(|b| b.borrow().is_empty()), "y28: kept bits left over at the end of the divide");
     let (y28_kept, y28_applied) = Y28_COUNT.with(|x| x.get());
@@ -5380,7 +5856,14 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
     c.cx(s1, x01);
     c.free(x01);
     pacc(c, "mul.endpoint", q0);
-    for t in (ahead..rounds()).rev() {
+    // N2 (SL_N2): the batch runs ticks rounds - 1 .. n2_from first
+    let fused_top = if n2_mul() {
+        n2_mul_batch(c, &mut wk, &mut pay);
+        n2_from(true)
+    } else {
+        rounds()
+    };
+    for t in (ahead..fused_top).rev() {
         rev_tick(c, &mut wk, t, Some(&mut pay));
     }
     if loan {
@@ -5494,6 +5977,7 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
         rev_tick(c, &mut wk, t, None);
     }
     T0_PLAIN.with(|p| p.set(false));
+    assert!(T0Q_KEEP.with(|k| k.get()).is_none() && t0h_held() == 0, "defer: tick-0 state left at the multiply's end");
     match SEAM_MUL.with(|s| s.borrow().clone()) {
         Some((ox, p1c)) => {
             // ox - R = (-R) + ox: complement R (= -R - 1) and add ox + 1

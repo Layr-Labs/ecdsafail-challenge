@@ -300,6 +300,21 @@ impl Builder {
             self.free(q);
         }
     }
+    /// N2 research patch (sim/patch_n2_sf.py, SL_N2_REACQ): take back the free wire `q` itself, keeping the free list's
+    /// order (unlike [`Builder::reacquire`]); false (nothing done) when `q` is not free.
+    pub fn n2_take(&mut self, q: QubitId) -> bool {
+        let Some(pos) = self.free_qubits.iter().rposition(|&f| u64::from(f) == q.0) else {
+            return false;
+        };
+        self.free_qubits.remove(pos);
+        self.active_qubits += 1;
+        self.note_peak();
+        if self.peak_census.enabled() {
+            let at = self.at();
+            self.peak_census.on_alloc(at, q.0, "reacquire", 0);
+        }
+        true
+    }
     pub fn reacquire(&mut self, q: QubitId) {
         let pos = self
             .free_qubits

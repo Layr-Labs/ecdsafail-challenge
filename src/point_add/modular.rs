@@ -313,6 +313,9 @@ pub(crate) fn ripple_add_proved(
     }
 
     for i in (0..owned).rev() {
+        if i < k {
+            dsq_apply(circ, acc[i], addend[i], carries[i]);
+        }
         if deferred.as_ref().is_some_and(|(at, _)| *at == i) {
             let (_, phase) = deferred.take().unwrap();
             // At this point `carries[i]` is still the arithmetic carry. The
@@ -331,6 +334,67 @@ pub(crate) fn ripple_add_proved(
 }
 
 thread_local! { static HEO_SPLIT_GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+// ---- defer (spooky-leapfrog-v1, SL_DEFER_SQ): the square's split cross-subtract boundaries, phase deferred ----
+pub(crate) fn sl_defer_sq() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("SL_DEFER_SQ").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
+}
+thread_local! {
+    /// a forward subtract whose split boundaries keep their bits (set by the square around its cross subtracts)
+    static DSQ_KEEP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// kept bits: (acc wire, addend wire) of the position below the boundary -> bit
+    static DSQ_BITS: std::cell::RefCell<Vec<(u64, u64, BitId)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static DSQ_COUNT: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+pub(crate) fn dsq_keep_scope<R>(on: bool, body: impl FnOnce() -> R) -> R {
+    let old = DSQ_KEEP.with(|k| k.replace(on && sl_defer_sq() != 0));
+    let r = body();
+    DSQ_KEEP.with(|k| k.set(old));
+    r
+}
+/// Forward: measure the boundary carry `b` (the carry out of position (a, v)) and keep its bit. true = kept.
+fn dsq_keep(circ: &mut Builder, b: QubitId, a: QubitId, v: QubitId) -> bool {
+    if !DSQ_KEEP.with(|k| k.get()) {
+        return false;
+    }
+    let m = circ.alloc_bit();
+    circ.hmr(b, m);
+    DSQ_BITS.with(|s| {
+        let mut s = s.borrow_mut();
+        assert!(!s.iter().any(|e| e.0 == a.0 && e.1 == v.0), "defer DSQ: two bits for one position");
+        s.push((a.0, v.0, m));
+    });
+    DSQ_COUNT.with(|c| c.set((c.get().0 + 1, c.get().1)));
+    true
+}
+/// Inverse: `t` holds the arithmetic carry out of position (a, v); a kept bit for that position goes on as a Z.
+fn dsq_apply(circ: &mut Builder, a: QubitId, v: QubitId, t: QubitId) {
+    if sl_defer_sq() == 0 || DSQ_KEEP.with(|k| k.get()) {
+        return;
+    }
+    let hit = DSQ_BITS.with(|s| {
+        let mut s = s.borrow_mut();
+        s.iter().position(|e| e.0 == a.0 && e.1 == v.0).map(|i| s.remove(i).2)
+    });
+    if let Some(m) = hit {
+        if sl_defer_sq() != 9 {
+            circ.z_if(t, m);
+        }
+        circ.free_bit(m);
+        DSQ_COUNT.with(|c| c.set((c.get().0, c.get().1 + 1)));
+    }
+}
+/// End of the square: every kept bit was applied once.
+pub(crate) fn dsq_check() {
+    if sl_defer_sq() == 0 {
+        return;
+    }
+    assert!(DSQ_BITS.with(|s| s.borrow().is_empty()), "defer DSQ: kept bits never applied");
+    let (k, a) = DSQ_COUNT.with(|c| c.get());
+    assert_eq!(k, a, "defer DSQ: kept and applied differ");
+    eprintln!("DEFER_SQ kept={k} applied={a}");
+}
 
 /// B3b: the chunked form of [`ripple_add_proved`] (see its HEO block). Returns false
 /// (nothing emitted) when no layout with every chunk inside the addend exists.
@@ -411,7 +475,9 @@ fn heo_split_ripple(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], car
         if win > 0 {
             // erase the boundary this chunk just consumed (the previous chunk's carry-out)
             if let Some((b, plo, phi, pcin)) = kept.pop() {
-                if plo == 0 && phi - plo <= win {
+                if dsq_keep(circ, b, acc[phi - 1], addend[phi - 1]) {
+                    // defer DSQ: the inverse's ripple forms this carry again
+                } else if plo == 0 && phi - plo <= win {
                     erase_with_compare(circ, b, &acc[plo..phi], &addend[plo..phi], pcin);
                 } else {
                     let kw = win.min(phi - plo);
@@ -422,6 +488,7 @@ fn heo_split_ripple(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], car
         }
         if !last {
             let b = out.unwrap();
+            dsq_apply(circ, acc[hi - 1], addend[hi - 1], b);
             if let Some((i, m)) = deferred {
                 if i == hi - 1 {
                     circ.z_if(b, m);
@@ -436,7 +503,9 @@ fn heo_split_ripple(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], car
     assert!(deferred.is_none(), "split ripple: deferred phase not placed");
     assert!(win == 0 || kept.is_empty());
     for (b, lo, hi, cin_j) in kept.into_iter().rev() {
-        erase_with_compare(circ, b, &acc[lo..hi], &addend[lo..hi], cin_j);
+        if !dsq_keep(circ, b, acc[hi - 1], addend[hi - 1]) {
+            erase_with_compare(circ, b, &acc[lo..hi], &addend[lo..hi], cin_j);
+        }
         circ.free(b);
     }
     HEO_SPLIT_GUARD.with(|g| g.set(false));
@@ -651,6 +720,7 @@ pub fn ripple_add_lent_with_deferred_phase(
     }
     unwind_carry_step_lent(circ, addend[owned], acc[owned], previous(owned), lent);
     for i in (0..owned).rev() {
+        dsq_apply(circ, acc[i], addend[i], carries[i]);
         if deferred.as_ref().is_some_and(|(at, _)| *at == i) {
             let (_, phase) = deferred.take().unwrap();
             circ.z_if(carries[i], phase);
