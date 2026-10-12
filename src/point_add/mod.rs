@@ -153,7 +153,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "17897128869873",
+        "TAIL_NONCE" => "990068690869",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -637,7 +637,14 @@ pub(crate) fn go_slice(key: &str, round: usize, dir: u8) -> isize {
 mod mabsorb;
 mod sqtop_pass;
 mod sqdepth2_pass;
+mod sqdepth2_base;
+mod sqdepth2_veto;
+mod sqdepth2_veto_pad;
 mod rowcut_pass;
+mod rowcut_base;
+mod rowcut_veto;
+mod rowcut_veto_pad;
+mod phase_cubic_base;
 mod pscan;
 mod cond_pass;
 pub mod constant_templates;

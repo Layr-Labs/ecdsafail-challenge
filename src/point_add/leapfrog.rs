@@ -239,6 +239,8 @@ pub(crate) fn install_recipe() {
         ("FM_PARK_LEND", "1:2"),
         ("FM_PARK_HOLD", "1"),
         ("ROOM_FOLD_ONLY", "1"),
+        ("YP8_VETO", "1"),
+        ("YP8_VETO_PAD", "0"),
         ("SL_SQDEPTH2", "on"),
         ("SL_PHASE_CUBIC", "1"),
         ("SL_PSCAN_FIX", "1"),
@@ -4805,6 +4807,20 @@ fn yp8_reserve(tl: usize, bl: usize, t: usize, fwd: bool) -> usize {
     yp8_chain_cost(&yp8_mask(tv, t), &yp8_mask(bv, t)) + if fwd { 4 } else { 3 } + 2 * need0 as usize + (tv - tl - 1) + (bl + 1).max(6).saturating_sub(bl + 1)
 }
 
+// Entry-specific stream configuration.
+fn yp8_veto() -> u8 {
+    std::env::var("YP8_VETO").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+}
+fn yp8_veto_fault() -> u8 {
+    std::env::var("YP8_VETO_FAULT").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+}
+/// Aligned-pair pad: one idle X measurement on a fresh wire where the base form erased r2.
+fn yp8_veto_pad(c: &mut Builder) {
+    if std::env::var("YP8_VETO_PAD").is_ok_and(|v| v == "1") {
+        y29_pad(c, 1);
+    }
+}
+
 /// The YP8 logic at the pause. `t2`, `b`: target after forced move 2 and source, plain, without their bit-0 wires;
 /// `s1`: that move's letter; `ct`: the carry into the top position of its add.
 /// `outs = Some((out, k1, k2))`: write the choice letter and the barrel letters (xor into zero wires).
@@ -4876,7 +4892,34 @@ fn yp8_logic(c: &mut Builder, t2: &[QubitId], b: &[QubitId], s1: QubitId, ct: Qu
             c.cx(tv[2], k2);
             c.cx(a2, k2);
             and_erase(c, a2, a1, tv[4]);
-            if veto {
+            let fsw = match w { Lit::W(q, i) if veto && yp8_veto() != 0 => Some((q, i)), _ => None };
+            if let Some((wq, winv)) = fsw {
+                // YP8_VETO: q' = E & (Y ^ S) (= E & !Y & S where the add did not overflow); v2 = q' & z2
+                c.cx(s1, wq);
+                if winv { c.x(wq); }
+                let q1 = and_new(c, tv[top], wq);
+                c.x(tv[2]);
+                let v2 = and_new(c, q1, tv[2]);
+                if yp8_veto_fault() != 2 { c.cx(v2, out); }
+                and_erase(c, v2, q1, tv[2]);
+                c.x(tv[2]);
+                yp8_veto_pad(c);
+                // v = 3 as before, on q'
+                c.cx(tv[2], a1);
+                let r3 = and_new(c, a1, ct);
+                c.cx(tv[2], a1);
+                let v3 = and_new(c, q1, r3);
+                c.cx(v3, out);
+                c.cx(v3, k2);
+                c.cx(v3, k1);
+                and_erase(c, v3, q1, r3);
+                c.cx(tv[2], a1);
+                and_erase(c, r3, a1, ct);
+                c.cx(tv[2], a1);
+                and_erase(c, q1, tv[top], wq);
+                if winv { c.x(wq); }
+                c.cx(s1, wq);
+            } else if veto {
                 // q1 = eq & !Y
                 let q1 = match w {
                     Lit::W(wq, _) => {
@@ -4934,7 +4977,25 @@ fn yp8_logic(c: &mut Builder, t2: &[QubitId], b: &[QubitId], s1: QubitId, ct: Qu
             }
             let a1 = and_new(c, tv[2], tv[3]);
             c.cz(a1, tv[4]); // !z2 & !z3 & !z4
-            if veto {
+            let fsw = match w { Lit::W(q, i) if veto && yp8_veto() != 0 => Some((q, i)), _ => None };
+            if let Some((wq, winv)) = fsw {
+                // YP8_VETO: the phase of q' & z2 and q' & r3, q' = E & (Y ^ S)
+                c.cx(s1, wq);
+                if winv { c.x(wq); }
+                let q1 = and_new(c, tv[top], wq);
+                c.x(tv[2]);
+                if yp8_veto_fault() != 1 { c.cz(q1, tv[2]); }
+                yp8_veto_pad(c);
+                c.x(tv[2]);
+                c.cx(tv[2], a1);
+                let r3 = and_new(c, a1, ct); // [v = 3] & added
+                c.cz(q1, r3);
+                and_erase(c, r3, a1, ct);
+                c.cx(tv[2], a1);
+                and_erase(c, q1, tv[top], wq);
+                if winv { c.x(wq); }
+                c.cx(s1, wq);
+            } else if veto {
                 let q1 = match w {
                     Lit::W(wq, _) => {
                         ny(c);
