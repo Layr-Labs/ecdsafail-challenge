@@ -242,6 +242,7 @@ pub(crate) fn install_recipe() {
         ("YP8_VETO", "1"),
         ("YP8_VETO_PAD", "0"),
         ("SL_SQDEPTH2", "on"),
+        ("READER_CUT", "on"),
         ("SL_PHASE_CUBIC", "1"),
         ("SL_PSCAN_FIX", "1"),
         ("SL_ROWCUT", "1"),
