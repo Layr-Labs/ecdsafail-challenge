@@ -68,7 +68,7 @@ const Y15_KEEP_LOW: [usize; 3] = [5, 4, 3];
 /// runs (not the same approximation as the base: see experiments/y15-core). false = each erased on its own.
 const Y15_JOINT_M: bool = true;
 /// Print one line a tick (costs by part, room, plans) to the build log. No effect on the gates.
-const Y15_TRACE: bool = false;
+fn room_trace() -> bool { std::env::var("ROOM_TRACE").is_ok_and(|v| v == "1") }
 /// y18 research price knob (0 = no effect on the gates): inside the body of every one-fold tick-pass the walk cap is
 /// read this many wires higher. A non-zero value is a PRICE, never a build: the peak goes over 1236.
 const Y18_PRICE: isize = 0;
@@ -330,7 +330,7 @@ fn y18_log() -> String {
     super::Y17_LOG.with(|l| l.borrow_mut().drain(..).collect::<Vec<_>>().join(" "))
 }
 pub(super) fn trace() -> bool {
-    Y15_TRACE
+    room_trace()
 }
 /// y15-room: the reverse fold reads bits 2..5 of W from four copies taken before the three adds (W is in the clear
 /// there) and builds its borrow chains only after the ladder, to clear the copies: the same 11 ANDs, 7 wires fewer
@@ -645,12 +645,12 @@ const Y17_REV0: bool = true;
 
 /// Trace of a tick on today's ops (for the per-tick comparison).
 pub(super) fn trace_old(c: &Builder, t: usize, e0: f64, a0: u32) {
-    if Y15_TRACE {
+    if room_trace() {
         eprintln!("Y15_OLD fwd t={t} active={a0} room={} cost={:.1}", cells::cap().saturating_sub(a0 as usize), c.expected_total() - e0);
     }
 }
 pub(super) fn trace_old_rev(c: &Builder, t: usize, e0: f64, a0: u32) {
-    if Y15_TRACE {
+    if room_trace() {
         eprintln!("Y15_OLD rev t={t} active={a0} room={} cost={:.1}", cells::cap().saturating_sub(a0 as usize), c.expected_total() - e0);
     }
 }
@@ -800,7 +800,7 @@ fn ladder_d(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: Qub
         c.hmr(out, m);
         c.release_clean(out);
         c.push_condition(m);
-        lin_lt_phase(c, &acc[lo..hi], &add[lo..hi], cin);
+        if !super::room_fold_fault() { lin_lt_phase(c, &acc[lo..hi], &add[lo..hi], cin); }
         c.pop_condition();
         c.free_bit(m);
     }
@@ -1807,7 +1807,7 @@ fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     let k7 = r_and(c, &mut recs, t, fc3);
     k.push(k7);
     let add = if Y16_CORE { addend_prog(c, &mut recs, &k, &Y16_FWD_GATES, &Y16_FWD_OUT, mw) } else { addend_from_k(c, &mut recs, &k, mw) };
-    if Y15_TRACE {
+    if room_trace() {
         eprintln!("Y18_IDLE fwd recs={} idle={:?}", recs.len(), y18_idle(&recs, &add));
     }
     // y18-next: the AND of the shift letter leaves for the ladder (see Y18_FIN); y28: also with `ttm` ([`Y28_TT_FWD`]),
@@ -2034,7 +2034,7 @@ fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     let n7 = r_and(c, &mut recs, y5.x(&one), r.x(&one));
     n.push(n7);
     let add = if Y16_CORE { addend_prog(c, &mut recs, &n, &Y16_REV_GATES, &Y16_REV_OUT, mw) } else { addend_from_n_rev(c, &mut recs, &n, mw) };
-    if Y15_TRACE {
+    if room_trace() {
         eprintln!("Y18_IDLE rev recs={} idle={:?}", recs.len(), y18_idle(&recs, &add));
     }
     // y18-next: c2 and c1 leave for the ladder (see Y18_FIN)
@@ -2175,7 +2175,7 @@ fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
 /// tick (the letters already flipped by the caller, the multiply direction's compare rules, the reverse fold).
 fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b: &[QubitId], tg: &[QubitId], proxy: usize, rev: bool) {
     let (e_start, a_start) = (c.expected_total(), c.active_qubits());
-    if Y15_TRACE {
+    if room_trace() {
         eprintln!("Y15_ROOM {} t={t} active={a_start} room={}", if rev { "rev" } else { "fwd" }, cells::cap().saturating_sub(a_start as usize));
     }
     // y15-pack: the reverse fold gets W's low bits from the adds' kept carries (Y15_CORE_V2 with Y15_KEEP_LOW) or from
@@ -2471,6 +2471,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         deep_a: if deep { acc2[sp2..N - 3].to_vec() } else { Vec::new() },
         deep_b: if deep { b[sp2..N - 3].to_vec() } else { Vec::new() },
     });
+    let room_fold_n = if rev { super::room_fold_begin(c) } else { 0 };
     let plan = if rev {
         // the reverse fold reads the source's low 6 bits as they are (b holds the source complemented by s[2])
         for j in 0..6 {
@@ -2508,6 +2509,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     } else {
         fold_fwd(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2)
     };
+    super::room_fold_end(c, room_fold_n);
     // y21, deep shed, reverse: the block and cq(N - 3) again, bottom up
     if deep && rev {
         for i in sh_lo..=sh_hi {
@@ -3083,7 +3085,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     c.cx_all(s[2], b);
     let e_end = c.expected_total();
     assert_eq!(c.active_qubits(), a_start, "y15: a wire was left behind");
-    if Y15_TRACE {
+    if room_trace() {
         eprintln!(
             "Y15_NEW {} t={t} active={a_start} room={} low={} at_fold={a_fold} sp2={sp2} k0={k0} k1={kk1} k2={kk2} cut={dcut} closed={} top1={} seeds={:?} plan={plan:?} shed={shed} top={tops} c3m={c3m} gsh={gsh} fin={fin} \
              add0={:.1} add1={:.1} add2={:.1} fold={:.1} tops={:.1} m0={:.1} m1={:.1} close={:.1} body={:.1}",
@@ -3132,7 +3134,7 @@ fn body_capped(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: Qubi
     super::C35_AT.with(|x| x.set((0, false, false)));
     super::super::pingpong::Y17_EXTRA.with(|e| e.set(Y18_PRICE + Y19_PRICE_FOLD));
     let dir = if rev { "rev" } else { "fwd" };
-    if Y15_TRACE {
+    if room_trace() {
         eprintln!("Y16_PEAK {dir} t={t} peak={peak} cap={}", cells::cap());
     }
     assert!(peak as usize <= cells::cap(), "y16: the one-fold tick {dir} t={t} peaks at {peak}, over the walk cap {}", cells::cap());
@@ -3155,7 +3157,7 @@ pub(super) fn fwd_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [V
         rot1(c, &tg, true);
     }
     rot4(c, k1, k2, &tg, false);
-    if Y15_TRACE {
+    if room_trace() {
         eprintln!("Y15_TICK fwd t={t} active={a0} cost={:.1}", c.expected_total() - e0);
     }
 }
@@ -3352,7 +3354,7 @@ pub(super) fn rev_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [V
     for q in s {
         c.x(q);
     }
-    if Y15_TRACE {
+    if room_trace() {
         eprintln!("Y15_TICK rev t={t} active={a0} cost={:.1}", c.expected_total() - e0);
     }
 }
@@ -3555,7 +3557,7 @@ pub(super) fn t0_phase(c: &mut Builder, letter: &[QubitId], p: &[Vec<QubitId>; 2
     for _ in 0..3 {
         rot1(c, &tg, true);
     }
-    if Y15_TRACE {
+    if room_trace() {
         eprintln!("Y15_TICK fwd t={t} active={a0} cost={:.1}", c.expected_total() - e0);
     }
     if let Some(bits) = bits.take() {
@@ -3572,7 +3574,7 @@ pub(super) fn t0_phase(c: &mut Builder, letter: &[QubitId], p: &[Vec<QubitId>; 2
     for q in s {
         c.x(q);
     }
-    if Y15_TRACE {
+    if room_trace() {
         eprintln!("Y15_TICK rev t={t} active={a0} cost={:.1}", c.expected_total() - e0);
     }
 }
@@ -3912,7 +3914,7 @@ fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: 
         c.release_clean(q);
     }
     assert_eq!(c.active_qubits(), a_start, "y26: a wire was left behind");
-    if Y15_TRACE {
+    if room_trace() {
     eprintln!(
         "Y26_FORMS active={a_start} cap={} room_after_low={room} wf={wf} edges={edges:?} top={top_len} mid_active={a_mid} fold_active={a_fold} window={:.1} adds={:.1} fold={:.1} boundaries={:.1} all={:.1}",
         cells::cap(),

@@ -236,9 +236,13 @@ pub(crate) fn install_recipe() {
         ("SL_RT0", "1"),
         ("SL_T0ONE", "1"),
         // this entry's switches as recipe values
-        // ("FM_PARK_LEND", "0:2"),
+        ("FM_PARK_LEND", "1:2"),
+        ("FM_PARK_HOLD", "1"),
+        ("ROOM_FOLD_ONLY", "1"),
+        ("SL_SQDEPTH2", "on"),
+        ("SL_PHASE_CUBIC", "1"),
         ("SL_PSCAN_FIX", "1"),
-        ("SL_ROWCUT", "0"),
+        ("SL_ROWCUT", "1"),
         // the square's inverse-row top carries under the top bit (sqtop_pass.rs)
         ("SL_SQTOP", "1"),
         // Toffolis consumed only by phases, a measurement or a reset (cond_pass.rs)
@@ -5142,6 +5146,7 @@ fn parity_in(c: &mut Builder, wk: &Walk, ahead: usize, k: usize, pad: Option<Qub
 /// trim each listed parked rail by k top wires (CX-cleared from the wire below,
 /// released clean: no measurement); returns (rail, width) to grow back. FM_PARK_LEND = "r:k,...".
 fn fm_park_out(c: &mut Builder, wk: &mut Walk) -> Vec<(usize, usize)> {
+    if std::env::var("ROOM_TRACE").is_ok_and(|v| v == "1") { eprintln!("ROOM_PARK {:?} {:?}", &wk.r[0][wk.r[0].len()-8..], &wk.r[1][wk.r[1].len()-8..]); }
     let Ok(v) = std::env::var("FM_PARK_LEND") else { return Vec::new() };
     let mut out = Vec::new();
     for part in v.split(',') {
@@ -5166,6 +5171,27 @@ fn fm_park_out(c: &mut Builder, wk: &mut Walk) -> Vec<(usize, usize)> {
 thread_local! {
     /// FM_PARK_HOLD placeholders (never touched).
     static FM_PARK_PADS: std::cell::RefCell<Vec<QubitId>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+// room track: placeholders pin the approximate planner; only the exact fold gets the loan.
+thread_local! { static ROOM_FOLD_ACTIVE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+fn room_fold_begin(c: &mut Builder) -> usize {
+    if !std::env::var("ROOM_FOLD_ONLY").is_ok_and(|v| v == "1") { return 0; }
+    let pads = FM_PARK_PADS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    let n = pads.len();
+    for q in pads { c.release_clean(q); } // never touched placeholders, no measurement
+    ROOM_FOLD_ACTIVE.with(|v| v.set(n));
+    if n > 0 {
+        let pad = std::env::var("ROOM_FOLD_PAD").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        y29_pad(c, pad); // fresh idle wire BEFORE fold gates, never after a Toffoli uncompute
+    }
+    n
+}
+fn room_fold_end(c: &mut Builder, n: usize) {
+    ROOM_FOLD_ACTIVE.with(|v| v.set(0));
+    if n > 0 { FM_PARK_PADS.with(|p| *p.borrow_mut() = c.alloc_qubits(n)); }
+}
+fn room_fold_fault() -> bool {
+    ROOM_FOLD_ACTIVE.with(|v| v.get() > 0) && std::env::var("ROOM_FOLD_FAULT").is_ok_and(|v| v == "1")
 }
 /// Grow the trimmed rails back (fresh wires, CX copies of the top). FM_PARK_FAULT=1: the first one is left |0>.
 fn fm_park_in(c: &mut Builder, wk: &mut Walk, lent: Vec<(usize, usize)>) {

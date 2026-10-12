@@ -36,6 +36,27 @@ pub fn run(mut ops: Vec<Op>) -> Vec<Op> {
         if pick.as_ref().map_or(true, |p| p.contains(&r.id)) { rows.push(r); }
     }
     if let Some(p) = &pick { assert!(rows.len() == p.len(), "rowcut: {} of {} picked ids found", rows.len(), p.len()); }
+    // Entry-specific stream configuration.
+    use sha3::{Digest, Sha3_256};
+    assert!(ops.len() >= 11275356, "rowcut: stream too short");
+    // Same-length prefix fault; every local CCX and every row index still matches.
+    if std::env::var("SL_ROWS_PREFIX_FAULT").ok().as_deref() == Some("1") {
+        let i = ops[..11275356].iter().position(|o| o.kind == K::CX).expect("prefix CX");
+        let mut w = (ops[i].q_control1.0 + 1) % 512;
+        if w == ops[i].q_target.0 { w = (w + 1) % 512; }
+        ops[i].q_control1 = QubitId(w); ops[i].validate();
+    }
+    let mut h = Sha3_256::new();
+    for o in &ops[..11275356] {
+        let mut buf = [0u8; 56];
+        buf[..4].copy_from_slice(&(o.kind as u32).to_le_bytes());
+        for (i,v) in [o.q_control2.0,o.q_control1.0,o.q_target.0,o.c_target.0,o.c_condition.0,o.r_target.0].iter().enumerate() {
+            buf[8+i*8..16+i*8].copy_from_slice(&v.to_le_bytes());
+        }
+        h.update(&buf);
+    }
+    let got: String = h.finalize().iter().map(|b| format!("{:02x}",b)).collect();
+    assert_eq!(got, "80820a9e710abad61126456de2c391cdb48e7f79973bbc321b65fd66b1525c04", "rowcut: input-prefix mismatch; input changed");
     rows.sort_by(|a, b| b.site.cmp(&a.site));
     for w in rows.windows(2) { assert!(w[0].site != w[1].site, "rowcut: two rows at site {}", w[0].site); }
     let (mut n_drop, mut n_cx) = (0usize, 0usize);
