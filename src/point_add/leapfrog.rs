@@ -205,7 +205,7 @@ pub(crate) const C35_TRACE: bool = false;
 /// same predictor is an identity): half the miss rate, that of an 18-bit seeded compare, and every miss is a miss of
 /// the 17-bit compare. 2 Toffoli under a measured condition each. The build panics if an entry meets a compare of
 /// another kind or is never met. Rounds 655, 661, 698 of the divide (each first add) and 661 of the multiply.
-pub(crate) const C35_WIDEN: bool = C35;
+pub(crate) const C35_WIDEN: bool = false;
 const C35_WIDEN_AT: [(bool, usize, usize, usize); 21] = [
     (false, 655, 0, 37), (false, 655, 37, 74), (false, 655, 74, 111), (false, 655, 111, 148), (false, 655, 148, 184), (false, 655, 184, 220),
     (false, 661, 0, 37), (false, 661, 37, 74), (false, 661, 74, 111), (false, 661, 111, 148), (false, 661, 148, 184), (false, 661, 184, 220),
@@ -224,7 +224,7 @@ thread_local! { static C35_WIDEN_HITS: std::cell::Cell<[u32; 21]> = const { std:
 /// added compares that are unseeded, divide 322 and multiply 636, two seeded compares of the round's own width).
 /// An entry is (multiply, round, lo, hi, width): the first compare with that key in the build; the build panics if
 /// it is not a seeded approximate compare of that width, or is never met.
-pub(crate) const C35_WIDEN_WIDE: bool = C35;
+pub(crate) const C35_WIDEN_WIDE: bool = false;
 const C35_WIDEN_WIDE_AT: [(bool, usize, usize, usize, usize); 32] = [
     (false, 279, 20, 138, 19), (false, 279, 0, 86, 19), (false, 284, 0, 86, 19), (false, 284, 86, 171, 19),
     (false, 322, 0, 86, 19), (false, 322, 86, 171, 19), (false, 462, 0, 64, 20), (false, 462, 64, 128, 20),
@@ -366,6 +366,7 @@ pub(crate) fn install_recipe() {
         ("LF_SEAMS", "1"),
         // peak cap, tuned together with LF_REORDER
         ("HEO_PIN_PP_WALK_MAX_QUBITS", if C35_CAP { "1235" } else { "1236" }),
+        ("HEO_PIN_PP_CHUNK_SHAPE", "64:0,38:0,25:-3,0:-4"),
         // the merged step's shared core has 13 ANDs (the rank bound) where it had 14; every fit, split and plan rule
         // counts the wire it no longer holds
         ("LF_CORE_FREED", "all"),

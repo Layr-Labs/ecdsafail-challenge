@@ -36,6 +36,11 @@ pub(super) const Y15_REV_FROM: usize = 1;
 pub(super) const Y15_REV_TO: usize = 999;
 /// Fold window (bits [0, MW) of the payload).
 const Y15_WIN: usize = 56;
+// Use the larger forward fold window on the initial payload ticks.
+const PAYLOAD_FOLD_PREFIX: bool = true;
+fn fold_window(t: usize, rev: bool) -> usize {
+    if PAYLOAD_FOLD_PREFIX && !rev && t <= 55 { 57 } else { Y15_WIN }
+}
 /// Bits below the compare window of m0 on which add 1's carries are built again.
 const Y15_GUARD: usize = 0;
 /// Research knob: bits added to every chunk-boundary compare of the tick (the cells' own shift is kept). 0 = as the cells.
@@ -594,7 +599,7 @@ fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usi
         return (0, 0, 0, 0, 0);
     }
     // the ladder's least budget on bits [6, MW): 10 at window 57 (as [`fold_plan`] finds it)
-    let nbits = Y15_WIN - 6;
+    let nbits = fold_window(at.1, at.0) - 6;
     let min_budget = (1..=nbits).find(|&b| merged_plan(nbits - 1, b).is_some() || merged_plan(nbits, b).is_some()).expect("y16: a ladder budget");
     // y28: the ladder with `drop` kept carries dropped early runs on that many wires fewer
     let need = fixed + min_budget - drop - 2 * usize::from(Y15_LEAN45);
@@ -2478,9 +2483,9 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
             c.cx(s[2], b[j]);
         }
         let plan = if Y15_CORE_V2 {
-            fold_rev_v2(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, &b[..6], &kept, &wc, lean_here, if swap01 { [2, 0, 1] } else { [2, 1, 0] }, &yg, fin.min(2), drop_n)
+            fold_rev_v2(c, &tg[..fold_window(t, true)], [x256, x257, x258], s, k1, k2, &b[..6], &kept, &wc, lean_here, if swap01 { [2, 0, 1] } else { [2, 1, 0] }, &yg, fin.min(2), drop_n)
         } else {
-            fold_rev(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, &b[..6], &wc)
+            fold_rev(c, &tg[..fold_window(t, true)], [x256, x257, x258], s, k1, k2, &b[..6], &wc)
         };
         for j in 0..6 {
             c.cx(s[2], b[j]);
@@ -2505,9 +2510,9 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
                 ph.finish(c);
             }
         }
-        fold_fwd_v2(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, fin, esh.as_mut(), ttm, drop_n)
+        fold_fwd_v2(c, &tg[..fold_window(t, false)], [x256, x257, x258], s, k1, k2, fin, esh.as_mut(), ttm, drop_n)
     } else {
-        fold_fwd(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2)
+        fold_fwd(c, &tg[..fold_window(t, false)], [x256, x257, x258], s, k1, k2)
     };
     super::room_fold_end(c, room_fold_n);
     // y21, deep shed, reverse: the block and cq(N - 3) again, bottom up
@@ -3249,7 +3254,7 @@ fn body_t0_one(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, b: &[
     c.cx(s[0], a1);
     c.cx(s[2], a0);
     let zz = c.alloc_qubit();
-    let _ = fold_fwd_v2(c, &tg[..Y15_WIN], [z[0], z[1], x258], [a1, a0, zz], k1, k2, 0, None, false, 0);
+    let _ = fold_fwd_v2(c, &tg[..fold_window(0, false)], [z[0], z[1], x258], [a1, a0, zz], k1, k2, 0, None, false, 0);
     c.release_clean(zz); // never written
     c.cx(s[2], a0);
     c.cx(s[0], a1);
