@@ -768,10 +768,6 @@ fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
     // SQ_ASM_TAIL=E: ripple the carry only E bits past the cross word. The
     // bits above hold b^2 and are random, so a carry reaches E bits in with
     // probability about 2^-E. An approximate cut, priced as a sell.
-    // y33-c35 (leapfrog::C35_SQ_REPLAN): a forward plan of one chunk with nothing held or deferred is not forced on
-    // the inverse, which then plans for its own room (as it does when the forward add took the plain ripple).
-    let replan=super::leapfrog::C35_SQ_REPLAN&&inverse&&held.is_empty()&&xkept.is_empty()&&recover.as_ref().is_some_and(|(p,f)|p.sizes.len()==1&&f.is_empty());
-    let recover=if replan{None}else{recover};
     let full=acc;
     let acc=match super::optional_env::<usize>("SQ_ASM_TAIL"){Some(e)=>&full[..full.len().min(cross.len()+e)],None=>full};
     let mut room=super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
@@ -814,10 +810,7 @@ fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
         }
         // bit0 of the source is zero, so acc[0] and the first carry stay put.
         let defer=!inverse && super::env_flag("SQ_DEFER_CROSS_PHASE");
-        // y33-c35 diagnostic (inert at C35_FAULT = 0): fault 3 on the re-planned inverse
-        super::leapfrog::C35_SQ_FX.with(|x|x.set(replan&&super::leapfrog::C35_FAULT==3));
         let pending=super::width_composition::direct_add_phase_transport(circ,&map,&acc[1..],cross[0],&plan,defer,&fixes);
-        super::leapfrog::C35_SQ_FX.with(|x|x.set(false));
         if inverse {circ.x_all(acc);}
         for &q in &tops{circ.reacquire(q);}
         if super::env_flag("SQ_FIT_CROSS_TRACE") {eprintln!("FIT_CROSS {} {} {} {} {}",acc.len(),room,plan.peak,plan.extra2,inverse as u8);}
@@ -920,7 +913,6 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
     // top of the 2(hi+1)-bit cross word is zero after this subtraction.
     let first=if !flat_sum_carries.is_empty() && (go_b2()||super::env_flag("SQ_FLAT_SHARE_C0")){assert!(row0_copy());Carry0::Known(flat_sum_carries[0])}else if let Some(q)=k0{assert!(row0_copy());Carry0::Known(q)}else{Carry0::Full};
     let odd_tops = lo < m - lo && super::env_flag("SQ_ODD_NODE_TOPS");
-    super::modular::dsq_keep_scope(true, || {
     if odd_tops {
         let c1=if cut_sqident(){Carry1::CopiesCarry0}else{Carry1::Full};
         super::modular::addsub_wide_known_top(circ,a2,&cross,true,first,c1,false);
@@ -929,19 +921,16 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
     } else {
         addsub_wide_low(circ,a2,&cross,true,first,Carry1::Full);
     }
-    });
     // SQ_ROW0_COPY: b2 holds b^2 + Nb with Nb = 2 (mod 4), so its bit 1 is
     // always set. Clearing it subtracts b2 - 2, which keeps the bit-1 carry
     // identity below and adds 2 to this node's cross offset.
     if row0_copy() {circ.x(b2[1]);}
-    super::modular::dsq_keep_scope(true, || {
     if super::env_flag("SQ_ZERO_TOP_CROSS") {
         // 2ab < 2^(lo+hi+1), while cross has 2*(hi+1) bits: its top is zero.
         let (c0,c1)=if cut_sqident(){(Carry0::Zero,Carry1::CopiesCarry0)}else{(Carry0::Full,Carry1::Full)};
         super::modular::addsub_wide_known_top(circ,b2,&cross,true,c0,c1,false);
     } else if cut_sqident() {addsub_wide_low(circ,b2,&cross,true,Carry0::Zero,Carry1::CopiesCarry0);}
     else {sub_wide(circ,b2,&cross);}
-    });
     if row0_copy() {circ.x(b2[1]);}
     if let Some(q)=k0{circ.cx(cross[1],q);circ.release_clean(q);}
     // product += 2ab << lo, exact full ripple to the top (x^2 < 2^(2m), so the
@@ -1064,6 +1053,140 @@ fn cross2_restore(circ:&mut Builder,l:Cross2Loan) {
     if row0_copy(){circ.x(l.q);}
 }
 
+/// Consumer-only exact loan of bit 3 of a retained `2ab` word.
+///
+/// The retained source frame holds `a` and `t=a+b`.  Writing `b=t-a`
+/// modulo 8, bit 3 of `2ab` has the complete ANF
+///
+/// `a0 ^ a1 ^ a0a1 ^ a0t0 ^ a2t0 ^ a0t1 ^ a1t1 ^
+///  a0t0t1 ^ a0a1t0t1 ^ a0t2`.
+///
+/// This lets the fold borrow the physical cross wire: X-measure it, apply the
+/// exact diagonal phase polynomial, and coherently recreate the same ANF
+/// before the retained square inverse.
+#[derive(Clone,Copy,Debug)]
+struct Cross3Loan {
+    q:QubitId,
+    a0:QubitId,a1:QubitId,a2:QubitId,
+    t0:QubitId,t1:QubitId,t2:QubitId,
+}
+
+fn retained_cross3_bits(r:&K2Retained,x:&[QubitId],out:&mut Vec<Cross3Loan>) {
+    assert!(matches!(x.len(),64|65|66|128|129),"cross3 production frame");
+    let lo=x.len()/2;
+    out.push(Cross3Loan{
+        q:r.cross[3],
+        a0:x[0],a1:x[1],a2:x[2],
+        t0:x[lo],t1:x[lo+1],t2:x[lo+2],
+    });
+    if let Some(q)=r.low.as_ref(){retained_cross3_bits(q,&x[..lo],out);}
+    if let Some(q)=r.sum.as_ref(){let mut t=x[lo..].to_vec();t.push(r.carry);retained_cross3_bits(q,&t,out);}
+}
+
+fn phase3_if(c:&mut Builder,a:QubitId,b:QubitId,d:QubitId,m:BitId) {
+    c.push_condition(m);
+    let q=c.alloc_qubit();c.ccx(a,b,q);c.cz(q,d);c.ccx(a,b,q);c.free(q);
+    c.pop_condition();
+}
+
+fn phase4_if(c:&mut Builder,a:QubitId,b:QubitId,d:QubitId,e:QubitId,m:BitId) {
+    c.push_condition(m);
+    let q1=c.alloc_qubit();let q2=c.alloc_qubit();
+    c.ccx(a,b,q1);c.ccx(d,e,q2);c.cz(q1,q2);
+    c.ccx(d,e,q2);c.ccx(a,b,q1);c.free(q2);c.free(q1);
+    c.pop_condition();
+}
+
+fn cross3_erase(c:&mut Builder,l:Cross3Loan) {
+    let m=c.alloc_bit();c.hmr(l.q,m);
+    c.z_if(l.a0,m);c.z_if(l.a1,m);
+    for (a,b) in [
+        (l.a0,l.a1),(l.a0,l.t0),(l.a2,l.t0),
+        (l.a0,l.t1),(l.a1,l.t1),(l.a0,l.t2),
+    ] { c.cz_if(a,b,m); }
+    phase3_if(c,l.a0,l.t0,l.t1,m);
+    phase4_if(c,l.a0,l.a1,l.t0,l.t1,m);
+    c.free_bit(m);
+}
+
+fn cross3_restore(c:&mut Builder,l:Cross3Loan) {
+    c.cx(l.a0,l.q);c.cx(l.a1,l.q);
+    for (a,b) in [
+        (l.a0,l.a1),(l.a0,l.t0),(l.a2,l.t0),
+        (l.a0,l.t1),(l.a1,l.t1),(l.a0,l.t2),
+    ] { c.ccx(a,b,l.q); }
+    let u=c.alloc_qubit();c.ccx(l.a0,l.t0,u);c.ccx(u,l.t1,l.q);c.ccx(l.a0,l.t0,u);c.free(u);
+    let u=c.alloc_qubit();let v=c.alloc_qubit();
+    c.ccx(l.a0,l.a1,u);c.ccx(l.t0,l.t1,v);c.ccx(u,v,l.q);
+    c.ccx(l.t0,l.t1,v);c.ccx(l.a0,l.a1,u);c.free(v);c.free(u);
+}
+
+/// Exact consumer loan of retained bit 4.  The masks encode the complete ANF
+/// of bit 4 of `2*a*(t-a)` over `(a0..a3,t0..t3)`.
+#[derive(Clone,Copy,Debug)]
+struct Cross4Loan { q:QubitId, a:[QubitId;4], t:[QubitId;4] }
+const CROSS4_ANF:&[u8]=&[
+    0x01,0x02,0x05,0x11,0x16,0x17,0x18,0x21,0x22,0x23,0x24,0x31,
+    0x33,0x36,0x37,0x41,0x42,0x51,0x55,0x61,0x63,0x71,0x73,0x81,
+];
+
+fn retained_cross4_bits(r:&K2Retained,x:&[QubitId],out:&mut Vec<Cross4Loan>) {
+    assert!(matches!(x.len(),64|65|66|128|129),"cross4 production frame");
+    let lo=x.len()/2;
+    out.push(Cross4Loan{q:r.cross[4],a:[x[0],x[1],x[2],x[3]],t:[x[lo],x[lo+1],x[lo+2],x[lo+3]]});
+    if let Some(q)=r.low.as_ref(){retained_cross4_bits(q,&x[..lo],out);}
+    if let Some(q)=r.sum.as_ref(){let mut t=x[lo..].to_vec();t.push(r.carry);retained_cross4_bits(q,&t,out);}
+}
+
+fn anf_vars(l:Cross4Loan,mask:u8)->Vec<QubitId> {
+    let all=[l.a[0],l.a[1],l.a[2],l.a[3],l.t[0],l.t[1],l.t[2],l.t[3]];
+    (0..8).filter(|i|mask&(1<<i)!=0).map(|i|all[i]).collect()
+}
+
+fn xor_monomial(c:&mut Builder,vars:&[QubitId],target:QubitId) {
+    match vars.len(){
+        1=>c.cx(vars[0],target),
+        2=>c.ccx(vars[0],vars[1],target),
+        n=>{
+            let mut anc=Vec::with_capacity(n-2);
+            let q=c.alloc_qubit();c.ccx(vars[0],vars[1],q);anc.push(q);
+            for i in 2..n-1 {let q=c.alloc_qubit();c.ccx(anc[i-2],vars[i],q);anc.push(q);}
+            c.ccx(*anc.last().unwrap(),vars[n-1],target);
+            for i in (1..anc.len()).rev(){c.ccx(anc[i-1],vars[i+1],anc[i]);}
+            c.ccx(vars[0],vars[1],anc[0]);
+            for q in anc.into_iter().rev(){c.free(q);}
+        }
+    }
+}
+
+fn phase_monomial_if(c:&mut Builder,vars:&[QubitId],m:BitId) {
+    match vars.len(){
+        1=>c.z_if(vars[0],m),
+        2=>c.cz_if(vars[0],vars[1],m),
+        n=>{
+            c.push_condition(m);
+            let mut anc=Vec::with_capacity(n-2);
+            let q=c.alloc_qubit();c.ccx(vars[0],vars[1],q);anc.push(q);
+            for i in 2..n-1 {let q=c.alloc_qubit();c.ccx(anc[i-2],vars[i],q);anc.push(q);}
+            c.cz(*anc.last().unwrap(),vars[n-1]);
+            for i in (1..anc.len()).rev(){c.ccx(anc[i-1],vars[i+1],anc[i]);}
+            c.ccx(vars[0],vars[1],anc[0]);
+            for q in anc.into_iter().rev(){c.free(q);}
+            c.pop_condition();
+        }
+    }
+}
+
+fn cross4_erase(c:&mut Builder,l:Cross4Loan) {
+    let m=c.alloc_bit();c.hmr(l.q,m);
+    for &mask in CROSS4_ANF {phase_monomial_if(c,&anf_vars(l,mask),m);}
+    c.free_bit(m);
+}
+
+fn cross4_restore(c:&mut Builder,l:Cross4Loan) {
+    for &mask in CROSS4_ANF {xor_monomial(c,&anf_vars(l,mask),l.q);}
+}
+
 /// Materialise `x^2` in a fresh register, run `folds` against it, then uncompute
 /// and release it.
 ///
@@ -1085,7 +1208,8 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
     let (t1,p1)=(g2t(circ),circ.take_win_peak());
     GO_B3.with(|g|g.set(old));
     let mut loans=Vec::new();
-    if super::env_flag("SQ_LEND_RETAINED_ZEROS"){retained_zero_bits(&retained,x.len(),&mut loans);}
+    let lend_retained_zeros=super::env_flag("SQ_LEND_RETAINED_ZEROS");
+    if lend_retained_zeros{retained_zero_bits(&retained,x.len(),&mut loans);}
     let branch=match policy_name{"SQ_A_POLICY"=>1,"SQ_B_POLICY"=>2,"SQ_C_POLICY"=>4,_=>7};
     let and_mask=super::optional_env::<usize>("SQ_LEND_RETAINED_ANDS").unwrap_or(0);
     let mut and_loans=Vec::new();
@@ -1094,6 +1218,14 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
     assert!(cross2_mask<=7,"W61 branch mask must be in 0..=7");
     let mut cross2_loans=Vec::new();
     if cross2_mask&branch!=0{retained_cross2_bits(&retained,x,&mut cross2_loans);}
+    let cross3_mask=super::optional_env::<usize>("SQ_LEND_RETAINED_CROSS3").unwrap_or(0);
+    assert!(cross3_mask<=7,"cross3 branch mask must be in 0..=7");
+    let mut cross3_loans=Vec::new();
+    if cross3_mask&branch!=0{retained_cross3_bits(&retained,x,&mut cross3_loans);}
+    let cross4_mask=super::optional_env::<usize>("SQ_LEND_RETAINED_CROSS4").unwrap_or(0);
+    assert!(cross4_mask<=7,"cross4 branch mask must be in 0..=7");
+    let mut cross4_loans=Vec::new();
+    if cross4_mask&branch!=0{retained_cross4_bits(&retained,x,&mut cross4_loans);}
     for &(q,a,t)in &and_loans{
         let m=circ.alloc_bit();circ.hmr(q,m);circ.x(t);circ.cz_if(a,t,m);circ.x(t);circ.free_bit(m);loans.push(q);
     }
@@ -1103,16 +1235,25 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
     let mut consumer_product=product.clone();
     if alias{circ.cx(x[0],product[0]);loans.push(product[0]);consumer_product[0]=x[0];}
     for &l in &cross2_loans{cross2_erase(circ,l);loans.push(l.q);}
-    if !cross2_loans.is_empty(){
+    for &l in &cross3_loans{cross3_erase(circ,l);loans.push(l.q);}
+    for &l in &cross4_loans{cross4_erase(circ,l);loans.push(l.q);}
+    if !cross2_loans.is_empty() || !cross3_loans.is_empty() || !cross4_loans.is_empty(){
         let ids:std::collections::HashSet<_>=loans.iter().map(|q|q.0).collect();
         assert_eq!(ids.len(),loans.len(),"W61 duplicate loan target");
         for l in &cross2_loans {
             for q in [l.a0,l.a1,l.t0,l.t1]{assert!(!ids.contains(&q.0),"W61 control is being loaned");}
         }
+        for l in &cross3_loans {
+            for q in [l.a0,l.a1,l.a2,l.t0,l.t1,l.t2]{assert!(!ids.contains(&q.0),"cross3 control is being loaned");}
+        }
+        for l in &cross4_loans {
+            for q in l.a.into_iter().chain(l.t){assert!(!ids.contains(&q.0),"cross4 control is being loaned");}
+        }
     }
     for &q in &loans{circ.release_clean(q);}
+    if g2 { eprintln!("G4_SQ_OWNER {policy_name} data=512 product={} cross={} carry=1 held={} flat_sum={} loans={} fold_base={} fold_room={}", product.len(), retained.cross.len(), retained.held.len()+retained.xkept.len(), retained.flat_sum_carries.len(), loans.len(), circ.active_qubits(), super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits() as usize)); }
     if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() || super::native_sfuse_b::mode()>0 {SQ_LOANS.with(|l|*l.borrow_mut()=loans.clone());}
-    folds(circ, &consumer_product);
+    if std::env::var_os("PORT_SQ_EMPTY_CONSUMER").is_none() { folds(circ, &consumer_product); }
     let (t2,p2)=(g2t(circ),circ.take_win_peak());
     if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() || super::native_sfuse_b::mode()>0 {SQ_LOANS.with(|l|l.borrow_mut().clear());}
     // Every consumer restores its temporary work and source. Reclaim the same
@@ -1120,6 +1261,8 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
     for &q in &loans{circ.reacquire(q);}
     for &(q,a,t)in &and_loans{circ.x(t);circ.ccx(a,t,q);circ.x(t);}
     for &l in &cross2_loans{cross2_restore(circ,l);}
+    for &l in &cross3_loans{cross3_restore(circ,l);}
+    for &l in &cross4_loans{cross4_restore(circ,l);}
     if alias{circ.cx(x[0],product[0]);}
     tri_square_k2r_inv(circ, x, &product, retained);
     let (t3,p3)=(g2t(circ),circ.take_win_peak());
@@ -1181,10 +1324,6 @@ thread_local! {
 }
 
 pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
-    sub_square_x(circ, out, y);
-    super::modular::dsq_check();
-}
-fn sub_square_x(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
     // G3_SQ_EXACT_SPLIT: every ladder the square splits to fit its cap erases its boundary carries exactly
     // (whole-chunk compares in reverse order) instead of through the HEO_FIT_K window, so a capped square
     // spends no lambda. Off in the default recipe.
