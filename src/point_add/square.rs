@@ -768,10 +768,6 @@ fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
     // SQ_ASM_TAIL=E: ripple the carry only E bits past the cross word. The
     // bits above hold b^2 and are random, so a carry reaches E bits in with
     // probability about 2^-E. An approximate cut, priced as a sell.
-    // y33-c35 (leapfrog::C35_SQ_REPLAN): a forward plan of one chunk with nothing held or deferred is not forced on
-    // the inverse, which then plans for its own room (as it does when the forward add took the plain ripple).
-    let replan=super::leapfrog::C35_SQ_REPLAN&&inverse&&held.is_empty()&&xkept.is_empty()&&recover.as_ref().is_some_and(|(p,f)|p.sizes.len()==1&&f.is_empty());
-    let recover=if replan{None}else{recover};
     let full=acc;
     let acc=match super::optional_env::<usize>("SQ_ASM_TAIL"){Some(e)=>&full[..full.len().min(cross.len()+e)],None=>full};
     let mut room=super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
@@ -814,10 +810,7 @@ fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
         }
         // bit0 of the source is zero, so acc[0] and the first carry stay put.
         let defer=!inverse && super::env_flag("SQ_DEFER_CROSS_PHASE");
-        // y33-c35 diagnostic (inert at C35_FAULT = 0): fault 3 on the re-planned inverse
-        super::leapfrog::C35_SQ_FX.with(|x|x.set(replan&&super::leapfrog::C35_FAULT==3));
         let pending=super::width_composition::direct_add_phase_transport(circ,&map,&acc[1..],cross[0],&plan,defer,&fixes);
-        super::leapfrog::C35_SQ_FX.with(|x|x.set(false));
         if inverse {circ.x_all(acc);}
         for &q in &tops{circ.reacquire(q);}
         if super::env_flag("SQ_FIT_CROSS_TRACE") {eprintln!("FIT_CROSS {} {} {} {} {}",acc.len(),room,plan.peak,plan.extra2,inverse as u8);}
@@ -920,7 +913,6 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
     // top of the 2(hi+1)-bit cross word is zero after this subtraction.
     let first=if !flat_sum_carries.is_empty() && (go_b2()||super::env_flag("SQ_FLAT_SHARE_C0")){assert!(row0_copy());Carry0::Known(flat_sum_carries[0])}else if let Some(q)=k0{assert!(row0_copy());Carry0::Known(q)}else{Carry0::Full};
     let odd_tops = lo < m - lo && super::env_flag("SQ_ODD_NODE_TOPS");
-    super::modular::dsq_keep_scope(true, || {
     if odd_tops {
         let c1=if cut_sqident(){Carry1::CopiesCarry0}else{Carry1::Full};
         super::modular::addsub_wide_known_top(circ,a2,&cross,true,first,c1,false);
@@ -929,19 +921,16 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
     } else {
         addsub_wide_low(circ,a2,&cross,true,first,Carry1::Full);
     }
-    });
     // SQ_ROW0_COPY: b2 holds b^2 + Nb with Nb = 2 (mod 4), so its bit 1 is
     // always set. Clearing it subtracts b2 - 2, which keeps the bit-1 carry
     // identity below and adds 2 to this node's cross offset.
     if row0_copy() {circ.x(b2[1]);}
-    super::modular::dsq_keep_scope(true, || {
     if super::env_flag("SQ_ZERO_TOP_CROSS") {
         // 2ab < 2^(lo+hi+1), while cross has 2*(hi+1) bits: its top is zero.
         let (c0,c1)=if cut_sqident(){(Carry0::Zero,Carry1::CopiesCarry0)}else{(Carry0::Full,Carry1::Full)};
         super::modular::addsub_wide_known_top(circ,b2,&cross,true,c0,c1,false);
     } else if cut_sqident() {addsub_wide_low(circ,b2,&cross,true,Carry0::Zero,Carry1::CopiesCarry0);}
     else {sub_wide(circ,b2,&cross);}
-    });
     if row0_copy() {circ.x(b2[1]);}
     if let Some(q)=k0{circ.cx(cross[1],q);circ.release_clean(q);}
     // product += 2ab << lo, exact full ripple to the top (x^2 < 2^(2m), so the
@@ -1072,6 +1061,16 @@ fn cross2_restore(circ:&mut Builder,l:Cross2Loan) {
 /// uncompute exact rather than a second square. Having the three uses go through
 /// here means a fold cannot be added without its inverse, or a register leaked.
 fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl FnOnce(&mut Builder, &[QubitId])) {
+    // Lilypad flat half-square (P1'): only the triangular product remains
+    // live across the folds, then it is uncomputed exactly.
+    if super::env_flag("P1_FLAT") {
+        let product = circ.alloc_qubits(2 * x.len());
+        tri_square(circ, x, &product, false);
+        folds(circ, &product);
+        tri_square(circ, x, &product, true);
+        circ.free_vec(&product);
+        return;
+    }
     let price_branches=super::env_flag("SQ_MODEL_BRANCHES");
     if price_branches {circ.set_phase(match policy_name{"SQ_A_POLICY"=>"square_a","SQ_B_POLICY"=>"square_b","SQ_C_POLICY"=>"square_c",_=>"square_test"});}
     let old_policy = OUTER_SQUARE_POLICY.with(|p| p.replace(super::optional_env::<usize>(policy_name)));
@@ -1111,8 +1110,9 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
         }
     }
     for &q in &loans{circ.release_clean(q);}
+    if g2 { eprintln!("G4_SQ_OWNER {policy_name} data=512 product={} cross={} carry=1 held={} flat_sum={} loans={} fold_base={} fold_room={}", product.len(), retained.cross.len(), retained.held.len()+retained.xkept.len(), retained.flat_sum_carries.len(), loans.len(), circ.active_qubits(), super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits() as usize)); }
     if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() || super::native_sfuse_b::mode()>0 {SQ_LOANS.with(|l|*l.borrow_mut()=loans.clone());}
-    folds(circ, &consumer_product);
+    if std::env::var_os("PORT_SQ_EMPTY_CONSUMER").is_none() { folds(circ, &consumer_product); }
     let (t2,p2)=(g2t(circ),circ.take_win_peak());
     if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() || super::native_sfuse_b::mode()>0 {SQ_LOANS.with(|l|l.borrow_mut().clear());}
     // Every consumer restores its temporary work and source. Reclaim the same
@@ -1181,10 +1181,6 @@ thread_local! {
 }
 
 pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
-    sub_square_x(circ, out, y);
-    super::modular::dsq_check();
-}
-fn sub_square_x(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
     // G3_SQ_EXACT_SPLIT: every ladder the square splits to fit its cap erases its boundary carries exactly
     // (whole-chunk compares in reverse order) instead of through the HEO_FIT_K window, so a capped square
     // spends no lambda. Off in the default recipe.
