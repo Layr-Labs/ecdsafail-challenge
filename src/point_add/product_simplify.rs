@@ -8,7 +8,7 @@ use crate::circuit::{analyze_ops, Op, OperationType, QubitId, QubitOrBit};
 use std::collections::{BTreeSet, HashMap};
 
 /// An unsupported query is absent, rather than a fresh opaque expression.
-fn exact_product(a: &Truth, b: &Truth) -> Option<Truth> {
+pub(super) fn exact_product(a: &Truth, b: &Truth) -> Option<Truth> {
     if a.is_zero() || b.is_zero() || a.complements(b) {
         return Some(Truth::constant(false));
     }
@@ -63,6 +63,7 @@ impl Hit {
 
 pub(super) struct Index {
     values: HashMap<Truth, BTreeSet<usize>>,
+    supports: HashMap<Vec<u64>, BTreeSet<usize>>,
     eligible: Vec<bool>,
 }
 
@@ -70,6 +71,7 @@ impl Index {
     pub(super) fn new(state: &Support, ops: &[Op]) -> Self {
         let mut index = Self {
             values: HashMap::new(),
+            supports: HashMap::new(),
             eligible: vec![false; state.qubits.len()],
         };
         let (_, _, _, registers) = analyze_ops(ops.iter());
@@ -88,6 +90,7 @@ impl Index {
 
     fn insert(&mut self, state: &Support, q: usize) {
         if self.eligible[q] {
+            self.supports.entry(state.qubits[q].atoms.clone()).or_default().insert(q);
             self.values
                 .entry(state.qubits[q].clone())
                 .or_default()
@@ -97,6 +100,12 @@ impl Index {
 
     fn remove(&mut self, state: &Support, q: usize) {
         let value = &state.qubits[q];
+        if let Some(slots) = self.supports.get_mut(&value.atoms) {
+            slots.remove(&q);
+            if slots.is_empty() {
+                self.supports.remove(&value.atoms);
+            }
+        }
         if let Some(slots) = self.values.get_mut(value) {
             slots.remove(&q);
             if slots.is_empty() {
@@ -122,6 +131,33 @@ impl Index {
                         complement,
                         zero_product: product.is_zero(),
                     });
+                }
+            }
+        }
+        None
+    }
+
+    /// Enumerate at most 64 support buckets, never all physical-slot pairs.
+    pub(super) fn span_slots(&self, atoms: &[u64], excluded: Option<usize>) -> Vec<usize> {
+        assert!(atoms.len() <= SUPPORT_CAP);
+        let mut slots = Vec::new();
+        // Constants are already provided by the synthesis basis.
+        for mask in 1..1usize << atoms.len() {
+            let support = atoms.iter().enumerate().filter_map(|(i, &a)|
+                (mask & (1 << i) != 0).then_some(a)).collect::<Vec<_>>();
+            if let Some(bucket) = self.supports.get(&support) {
+                slots.extend(bucket.iter().copied().filter(|q| Some(*q) != excluded));
+            }
+        }
+        slots.sort_unstable();
+        slots
+    }
+
+    pub(super) fn span_witness(&self, desired: &Truth, excluded: Option<usize>) -> Option<(usize, bool)> {
+        for (value, complement) in [(desired.clone(), false), (desired.complement(), true)] {
+            if let Some(slots) = self.values.get(&value) {
+                if let Some(&q) = slots.iter().find(|&&q| Some(q) != excluded) {
+                    return Some((q, complement));
                 }
             }
         }

@@ -325,17 +325,27 @@ pub(crate) fn simplify_products(ops: Vec<Op>) -> Vec<Op> {
 #[path = "product_simplify.rs"]
 mod product;
 
+#[path = "linear_span.rs"]
+mod linear_span;
+
 fn simplify_with_products(ops: Vec<Op>, use_products: bool) -> Vec<Op> {
     let mut affine = AffineSupport::new(&ops);
     let mut quadratic = QuadraticSupport::new(&ops);
     let mut truth = Support::new(&ops);
     let mut products = use_products.then(|| product::Index::new(&truth, &ops));
     let mut result = Vec::with_capacity(ops.len());
+    let mut span_ccx = 0;
+    let mut span_ccz = 0;
     for op in ops {
         // Query the pre-op state; remove old keys before truth mutates it.
         let product_hit = products
             .as_mut()
             .and_then(|index| index.before(&truth, &op));
+        // before() has removed changed target keys, which is safe because CCX
+        // excludes its target. CCZ changes no physical value or index key.
+        let span_hit = if product_hit.is_none() {
+            products.as_ref().and_then(|index| linear_span::before(&truth, index, &op))
+        } else { None };
         let affine_rewrite = affine.step(&op);
         let quadratic_rewrite = quadratic.step(&op);
         let truth_rewrite = truth.step(&op);
@@ -347,11 +357,16 @@ fn simplify_with_products(ops: Vec<Op>, use_products: bool) -> Vec<Op> {
             (Rewrite::Keep, quadratic_proof) => quadratic_proof,
             (affine_proof, _) => affine_proof,
         };
-        match (rewrite, product_hit) {
-            (Rewrite::Keep, Some(hit)) => hit.emit(op, &mut result),
-            (old_proof, _) => old_proof.emit(op, &mut result),
+        match (rewrite, product_hit, span_hit) {
+            (Rewrite::Keep, Some(hit), _) => hit.emit(op, &mut result),
+            (Rewrite::Keep, None, Some(hit)) => {
+                if op.kind == OperationType::CCX { span_ccx += 1; } else { span_ccz += 1; }
+                hit.emit(op, &mut result)
+            },
+            (old_proof, _, _) => old_proof.emit(op, &mut result),
         }
     }
+    eprintln!("LINEAR_SPAN_R1 ccx={span_ccx} ccz={span_ccz}");
     result
 }
 
