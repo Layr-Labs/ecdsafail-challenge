@@ -295,6 +295,44 @@ impl Builder {
         let at = self.at();
         self.peak_census.on_free(at, q.0);
     }
+    /// y42-railtop: the allocator's state (free wires and free bits in the order later allocations take them, and the
+    /// next fresh bit).
+    pub(crate) fn y42_alloc_state(&self) -> (Vec<u32>, Vec<u32>, u32) {
+        (self.free_qubits.clone(), self.free_bits.clone(), self.next_bit)
+    }
+    /// y42-railtop: a fingerprint of an allocator state.
+    pub(crate) fn y42_alloc_hash(st: &(Vec<u32>, Vec<u32>, u32)) -> u64 {
+        let mut h = 14695981039346656037u64;
+        for &x in st.0.iter().chain([u32::MAX].iter()).chain(st.1.iter()).chain([u32::MAX, st.2].iter()) {
+            h = (h ^ x as u64).wrapping_mul(1099511628211);
+        }
+        h
+    }
+    /// y42-railtop: after a payload op that ran on another plan than the base's, the allocator set to the state the
+    /// base's op leaves (`free_q`; the free bits `before.1[..bits_keep]` then `bits_tail`; `next_bit`), so that every
+    /// later op gets the base's wires and bits. Asserted: the op gave back every wire and every bit it took, and the
+    /// recorded state holds the same free wires and the same free bits (with the base's fresh ones).
+    pub(crate) fn y42_alloc_set(&mut self, before: &(Vec<u32>, Vec<u32>, u32), free_q: &[u32], bits_keep: usize, bits_tail: &[u32], next_bit: u32) {
+        let sorted = |v: &[u32]| {
+            let mut v = v.to_vec();
+            v.sort_unstable();
+            v
+        };
+        assert_eq!(sorted(&self.free_qubits), sorted(&before.0), "y42: the payload op changed the set of free wires");
+        assert!(self.next_bit >= before.2 && next_bit >= before.2, "y42: bit counter");
+        let mut now = before.1.clone();
+        now.extend(before.2..self.next_bit);
+        assert_eq!(sorted(&self.free_bits), sorted(&now), "y42: the payload op kept a classical bit");
+        assert_eq!(sorted(free_q), sorted(&before.0), "y42: the recorded free wires are not this tick's");
+        let mut bits = before.1[..bits_keep].to_vec();
+        bits.extend_from_slice(bits_tail);
+        let mut base = before.1.clone();
+        base.extend(before.2..next_bit);
+        assert_eq!(sorted(&bits), sorted(&base), "y42: the recorded free bits are not this tick's");
+        self.free_qubits = free_q.to_vec();
+        self.free_bits = bits;
+        self.next_bit = next_bit;
+    }
     pub fn free_vec(&mut self, qs: &[QubitId]) {
         for &q in qs {
             self.free(q);

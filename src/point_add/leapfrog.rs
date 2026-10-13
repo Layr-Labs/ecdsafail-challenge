@@ -47,6 +47,109 @@ pub(crate) const C35_DROPN2: bool = C35;
 pub(crate) const C35_MD_PLAN: bool = C35;
 pub(crate) const C35_MUL76: bool = C35;
 pub(crate) const C35_SQ_REPLAN: bool = C35;
+// ---- y42-railtop: the target rail's top wire given back through the payload op of the fused one-fold ticks ----
+/// y42-railtop (12 and 13 October 2026, experiments/y42-board/c1 and b6 in the Pensieve repo). On a fused one-fold
+/// tick all payload work runs as one op behind the rail work, and the rail's width changes stayed at the tick's ends,
+/// so the top wire of the tick's target rail sits through the payload op as a CX copy of the wire below it, while the
+/// qubit count is at its peak. The wire is given back before the payload op and taken again after it (80 forward and
+/// 47 reverse ticks), and the one-fold tick plans with one wire more there: 762,553.1 -> 762,258.4 by the builder at
+/// peak 1,235 (-294.7; forward -152.0, reverse -142.75), 0 outputs differing from the base on 1,082,880 shots.
+/// `Y42` = false: the base's gate list byte for byte (every switch below off, the base's four bound passes on).
+/// - [`Y42_RAIL_MUL`] (reverse fused one-fold ticks, [`rev_tick_fast`]): the wires the previous reverse tick's end
+///   grew by CX and that this tick first reads in its rail work are un-grown before the payload op (the same CX
+///   again, released clean: no reset is added or moved) and grown again by CX right after it.
+/// - [`Y42_RAIL_DIV`] (forward fused one-fold ticks, [`fwd_tick_fast`]): 0 = off. 2 = the target rail is cut before
+///   the payload op to the width the next tick's first step cuts it to as its source (the CX from the wire below and
+///   the reset move from there to here; the tick's end does not grow it). 1 = the hold form, for the aligned test:
+///   only the clearing CX runs before the payload op, and again right after it; the wire and its reset stay.
+/// - [`Y42_SPEND_FWD`] / [`Y42_SPEND_REV`]: tick ranges [from, to) where the freed wire is left to the payload op's
+///   plan. Elsewhere an idle pad wire is held in its place through the payload op, so the plan sees the base's room
+///   (with both rail switches on and no tick spent: the base's outputs on every shot).
+/// Tests (results.jsonl in b6): multiply half with the divide's hold form against the base, 120 draws: 0 outputs, 0
+/// flags, 0 verdicts differ. The spent form has 15 approximate chunk-boundary compares fewer than the base (1,934 ->
+/// 1,919, no width class grows), so [`C35_WIDEN_WIDE_AT`]'s entry 1 names a chunk that is no longer there
+/// ([`c35_widen_check`] lists the hits instead of stopping).
+pub(crate) const Y42: bool = true;
+pub(crate) const Y42_RAIL_MUL: bool = Y42;
+pub(crate) const Y42_RAIL_DIV: u8 = if Y42 { 2 } else { 0 };
+pub(crate) const Y42_SPEND_FWD: &[(usize, usize)] = if Y42 { &[(0, 999)] } else { &[] };
+pub(crate) const Y42_SPEND_REV: &[(usize, usize)] = if Y42 { &[(0, 999)] } else { &[] };
+/// y42 (test builds only): the passes that are bound to the base's exact op stream are off (SL_SQDEPTH2, READER_CUT
+/// and SL_ROWCUT: each asserts the length and a hash of its whole input and edits by op index; SL_PHASE_CUBIC, which
+/// does nothing under YP8_VETO), and so is [`Y42_BOUND`]'s pass. Each stops the build on any change of the stream, so
+/// a gate list with other switch values than the kept ones is built and compared without them, against the base built
+/// without them.
+pub(crate) const Y42_UNBOUND: bool = false;
+/// y42: the passes bound to the base's stream are replaced by one pass (y42_bound_pass.rs) with one table, bound to
+/// this tree's own stream with the switches above as kept: the same edits, carried to their new op indices (27,533 of
+/// the base's 27,537 edited ops; the other four lie at ops the tree's simplifiers write differently on this stream).
+pub(crate) const Y42_BOUND: bool = Y42 && !Y42_UNBOUND;
+/// y42: on a tick that spends its wire the payload op runs on another plan than the base's and leaves the allocator
+/// in another order. With this switch the allocator is then set to the state the base's op leaves on that tick
+/// (leapfrog_data/y42_alloc.txt, dumped by a build with the pads held and [`Y42_TRACE`]; the state before the op is
+/// checked against the table's fingerprint), so every later op takes the base's wires and bits and the bound table
+/// stays valid. false: the allocator is put back as it was before the op.
+pub(crate) const Y42_ALLOC: bool = Y42;
+/// One row of leapfrog_data/y42_alloc.txt: fingerprint of the state before the op; after it: next bit, the length of
+/// the free-bit list that is unchanged, the free wires, the rest of the free bits.
+struct Y42Row {
+    before: u64,
+    next_bit: u32,
+    keep: usize,
+    q: Vec<u32>,
+    bits: Vec<u32>,
+}
+fn y42_row(rev: bool, t: usize) -> Option<&'static Y42Row> {
+    static T: OnceLock<std::collections::HashMap<(bool, usize), Y42Row>> = OnceLock::new();
+    T.get_or_init(|| {
+        let list = |s: &str| -> Vec<u32> { if s == "-" { Vec::new() } else { s.split(',').map(|x| x.parse().expect("y42_alloc: id")).collect() } };
+        include_str!("leapfrog_data/y42_alloc.txt")
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .map(|l| {
+                let f: Vec<&str> = l.split_whitespace().collect();
+                assert!(f.len() == 7 && (f[0] == "F" || f[0] == "R"), "y42_alloc: bad line");
+                let row = Y42Row { before: u64::from_str_radix(f[2], 16).expect("y42_alloc: hash"), next_bit: f[3].parse().unwrap(), keep: f[4].parse().unwrap(), q: list(f[5]), bits: list(f[6]) };
+                ((f[0] == "R", f[1].parse().unwrap()), row)
+            })
+            .collect()
+    })
+    .get(&(rev, t))
+}
+/// y42: after a payload op. A tick that spent its wire: the allocator set as the base leaves it ([`Y42_ALLOC`]) or
+/// put back. A tick with its pads released, under [`Y42_TRACE`]: the line of y42_alloc.txt for this tick.
+fn y42_after(c: &mut Builder, rev: bool, t: usize, before: &(Vec<u32>, Vec<u32>, u32), spent: bool) {
+    if spent {
+        if Y42_ALLOC {
+            let row = y42_row(rev, t).unwrap_or_else(|| panic!("y42: no recorded allocator state for {} tick {t}", if rev { "reverse" } else { "forward" }));
+            assert_eq!(Builder::y42_alloc_hash(before), row.before, "y42: the allocator before the payload op of {} tick {t} is not the recorded one", if rev { "reverse" } else { "forward" });
+            c.y42_alloc_set(before, &row.q, row.keep, &row.bits, row.next_bit);
+        } else {
+            let (q, b, n) = before.clone();
+            let keep = b.len();
+            c.y42_alloc_set(before, &q, keep, &[], n);
+        }
+    } else if Y42_TRACE {
+        let now = c.y42_alloc_state();
+        let keep = now.1.iter().zip(before.1.iter()).take_while(|(a, b)| a == b).count();
+        let join = |v: &[u32]| if v.is_empty() { "-".to_string() } else { v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",") };
+        eprintln!("Y42A {} {t} {:016x} {} {keep} {} {}", if rev { "R" } else { "F" }, Builder::y42_alloc_hash(before), now.2, join(&now.0), join(&now.1[keep..]));
+    }
+}
+/// y42: a line per fused one-fold tick on stderr (the wires freed, the pads, the live count, the payload op's cost).
+const Y42_TRACE: bool = false;
+fn y42_spend(t: usize, rev: bool) -> bool {
+    let r = if rev { Y42_SPEND_REV } else { Y42_SPEND_FWD };
+    r.iter().any(|&(a, b)| t >= a && t < b)
+}
+thread_local! {
+    /// y42: true while the divide's fused loop runs a tick that the next tick of the same loop follows.
+    static Y42_FWD_NEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// y42: (tick, length) of a target rail cut before its payload op; the next forward tick checks it.
+    static Y42_FWD_CUT: std::cell::Cell<Option<(usize, usize)>> = const { std::cell::Cell::new(None) };
+    /// y42: (tick, target length, source length) of the last reverse payload tick just before its end grew the rails.
+    static Y42_REV_END: std::cell::Cell<Option<(usize, usize, usize)>> = const { std::cell::Cell::new(None) };
+}
 // ---- y33-c35b: per-tick tables re-picked at the cap of 1,235 (candidate Z9, on top of y33-c35) ----
 /// y33-c35b (11 October 2026, experiments/y33-stack/p6 and b6 in the Pensieve repo). Three tables of the tree were
 /// fitted on earlier trees at 1,236; with the pieces below re-picked per tick at 1,235: 762,986.1 x 1,235 by the
@@ -161,6 +264,12 @@ pub(crate) fn c35_widen(multiply: bool, round: usize, lo: usize, hi: usize, comp
 /// Every entry of [`C35_WIDEN_AT`] was met (called once, after the multiply).
 pub(crate) fn c35_widen_check() {
     C35_WIDEN_HITS.with(|h| assert!(!C35_WIDEN || h.get().iter().all(|&n| n > 0), "C35_WIDEN: an entry was never met: {:?}", h.get()));
+    // y42-railtop: on a tick that spends its wire an add may take another chunk layout (the one it has with a wire
+    // more of room), and an entry that names a chunk of the old layout is then not met; such entries are listed
+    if (Y42_RAIL_MUL && !Y42_SPEND_REV.is_empty()) || (Y42_RAIL_DIV == 2 && !Y42_SPEND_FWD.is_empty()) {
+        C35_WIDEN_WIDE_HITS.with(|h| eprintln!("Y42_WIDEN_WIDE hits {:?}", h.get()));
+        return;
+    }
     C35_WIDEN_WIDE_HITS.with(|h| assert!(!C35_WIDEN_WIDE || h.get().iter().all(|&n| n > 0), "C35_WIDEN_WIDE: an entry was never met: {:?}", h.get()));
 }
 thread_local! {
@@ -241,11 +350,11 @@ pub(crate) fn install_recipe() {
         ("ROOM_FOLD_ONLY", "1"),
         ("YP8_VETO", "1"),
         ("YP8_VETO_PAD", "0"),
-        ("SL_SQDEPTH2", "on"),
-        ("READER_CUT", "on"),
-        ("SL_PHASE_CUBIC", "1"),
+        ("SL_SQDEPTH2", if Y42_UNBOUND || Y42_BOUND { "0" } else { "on" }),
+        ("READER_CUT", if Y42_UNBOUND || Y42_BOUND { "0" } else { "on" }),
+        ("SL_PHASE_CUBIC", if Y42_UNBOUND || Y42_BOUND { "0" } else { "1" }),
         ("SL_PSCAN_FIX", "1"),
-        ("SL_ROWCUT", "1"),
+        ("SL_ROWCUT", if Y42_UNBOUND || Y42_BOUND { "0" } else { "1" }),
         // the square's inverse-row top carries under the top bit (sqtop_pass.rs)
         ("SL_SQTOP", "1"),
         // Toffolis consumed only by phases, a measurement or a reset (cond_pass.rs)
@@ -3891,6 +4000,12 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
         1 => vec![(n0, n2)],
         _ => Vec::new(),
     };
+    // y42-railtop: the tick before cut this tick's source rail before its payload op; this tick's first step must be
+    // the one that would have cut it, and to that length
+    if let Some((t0, kl)) = Y42_FWD_CUT.with(|x| x.take()) {
+        let nk = fsteps.first().expect("y42: the tick after an early cut has a forced step").0;
+        assert!(t0 + 1 == t && pay.is_some() && br.len() == kl && bw(nk) - o == kl, "y42: early cut at tick {t0} to {kl}, tick {t} finds {} and cuts to {}", br.len(), bw(nk) - o);
+    }
     // The LF_YP8 rule runs inside forced move 2's add, so it is off at tick 0 under LF_T0_FREE (that tick keeps its
     // own rule, a function of R1 alone) and on a last tick with fewer forced steps (LF_TAIL_FORCED: that tick takes
     // the LF_W1 rule of [`fast_choice`])
@@ -4037,6 +4152,44 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
         lr_drop(c, tr);
     }
     pacc(c, &format!("fwd{fk}.rail_barrel"), q0);
+    // y42-railtop ([`Y42_RAIL_DIV`]): the next tick's first step cuts this rail (its source) to `kl` wires before any
+    // op reads it, and nothing from here to there touches the wires above `kl` but the tick's end, which only grows
+    // the rail by CX. So the cut (CX from the wire below, reset) runs here, before the payload op.
+    let mut y42_pads: Vec<QubitId> = Vec::new();
+    let mut y42_hold: Vec<(QubitId, QubitId)> = Vec::new();
+    let mut y42_cut = 0usize;
+    let mut y42_alloc: Option<(Vec<u32>, Vec<u32>, u32)> = None;
+    if Y42_RAIL_DIV != 0 && y15f && Y42_FWD_NEXT.with(|x| x.get()) && tail_forced(t + 1) >= 1 {
+        let (w1, n01) = (st[t + 1][0], st[t + 1][1]);
+        let w2 = st.get(t + 2).map(|r| r[0]).unwrap_or(w1);
+        let kl = if lf_signwire() { n01.min(w1).min(w2) } else { n01 } - o;
+        assert!(kl >= 2, "y42: next source width");
+        if Y42_RAIL_DIV == 1 {
+            // the hold form: the clearing CX only, undone after the payload op
+            let mut i = tr.len();
+            while i > kl {
+                c.cx(tr[i - 2], tr[i - 1]);
+                y42_hold.push((tr[i - 2], tr[i - 1]));
+                i -= 1;
+            }
+        } else {
+            while tr.len() > kl {
+                let top = tr.pop().unwrap();
+                c.cx(*tr.last().unwrap(), top);
+                c.free(top);
+                y42_cut += 1;
+            }
+            if y42_cut > 0 {
+                Y42_FWD_CUT.with(|x| x.set(Some((t, kl))));
+                // the allocator with the cut wire free, before the payload op (see [`y42_after`])
+                y42_alloc = Some(c.y42_alloc_state());
+                if !y42_spend(t, false) {
+                    y42_pads = c.alloc_qubits(y42_cut);
+                }
+            }
+        }
+    }
+    let y42_free = y42_cut - y42_pads.len();
     let q0 = pmark(c);
     let pads = if pay.is_some() { lr_pad(c, 2 * o) } else { Vec::new() };
     // LF_DIV_PHROT: the divide's last tick leaves its target unrotated (the endpoint measures it away)
@@ -4044,10 +4197,22 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     SKIP_ROT4.with(|s| s.set(skip_pay_rot));
     if let Some(p) = pay.as_deref_mut() {
         if y15f {
-            assert_eq!(c.active_qubits() as usize, at_barrel);
+            assert_eq!(c.active_qubits() as usize + y42_free, at_barrel);
             let l5 = [letter[0], letter[1], s3, k1, k2];
             y15::fwd_tick(c, t, &l5, p);
             pacc(c, &format!("fwd{fk}.pay_y15"), q0);
+            if Y42_TRACE {
+                eprintln!("Y42 fwd t={t} cut={y42_cut} hold={} pads={} live={} cost={:.3}", y42_hold.len(), y42_pads.len(), at_barrel - y42_free, c.expected_total() - q0);
+            }
+            for q in y42_pads.drain(..).rev() {
+                c.release_clean(q);
+            }
+            if let Some(st) = y42_alloc.as_ref() {
+                y42_after(c, false, t, st, y42_free > 0);
+            }
+            for (a, b) in y42_hold.drain(..).rev() {
+                c.cx(a, b);
+            }
         } else if let Some(mw) = merged {
             assert_eq!(c.active_qubits() as usize, at_barrel);
             let (pt, ps) = (p[ti].clone(), p[si].clone());
@@ -4084,7 +4249,10 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     pacc(c, &format!("tick.fwd{fk}.t{:03}", t / 10 * 10), tick0);
     letter.extend([s3, k1, k2]);
     wk.tape.push(letter);
-    resize(c, tr, wn - o);
+    // y42-railtop: a target cut before the payload op stays at that length (the next tick's source width)
+    if y42_cut == 0 {
+        resize(c, tr, wn - o);
+    }
     resize(c, br, wn - o);
 }
 
@@ -4122,11 +4290,51 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     // y15-room: on these fused ticks the three payload ops run as one reverse one-fold tick
     let y15r = pay.is_some() && y15::fused_rev_on(t);
     assert!(!y15r || (nf == 2 && t < tie_from() && t > 0), "y15 fused tick out of range");
+    // y42-railtop ([`Y42_RAIL_MUL`]): what the reverse payload tick before this one (tick t + 1, whose target is this
+    // tick's source) recorded just before its end grew the rails
+    let y42_end = Y42_REV_END.with(|x| x.take()).filter(|e| e.0 == t + 1);
     if y15r {
+        // the wires above the recorded lengths are CX copies made by that tick's end; since then only the trims
+        // above have run (they read a rail's top wire as a control). Un-grow them through the payload op.
+        let (y42_tr, y42_br) = (tr.len(), br.len());
+        let mut y42_pads: Vec<QubitId> = Vec::new();
+        let mut y42_alloc: Option<(Vec<u32>, Vec<u32>, u32)> = None;
+        if let (true, Some((_, a_br, a_tr))) = (Y42_RAIL_MUL, y42_end) {
+            assert!(a_tr >= 1 && a_br >= 1, "y42: recorded rail lengths");
+            for (reg, a) in [(&mut *tr, a_tr), (&mut *br, a_br)] {
+                while reg.len() > a {
+                    let top = reg.pop().unwrap();
+                    c.cx(*reg.last().unwrap(), top);
+                    c.release_clean(top);
+                }
+            }
+            if tr.len() + br.len() < y42_tr + y42_br {
+                // the allocator with the un-grown wires free, before the payload op (see [`y42_after`])
+                y42_alloc = Some(c.y42_alloc_state());
+                if !y42_spend(t, true) {
+                    y42_pads = c.alloc_qubits(y42_tr + y42_br - tr.len() - br.len());
+                }
+            }
+        }
+        let y42_free = y42_tr + y42_br - tr.len() - br.len() - y42_pads.len();
         let q0 = pmark(c);
         let l5 = [s0, s1, s3, k1, k2];
+        if Y42_TRACE {
+            eprintln!("Y42 rev t={t} ungrown={} pads={} live={}", y42_free + y42_pads.len(), y42_pads.len(), c.active_qubits());
+        }
         y15::rev_tick(c, t, &l5, pay.as_deref_mut().unwrap());
         pacc(c, "revF.pay_y15", q0);
+        if Y42_TRACE {
+            eprintln!("Y42 rev t={t} cost={:.3}", c.expected_total() - q0);
+        }
+        for q in y42_pads.drain(..).rev() {
+            c.release_clean(q);
+        }
+        if let Some(st) = y42_alloc.as_ref() {
+            y42_after(c, true, t, st, y42_free > 0);
+        }
+        resize(c, tr, y42_tr);
+        resize(c, br, y42_br);
     }
     // y17: the trace's ops of this tick-pass, and which reverse cells run late (Y17_PLAN): the cell of forced letter 2
     // may run late only if that of letter 1 does (the payload order is merged op, cell 2, cell 1)
@@ -4281,6 +4489,9 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
         }
     }
     pacc(c, &format!("tick.rev{fk}.t{:03}", t / 10 * 10), tick0);
+    if Y42_RAIL_MUL && pay.is_some() {
+        Y42_REV_END.with(|x| x.set(Some((t, tr.len(), br.len()))));
+    }
     resize(c, tr, w - o);
     resize(c, br, w - o);
 }
@@ -6203,7 +6414,9 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
         }
         // y28: this pass keeps the outcome bits of its split rail adds' boundary carries for the reverse rail pass
         Y28_KEEP.with(|d| d.set(true));
+        Y42_FWD_NEXT.with(|x| x.set(t + 1 < fused_end));
         fwd_tick(c, &mut wk, t, Some(&mut pay));
+        Y42_FWD_NEXT.with(|x| x.set(false));
         Y28_KEEP.with(|d| d.set(false));
         SKIP_PAY_ROT_AT.with(|s| s.set(usize::MAX));
     }
