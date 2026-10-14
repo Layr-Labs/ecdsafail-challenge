@@ -72,16 +72,17 @@ pub(super) fn run(ops: Vec<Op>) -> Vec<Op> {
         return ops;
     }
     assert!(TABLE.len() >= 28 && &TABLE[..8] == b"Y42BOUND", "y42 bound: table header");
-    assert_eq!(ops.len() as u64, u64_at(8), "y42 bound: input length binding");
-    assert_eq!(fingerprint(&ops), u64_at(16), "y42 bound: input fingerprint binding");
+    // the whole-stream binding is now informational: the edits bind by their region (rebind.rs)
+    let exact = ops.len() as u64 == u64_at(8) && fingerprint(&ops) == u64_at(16);
     let ne = u32_at(24);
+    let d = super::rebind::region_shift("y42_bound", &ops, (u32_at(28), u32_at(28 + 12 * (ne - 1))), exact);
     let flat = 28 + 12 * ne;
     assert!(flat <= TABLE.len() && (TABLE.len() - flat) % 12 == 0, "y42 bound: table size");
     let rows = (TABLE.len() - flat) / 12;
     let mut out = Vec::with_capacity(ops.len() + rows);
     let mut ei = 0;
     for (i, o) in ops.into_iter().enumerate() {
-        if ei < ne && u32_at(28 + 12 * ei) == i {
+        if ei < ne && (u32_at(28 + 12 * ei) as isize + d) as usize == i {
             let (at, n) = (u32_at(32 + 12 * ei), u32_at(36 + 12 * ei));
             assert!(at + n <= rows, "y42 bound: row range");
             for j in at..at + n {
