@@ -295,6 +295,24 @@ impl Builder {
         let at = self.at();
         self.peak_census.on_free(at, q.0);
     }
+    /// narrow (narrow.rs): the allocator set to a recorded state (free wires in order, free bits in order, next fresh
+    /// bit). Asserted: the same free wires and the same held bits.
+    pub(crate) fn narrow_alloc_set(&mut self, free_q: &[u32], bits: &[u32], next_bit: u32) {
+        let sorted = |v: &[u32]| {
+            let mut v = v.to_vec();
+            v.sort_unstable();
+            v
+        };
+        assert_eq!(sorted(&self.free_qubits), sorted(free_q), "narrow: the recorded free wires are not this build's");
+        let held = |free: &[u32], n: u32| {
+            let f: std::collections::HashSet<u32> = free.iter().copied().collect();
+            (0..n).filter(|b| !f.contains(b)).collect::<Vec<u32>>()
+        };
+        assert_eq!(held(&self.free_bits, self.next_bit), held(bits, next_bit), "narrow: the recorded held bits are not this build's");
+        self.free_qubits = free_q.to_vec();
+        self.free_bits = bits.to_vec();
+        self.next_bit = next_bit;
+    }
     /// y42-railtop: the allocator's state (free wires and free bits in the order later allocations take them, and the
     /// next fresh bit).
     pub(crate) fn y42_alloc_state(&self) -> (Vec<u32>, Vec<u32>, u32) {

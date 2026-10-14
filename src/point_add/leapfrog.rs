@@ -120,7 +120,13 @@ fn y42_row(rev: bool, t: usize) -> Option<&'static Y42Row> {
 /// put back. A tick with its pads released, under [`Y42_TRACE`]: the line of y42_alloc.txt for this tick.
 fn y42_after(c: &mut Builder, rev: bool, t: usize, before: &(Vec<u32>, Vec<u32>, u32), spent: bool) {
     if spent {
-        if Y42_ALLOC {
+        let row = if Y42_ALLOC { y42_row(rev, t) } else { None };
+        // narrow (narrow.rs): a narrowed compare before the op leaves another allocator; the op's state is put back
+        let narrowed = !super::narrow::NARROW.is_empty() && row.is_some_and(|r| Builder::y42_alloc_hash(before) != r.before);
+        if narrowed {
+            eprintln!("NARROW_Y42 {} {t} put back", if rev { "R" } else { "F" });
+        }
+        if Y42_ALLOC && !narrowed {
             let row = y42_row(rev, t).unwrap_or_else(|| panic!("y42: no recorded allocator state for {} tick {t}", if rev { "reverse" } else { "forward" }));
             assert_eq!(Builder::y42_alloc_hash(before), row.before, "y42: the allocator before the payload op of {} tick {t} is not the recorded one", if rev { "reverse" } else { "forward" });
             c.y42_alloc_set(before, &row.q, row.keep, &row.bits, row.next_bit);

@@ -13,8 +13,8 @@
 use crate::circuit::{Op, OperationType};
 use std::collections::HashMap;
 
-type Want = Vec<u64>;
-fn want_of(v: impl IntoIterator<Item = u64>) -> Want {
+pub(super) type Want = Vec<u64>;
+pub(super) fn want_of(v: impl IntoIterator<Item = u64>) -> Want {
     let mut w: Vec<u64> = v.into_iter().collect();
     w.sort_unstable();
     w.dedup();
@@ -26,7 +26,7 @@ const B: u64 = 0x9E37_79B9_7F4A_7C15 | 1;
 /// Region margin (ops) on each side of the edit span.
 pub(super) const MARGIN: usize = 64;
 
-fn mix(o: &Op) -> u64 {
+pub(super) fn mix(o: &Op) -> u64 {
     let mut h = 0x9E3779B97F4A7C15u64;
     for x in [o.kind as u64, o.q_control2.0, o.q_control1.0, o.q_target.0, o.c_target.0, o.c_condition.0, o.r_target.0] {
         h = (h ^ x).wrapping_mul(0x100000001B3);
@@ -34,13 +34,13 @@ fn mix(o: &Op) -> u64 {
     }
     h
 }
-fn mixes(ops: &[Op]) -> Vec<u64> {
+pub(super) fn mixes(ops: &[Op]) -> Vec<u64> {
     ops.iter().map(mix).collect()
 }
-fn poly(h: &[u64]) -> u64 {
+pub(super) fn poly(h: &[u64]) -> u64 {
     h.iter().fold(0u64, |a, &x| a.wrapping_mul(B).wrapping_add(x))
 }
-fn fp(h: &[u64]) -> u64 {
+pub(super) fn fp(h: &[u64]) -> u64 {
     h.iter().enumerate().fold(0u64, |a, (j, &x)| a.wrapping_add(x.wrapping_mul(2 * j as u64 + 1)))
 }
 fn powb(n: usize) -> u64 {
@@ -55,7 +55,7 @@ fn powb(n: usize) -> u64 {
     r
 }
 /// Start positions p where poly(h[p..p+len]) is in `want`; returns (p, want value).
-fn scan(h: &[u64], len: usize, want: &Want) -> Vec<(usize, u64)> {
+pub(super) fn scan(h: &[u64], len: usize, want: &Want) -> Vec<(usize, u64)> {
     let mut out = Vec::new();
     if len == 0 || h.len() < len {
         return out;
