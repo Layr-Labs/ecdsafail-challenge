@@ -336,6 +336,8 @@ pub(crate) fn install_recipe() {
         ("LF_REORDER_MUL", if C35_MUL76 { "76" } else { "77" }),
         // spookyfrog: N1 split-carry phase deferral, N2 tail batch with a terminal sign-copy loan, RT0 + T0 one boundary
         ("SL_N2", "2"),
+        ("SL_N2_MD", "none"),
+        ("LF_SQUARE_CAP", "1234"),
         ("SL_N2_DROP", "all"),
         // y33-c35: the batch's one-fold ticks drop two carries where the room is 38 (see [`C35`]); "1" is the code default
         ("SL_N2_DROPN", if C35_DROPN2 { "2" } else { "1" }),
@@ -346,7 +348,7 @@ pub(crate) fn install_recipe() {
         ("SL_T0ONE", "1"),
         // this entry's switches as recipe values
         ("FM_PARK_LEND", "1:2"),
-        ("FM_PARK_HOLD", "1"),
+        ("FM_PARK_HOLD", "0"),
         ("ROOM_FOLD_ONLY", "1"),
         ("YP8_VETO", "1"),
         ("YP8_VETO_PAD", "0"),
@@ -365,8 +367,8 @@ pub(crate) fn install_recipe() {
         ("LF_SIGNWIRE", "1"),
         ("LF_SEAMS", "1"),
         // peak cap, tuned together with LF_REORDER
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", if C35_CAP { "1235" } else { "1236" }),
-        ("HEO_PIN_PP_CHUNK_SHAPE", "64:0,38:0,25:-3,0:-4"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", if C35_CAP { "1234" } else { "1236" }),
+        ("HEO_PIN_PP_CHUNK_SHAPE", "64:0,38:0,25:-3,0:-5"),
         // the merged step's shared core has 13 ANDs (the rank bound) where it had 14; every fit, split and plan rule
         // counts the wire it no longer holds
         ("LF_CORE_FREED", "all"),

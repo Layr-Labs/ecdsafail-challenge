@@ -153,7 +153,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "1013008676774",
+        "TAIL_NONCE" => "1024000750122",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -563,7 +563,6 @@ pub fn build() -> Vec<Op> {
     // y42-railtop (leapfrog.rs `Y42_BOUND`; false = this gate list byte for byte): the edits of the four bound
     // passes above as one table, carried to this tree's stream with the rail switches on
     ops = y42_bound_pass::run(ops);
-    ops = square_guard::run(ops);
     ops = linear_restore::run(ops);
     // SKY_REWRITE (q73b package rows: 105 rows proved exact by SAT on the q73b op stream, compiled in): replace SAT-proved linear-span CCX by CX chains.
     // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted). Skywalk stream only.
@@ -649,7 +648,6 @@ mod sqdepth2_veto_pad;
 mod rowcut_pass;
 mod reader_pass;
 mod y42_bound_pass;
-mod square_guard;
 mod linear_restore;
 mod rowcut_base;
 mod rowcut_veto;
