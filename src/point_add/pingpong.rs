@@ -99,30 +99,9 @@ pinned_env!(flag_widen_div, "PP_FLAG_WIDEN_DIV");
 // is high by exactly `MODEL_OVERCOUNT`, so its budget is only ever this knob plus
 // four, and its achieved peak this knob exactly.
 pinned_env!(pub(super) walk_max_qubits_base, "PP_WALK_MAX_QUBITS");
-thread_local! {
-    /// Per-phase width budget: while set (by [`with_phase_cap`]), it replaces the walk cap for every
-    /// room-sized ladder. Layout only: the function computed is the same at any budget.
-    static PHASE_CAP: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
-}
-/// True while a per-phase width budget is in force.
-pub(super) fn phase_cap_active() -> bool { PHASE_CAP.with(|c| c.get().is_some()) }
-/// Run `f` with the width budget pinned to `cap` (None = the walk cap).
-pub(super) fn with_phase_cap<R>(cap: Option<usize>, f: impl FnOnce() -> R) -> R {
-    let old = PHASE_CAP.with(|c| c.replace(cap));
-    let r = f();
-    PHASE_CAP.with(|c| c.set(old));
-    r
-}
 /// K3b pricing instrument: `K3B_EXTRA_ROOM=k` as a CELL pin raises the cap by k inside that cell only.
-// y17 research price knob (default 0 = no effect): extra wires the cap is read with inside one payload op
-thread_local! { pub(super) static Y17_EXTRA: std::cell::Cell<isize> = const { std::cell::Cell::new(0) }; }
-/// y17: a fold reads the true cap (an op planned for a smaller room keeps its fold's own plan)
-pub(super) fn y17_fold_true_cap() {
-    Y17_EXTRA.with(|e| if e.get() < 0 { e.set(0) });
-}
 pub(super) fn walk_max_qubits() -> usize {
-    if let Some(cap) = PHASE_CAP.with(|c| c.get()) { return cap; }
-    (walk_max_qubits_base() as isize + super::heo::cell_pin("K3B_EXTRA_ROOM").map_or(0, |v| v.parse::<isize>().unwrap()) + Y17_EXTRA.with(|e| e.get())) as usize
+    (walk_max_qubits_base() as isize + super::heo::cell_pin("K3B_EXTRA_ROOM").map_or(0, |v| v.parse::<isize>().unwrap())) as usize
 }
 
 /// Wires a footprint *model* counts that the allocator has already taken back:
@@ -3993,10 +3972,6 @@ fn drop_lead_first_compare(round:usize,multiply:bool,phi:usize)->(usize,bool) {
     (k,seeded)
 }
 
-/// y15-core: a carry-in for the next [`chunked_add`]'s first chunk, as (low, wire): the caller has already added
-/// positions [0, low) (sums written, carries kept) and the first chunk's ripple runs on [low, hi) with this carry-in.
-/// The chunk plan and the boundary compares are those of the plain add. Unset (the default) changes nothing.
-thread_local! { static Y15_CARRY_IN:std::cell::Cell<Option<(usize,QubitId)>>=const{std::cell::Cell::new(None)}; }
 fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: usize, multiply: bool) -> QubitId {
     let _dirty_trace=super::dirty_boundary_probe::Trace::new(circ,"chunked_add",acc.len());
 
@@ -4045,7 +4020,6 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
         eprintln!("REPLAY_PIN {} {} {} {}",round,multiply as u8,addend.len(),bounds.iter().map(|(a,b)|(b-a).to_string()).collect::<Vec<_>>().join(" "));
     }
 
-    super::leapfrog::y17_log(circ,||format!("chunked(r={round},n={},room={ladder},loans={loans},bridge={},bounds={:?})",addend.len(),super::bridge::budget(),bounds.iter().map(|&(a,b)|b-a).collect::<Vec<_>>()));
     let mut carry_in: Option<QubitId> = None;
     let mut previous: Option<(QubitId, usize, usize)> = None;
 
@@ -4057,17 +4031,12 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
             super::width_composition::add_with_carry(circ,&addend[lo..hi],&acc[lo..hi],carry_in,&plan)
         }else{
             let next=circ.alloc_qubit();
-            match if lo==0 {Y15_CARRY_IN.with(|k|k.take())} else {None} {
-                Some((low,cin)) => {assert!(low>=1 && low+2<hi,"y15: the kept low carries must sit inside the first chunk");ripple_add(circ,&addend[low..hi],&acc[low..hi],Some(cin),Some(next));}
-                None => ripple_add(circ,&addend[lo..hi],&acc[lo..hi],carry_in,Some(next)),
-            }
-            next
+            ripple_add(circ,&addend[lo..hi],&acc[lo..hi],carry_in,Some(next));next
         };
         // Erase the previous chunk's carry as soon as it has been consumed.
         if let Some((carry, plo, phi)) = previous {
             let tie=tie_borrow();
             let(compare,seeded)=if tie.is_some(){(chunk_compare(round).min(phi-plo),false)}else{boundary_repair_spec(round,multiply,plo,phi)};
-            if super::leapfrog::C35_TRACE{eprintln!("C35_CMP\t{}\t{}\t{}\t{}\t{}\t{}\t{}",round,multiply as u8,plo,phi,compare,seeded as u8,tie.is_some() as u8);}
             let borrow = if tie.is_some() {
                 // B3b fix: a whole leading chunk is compared EXACTLY with its true
                 // carry-in, which is 0 (the cell has none); the sign seed there is
@@ -4079,16 +4048,9 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
             // Freeze the OLD predictor identity before widening the window.
             // The comparator supports that source wire as an interior alias.
             let compare=if seeded{refined_seeded_width(compare,phi-plo,"PP_REFINE_SEEDED_B")}else{compare};
-            // C35_WIDEN: a table compare reads 2 more bits, its predictor wire kept (leapfrog.rs)
-            let (compare,c35_pads)=super::leapfrog::c35_widen(multiply,round,plo,phi,compare,seeded);
-            // narrow (narrow.rs): a seeded compare in a NARROW class reads fewer bits, its seed moving with the window
-            let (compare,borrow)=if c35_pads==0{super::narrow::chunk(multiply,phi,compare,addend,borrow,tie.is_some())}else{(compare,borrow)};
             circ.record_replay_site('B', round, phi, compare);
             trace_replay_predictor('B',round,multiply,phi,compare,addend,borrow);
-            // y33-c35 diagnostic (inert at C35_FAULT = 0): faults 4 and 5 read 2 bits
-            let compare=if super::leapfrog::C35_CMP_FX.with(|x|x.get()){compare.min(2)}else{compare};
             let window = phi - compare..phi;
-            super::leapfrog::C35_PADS.with(|p|p.set(c35_pads));
             erase_with_compare(circ, carry, &acc[window.clone()], &addend[window], borrow);
             circ.free(carry);
         }
@@ -4780,7 +4742,6 @@ pub(crate) mod heo_hooks {
     pub(crate) fn add_consume_exact(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: usize, multiply: bool,
                                     split: usize, consumer: impl FnOnce(&mut Builder, QubitId)) {
         assert!(split >= 2 && split + 1 < N);
-        super::super::leapfrog::y17_log(circ,||format!("exact_split({split})"));
         let m = super::chunked_add(circ, &addend[..split], &acc[..split], round, multiply);
         let ov = circ.alloc_qubit();
         super::super::modular::ripple_add_consume(circ, &addend[split..], &acc[split..], Some(m), ov, |c, o, a, s, p| {
@@ -4798,26 +4759,6 @@ pub(crate) mod heo_hooks {
     pub(crate) fn split_compare_width(round: usize, multiply: bool, split: usize) -> usize {
         let (k, seeded) = boundary_repair_spec(round, multiply, 0, split);
         (if seeded { refined_seeded_width(k, split, "PP_REFINE_SEEDED_B") } else { k }).max(k + usize::from(seeded))
-    }
-
-    /// y15 (one-fold tick): the chunk-boundary compare [`add_consume_exact`] uses at `split`: (window, seed bit index).
-    pub(crate) fn y15_split_spec(round: usize, multiply: bool, split: usize) -> (usize, Option<usize>) {
-        let (k, seeded) = boundary_repair_spec(round, multiply, 0, split);
-        let seed = seeded.then(|| split - k - 1);
-        let k = if seeded { refined_seeded_width(k, split, "PP_REFINE_SEEDED_B") } else { k };
-        (k, seed)
-    }
-    /// y15-core: [`chunked_add`] whose positions [0, low) the caller has already added, `cin` = the carry into `low`.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn y15_chunked_add_cin(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], proxy: usize, multiply: bool, low: usize, cin: QubitId) -> QubitId {
-        super::Y15_CARRY_IN.with(|k| k.set(Some((low, cin))));
-        let out = super::chunked_add(circ, addend, acc, proxy, multiply);
-        assert!(super::Y15_CARRY_IN.with(|k| k.take()).is_none(), "y15: the chunked add did not take the carry-in");
-        out
-    }
-    /// y15: the cells' measured erase of a carry by the compare [a < b] (+ borrow); the caller frees `target`.
-    pub(crate) fn y15_erase_cmp(circ: &mut Builder, target: QubitId, a: &[QubitId], b: &[QubitId], borrow: Option<QubitId>) {
-        erase_with_compare(circ, target, a, b, borrow);
     }
 
     /// LF_MERGED: run `body` inside the replay cell's I35 bridge scope at `round` (as `replay_add_halve` /
