@@ -153,7 +153,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "18364062961376",
+        "TAIL_NONCE" => "1046072871510",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -569,6 +569,7 @@ pub fn build() -> Vec<Op> {
     }
     ops = y42_bound_pass::run(ops);
     ops = linear_restore::run(ops);
+    ops = square_finish::run(ops);
     // cond levers u and r on the finished stream, after every certificate pass has checked its window
     std::env::set_var("SL_COND", "ur");
     ops = cond_pass::run(ops);
@@ -577,7 +578,7 @@ pub fn build() -> Vec<Op> {
     ops = zero_force::run(ops);
     // census cuts (census_cut_data.txt, rows keyed to this exact stream, the last pass and asserted): Toffolis whose replaced
     // control pattern occurred on no correct shot of a large random-input census
-    ops = census_cut::run(ops);
+    ops = census_anchored::run(ops);
     // SKY_REWRITE (q73b package rows: 105 rows proved exact by SAT on the q73b op stream, compiled in): replace SAT-proved linear-span CCX by CX chains.
     // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted). Skywalk stream only.
     if !leapfrog::enabled() {
@@ -678,3 +679,6 @@ pub mod constant_templates;
 mod native_sfuse_b;
 
 mod phase_cubic;
+
+mod square_finish;
+mod census_anchored;
