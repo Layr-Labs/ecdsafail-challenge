@@ -1,0 +1,1581 @@
+//! Scheme G (arch700): the column quotient without the second pipeline stage (no rho, no q0 replay).
+//!
+//! The stage-1 test decides one candidate of the binary search: with s = sz - K, Zh = (Z >> s) | 1 and
+//! F = floor((2^(256-s) - 1) / Zh) (bl(F) = 257 - sz, p's top bits are ones), it computes
+//! over(W) = [(W >> u) > (F >> u)], u = max(0, 257 - sz - TC), using only the reciprocal remainder R (K + 1 lanes):
+//! F's bits stream MSB-first out of a restoring division and are subtracted from W's window in place.
+use super::builder::{B, G};
+use super::frogdrop::{cmp_csub_carries, inc_mixed};
+use super::mask::{ge_const, mc_xor};
+use crate::circuit::QubitId;
+
+/// F's top bits compared with W (the window has TC + 1 lanes: W's position 257 - sz, then F's TC positions)
+pub const TC: usize = 26;
+
+/// Scratch of the stage-1 test (all |0> on entry and exit except `dirty`).
+#[derive(Clone)]
+pub struct S1 {
+    /// reciprocal remainder, K + 1 lanes
+    pub r: Vec<QubitId>,
+    /// quotient bit (erased by R's parity every iteration)
+    pub f: QubitId,
+    /// the divisor's zero top lane
+    pub zero: QubitId,
+    /// sign of the window difference
+    pub sgn: QubitId,
+    /// three temps for the early-column gates
+    pub gt: Vec<QubitId>,
+    /// clean increment ancillas (may be empty: dirty increments)
+    pub anc: Vec<QubitId>,
+    /// clean lanes for the compare's measured top carries (may be empty; disjoint from r, zh, f, zero)
+    pub andc: Vec<QubitId>,
+    /// comparator chain for the sz gates (>= sz lanes)
+    pub chain: Vec<QubitId>,
+    pub dirty: Vec<QubitId>,
+}
+
+/// window lanes from F position index m (win[m]) up to W's top position (win[0]), then the sign lane
+fn seg(win: &[QubitId], m: usize, sgn: QubitId) -> Vec<QubitId> {
+    let mut v: Vec<QubitId> = (0..=m).rev().map(|i| win[i]).collect();
+    v.push(sgn);
+    v
+}
+
+/// Recorded forward part of the test: leaves sgn = [(W >> u) - (F >> u) - 1 < 0] and the window holding the
+/// difference; R, f restored by the caller's inverse play. `zh`: Z's top K lanes (zh[K-1] = MSB); `win`: TC + 1 lanes,
+/// win[0] = W's position 257 - sz, win[1 + j] = position 256 - sz - j (lanes past position 0 are never touched);
+/// `sz`, `szr`: the bl(Z) register and its range over the column's shots.
+pub fn stage1_fwd(b: &mut B, zh: &[QubitId], win: &[QubitId], sz: &[QubitId], szr: (usize, usize), s: &S1) -> Vec<G> {
+    let k = zh.len();
+    assert_eq!(s.r.len(), k + 1);
+    assert_eq!(win.len(), TC + 1);
+    assert!(szr.1 <= 256 && szr.0 >= k + 33, "all-ones dividend needs s = sz - K >= 33");
+    b.begin();
+    // W - (F >> u) - 1 = W - 2^(257 - sz) + sum of F's complement bits over the valid positions (u = max(0, 257 - sz - TC))
+    b.x(win[0]);
+    b.cx(win[0], s.sgn);
+    let mut r = s.r.clone();
+    // after the K - 1 leading ones of the dividend: R = 2^(K-1) - 1 < Zh
+    for &x in &r[..k - 1] { b.x(x); }
+    let mut upper: Vec<QubitId> = zh[1..].to_vec();
+    upper.push(s.zero);
+    for j in 0..TC {
+        // R <- 2R + 1 (R < 2^K: the top lane is zero), f = [R >= Zh], R -= f Zh (Zh odd: the low bit is r0 ^ f = !f)
+        let top = r.pop().unwrap();
+        r.insert(0, top);
+        if s.r.contains(&s.zero) {
+            super::frogdrop::cmp_csub_carries_vz(b, &r[1..], &upper[..upper.len() - 1], r[0], s.f, &s.andc);
+        } else {
+            cmp_csub_carries(b, &r[1..], &upper, r[0], s.f, &s.andc);
+        }
+        b.x(r[0]);
+        b.cx(s.f, r[0]);
+        b.cx(r[0], s.f);
+        b.x(s.f);
+        // W += !f 2^(256 - sz - j): valid while that position is >= 0, i.e. sz <= 256 - j
+        let bits = seg(win, 1 + j, s.sgn);
+        if szr.1 + j >= 257 {
+            let (g0, g1) = (s.gt[0], s.gt[1]);
+            let rr = super::frogdrop_col::rec(b, |b| ge_const(b, sz, 257 - j as isize - S1_ZLO.with(|z| z.get()) as isize, g0,
+                                                             &s.chain));
+            b.play(&rr, false);
+            b.x(g0);
+            b.and_c(r[0], g0, g1);
+            inc_mixed(b, g1, &bits, &s.anc, &s.dirty);
+            b.and_u(r[0], g0, g1);
+            b.x(g0);
+            b.play(&rr, true);
+        } else {
+            inc_mixed(b, r[0], &bits, &s.anc, &s.dirty);
+        }
+    }
+    b.end()
+}
+
+/// V form of the window (recorded; `window` = false: R's evolution only). With act: W += T - G, T = 2^(257 - sz),
+/// G = ((F >> u) + 1) << u, i.e. F's complement bits added at their positions >= 0. For W < G (accepted values) V < T,
+/// and a candidate W' < G + T is over (W' >= G) iff bit 257 - sz of V' = W' + T - G is set: the binary search reads
+/// one lane per test and runs the reciprocal division twice per column. Window lanes as in `stage1_fwd` (index 0 is
+/// not touched: V < T on the stepping shots; the increments wrap within positions <= 256 - sz on any other shot).
+thread_local! {
+    /// lowq-size: the offset sz carries while stage1_v's early-column gates are recorded (FD_MIDG_ZOFF)
+    pub(crate) static S1_ZLO: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// lowq-size FD_MIDG_SGW (ported by lowq-quot): what stage1_v's early-column gates read while they are recorded
+    pub(crate) static S1_GATE: std::cell::RefCell<S1Gate> = const { std::cell::RefCell::new(S1Gate::Sz) };
+}
+
+/// (lowq-size SGW) The early-column gate's input (the gate is [sz >= 257 - j], i.e. [s' <= j] with s' = 257 - sz =
+/// g + sy on the act shots). `U8`: u = sy + g in place (8 lanes, no wrap). `UPark` (sy[7] lent to a park, sy = 128 held
+/// as low7 = 0): u = (low7 + g) mod 128 in place, and an act shot's gate is [g < u <= j] (a wrapped sum or sy = 128
+/// gives u <= g), computed as act & [u <= j] & [u > g] by toggling with the borrowed lane `dk` (ttk_carry of u + ~g,
+/// `d2` borrowed).
+#[derive(Clone)]
+pub(crate) enum S1Gate {
+    Sz,
+    U8 { u: Vec<QubitId> },
+    UPark { u: Vec<QubitId>, g: Vec<QubitId>, dk: QubitId, d2: QubitId },
+}
+
+/// target ^= [v < k] & AND(extra): v's disjoint prefix terms, exact dirty multi-control toggles
+fn lt_const_and(b: &mut B, v: &[QubitId], k: usize, extra: &[(QubitId, bool)], target: QubitId, dirty: &[QubitId]) {
+    if k == 0 { return; }
+    if k >= 1 << v.len() { mc_xor(b, extra, target, &[], dirty); return; }
+    for i in (0..v.len()).rev() {
+        if (k >> i) & 1 == 0 { continue; }
+        let mut lits: Vec<(QubitId, bool)> = ((i + 1)..v.len()).rev().map(|j| (v[j], (k >> j) & 1 == 0)).collect();
+        lits.push((v[i], true));
+        lits.extend_from_slice(extra);
+        mc_xor(b, &lits, target, &[], dirty);
+    }
+}
+
+/// g0 ^= the early-column gate of iteration j in the U forms (see `S1Gate`)
+fn s1_gate_u(b: &mut B, gate: &S1Gate, j: usize, act: QubitId, g0: QubitId, dirty: &[QubitId]) {
+    match gate {
+        S1Gate::Sz => unreachable!(),
+        S1Gate::U8 { u } => lt_const_and(b, u, j + 1, &[], g0, dirty),
+        S1Gate::UPark { u, g, dk, d2 } => {
+            let dl: Vec<QubitId> = dirty.iter().copied().filter(|q| q != dk && q != d2).collect();
+            for &x in g { b.x(x); }
+            lt_const_and(b, u, j + 1, &[(*dk, false)], g0, &dl);
+            super::arith::ttk_carry(b, g, &u[..g.len()], act, *dk, *d2);
+            lt_const_and(b, u, j + 1, &[(*dk, false)], g0, &dl);
+            super::arith::ttk_carry(b, g, &u[..g.len()], act, *dk, *d2);
+            for &x in g { b.x(x); }
+        }
+    }
+}
+
+pub fn stage1_v(b: &mut B, zh: &[QubitId], win: &[QubitId], sz: &[QubitId], szr: (usize, usize), s: &S1, act: QubitId,
+                window: bool) -> Vec<G> {
+    let k = zh.len();
+    assert!(s.r.len() == k + 1 || s.r.len() == k);
+    assert_eq!(win.len(), TC + 1);
+    assert!(szr.1 <= 256 && szr.0 >= k + 33, "all-ones dividend needs s = sz - K >= 33");
+    b.begin();
+    let mut r = s.r.clone();
+    for &x in &r[..k - 1] { b.x(x); }
+    let mut upper: Vec<QubitId> = zh[1..].to_vec();
+    upper.push(s.zero);
+    // agent_lowq_quot: a K-lane remainder (s.r.len() == K) compares first and rotates after (quot_klane)
+    let klane = s.r.len() == k;
+    for j in 0..TC {
+        if klane {
+            // (agent_lowq_quot: R holding the head's top lane = the virtual leading one, jackylee0424's 693)
+            if s.r.contains(&zh[k - 1]) {
+                super::quot_klane::cmp_csub_ttk_vh1(b, &r, &zh[1..k - 1], s.f, &s.dirty[..2]);
+            } else {
+                super::quot_klane::cmp_csub_ttk_vz(b, &r, &zh[1..], s.f, s.dirty[0]);
+            }
+            let top = r.pop().unwrap();
+            r.insert(0, top);
+        } else {
+            let top = r.pop().unwrap();
+            r.insert(0, top);
+            if s.r.contains(&s.zero) {
+                super::frogdrop::cmp_csub_carries_vz(b, &r[1..], &upper[..upper.len() - 1], r[0], s.f, &s.andc);
+            } else {
+                cmp_csub_carries(b, &r[1..], &upper, r[0], s.f, &s.andc);
+            }
+        }
+        b.x(r[0]);
+        b.cx(s.f, r[0]);
+        b.cx(r[0], s.f);
+        b.x(s.f);
+        if !window { continue; }
+        // V += act !f 2^(256 - sz - j) where that position is >= 0 (sz <= 256 - j)
+        let bits: Vec<QubitId> = (1..=1 + j).rev().map(|i| win[i]).collect();
+        let g0 = s.gt[0];
+        if szr.1 + j >= 257 {
+            let sgate = S1_GATE.with(|g| g.borrow().clone());
+            let rr = super::frogdrop_col::rec(b, |b| {
+                if !matches!(sgate, S1Gate::Sz) { return s1_gate_u(b, &sgate, j, act, g0, &s.dirty); }
+                // (offset form: sz - lo < 128, so its top lane is |0> and stays out of the literals)
+                let zl = S1_ZLO.with(|z| z.get());
+                let szv = if zl > 0 { &sz[..7] } else { sz };
+                super::frogdrop_col::ge_const_compact(b, szv, 257 - j as isize - zl as isize, g0, &s.chain, &s.dirty)
+            });
+            b.play(&rr, false);
+            if s.gt.len() == 1 {
+                inc_with_controls(b, &bits, &[(act, false), (r[0], false), (g0, true)], &s.dirty);
+            } else if s.gt.len() >= 3 {
+                let g1 = s.gt[1];
+                let g2 = s.gt[2];
+                b.x(g0);
+                b.and_c(act, g0, g2);
+                b.and_c(r[0], g2, g1);
+                inc_mixed(b, g1, &bits, &s.anc, &s.dirty);
+                b.and_u(r[0], g2, g1);
+                b.and_u(act, g0, g2);
+                b.x(g0);
+            } else {
+                let g1 = s.gt[1];
+                // g1 = act & r0 & !g0 (dirty three-control toggles)
+                mc_xor(b, &[(act, false), (r[0], false), (g0, true)], g1, &[], &s.dirty);
+                inc_mixed(b, g1, &bits, &s.anc, &s.dirty);
+                mc_xor(b, &[(act, false), (r[0], false), (g0, true)], g1, &[], &s.dirty);
+            }
+            b.play(&rr, true);
+        } else if s.gt.len() == 1 {
+            inc_with_controls(b, &bits, &[(act, false), (r[0], false)], &s.dirty);
+        } else {
+            let g1 = s.gt[1];
+            b.and_c(r[0], act, g1);
+            inc_mixed(b, g1, &bits, &s.anc, &s.dirty);
+            b.and_u(r[0], act, g1);
+        }
+    }
+    b.end()
+}
+
+// A V-form whose quotient reserve occupies every possible clean gate lane
+// uses the dirty-lane multi-control primitive directly. Visit high bits
+// first so each prefix sees the original lower bits of the window.
+fn inc_with_controls(b: &mut B, bits: &[QubitId], ctl: &[(QubitId, bool)], dirty: &[QubitId]) {
+    for i in (0..bits.len()).rev() {
+        let mut lits = ctl.to_vec();
+        lits.extend(bits[..i].iter().copied().map(|q| (q, false)));
+        mc_xor(b, &lits, bits[i], &[], dirty);
+    }
+}
+
+/// t ^= AND(ctl) & over(W) (`over` = true) or AND(ctl) & !over(W) (see `stage1_fwd`); everything else restored.
+pub fn stage1_test(b: &mut B, fwd: &[G], s: &S1, t: QubitId, ctl: &[(QubitId, bool)], temps: &[QubitId], over: bool) {
+    b.play(fwd, false);
+    let mut lits = ctl.to_vec();
+    lits.push((s.sgn, over));
+    mc_xor(b, &lits, t, temps, &s.dirty);
+    b.play(fwd, true);
+}
+
+// ------------------------------------------------------------------------------------------------ the middle
+use super::builder::G as Gate;
+use super::frogdrop::rot_by_range_care;
+use super::frogdrop_col::{mc_xor_dn, rec, ring_cadd2_loan, ColPar, ColScr, Fd};
+use super::payload::{read_lane, ripple, PlCol, L0P, NP};
+
+// Diagnostic only: emitted-op boundaries of the three V-form park windows.
+// The packed replay consumes this with its actual 64-shot simulator state.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static D4B_WINDOWS: std::cell::RefCell<Vec<(usize, usize, u8, QubitId)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn d4b_window(start: usize, end: usize, kind: u8, act: QubitId) {
+    if std::env::var_os("D4B_PARK_AUDIT").is_some() {
+        D4B_WINDOWS.with(|w| w.borrow_mut().push((start, end, kind, act)));
+    }
+}
+
+/// Borrow sy's high bit while parking on the model-clean domain 1..=128.
+/// Low seven bits encode 128 as zero; the high bit can therefore join the
+/// quotient cycle after this normalization has cleared it.
+pub(crate) fn borrowed_sy_normal(b: &mut B, sy: &[QubitId], dirty: &[QubitId]) -> Vec<Gate> {
+    assert_eq!(sy.len(), 8);
+    rec(b, |b| {
+        let zero: Vec<(QubitId, bool)> = sy[..7].iter().copied().map(|q| (q, true)).collect();
+        mc_xor(b, &zero, sy[7], &[], dirty);
+    })
+}
+
+/// Rotate the augmented Q cycle down by sy without reading the borrowed bit.
+pub(crate) fn borrowed_sy_rotate(b: &mut B, cycle: &[QubitId], sy: &[QubitId], temp: QubitId,
+                                 dirty: &[QubitId]) -> Vec<Gate> {
+    assert_eq!(sy.len(), 8);
+    assert!(cycle.len() >= 129 && cycle.contains(&sy[7]) && !cycle.contains(&temp));
+    rec(b, |b| {
+        super::frogdrop::rot_by(b, cycle, &sy[..7], true);
+        let zero: Vec<(QubitId, bool)> = sy[..7].iter().copied().map(|q| (q, true)).collect();
+        mc_xor(b, &zero, temp, &[], dirty);
+        super::frogdrop::crot_up(b, temp, cycle, cycle.len() - 128);
+        mc_xor(b, &zero, temp, &[], dirty);
+    })
+}
+
+/// Place q19 into the Q-cycle position that rotates to lane 19. This clears
+/// its SX owner during the HT payload park whenever the position is in range.
+pub(crate) fn preposition_q19(b: &mut B, cycle: &[QubitId], sy: &[QubitId], q19: QubitId,
+                             act: QubitId, range: (usize, usize), dirty: &[QubitId]) -> Vec<Gate> {
+    preposition_qk(b, cycle, sy, q19, 19, act, range, dirty)
+}
+/// agent_lowq_quot: preposition_q19 for the first external bit kb0 = K + 1
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn preposition_qk(b: &mut B, cycle: &[QubitId], sy: &[QubitId], q19: QubitId, kb0: usize,
+                             act: QubitId, range: (usize, usize), dirty: &[QubitId]) -> Vec<Gate> {
+    assert!(cycle.len() > kb0 && cycle.last() == Some(&q19));
+    rec(b, |b| {
+        let lane = |v: usize| {
+            let idx = v + kb0;
+            if idx < cycle.len() && cycle[idx] != q19 { Some(cycle[idx]) } else { None }
+        };
+        super::mid2::dec_swap(b, sy, range.0, range.1, &lane, q19, &[(act, false)], &[], &[], dirty);
+    })
+}
+
+/// agent_lowq_quot: the K-lane reciprocal remainder (24 lanes; QUOT_KLANE=0 restores the 25-lane form)
+pub const KLANE_R: bool = true;
+pub fn klane_r() -> bool {
+    std::env::var("QUOT_KLANE").map(|v| v != "0").unwrap_or(KLANE_R)
+}
+
+/// agent_lowq_quot: chunked q sessions, C0 = bits [0, QCH) and C1 = [QCH, kmax), at most one chunk stored per loop
+/// and per park (bit kb of chunk [a, b) in slot kb - a, cycle index kb - a); QUOT_CHUNKED=0 restores one session
+pub const CHUNKED: bool = true;
+pub const QCH: usize = 6;
+/// agent_lowq_quot: C0's length at ring K: C1 (bits [qch, 23)) must fit the K + 6 slots (headroom 0..=K, sx[1..=5])
+pub fn qch() -> usize { QCH.max(23usize.saturating_sub(super::pointadd_frogdrop::K + 6)) }
+/// lowq_cross N chunks (ported by lowq-quot): the chunk cuts of a column, chunks C_i = [bd[i], bd[i + 1]) with
+/// bd = [0, cuts.., kmax]. QUOT_CUTS_WIDE = "a,b,..": the cuts in the wide columns (sz envelope >= 128 lanes, no sz
+/// offset; R takes a park lane there below K11); [qch()] elsewhere
+pub fn chunk_cuts_wide(wide: bool) -> Vec<usize> {
+    // (QUOT_CUTS_NARROW: the narrow columns' cuts)
+    if let Some(v) = std::env::var(if wide { "QUOT_CUTS_WIDE" } else { "QUOT_CUTS_NARROW" }).ok() {
+        return v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+    }
+    vec![qch()]
+}
+pub fn chunked() -> bool {
+    std::env::var("QUOT_CHUNKED").map(|v| v != "0").unwrap_or(CHUNKED)
+}
+
+/// mid2's trans_masked (private there), for the IP5-split payload: t += s (positions k.. of the post region) on shots
+/// with c, writing only positions pos <= 258 - 2^sh (sy >> sh); the mask g grows and ends as g = c, then g ^= c.
+#[allow(clippy::too_many_arguments)]
+fn trans_masked_q(b: &mut B, t: &[QubitId], s: &[QubitId], k: usize, c: QubitId, sy: &[QubitId], sh: usize,
+                  sylo: usize, syhi: usize, g: QubitId, c0: QubitId, pre: &[QubitId], temps: &[QubitId],
+                  dirty: &[QubitId]) {
+    let bits = &sy[sh..];
+    let (alo, ahi) = (sylo >> sh, syhi >> sh);
+    let mut dec = super::mask::Dec::new(bits, pre);
+    let mut next = alo;
+    let mut mid = |_b: &mut B| {};
+    let mut gate = |b: &mut B, i: Option<usize>| -> Option<QubitId> {
+        let lim = match i { Some(i) => (258 - (k + i) as isize).div_euclid(1 << sh), None => isize::MAX };
+        while next <= ahi && (next as isize) <= lim {
+            let mut ct = dec.ctrls(b, next);
+            ct.push((c, false));
+            mc_xor(b, &ct, g, temps, dirty);
+            next += 1;
+        }
+        match i {
+            Some(_) => Some(g),
+            None => {
+                dec.clear(b);
+                b.cx(c, g);
+                None
+            }
+        }
+    };
+    ripple(b, t, s, c0, false, &mut mid, &mut gate);
+}
+
+/// Swap tree over `reg`'s low `level` bits for sorted leaves (value, lane): after the swaps (in order), the first
+/// leaf's lane holds the lane of the register's value (if it is a leaf value); returns that root lane.
+fn swap_tree(reg: &[QubitId], leaves: &[(usize, QubitId)], level: usize,
+             swaps: &mut Vec<(QubitId, QubitId, QubitId)>) -> QubitId {
+    assert!(!leaves.is_empty());
+    if level == 0 { assert_eq!(leaves.len(), 1); return leaves[0].1; }
+    let bit = level - 1;
+    let split = leaves.partition_point(|&(v, _)| (v >> bit) & 1 == 0);
+    if split == 0 || split == leaves.len() { return swap_tree(reg, leaves, bit, swaps); }
+    let left = swap_tree(reg, &leaves[..split], bit, swaps);
+    let right = swap_tree(reg, &leaves[split..], bit, swaps);
+    swaps.push((reg[bit], left, right));
+    left
+}
+
+/// Scheme G: lanes appended to the column pool (FD_MIDG; the lean middle uses none of them)
+pub const EXTRA: usize = 0;
+
+/// Scheme G replaces the rho middle (FD_MIDG=1 / MIDG_ON)
+pub const MIDG_ON: bool = true;
+pub fn enabled() -> bool {
+    MIDG_ON || std::env::var("FD_MIDG").is_ok()
+}
+
+/// Stage 5 (HT division) in place on the 13 lanes and sx (false: the headroom division)
+pub const G_IP5: bool = true;
+
+/// crossing reserve: lanes of the parking cycle beyond Q + x128 (MIDG_RES overrides; fewer if the pool lacks them)
+/// Direct-control V-form increments allow sx[1] to join the HT payload cycle after q19 is positioned.
+pub const PARK_RES: usize = 7;
+pub fn park_reserve() -> usize {
+    std::env::var("MIDG_RES").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(PARK_RES)
+}
+
+/// Gate register v = (sz + sy + 38) mod 64 = s9 - 218 for s9 = sz + sy in [218, 281]: bit kb of q can be set only if
+/// kb < 258 - s9, i.e. v <= 39 - kb (a shot with s9 < 218 has q >= 2^40: a capped failure either way).
+const VB: usize = 6;
+const VOFF: usize = 38;
+
+/// lowq-size FD_MID_CHAIN: sx lanes for the IP5 block's sw-toggle comparator chain (short: the exact compact form)
+fn mid_chain() -> usize { std::env::var("FD_MID_CHAIN").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(7) }
+
+/// act ^= the HT stepping flag: ph & not done (done derived), in dq columns & !(sz < sy) (a delayed shot's no-step
+/// column; the in-place compare on `c0`)
+#[allow(clippy::too_many_arguments)]
+fn ht_act(b: &mut B, fd: &Fd, cp: &ColPar, sc: &ColScr, act: QubitId, temps: &[QubitId], c0: QubitId,
+          dirty: &[QubitId]) {
+    let mut lits = vec![(fd.ph, false)];
+    let lt = if cp.dq {
+        let lt = super::arith::up_m(b, &sc.sz, &fd.sy, c0, true);
+        b.play(&lt, false);
+        lits.push((fd.sy[fd.sy.len() - 1], true));
+        Some(lt)
+    } else { None };
+    if cp.dn { mc_xor_dn(b, &lits, act, temps, dirty, fd, cp.l0, false); }
+    else { mc_xor(b, &lits, act, temps, dirty); }
+    if let Some(lt) = lt { b.play(&lt, true); }
+}
+
+/// The Scheme G middle (stages 3-7). Pool lanes: sz, sw and mid2's nine single roles (bq, the P zero / cmpc, P f / g
+/// / c0, the two old stored-quotient lanes, mz); sx is scratch (gate register, decoder prefixes, compare chains).
+/// q's bits live in the ring headroom (X's positions 258 - sz + .., ring[sz + kb]; no add carries there) and,
+/// while the V form is entered or left (R needs the headroom), in Q above Y (Q + bq as lane 128 + the crossing
+/// reserve). HR: binary search in the V form, V -= qY, leave, D^-1. HT: trial-subtract division, X += qY, enter,
+/// reverse search, leave.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn middle(b: &mut B, fd: &Fd, cp: &ColPar, sc: &ColScr, pl: Option<&PlCol>, _swap: &[Gate],
+                     stage: &mut dyn FnMut(&mut B) -> bool) {
+    let n = cp.n;
+    let ring = fd.ring.clone();
+    let q = fd.q.clone();
+    let nq = q.len();
+    let ph = fd.ph;
+    let (k, kp, tot) = (cp.k, cp.kp, cp.tot);
+    let dirty = sc.dirty.clone();
+    let _ = tot;
+    let qf = super::mid2::QF;
+    let pclo = cp.sz.0 + cp.h;
+    let mt = (n - pclo + 1).min(nq.max(cp.xw) + 1);
+    let lsb = if cp.dn { cp.sy.1.max(28) } else { cp.sy.1 };
+    let loan_end = nq - if cp.dn { fd.cnt.len() } else { 0 };
+    assert!(cp.h >= k + 2, "the window starts at lane K + 1 of the test frame: ring headroom K + 2");
+    let sx = fd.sx.clone();
+    assert!(sx.len() >= 8);
+    // pool roles: act, c0 (carries), bq (adder h / bank lane, and Q's lane 128 while q is parked above Y), the P zero
+    // (the adders' zero source); sx: the gate register v, ak (gated act), c (gate temp, decision / bit in flight)
+    // the 13-lane layout (sz, sw, bq, cmpc, f, g): act on g, the adders' carry c0 on f, Q's lane 128 on bq, the
+    // zero source (sc.zeros) on cmpc
+    let (act, c0, x128, pzero) = (sc.g, sc.f, sc.bq, sc.cmpc);
+    assert_eq!(sc.zeros, vec![pzero]);
+    let (ak, c) = (sx[VB], sx[VB + 1]);
+    let bmax = 258usize.saturating_sub(cp.sz.0 + cp.sy.0).min(qf);
+    let kmax = bmax.min(mt);
+    // Vform may run with quotient bits parked above Y. The exact paired
+    // care rotation maps every parked Q bit back to index sy + kb, for
+    // kb < kmax; reserve bits above Q remain outside this bank. Keep the
+    // entire public support, the old Y/done support and the live counter.
+    let p_bank_lo = lsb.max(cp.sy.1.min(nq) + kmax);
+    let p_bank = if p_bank_lo < loan_end { q[p_bank_lo..loan_end].to_vec() } else { vec![] };
+    assert!(!p_bank.iter().any(|q| dirty.contains(q) || ring.contains(q) || sx.contains(q)
+        || sc.sz.contains(q) || [act, c0, x128, pzero, ph, sc.sw].contains(q)));
+    // N277 has physical K18 and h20. Keep the 24-bit head and 25-lane remainder:
+    // ring[0..19] plus sx[1..5]. The divisor's high zero is virtual, so
+    // ring[19] serves R and the V window's unused top position. External
+    // q19..q23 live in returned SX owners between V calls and park before R.
+    // sx[0] (the quotient lane) is returned before each stage1_v geometry
+    // query, so it can hold gt0 until that query is inverted. This alias is
+    // exclusive to stage1_v; stage1_fwd keeps its original distinct gt0.
+    // agent_lowq_quot: N = 259 + K (K 14..=17, h = K + 2) with the K-lane remainder (24 lanes)
+    let precision24 = (6..=17).contains(&k) && n == 259 + k && nq == 128 && sx.len() == 8
+        && dirty.len() == 259 && cp.h == k + 2
+        && cp.sz.0 >= 57 && cp.sz.1 <= 256;
+    // The physical window starts at K+1=19, but the reciprocal reads the top 24 ring
+    // lanes. The care rotation must preserve all 24 destination lanes.
+    if std::env::var_os("QUOT_MIDDBG").is_some() {
+        eprintln!("MIDDBG n {} k {} h {} sz {:?} sy {:?} kmax {} mt {} p24 {} hr {} ht {} sw {} dl {} dq {} dn {} tt {}",
+                  n, k, cp.h, cp.sz, cp.sy, kmax, mt, precision24, cp.hr, cp.ht, cp.sw, cp.dl, cp.dq, cp.dn, cp.tt);
+    }
+    let top_head = if precision24 { 24 } else { k };
+    // ---- recordings
+    let dest_r: std::collections::BTreeSet<usize> = (0..k + 2 + TC).chain(n - top_head..n).collect();
+    // lowq-size FD_MIDG_ZOFF: across the middle sz holds sz - lo (lo = the column's smallest sz, every column's range
+    // < 128), so sz[7] is |0>. Rotations by sz rotate by lo and then by the offset, v's constant absorbs lo, and the
+    // few in-place sz/sy compares (sw toggles, the dq act, the in-place division's size gates) run on the restored sz.
+    // stage1_v reads sz only for its early-column gates (sz + j >= 257), so the offset is off where those exist.
+    let zoff_on = precision24 && std::env::var("FD_MIDG_ZOFF").map(|v| v == "1").unwrap_or(false)
+        && cp.sz.1 - cp.sz.0 < 128 && (sc.sz.len() == 8 || (k <= 6 && sc.sz.len() == 9));
+    let zlo = if zoff_on { cp.sz.0 } else { 0 };
+    let zshift = rec(b, |b| if zoff_on { super::frogdrop::add_const_dirty_exact(b, &sc.sz, zlo, &dirty); });
+    let rot_sz = |b: &mut B, d: &std::collections::BTreeSet<usize>| {
+        if zoff_on { super::frogdrop::rot_by_off_care(b, &ring, &sc.sz, cp.sz.0, cp.sz.1, true, d); }
+        else { rot_by_range_care(b, &ring, &sc.sz, cp.sz.0, cp.sz.1, true, &dirty, d); }
+    };
+    let prot = rec(b, |b| rot_sz(b, &dest_r));
+    // ring down by sz caring for the P-frame lanes `d` (24 = X's position 257 - sz, kb < 24 = headroom bit kb)
+    let rotz = |b: &mut B, d: &[usize]| -> Vec<Gate> {
+        let ds: std::collections::BTreeSet<usize> = d.iter().copied().collect();
+        rec(b, |b| rot_sz(b, &ds))
+    };
+    // the V form's scratch: sx[0], sx[1..5]; the divisor's zero top lane is the window top (X's position 257 - sz:
+    // 0 on the act shots on entry and exit, never written by the V form; other shots replay consistently).
+    // sx[6..8], c0 and the P zero may hold parked bits while
+    // stage1_v runs; only sx[0] is borrowed for the size threshold.
+    // Carry summaries return before window gating. The first bank lane then
+    // holds the optional third gt; increments exclude it until that gt is
+    // erased. Threshold prefixes return before gt is computed and are used
+    // again only after gt is erased, so they may reuse the complete bank.
+    let ycomp_on = precision24 && klane_r() && std::env::var("FD_MIDG_YCOMP").map(|v| v == "1").unwrap_or(false);
+    // agent_lowq_quot: below K14 the YCOMP lanes sy[5], sy[6] are R's own (every V-form play is compressed), so the
+    // V-form recording is not remapped and the P zero stays R-free
+    let ycomp_r = ycomp_on && k <= 13;
+    // lowq-size FD_MIDG_SGW (ported): in the columns the offset can't take (sz range >= 128), sz holds g = (1 - sz - sy)
+    // mod 256 while R is live (after prot, before prot^-1) instead of compressing sy: g <= bl(q + 1) + 1 <= 23 on the
+    // act shots, so sz[5], sz[6], sz[7] are |0> there and serve as R's lanes in place of sy[5], sy[6] (R tolerates other
+    // values on the shots without act)
+    let sgw_on = precision24 && klane_r() && ycomp_r && std::env::var("FD_MIDG_SGW").map(|v| v == "1").unwrap_or(false)
+        && sc.sz.len() == 8 && !zoff_on;
+    let (r5, r6) = if sgw_on { (sc.sz[5], sc.sz[6]) } else { (fd.sy[5], fd.sy[6]) };
+    assert!(!precision24 || k >= 13 || ycomp_r, "K12 needs FD_MIDG_YCOMP=1 (R's off-ring lanes sy[5], sy[6])");
+    // K11: the P zero joins R as its last off-ring lane (the parks then reserve ph, sw, sy7)
+    assert!(!precision24 || k >= 6, "R has 16 off-ring lanes at most");
+    // K8: the aligned divisor head's top lane ring[n - 1] (1 on every act shot) is flipped to 0 around each
+    // reciprocal and lent to R; the comparator takes that bit as a virtual one (jackylee0424's 693, sub 261d4e06)
+    let vh1_r = precision24 && klane_r() && ycomp_r && k <= 8;
+    let pzero_r = precision24 && klane_r() && (if ycomp_r { k <= 11 } else { k <= 13 });
+    // K10: R's 12th lane is sz7 where sz is in offset form (|0> at every middle instant), else ph (0 on HR act shots;
+    // the HT plays flip it, the parked ones already do; the parks then keep sw, sy7)
+    // (QUOT_NO_SZ7R=1: ph in every column, the wide-column chunk cuts everywhere)
+    let no_sz7r = std::env::var_os("QUOT_NO_SZ7R").is_some();
+    let sz7_r = precision24 && klane_r() && ycomp_r && k <= 10 && (zoff_on || sgw_on) && !no_sz7r;
+    let ph_r = precision24 && klane_r() && ycomp_r && (k <= 9 || (k <= 10 && !sz7_r));
+    // K9: R's 13th lane is ph (narrow columns) or sw (wide: 0 on every V-form play's act shots), the parks keep sw, sy7
+    // (RES 2) / sy7 (RES 1)
+    // (a 9-lane sz holds sw: col 0, HR only with sy < 128 and no crossing, so its parks need no reserve and sy7 is |0>)
+    // K7 (agent_lowq_quot, ring 266): R's 15th lane is sw in every column (0 on the act shots of every V-form play:
+    // act is g there; a switch column's sw marks switching shots, which never act), or sy7 where sw is an sz lane
+    let k7 = k <= 7;
+    // K6 (ring 265): R's 16th lane is sy7 in every column, cleared around each V-form play (sy7 ^= [sy mod 128 == 0]:
+    // every stepping shot has 1 <= sy <= 128, so the low seven lanes give sy; the plays read only those: SGW columns
+    // play the parked form); the V-form parks then keep no reserve (RES 0)
+    let k6 = k <= 6;
+    let sy7n_r = precision24 && klane_r() && ycomp_r && k6;
+    let sy7_r = precision24 && klane_r() && ycomp_r && ((k <= 9 && (!sz7_r || k7) && sc.sz.contains(&sc.sw)) || k6);
+    assert!(sy7n_r || !sy7_r || (!cp.ht && cp.sy.1 < 128), "sy7 joins R only in an HR column with sy < 128");
+    let sw_r = precision24 && klane_r() && ycomp_r && k <= 9 && (!sz7_r || k7) && !sc.sz.contains(&sc.sw);
+    // K6 in col 0 (9-lane sz in offset form, sz - zlo < 64): sw is sz[8], |0> on the act shots
+    let swz_r = precision24 && klane_r() && ycomp_r && k6 && zoff_on && sz7_r && sc.sz.len() == 9 && sc.sz[8] == sc.sw;
+    // K7 in a column whose sz holds sw and no sz7 lane (col 0: 9-lane sz, HR only): Q's lane 128 (x128), which no
+    // park reaches there (sy + kmax <= 127: every parked bit stays in Q, the cycle's lane 128 is 0)
+    let x128_r = precision24 && klane_r() && ycomp_r && k7 && !k6 && !sz7_r && sy7_r && !cp.ht && cp.sy.1 + kmax <= 127;
+    let mut reciprocal_r = ring[0..k + 1].to_vec();
+    if precision24 && klane_r() {
+        // agent_lowq_quot: 24 lanes, ring[0..=K+1] (the window top shared as in the virtual zero) + sx[1..] (+ c0
+        // below K15): sx[6], sx[7] and c0 are idle while the V form is entered or left, so the park's reserve is
+        // R-free there (QUOT_RES_A)
+        reciprocal_r.push(ring[k + 1]);
+        let tail: Vec<QubitId> = if ycomp_r {
+            let mut t = vec![c0, r5, r6, pzero];
+            if sz7_r { t.push(sc.sz[7]); }
+            if ph_r { t.push(ph); }
+            if sw_r || swz_r { t.push(sc.sw); }
+            if sy7_r { t.push(fd.sy[7]); }
+            if x128_r { t.push(x128); }
+            if vh1_r { t.push(ring[n - 1]); }
+            t
+        } else { vec![c0, pzero] };
+        reciprocal_r.extend(sx[1..8].iter().copied().chain(tail).take(22 - k));
+    } else if precision24 {
+        assert_eq!(k, 17, "the 25-lane remainder is the N276 form");
+        reciprocal_r.push(ring[k + 1]); reciprocal_r.extend([sx[1], sx[2], sx[3], sx[4], sx[5]]);
+    }
+    let mut p_gt = if precision24 { vec![sx[0]] } else { sx[2..4].to_vec() };
+    if !precision24 { if let Some(&third) = p_bank.first() { p_gt.push(third); } }
+    let zh: Vec<QubitId> = if precision24 { ring[n - 24..n].to_vec() } else { ring[n - k..n].to_vec() };
+    if precision24 {
+        assert_eq!(reciprocal_r.len(), if klane_r() { 24 } else { 25 });
+        let unique: std::collections::BTreeSet<QubitId> = reciprocal_r.iter().copied().collect();
+        assert_eq!(unique.len(), reciprocal_r.len());
+        assert!(!reciprocal_r.iter().any(|q| (zh.contains(q) && !(vh1_r && *q == ring[n - 1]))
+            || p_gt.contains(q) || [act].contains(q)
+            || dirty.contains(q) || p_bank.contains(q) || (sc.sz.contains(q) && !(sz7_r && *q == sc.sz[7])
+                && !(sgw_on && (*q == sc.sz[5] || *q == sc.sz[6])) && !(swz_r && *q == sc.sw))
+            || (!x128_r && *q == x128) || (!sw_r && !swz_r && *q == sc.sw) || (!ph_r && *q == ph) || (k >= 15 && *q == c0) || (!pzero_r && *q == pzero)
+            || (!ycomp_r && fd.sy.contains(q)) || fd.sy[..5].contains(q) || (!sy7_r && fd.sy[7] == *q)
+            || sx.iter().enumerate().any(|(i, x)| !(1..=22 - k.min(17)).contains(&i) && x == q)));
+        assert_eq!(p_gt[0], sx[0]);
+        assert!(!zh.iter().any(|q| sx.contains(q) || sc.sz.contains(q)
+            || [ring[k + 1], act, c0, x128, pzero, ph, sc.sw].contains(q)
+            || dirty.contains(q) || p_bank.contains(q)));
+    }
+    let s1 = S1 { r: reciprocal_r, f: sx[0], zero: ring[k + 1], sgn: sx[0], gt: p_gt,
+                  anc: p_bank.iter().skip(1).copied().collect(),
+                  andc: p_bank.clone(), chain: p_bank,
+                  dirty: dirty.clone() };
+    let win: Vec<QubitId> = ring[k + 1..k + 2 + TC].to_vec();
+    let szr = (cp.sz.0, cp.sz.1);
+    S1_ZLO.with(|z| z.set(zlo));
+    let fv = stage1_v(b, &zh, &win, &sc.sz, szr, &s1, act, true);
+    let fr = stage1_v(b, &zh, &win, &sc.sz, szr, &s1, act, false);
+    S1_ZLO.with(|z| z.set(0));
+    // enter / leave the V form on the act shots: X += T - G (R cleared by its own replay); v must be clear (sx)
+    let vform = rec(b, |b| {
+        b.play(&prot, false);
+        if vh1_r { b.x(ring[n - 1]); }
+        b.play(&fv, false);
+        b.play(&fr, true);
+        if vh1_r { b.x(ring[n - 1]); }
+        b.play(&prot, true);
+    });
+    // lowq-size FD_MIDG_YCOMP: inside the parked V-form windows (between park and unpark) sy is not read, so its low
+    // seven lanes (sy mod 128; sy[7] is a park lane there) hold g = (1 - sz - sy) mod 128 = 257 - sz - sy (< 32 on
+    // every kind), leaving sy[5], sy[6] |0>. They replace sx[6], sx[7] as R's off-ring lanes in a second V-form
+    // recording played only there. f(y) = 1 - sz - y is an involution: one ancilla-free record (TTK add,
+    // complement, +2 by a dirty increment) enters and leaves the compressed form.
+    let ycomp_on = ycomp_on && !sgw_on;
+    let ycomp = rec(b, |b| {
+        if !ycomp_on { return; }
+        super::arith::ttk_add(b, &sc.sz[..7], &fd.sy[..7], None, None);
+        for &y in &fd.sy[..7] { b.x(y); }
+        if zoff_on { super::frogdrop::add_const_dirty_exact(b, &fd.sy[..7], (130 - zlo % 128) % 128, &dirty); }
+        else { super::modp_frogdrop::inc_dirty_free(b, &fd.sy[1..7], &dirty); }
+    });
+    let vform_p = if !ycomp_on || ycomp_r { vform.clone() } else {
+        let rc: Vec<QubitId> = s1.r.iter().map(|&q| if q == sx[6] { fd.sy[5] } else if q == sx[7] { fd.sy[6] } else { q })
+            .collect();
+        let s1c = S1 { r: rc, f: s1.f, zero: s1.zero, sgn: s1.sgn, gt: s1.gt.clone(), anc: s1.anc.clone(),
+                       andc: s1.andc.clone(), chain: s1.chain.clone(), dirty: s1.dirty.clone() };
+        S1_ZLO.with(|z| z.set(zlo));
+        let fvc = stage1_v(b, &zh, &win, &sc.sz, szr, &s1c, act, true);
+        let frc = stage1_v(b, &zh, &win, &sc.sz, szr, &s1c, act, false);
+        S1_ZLO.with(|z| z.set(0));
+        rec(b, |b| { b.play(&prot, false); b.play(&fvc, false); b.play(&frc, true); b.play(&prot, true); })
+    };
+    // every V-form play (parked or not) runs in the compressed form: nothing inside reads sy
+    let vform = if !ycomp_on { vform } else {
+        rec(b, |b| { b.play(&ycomp, false); b.play(&vform_p, false); b.play(&ycomp, false); })
+    };
+    // (lowq-size FD_MIDG_SGW, ported) separate recordings for the unparked plays (sy whole) and the parked ones (sy[7]
+    // lent, low7 = 0 = 128)
+    let (vform, vform_pk) = if !sgw_on { (vform.clone(), vform) } else {
+        let a = &sc.sz;
+        let sy = &fd.sy;
+        assert!(sy.len() == 8 && !dirty.iter().any(|q| a.contains(q) || sy.contains(q) || *q == sx[7] || *q == act));
+        // A := 1 - A - sy (an involution); the parked form adds 128 where low7 = 0, zero-extending low7 by sx[7]
+        // (an R lane: |0> on the act shots before fv and after fr^-1; the transform is an involution on every shot)
+        let sg_u = rec(b, |b| {
+            super::arith::ttk_add(b, &sy[..8], &a[..8], None, None);
+            for &x in a.iter() { b.x(x); }
+            super::modp_frogdrop::inc_dirty_free(b, &a[1..], &dirty);
+        });
+        let sg_p = rec(b, |b| {
+            let mut ax: Vec<QubitId> = sy[..7].to_vec();
+            ax.push(sx[7]);
+            super::arith::ttk_add(b, &ax, &a[..8], None, None);
+            let zero: Vec<(QubitId, bool)> = sy[..7].iter().map(|&q| (q, true)).collect();
+            mc_xor(b, &zero, a[7], &[], &dirty);
+            for &x in a.iter() { b.x(x); }
+            super::modp_frogdrop::inc_dirty_free(b, &a[1..], &dirty);
+        });
+        // the gates' u: sy += A (8 lanes) / low7 += A[..7] (mod 128); undone after fr^-1, when A[5..8] are R-free again
+        let u_u = rec(b, |b| super::arith::ttk_add(b, &a[..8], &sy[..8], None, None));
+        let u_p = rec(b, |b| super::arith::ttk_add(b, &a[..7], &sy[..7], None, None));
+        let (dk, d2) = (dirty[dirty.len() - 1], dirty[dirty.len() - 2]);
+        S1_GATE.with(|g| *g.borrow_mut() = S1Gate::U8 { u: sy[..8].to_vec() });
+        let fvu = stage1_v(b, &zh, &win, &sc.sz, szr, &s1, act, true);
+        S1_GATE.with(|g| *g.borrow_mut() = S1Gate::UPark { u: sy[..7].to_vec(), g: a[..5].to_vec(), dk, d2 });
+        let fvp = stage1_v(b, &zh, &win, &sc.sz, szr, &s1, act, true);
+        S1_GATE.with(|g| *g.borrow_mut() = S1Gate::Sz);
+        let mk = |b: &mut B, sg: &[Gate], u: &[Gate], fv: &[Gate]| rec(b, |b| {
+            b.play(&prot, false);
+            b.play(sg, false);
+            b.play(u, false);
+            if vh1_r { b.x(ring[n - 1]); }
+            b.play(fv, false);
+            b.play(&fr, true);
+            if vh1_r { b.x(ring[n - 1]); }
+            b.play(u, true);
+            b.play(sg, false);
+            b.play(&prot, true);
+        });
+        if sy7n_r { let pk = mk(b, &sg_p, &u_p, &fvp); (pk.clone(), pk) }
+        else { (mk(b, &sg_u, &u_u, &fvu), mk(b, &sg_p, &u_p, &fvp)) }
+    };
+    // K6: sy7 cleared around every V-form play (an R lane inside)
+    let (vform, vform_pk) = if !sy7n_r { (vform, vform_pk) } else {
+        let zero: Vec<(QubitId, bool)> = fd.sy[..7].iter().map(|&q| (q, true)).collect();
+        let n7 = rec(b, |b| mc_xor(b, &zero, fd.sy[7], &[], &dirty));
+        let w = |b: &mut B, r: &[Gate]| rec(b, |b| { b.play(&n7, false); b.play(r, false); b.play(&n7, false); });
+        (w(b, &vform), w(b, &vform_pk))
+    };
+    // q19..q23 occupy sx[1..5] between V calls. Form v in SZ for each
+    // threshold query, restoring SZ before any arithmetic or rotation.
+    let external_q = |kb: usize| if precision24 && (k + 1..=k + 5).contains(&kb) { Some(sx[kb - k]) } else { None };
+    assert!(!precision24 || kmax <= 23);
+    // one session stores all of q in the headroom and sx[1..5]
+    assert!(!precision24 || chunked() || kmax <= k + 6);
+    let qloc = |kb: usize| external_q(kb).unwrap_or(ring[kb]);
+    assert!((0..kmax).all(|kb| qloc(kb) != ring[k + 1]));
+    // v = (sz + sy + VOFF) mod 2^VB, in SZ only during ge_k.
+    let v: Vec<QubitId> = sc.sz[..VB].to_vec();
+    let vg = rec(b, |b| {
+        super::frogdrop::reg_add_into(b, &v, &fd.sy[..VB], &[], c0);
+        let voff = (VOFF + zlo) % (1 << VB);
+        for i in 0..VB {
+            if (voff >> i) & 1 == 1 { super::modp_frogdrop::inc_dirty_free(b, &v[i..], &dirty); }
+        }
+    });
+    // These adder helpers are clean at every gate_on/off boundary: the
+    // reciprocal/parking records have returned before vg is live, and each
+    // ring add returns c0, pzero and x128 before the next predicate. Both
+    // exact comparator forms return the entire bank before the body.
+    let gate_chain = [c0, pzero, x128];
+    assert_eq!(gate_chain.iter().copied().collect::<std::collections::BTreeSet<_>>().len(), gate_chain.len());
+    assert!(!gate_chain.iter().any(|q| v.contains(q) || *q == ak || *q == c));
+    // tmp ^= [kb >= 258 - s9] = [v >= 40 - kb]
+    let ge_k = |b: &mut B, kb: usize, t: QubitId| {
+        b.play(&vg, false);
+        super::frogdrop_col::ge_cd(b, &v, (40 - kb) as isize, t, &gate_chain, &dirty);
+        b.play(&vg, true);
+    };
+    // ak = a & [kb < 258 - s9] (tmp = c clear again)
+    let gate_on = |b: &mut B, kb: usize, a: QubitId| {
+        let f1 = b.tof;
+        ge_k(b, kb, c);
+        b.x(c);
+        b.and_c(a, c, ak);
+        b.x(c);
+        ge_k(b, kb, c);
+        super::f1_profile("midg.gate_on", f1, b.tof);
+    };
+    let gate_off = |b: &mut B, kb: usize, a: QubitId| {
+        let f1 = b.tof;
+        ge_k(b, kb, c);
+        b.x(c);
+        b.and_u(a, c, ak);
+        b.x(c);
+        ge_k(b, kb, c);
+        super::f1_profile("midg.gate_off", f1, b.tof);
+    };
+    let add = |b: &mut B, kb: usize, ctl: QubitId, sub: bool| {
+        let f1 = b.tof;
+        ring_cadd2_loan(b, &ring, &q, kb, mt - kb, ctl, sub, &sc.zeros, c0, x128, &dirty, lsb, loan_end, x128);
+        super::f1_profile("midg.ring_add", f1, b.tof);
+    };
+    // the bit in flight: c <-> headroom lane kb on the shots with AND(extra)
+    let fetch = |b: &mut B, kb: usize, extra: &[(QubitId, bool)]| {
+        let f1 = b.tof;
+        let r = if external_q(kb).is_some() { vec![] } else { rotz(b, &[kb]) };
+        b.play(&r, false);
+        let qb = qloc(kb);
+        let mut ct = extra.to_vec();
+        ct.push((qb, false));
+        b.cx(c, qb);
+        mc_xor(b, &ct, c, &[], &dirty);
+        b.cx(c, qb);
+        b.play(&r, true);
+        super::f1_profile("midg.fetch", f1, b.tof);
+    };
+    // one search / division step's decision after the trial add: t2 = ak & s, headroom bit kb = ak & !s (s = bit
+    // 257 - sz: over in the V form, negative in the division, where the borrow also ran through the headroom);
+    // `undo` erases t2 after the revert. t2 is a gate temp (idle between the gate's compares).
+    let rv = c;
+    let decide = |b: &mut B, kb: usize, undo: bool| {
+        let f1 = b.tof;
+        let r = rotz(b, &[k + 1, kb]);
+        b.play(&r, false);
+        if undo {
+            mc_xor(b, &[(ak, false), (qloc(kb), true)], rv, &[], &dirty);
+        } else {
+            mc_xor(b, &[(ak, false), (ring[k + 1], false)], rv, &[], &dirty);
+            mc_xor(b, &[(ak, false), (ring[k + 1], true)], qloc(kb), &[], &dirty);
+        }
+        b.play(&r, true);
+        super::f1_profile("midg.decide", f1, b.tof);
+    };
+    // headroom (P-frame lane kb) <-> Q above Y (Q + x128 + the crossing reserve, down by sy: lane kb) where bit kb can
+    // be set; v live
+    // Q's extension beyond lane 128 (the crossing step's bits): the lanes idle while the V form is entered or left
+    // (c0, the P zero and sx[6..8]), then the park's own flag lanes that are constant on its act shots (`extra`: ph,
+    // and sw or g, whichever does not hold act; ph reads 1 on HT act shots and is flipped around the window), then
+    // the pool past the 13-lane layout; MIDG_RES lanes in all
+    let nres = park_reserve();
+    let d24: std::collections::BTreeSet<usize> = (0..kmax).collect();
+    // agent_lowq_quot: QUOT_RES_A=n gives the chunked parks (cycle a) n lanes from the R-free set (P zero above K13,
+    // ph, sw, sy7) instead of the MIDG_RES list (c0, sx[6], sx[7] belong to R at ring 273); `low` takes `extra` only
+    let res_a: Option<usize> = std::env::var("QUOT_RES_A").ok().and_then(|v| v.parse().ok())
+        .or(if precision24 && k < 17 { Some(if sy7_r { 0 } else if sw_r { 1 } else if ph_r { 2 } else if pzero_r { 3 } else { 4 }) } else { None });
+    // below N276, R holds sx[6] (K <= 16), sx[7] (K <= 15) and c0 (K = 14) while the V form is entered or left
+    assert!(!precision24 || k == 17 || (chunked() && res_a.is_some_and(|r| r <= 4)),
+            "below N276 the parks need the chunked sessions and an R-free reserve");
+    let mk_cycle = |b: &mut B, extra: &[QubitId], ht: bool, low: Option<usize>| -> (Vec<QubitId>, Vec<Gate>) {
+        let mut q129: Vec<QubitId> = q.clone();
+        q129.push(x128);
+        let mut reserve: Vec<QubitId> = if low.is_some() { vec![] } else { vec![c0, pzero, sx[6], sx[7]] };
+        reserve.extend(extra.iter().copied());
+        if low.is_none() { reserve.extend(&sc.gx); }
+        let nres = low.unwrap_or(nres);
+        reserve.truncate(nres);
+        assert_eq!(reserve.iter().copied().collect::<std::collections::BTreeSet<_>>().len(), reserve.len());
+        // (an HR park needs no reserve: sy + bl(q) <= 129 there)
+        assert!(!MIDG_ON || !ht || reserve.len() == nres, "crossing reserve: {} of {} lanes", reserve.len(), nres);
+        q129.extend(&reserve);
+        let rq = if reserve.contains(&fd.sy[7]) {
+            // On every model-clean stepping shot, 1 <= sy <= 128. The low
+            // seven bits therefore determine sy exactly: zero means 128.
+            // This record never reads sy[7], which the cycle may carry.
+            borrowed_sy_rotate(b, &q129, &fd.sy, sx[0], &dirty)
+        } else {
+            rec(b, |b| rot_by_range_care(b, &q129, &fd.sy, cp.sy.0.min(128), cp.sy.1.min(128), true, &dirty, &d24))
+        };
+        (q129, rq)
+    };
+    // HR block and HT block (act on g): ph and sw are 0 / (1, 0) on their act shots; HT division (act on sw): ph, g
+    // (the P zero joins R at K13: the R-free V-form park lanes are then ph, sw, sy7)
+    let ra: Vec<QubitId> = if res_a.is_some() && sy7_r { vec![] }
+                           else if res_a.is_some() && sw_r { vec![fd.sy[7]] }
+                           else if res_a.is_some() && ph_r { vec![sc.sw, fd.sy[7]] }
+                           else if res_a.is_some() && pzero_r { vec![ph, sc.sw, fd.sy[7]] }
+                           else if res_a.is_some() { vec![pzero, ph, sc.sw, fd.sy[7]] } else { vec![ph, sc.sw, fd.sy[7]] };
+    let (q129a, rqa) = mk_cycle(b, &ra, cp.ht, res_a);
+    let (q129b, rqb) = mk_cycle(b, &[ph, act, sx[1]], cp.ht, None);
+    // (lowq_cross) only a cycle that borrows sy7 needs it normalized: around a sy7-free cycle the normalization would
+    // clear sy7 at sy = 128 and the rotation, which reads all of sy, would see 0
+    let sy7_normal = if q129a.contains(&fd.sy[7]) { borrowed_sy_normal(b, &fd.sy, &dirty) } else { vec![] };
+    // a bit at Q-cycle index sy + kb >= its length would wrap onto Y: such a bit (a crossing step beyond the reserve)
+    // stays in the headroom (a failure if set), so the swap is also gated by sy <= len - 1 - kb
+    // (no bit gate: for kb >= B both lanes are zero on the act shots; v must be clear: sx holds the wrap flag)
+    let wf = sx[0];
+    let wrap_flag = |b: &mut B, kb: usize, qlen: usize, borrow_sy7: bool| {
+        let threshold = qlen - kb;
+        if borrow_sy7 {
+            if threshold <= 128 {
+                super::frogdrop_col::ge_const_compact(b, &fd.sy[..7], threshold as isize, wf, &[], &dirty);
+                let zero: Vec<(QubitId, bool)> = fd.sy[..7].iter().copied().map(|q| (q, true)).collect();
+                mc_xor(b, &zero, wf, &[], &dirty);
+            }
+        } else {
+            super::frogdrop_col::ge_const_compact(b, &fd.sy, threshold as isize, wf, &[], &dirty);
+        }
+    };
+    // slots 0..nb <-> cycle indices 0..nb (nb = kmax: one session; a chunk's length: chunk-relative indices)
+    // (agent_lowq_quot: park_for_off: slots base.. <-> cycle indices off.., for a park staged in batches)
+    let park_for_off = |b: &mut B, a: QubitId, q129: &[QubitId], rq: &[Gate], relocated19: bool, nb: usize, base: usize,
+                        off: usize|
+    rec(b, |b| {
+        let qlen = q129.len();
+        let rz = rotz(b, &(base..base + nb).collect::<Vec<_>>());
+        b.play(&rz, false);
+        b.play(rq, false);
+        for i in 0..nb {
+            let kb = off + i;
+            if relocated19 && kb == k + 1 { continue; }
+            if cp.sy.1.min(128) + kb >= qlen {
+                wrap_flag(b, kb, qlen, q129.contains(&fd.sy[7]));
+                if q129.contains(&sx[1]) || precision24 {
+                    super::mid2::mc_swap(b, &[(a, false), (wf, true)], qloc(base + i), q129[kb], &[], &dirty);
+                } else {
+                    let akp = sx[1];
+                    mc_xor(b, &[(a, false), (wf, true)], akp, &[], &dirty);
+                    super::mid2::mc_swap(b, &[(akp, false)], qloc(base + i), q129[kb], &[], &dirty);
+                    mc_xor(b, &[(a, false), (wf, true)], akp, &[], &dirty);
+                }
+                wrap_flag(b, kb, qlen, q129.contains(&fd.sy[7]));
+            } else {
+                super::mid2::mc_swap(b, &[(a, false)], qloc(base + i), q129[kb], &[], &dirty);
+            }
+        }
+        b.play(rq, true);
+        b.play(&rz, true);
+    });
+    let park_for = |b: &mut B, a: QubitId, q129: &[QubitId], rq: &[Gate], relocated19: bool, nb: usize, base: usize|
+        park_for_off(b, a, q129, rq, relocated19, nb, base, 0);
+    let park = park_for(b, act, &q129a, &rqa, false, kmax, 0);
+    let hr_lits = { let mut l = vec![(ph, true)]; if cp.sw { l.push((sc.sw, true)); } l };
+    // ---------------- agent_lowq_quot: chunked sessions (C0 = bits [0, QCH), C1 = [QCH, kmax)). At every loop
+    // instant and park at most one chunk is in its slots (bit kb of [a, b) at slot kb - a, park index kb - a); C1 is
+    // consumed into X between the sessions (D^-1) and rebuilt by an in-place division (q_kk at X-index sy + kk, zero
+    // while X < 2^kk Y). HR: S1 finds C1, D^-1 C1, S2 finds C0, divide >= QCH, one D^-1 of all bits with the payload.
+    // HT: D^-1 C1, X += C0 Y, S1 erases C0, divide >= QCH and rebuild C1 into its slots, S2 erases C1.
+    // (lowq_cross) N chunks: 0 = bd[0] < bd[1] < .. < bd[nch] = kmax; the HR sessions run C_{nch-1} .. C_0, the HT
+    // sessions C_0 .. C_{nch-1}; the cut list [qch()] is the two-chunk form above
+    let bd: Vec<usize> = { let mut v = vec![0];
+                           // (QUOT_CUTS_CROSS_ONLY=1: the extra chunks only where a crossing step can park, i.e. a
+                           // switch / delayed / no-step column or the one after a switch; elsewhere no park needs the
+                           // reserve and two chunks fit the slots)
+                           let cross_col = cp.sw || cp.psw || cp.dl || cp.dq;
+                           let cuts = if !cross_col && std::env::var("QUOT_CUTS_CROSS_ONLY").map(|v| v == "1").unwrap_or(false) {
+                               vec![qch()]
+                           } else { chunk_cuts_wide(!zoff_on || no_sz7r) };
+                           v.extend(cuts.into_iter().filter(|&x| x > 0 && x < kmax));
+                           v.push(kmax); v };
+    assert!(bd.windows(2).all(|w| w[0] < w[1]), "chunk cuts must ascend");
+    let nch = bd.len() - 1;
+    let chunk = chunked() && nch > 1;
+    let qch = if chunk { bd[1] } else { qch() };
+    assert!(!chunk || bd.windows(2).all(|w| w[1] - w[0] <= k + 6), "a chunk exceeds the K + 6 slots");
+    let (sylo_c, syhi_c) = (cp.sy.0.max(1), cp.sy.1.min(nq));
+    // decoder prefixes: sx[0..6) less the chunk slots, and the P zero
+    let pre_c: Vec<QubitId> = {
+        let longest = bd.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0).max(qch);
+        let slots: Vec<QubitId> = (0..longest.max(kmax.saturating_sub(qch))).map(|s| qloc(s)).collect();
+        let mut v: Vec<QubitId> = sx[..VB].iter().copied().filter(|x| !slots.contains(x)).collect();
+        v.push(pzero);
+        // lowq-size FD_LOOP_PRE: lane budget of the loops' sy decoders (shorter: dirty toggles, more T)
+        if let Some(k) = std::env::var("FD_LOOP_PRE").ok().and_then(|x| x.parse::<usize>().ok()) { v.truncate(k); }
+        v
+    };
+    // gate_t with v already in SZ (vg played: loops that neither rotate by sz nor read it)
+    let gate_v = |b: &mut B, kk: usize, a: QubitId, t: QubitId, on: bool| {
+        let f1 = b.tof;
+        super::frogdrop_col::ge_cd(b, &v, (40 - kk) as isize, t, &gate_chain, &dirty);
+        b.x(t);
+        if on { b.and_c(a, t, ak); } else { b.and_u(a, t, ak); }
+        b.x(t);
+        super::frogdrop_col::ge_cd(b, &v, (40 - kk) as isize, t, &gate_chain, &dirty);
+        super::f1_profile(if on { "midg.gate_v_on" } else { "midg.gate_v_off" }, f1, b.tof);
+    };
+    // gate_v with v formed before and returned after (no rotation by sz in between)
+    let gate_x = |b: &mut B, kk: usize, a: QubitId, t: QubitId, on: bool| {
+        if on {
+            b.play(&vg, false);
+            gate_v(b, kk, a, t, true);
+        } else {
+            gate_v(b, kk, a, t, false);
+            b.play(&vg, true);
+        }
+    };
+    // c ^= ak & [X >= 2^kk Y] (X < 2^(kk+1) Y: the carry out of the shot's relative position sy); `sub` (c |0> on
+    // entry): also X -= 2^kk Y where it holds, one step of the restoring division
+    let cmp_y = |b: &mut B, kk: usize, sub: bool, pre: &[QubitId]| {
+        let span = (syhi_c + 1).min(n - kk);
+        let tl: Vec<QubitId> = (0..span).map(|i| ring[n - 1 - kk - i]).collect();
+        let mut s: Vec<QubitId> = q.iter().copied().take(span).collect();
+        if s.len() < span { s.push(x128); }
+        assert_eq!(s.len(), span);
+        let rd = s.clone();
+        let mut mid = |b: &mut B| {
+            let lane = |vv: usize| if vv < rd.len() { Some(rd[vv]) } else { None };
+            read_lane(b, &fd.sy, sylo_c, syhi_c, &lane, true, &[(ak, false)], c, pre, &[], &dirty);
+        };
+        let mut gate = |_b: &mut B, i: Option<usize>| if sub { i.map(|_| c) } else { None };
+        ripple(b, &tl, &s, c0, true, &mut mid, &mut gate);
+    };
+    // c <-> X-index sy + kk (the in-place lane) on the ak shots: a swap tree on sy's bits brings the shot's lane to
+    // the range's first lane (any sy in [sylo, syhi]; an ak shot's sy is in range), one controlled swap, the tree back
+    // (QUOT_INPLACE_DEC=1: the one-hot decoder)
+    let tree_inplace = std::env::var_os("QUOT_INPLACE_DEC").is_none();
+    let inplace_by = |b: &mut B, kk: usize, ctl: QubitId, pre: &[QubitId]| {
+        let f1 = b.tof;
+        let lane = |vv: usize| {
+            let i = n as isize - 1 - vv as isize - kk as isize;
+            if i >= 0 { Some(ring[i as usize]) } else { None }
+        };
+        if tree_inplace {
+            let leaves: Vec<(usize, QubitId)> = (sylo_c..=syhi_c).filter_map(|v| lane(v).map(|l| (v, l))).collect();
+            let mut swaps = vec![];
+            let root = swap_tree(&fd.sy, &leaves, fd.sy.len(), &mut swaps);
+            for &(bit, l, r) in &swaps { b.cswap(bit, l, r); }
+            super::mid2::mc_swap(b, &[(ctl, false)], root, c, &[], &dirty);
+            for &(bit, l, r) in swaps.iter().rev() { b.cswap(bit, l, r); }
+        } else {
+            super::mid2::dec_swap(b, &fd.sy, sylo_c, syhi_c, &lane, c, &[(ctl, false)], pre, &[], &dirty);
+        }
+        super::f1_profile("midg.inplace", f1, b.tof);
+    };
+    let inplace = |b: &mut B, kk: usize, pre: &[QubitId]| inplace_by(b, kk, ak, pre);
+    // one park per chunk (slot s <-> cycle index s), recorded top chunk first
+    let parks: Vec<Vec<Gate>> = if chunk {
+        let mut v: Vec<Vec<Gate>> = vec![vec![]; nch];
+        for i in (0..nch).rev() { v[i] = park_for(b, act, &q129a, &rqa, false, bd[i + 1] - bd[i], 0); }
+        v
+    } else { vec![] };
+    // (lowq_cross) the in-place division of X = r + q_{>=lo} Y back to r for the bits >= lo (q_kk at X-index sy + kk,
+    // on the act shots; v formed around it)
+    let div_inplace = |b: &mut B, lo: usize| {
+        b.play(&vg, false);
+        for kk in (lo..kmax).rev() {
+            gate_v(b, kk, act, sx[0], true);
+            cmp_y(b, kk, true, &pre_c);
+            inplace(b, kk, &pre_c);
+            gate_v(b, kk, act, sx[0], false);
+        }
+        b.play(&vg, true);
+    };
+    let xl: Vec<QubitId> = (0..mt).map(|m| ring[n - 1 - m]).collect();
+    b.play(&zshift, true);
+    if cp.hr && chunk {
+        // tt: the D^-1 runs on X - 1
+        let dec1 = if cp.tt { Some(rec(b, |b| super::modp_frogdrop::inc_dirty(b, &xl, &dirty, c0))) } else { None };
+        mc_xor(b, &hr_lits, act, &[], &dirty);
+        for i in (0..nch).rev() {
+            let (lo, hi) = (bd[i], bd[i + 1]);
+            if i + 1 < nch {
+                // D^-1 of C_{i+1} = [hi, h2) (no payload): X = t_{j-1} + q_{>=h2} Y -> t_{j-1} + q_{>=hi} Y, its slots
+                // cleared. (lowq_cross) For h2 < kmax the chunks above are divided out in place around it: X_low =
+                // t_{j-1} + q_[hi, kk] Y < 2^h2 Y stays below their lanes.
+                let h2 = bd[i + 2];
+                if let Some(d) = &dec1 { b.play(d, true); }
+                let up = if h2 < kmax { Some(rec(b, |b| div_inplace(b, h2))) } else { None };
+                if let Some(u) = &up { b.play(u, false); }
+                for kk in hi..h2 {
+                    fetch(b, kk - hi, &[(act, false)]);
+                    add(b, kk, c, false);
+                    gate_x(b, kk, act, sx[0], true);
+                    cmp_y(b, kk, false, &pre_c);
+                    gate_x(b, kk, act, sx[0], false);
+                }
+                if let Some(u) = &up { b.play(u, true); }
+                if let Some(d) = &dec1 { b.play(d, false); }
+            }
+            let f1 = b.tof;
+            b.play(&vform, false);
+            super::f1_profile("midg.vform", f1, b.tof);
+            for kb in (lo..hi).rev() {
+                gate_on(b, kb, act);
+                add(b, kb, ak, false);
+                decide(b, kb - lo, false);
+                add(b, kb, rv, true);
+                decide(b, kb - lo, true);
+                gate_off(b, kb, act);
+            }
+            for kb in lo..hi {
+                fetch(b, kb - lo, &[(act, false)]);
+                add(b, kb, c, true);
+                fetch(b, kb - lo, &[(act, false)]);
+            }
+            let pk = &parks[i];
+            b.play(&sy7_normal, false);
+            b.play(pk, false);
+            #[cfg(test)] let d4b_start = b.ops.len();
+            let f1 = b.tof;
+            super::frogdrop_col::mark(b, 3101);
+            b.play(&vform_pk, true);
+            super::frogdrop_col::mark(b, 3102);
+            super::f1_profile("midg.vform", f1, b.tof);
+            #[cfg(test)] d4b_window(d4b_start, b.ops.len(), if lo == 0 { 3 } else { 0 }, act);
+            b.play(pk, false);
+            b.play(&sy7_normal, false);
+        }
+        mc_xor(b, &hr_lits, act, &[], &dirty);
+    }
+    // ---------------- HR: binary search in the V form, q's bits parked in the ring headroom
+    if cp.hr && !chunk {
+        mc_xor(b, &hr_lits, act, &[], &dirty);
+        let f1 = b.tof;
+        b.play(&vform, false);
+        super::f1_profile("midg.vform", f1, b.tof);
+        for kb in (0..kmax).rev() {
+            gate_on(b, kb, act);
+            add(b, kb, ak, false);
+            decide(b, kb, false);
+            add(b, kb, rv, true);
+            decide(b, kb, true);
+            gate_off(b, kb, act);
+        }
+        // V -= qY: V = t_{j-1} + T - G
+        for kb in 0..kmax {
+            fetch(b, kb, &[(act, false)]);
+            add(b, kb, c, true);
+            fetch(b, kb, &[(act, false)]);
+        }
+        // leave the V form with q above Y, then q back to the headroom
+        b.play(&sy7_normal, false);
+        b.play(&park, false);
+        #[cfg(test)] let d4b_start = b.ops.len();
+        let f1 = b.tof;
+        b.play(&vform_pk, true);
+        super::f1_profile("midg.vform", f1, b.tof);
+        #[cfg(test)] d4b_window(d4b_start, b.ops.len(), 0, act);
+        b.play(&park, false);
+        b.play(&sy7_normal, false);
+        mc_xor(b, &hr_lits, act, &[], &dirty);
+    }
+    if !stage(b) { return; } // 3
+    if cp.hr && chunk {
+        let dec1 = if cp.tt { Some(rec(b, |b| super::modp_frogdrop::inc_dirty(b, &xl, &dirty, c0))) } else { None };
+        if let Some(d) = &dec1 { b.play(d, true); }
+        let wtop = 259 - if cp.dl { cp.dlr.min(L0P + 1) } else { L0P + 1 };
+        let pads: Vec<QubitId> = if cp.dl { vec![x128, pzero, sx[1], sx[6], sc.sw, ph] }
+                                 else { vec![x128, pzero] };
+        // FD_DINV_NOPAD: the transition's source is Q alone (trans_one adds the carry out of Q's top lane into the
+        // rest of the target by an increment), so the zero pads are not held
+        let nopad = std::env::var("FD_DINV_NOPAD").map(|v| v == "1").unwrap_or(false);
+        let slen = if nopad { wtop.min(nq) } else { wtop.min(nq + pads.len()) };
+        let src = if pl.is_some() { if nopad { fd.q[..slen].to_vec() } else { super::payload::pad(&fd.q, &pads, slen) } }
+                  else { vec![] };
+        mc_xor(b, &hr_lits, act, &[], &dirty);
+        // in-place division for the bits >= QCH: X = t_{j-1} + q_{>=QCH} Y -> t_{j-1}, q_kk at X-index sy + kk
+        b.play(&vg, false);
+        for kk in (qch..kmax).rev() {
+            gate_v(b, kk, act, sx[0], true);
+            cmp_y(b, kk, true, &pre_c);
+            inplace(b, kk, &pre_c);
+            gate_v(b, kk, act, sx[0], false);
+        }
+        b.play(&vg, true);
+        // D^-1 of all bits LSB first, the payload fused (C0 from its slots, C1 from X's lanes): X = t_{j+1}
+        for kk in 0..kmax {
+            // v stays in SZ from bit QCH on (no rotation by sz there)
+            if kk == qch { b.play(&vg, false); }
+            if kk < qch {
+                fetch(b, kk, &[(act, false)]);
+            } else {
+                gate_v(b, kk, act, sx[0], true);
+                inplace(b, kk, &pre_c);
+                // sx[6] (ak) is a payload pad in dl columns
+                if cp.dl { gate_v(b, kk, act, sx[0], false); }
+            }
+            if let Some(pl) = pl {
+                let t: Vec<QubitId> = (kk..wtop).map(|pos| super::payload::wl(&pl.p, pos)).collect();
+                let sl = (wtop - kk).min(slen);
+                super::payload::trans_one(b, &t, &src[..sl], kk, false, vec![(c, false)], None, sx[0], c0, &[],
+                                          &pl.dirty);
+                super::frogdrop_col::mark(b, 1000 + kk);
+            }
+            add(b, kk, c, false);
+            if kk < qch {
+                gate_x(b, kk, act, sx[0], true);
+                cmp_y(b, kk, false, &pre_c);
+                gate_x(b, kk, act, sx[0], false);
+            } else {
+                if cp.dl { gate_v(b, kk, act, sx[0], true); }
+                cmp_y(b, kk, false, &pre_c);
+                gate_v(b, kk, act, sx[0], false);
+            }
+        }
+        if kmax > qch { b.play(&vg, true); }
+        mc_xor(b, &hr_lits, act, &[], &dirty);
+        if let Some(d) = &dec1 { b.play(d, false); }
+    }
+    if cp.hr && !chunk {
+        // D^-1: X = t_{j-1} < t_j grows to t_{j+1}, consuming q's bits LSB first (tt: run on X - 1)
+        let dec1 = if cp.tt { Some(rec(b, |b| super::modp_frogdrop::inc_dirty(b, &xl, &dirty, c0))) } else { None };
+        if let Some(d) = &dec1 { b.play(d, true); }
+        let (sylo, syhi) = (cp.sy.0.max(1), cp.sy.1.min(nq));
+        // the post region's positions [0, 259 - bl(r_j)): a delayed shot's r_j < 2^l0 widens it to 259 - dlr; Q's
+        // pad: lanes zero on the written (HR stepping) shots, the carry past them by trans_one's increment
+        let wtop = 259 - if cp.dl { cp.dlr.min(L0P + 1) } else { L0P + 1 };
+        let pads: Vec<QubitId> = if cp.dl { vec![x128, pzero, sx[1], sx[6], sc.sw, ph] }
+                                 else { vec![x128, pzero] };
+        // FD_DINV_NOPAD: the transition's source is Q alone (trans_one adds the carry out of Q's top lane into the
+        // rest of the target by an increment), so the zero pads are not held
+        let nopad = std::env::var("FD_DINV_NOPAD").map(|v| v == "1").unwrap_or(false);
+        let slen = if nopad { wtop.min(nq) } else { wtop.min(nq + pads.len()) };
+        let src = if pl.is_some() { if nopad { fd.q[..slen].to_vec() } else { super::payload::pad(&fd.q, &pads, slen) } }
+                  else { vec![] };
+        mc_xor(b, &hr_lits, act, &[], &dirty);
+        for kk in 0..kmax {
+            fetch(b, kk, &[(act, false)]);
+            if std::env::var_os("D3_TRACE_PHASE").is_some() && kk + 1 == kmax { super::frogdrop_col::mark(b, 1400); }
+            if let Some(pl) = pl {
+                let t: Vec<QubitId> = (kk..wtop).map(|pos| super::payload::wl(&pl.p, pos)).collect();
+                let sl = (wtop - kk).min(slen);
+                super::payload::trans_one(b, &t, &src[..sl], kk, false, vec![(c, false)], None, sx[0], c0, &[],
+                                          &pl.dirty);
+                super::frogdrop_col::mark(b, 1000 + kk);
+            }
+            add(b, kk, c, false);
+            if std::env::var_os("D3_TRACE_PHASE").is_some() && kk + 1 == kmax { super::frogdrop_col::mark(b, 1402); }
+            if precision24 {
+                ge_k(b, kk, sx[0]);
+                b.x(sx[0]);
+                b.and_c(act, sx[0], ak);
+                b.x(sx[0]);
+                ge_k(b, kk, sx[0]);
+            }
+            // c ^= act & [X >= 2^kk Y]: carry out of the shot's top relative position sy (X < 2^(kk+1) Y)
+            let span = (syhi + 1).min(n - kk);
+            let tl: Vec<QubitId> = (0..span).map(|i| ring[n - 1 - kk - i]).collect();
+            let mut s: Vec<QubitId> = q.iter().copied().take(span).collect();
+            if s.len() < span { s.push(x128); }
+            assert_eq!(s.len(), span);
+            let rd = s.clone();
+            let mut mid = |b: &mut B| {
+                let lane = |vv: usize| if vv < rd.len() { Some(rd[vv]) } else { None };
+                let mut read_pre = if precision24 { vec![sx[0], pzero] }
+                               else { vec![sx[0], sx[1], sx[2], sx[6], pzero] };
+                if let Some(k) = std::env::var("FD_DINV_PRE").ok().and_then(|v| v.parse::<usize>().ok()) {
+                    read_pre.truncate(k);
+                }
+                if std::env::var_os("D3_TRACE_PHASE").is_some() && kk + 1 == kmax { super::frogdrop_col::mark(b, 1404); }
+                read_lane(b, &fd.sy, sylo, syhi, &lane, true, &[(if precision24 { ak } else { act }, false)], c, &read_pre, &[], &dirty);
+                if std::env::var_os("D3_TRACE_PHASE").is_some() && kk + 1 == kmax { super::frogdrop_col::mark(b, 1405); }
+            };
+            let mut gate = |_b: &mut B, _i: Option<usize>| None;
+            ripple(b, &tl, &s, c0, true, &mut mid, &mut gate);
+            if precision24 {
+                ge_k(b, kk, sx[0]);
+                b.x(sx[0]);
+                b.and_u(act, sx[0], ak);
+                b.x(sx[0]);
+                ge_k(b, kk, sx[0]);
+            }
+            if std::env::var_os("D3_TRACE_PHASE").is_some() && kk + 1 == kmax { super::frogdrop_col::mark(b, 1403); }
+        }
+        mc_xor(b, &hr_lits, act, &[], &dirty);
+        if let Some(d) = &dec1 { b.play(d, false); }
+    }
+    if !stage(b) { return; } // 4
+    // ---------------- HT: in-place restoring division (mid2): q_k at X-index sy + k, X = r_{j+1}, the payload add
+    // U += q |t_j| fused per bit (FD_MIDG_OLD5=1: the headroom division and the parked payload add)
+    // agent_lowq_quot: QUOT_GIP5=1 runs the in-place division (with lowq_cross's repair)
+    let old5 = (!G_IP5 && std::env::var_os("QUOT_GIP5").is_none()) || std::env::var("FD_MIDG_OLD5").is_ok();
+    // agent_lowq_quot IP5-split (chunked sessions): the in-place division without the fused payload. The fused
+    // payload's masked source reaches X-index K + sy, so an in-place bit kb' >= K would be read as |t_j| (q >= 2^K):
+    // the bits >= K move to slots QCH.. and park in the Q cycle at kb - K for the payload, the bits < K stay in place.
+    // Hand-off: bits < K in place, bits >= K in slots QCH + kb - K. QUOT_IP5_FUSED=1: ht_div_inplace.
+    let split5 = chunk && !old5 && std::env::var_os("QUOT_IP5_FUSED").is_none();
+    let res_s: usize = std::env::var("QUOT_RES_S").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+    if cp.ht && !old5 {
+        // (lowq_cross repair, copied for the chunked hand-off test: the crossing form choice is ported: sw marks only
+        // the switching shots in dl columns, and act excludes a delayed shot's no-step column)
+        // in place on the 13 lanes (the stepping flag on sw; act idle) and sx; s = sz + sy is formed as s - 2 on sz
+        // (every shot's s in [228, 257]); the division's Q pad past lane 127 is sv (clean outside the size gates)
+        let actl = sc.sw;
+        let ds = super::payload::DigScr { e: vec![], sa: sc.sz.clone(), sb: fd.sy.clone(), sv: x128, fa: sx[0], g: act,
+                                          c0, tmp: vec![pzero, sx[1]], pre1: vec![], pre2: vec![], zeros: vec![],
+                                          dirty: dirty.clone(), smin: 2 };
+        let sw_toggle = |b: &mut B| {
+            if !cp.sw { return; }
+            if zoff_on { b.play(&zshift, false); }
+            super::frogdrop_col::ge_cd(b, &sc.sz, cp.l0 as isize + 1, ds.fa, &sx[1..1 + mid_chain().min(7)], &dirty);
+            if cp.dl {
+                let gt = super::arith::up_m(b, &fd.sy, &sc.sz, x128, true);
+                b.play(&gt, false);
+                mc_xor(b, &[(ds.fa, true), (ph, true), (sc.sz[sc.sz.len() - 1], true)], sc.sw, &[], &dirty);
+                b.play(&gt, true);
+            } else {
+                mc_xor(b, &[(ds.fa, true), (ph, true)], sc.sw, &[], &dirty);
+            }
+            super::frogdrop_col::ge_cd(b, &sc.sz, cp.l0 as isize + 1, ds.fa, &sx[1..1 + mid_chain().min(7)], &dirty);
+            if zoff_on { b.play(&zshift, true); }
+        };
+        let set_act = |b: &mut B| { if zoff_on && cp.dq { b.play(&zshift, false); } ht_act(b, fd, cp, sc, actl, &sx[..2], x128, &dirty); if zoff_on && cp.dq { b.play(&zshift, true); } };
+        sw_toggle(b);
+        set_act(b);
+        if split5 {
+            let kin = k.min(kmax);
+            // the division in place, every bit (no payload): X = r_{j-1} -> r_{j+1}, q_kk at X-index sy + kk
+            b.play(&vg, false);
+            for kk in (0..kmax).rev() {
+                gate_v(b, kk, actl, sx[0], true);
+                cmp_y(b, kk, true, &pre_c);
+                inplace(b, kk, &pre_c);
+                gate_v(b, kk, actl, sx[0], false);
+            }
+            b.play(&vg, true);
+            if let Some(pl) = pl {
+                // the payload: the bits >= K parked above Y (the headroom clean), control per bit on c
+                // (lowq_cross direct park, replacing the staged two-batch park, whose batch-B gates ran on the cycle
+                // lanes pzero / x128 while batch A was parked there): the cycle is rotated down by sy once; each bit
+                // kb >= K goes from its in-place lane through c straight to cycle index kb - K and back after the
+                // payload, so no staging slots at any K; stage 6 reads every bit in place
+                let (q129s, rqs) = mk_cycle(b, &[pzero, ph, sx[1], sx[2]], cp.ht, Some(res_s));
+                let qlen = q129s.len();
+                let (sylo5, syhi5) = (cp.sy.0.max(1), cp.sy.1.min(L0P));
+                let pre5 = [sx[4], sx[5], sx[6]];
+                // the direct park's gate compares on [c0, sx4, sx5] (clean here: no slots in this stage), never on a
+                // cycle lane; a bit that would wrap onto Y stays in c (a counted failure)
+                let chain5 = [c0, sx[4], sx[5]];
+                assert!(!chain5.iter().any(|x| q129s.contains(x) || v.contains(x) || *x == ak || *x == c || *x == wf));
+                assert!(tree_inplace, "the direct park's in-place swaps must not use pre_c (it holds pzero)");
+                let gate5 = |b: &mut B, kk: usize, on: bool| {
+                    if on { b.play(&vg, false); }
+                    super::frogdrop_col::ge_cd(b, &v, (40 - kk) as isize, sx[0], &chain5, &dirty);
+                    b.x(sx[0]);
+                    if on { b.and_c(actl, sx[0], ak); } else { b.and_u(actl, sx[0], ak); }
+                    b.x(sx[0]);
+                    super::frogdrop_col::ge_cd(b, &v, (40 - kk) as isize, sx[0], &chain5, &dirty);
+                    if !on { b.play(&vg, true); }
+                };
+                let dpark = |b: &mut B, kb: usize, fwd: bool| {
+                    let idx = kb - kin;
+                    let wrap = cp.sy.1.min(128) + idx >= qlen;
+                    gate5(b, kb, true);
+                    if fwd { inplace(b, kb, &pre_c); }
+                    if wrap { wrap_flag(b, idx, qlen, false); }
+                    let ct: Vec<(QubitId, bool)> = if wrap { vec![(actl, false), (wf, true)] } else { vec![(actl, false)] };
+                    super::mid2::mc_swap(b, &ct, c, q129s[idx], &[], &dirty);
+                    if wrap { wrap_flag(b, idx, qlen, false); }
+                    if !fwd { inplace(b, kb, &pre_c); }
+                    gate5(b, kb, false);
+                };
+                b.x(ph);
+                b.play(&rqs, false);
+                for kb in kin..kmax { dpark(b, kb, true); }
+                for kb in 0..kmax.min(NP) {
+                    let ctl = |b: &mut B| {
+                        if kb < kin {
+                            inplace_by(b, kb, actl, &pre_c);
+                        } else {
+                            let idx = kb - kin;
+                            let wrap = cp.sy.1.min(128) + idx >= qlen;
+                            let mut ct = vec![(actl, false), (q129s[idx], false)];
+                            if wrap { wrap_flag(b, idx, qlen, false); ct.push((wf, true)); }
+                            mc_xor(b, &ct, c, &[], &dirty);
+                            if wrap { wrap_flag(b, idx, qlen, false); }
+                        }
+                    };
+                    ctl(b);
+                    let sh = ((usize::BITS - 1 - (kb + 1).leading_zeros()) as usize).min(4);
+                    let tt: Vec<QubitId> = (kb..NP).map(|pos| super::payload::wl(&pl.p, pos)).collect();
+                    trans_masked_q(b, &tt, &fd.ring[..NP - kb], kb, c, &fd.sy, sh, sylo5, syhi5, act, c0, &pre5,
+                                   &[], &pl.dirty);
+                    ctl(b);
+                }
+                for kb in (kin..kmax).rev() { dpark(b, kb, false); }
+                b.play(&rqs, true);
+                b.x(ph);
+            }
+        } else {
+            // c, q's top bit, then the sy decoder's prefixes
+            let l5: Vec<QubitId> = sx[2..].to_vec();
+            if zoff_on { b.play(&zshift, false); }
+            super::mid2::ht_div_inplace(b, fd, cp, actl, &ds, l5[0], l5[1], &l5[2..], &[], &[], pl, &dirty);
+            if zoff_on { b.play(&zshift, true); }
+        }
+        set_act(b);
+        sw_toggle(b);
+    }
+    // ---------------- HT: restoring division (q's bits to the headroom), X = r_{j+1}
+    if cp.ht && old5 {
+        let actl = sc.sw;
+        // dl columns: sw marks the switching shots only (& [sz <= sy], the in-place compare on x128)
+        let sw_toggle = |b: &mut B| {
+            if !cp.sw { return; }
+            if zoff_on { b.play(&zshift, false); }
+            let switch_pre: Vec<QubitId> = sx[1..].iter().copied().filter(|q| !sx[1..=5].contains(q)).collect();
+            super::frogdrop_col::ge_const_compact(b, &sc.sz, cp.l0 as isize + 1, sx[0], &switch_pre, &dirty);
+            if cp.dl {
+                let gt = super::arith::up_m(b, &fd.sy, &sc.sz, x128, true);
+                b.play(&gt, false);
+                mc_xor(b, &[(sx[0], true), (ph, true), (sc.sz[sc.sz.len() - 1], true)], sc.sw, &[], &dirty);
+                b.play(&gt, true);
+            } else {
+                mc_xor(b, &[(sx[0], true), (ph, true)], sc.sw, &[], &dirty);
+            }
+            super::frogdrop_col::ge_const_compact(b, &sc.sz, cp.l0 as isize + 1, sx[0], &switch_pre, &dirty);
+            if zoff_on { b.play(&zshift, true); }
+        };
+        let set_act = |b: &mut B| { if zoff_on && cp.dq { b.play(&zshift, false); } ht_act(b, fd, cp, sc, actl, &sx[..1], x128, &dirty); if zoff_on && cp.dq { b.play(&zshift, true); } };
+        sw_toggle(b);
+        set_act(b);
+        let syhi = cp.sy.1.min(L0P);
+        for kb in (0..kmax).rev() {
+            gate_on(b, kb, actl);
+            // X -= 2^kb Y; negative iff bit 257 - sz is set (X < 2^(257 - sz), 2^kb Y < 2^(257 - sz))
+            add(b, kb, ak, true);
+            decide(b, kb, false);
+            add(b, kb, rv, false);
+            decide(b, kb, true);
+            gate_off(b, kb, actl);
+        }
+        if let Some(pl) = pl {
+            // the payload transition reads the ring below its top (the headroom must be clean): q above Y, then
+            // Q down by sy puts bit kb on lane kb
+            let park5 = park_for(b, actl, &q129b, &rqb, precision24, kmax, 0);
+            let qlen = q129b.len();
+            let pre19 = if precision24 {
+                Some(preposition_qk(b, &q129b, &fd.sy, sx[1], k + 1, actl,
+                                     (cp.sy.0.max(1), cp.sy.1.min(128)), &dirty))
+            } else { None };
+            super::frogdrop_col::mark(b, 1501);
+            b.x(ph);
+            if let Some(p) = &pre19 { b.play(p, false); }
+            super::frogdrop_col::mark(b, 1502);
+            b.play(&park5, false);
+            super::frogdrop_col::mark(b, 1503);
+            #[cfg(test)] let d4b_start = b.ops.len();
+            b.play(&rqb, false);
+            for kb in 0..kmax.min(NP) {
+                let t: Vec<QubitId> = (kb..NP).map(|pos| super::payload::wl(&pl.p, pos)).collect();
+                // a wrapped index holds Y, not bit kb (left in the headroom): wf = [sy >= len - kb] masks it
+                let wrap = cp.sy.1.min(128) + kb >= qlen;
+                let mut base = vec![(q129b[kb], false), (actl, false)];
+                if wrap {
+                    wrap_flag(b, kb, qlen, false);
+                    base.push((wf, true));
+                }
+                super::payload::trans_one_guard(b, &t, &fd.ring[..NP - kb], kb, false, base,
+                                                Some((&fd.sy[4..], syhi >> 4)), sx[2], sx[3], &[], &pl.dirty,
+                                                (n - 16) as isize);
+                if wrap { wrap_flag(b, kb, qlen, false); }
+            }
+            b.play(&rqb, true);
+            #[cfg(test)] d4b_window(d4b_start, b.ops.len(), 1, actl);
+            b.play(&park5, false);
+            super::frogdrop_col::mark(b, 1504);
+            if let Some(p) = &pre19 { b.play(p, false); }
+            b.x(ph);
+            super::frogdrop_col::mark(b, 1505);
+        }
+        set_act(b);
+        sw_toggle(b);
+    }
+    if !stage(b) { return; } // 5
+    if cp.ht && chunk {
+        let set_act = |b: &mut B| { if zoff_on && cp.dq { b.play(&zshift, false); } ht_act(b, fd, cp, sc, act, &sx[..1], x128, &dirty); if zoff_on && cp.dq { b.play(&zshift, true); } };
+        set_act(b);
+        // D^-1 of C1 (X = r_{j+1} -> r_{j+1} + q_{>=QCH} Y), then X += C0 Y keeping C0. old5: q in the slots; in
+        // place (G_IP5): q at X-index sy + kb, C0 first moved to its slots (X < Y leaves those lanes alone)
+        if old5 {
+            let pre_abs = vec![sx[0], pzero];
+            for kk in qch..kmax {
+                fetch(b, kk, &[(act, false)]);
+                add(b, kk, c, false);
+                gate_x(b, kk, act, sx[0], true);
+                cmp_y(b, kk, false, &pre_abs);
+                gate_x(b, kk, act, sx[0], false);
+            }
+        } else {
+            for kb in 0..qch {
+                gate_x(b, kb, act, sx[0], true);
+                inplace(b, kb, &pre_c);
+                gate_x(b, kb, act, sx[0], false);
+                fetch(b, kb, &[(act, false)]);
+            }
+            // IP5-split: the bits >= K come from slots QCH + kk - K
+            let kin = kmax;
+            b.play(&vg, false);
+            for kk in qch..kin {
+                gate_v(b, kk, act, sx[0], true);
+                inplace(b, kk, &pre_c);
+                add(b, kk, c, false);
+                cmp_y(b, kk, false, &pre_c);
+                gate_v(b, kk, act, sx[0], false);
+            }
+            b.play(&vg, true);
+            for kk in kin..kmax {
+                fetch(b, qch + kk - kin, &[(act, false)]);
+                add(b, kk, c, false);
+                gate_x(b, kk, act, sx[0], true);
+                cmp_y(b, kk, false, &pre_c);
+                gate_x(b, kk, act, sx[0], false);
+            }
+        }
+        for kb in 0..qch {
+            fetch(b, kb, &[(act, false)]);
+            add(b, kb, c, false);
+            fetch(b, kb, &[(act, false)]);
+        }
+        // S1 erases C0 (X = r_{j-1} -> r_{j+1} + q_{>=QCH} Y); then the in-place division for the bits >= QCH and
+        // each bit back to its C1 slot while X regains it; S2 erases C1
+        for i in 0..nch {
+            let (lo, hi) = (bd[i], bd[i + 1]);
+            if i > 0 {
+                div_inplace(b, lo);
+                if hi == kmax {
+                    for kk in lo..kmax {
+                        gate_x(b, kk, act, sx[0], true);
+                        inplace(b, kk, &pre_c);
+                        add(b, kk, c, false);
+                        gate_x(b, kk, act, sx[0], false);
+                        fetch(b, kk - lo, &[(act, false)]);
+                    }
+                } else {
+                    // (lowq_cross) a middle chunk: to its slots, the bits >= hi multiplied back by D^-1 (X = r_{j+1} +
+                    // q_[hi, kk] Y < 2^(kk+1) Y: each erased by [X >= 2^kk Y]), then X += C_i Y keeping C_i
+                    for kk in lo..hi {
+                        gate_x(b, kk, act, sx[0], true);
+                        inplace(b, kk, &pre_c);
+                        gate_x(b, kk, act, sx[0], false);
+                        fetch(b, kk - lo, &[(act, false)]);
+                    }
+                    b.play(&vg, false);
+                    for kk in hi..kmax {
+                        gate_v(b, kk, act, sx[0], true);
+                        inplace(b, kk, &pre_c);
+                        add(b, kk, c, false);
+                        cmp_y(b, kk, false, &pre_c);
+                        gate_v(b, kk, act, sx[0], false);
+                    }
+                    b.play(&vg, true);
+                    for kk in lo..hi {
+                        fetch(b, kk - lo, &[(act, false)]);
+                        add(b, kk, c, false);
+                        fetch(b, kk - lo, &[(act, false)]);
+                    }
+                }
+            }
+            let pk = &parks[i];
+            b.x(ph);
+            b.play(&sy7_normal, false);
+            b.play(pk, false);
+            #[cfg(test)] let d4b_start = b.ops.len();
+            let f1 = b.tof;
+            super::frogdrop_col::mark(b, 3121);
+            b.play(&vform_pk, false);
+            super::frogdrop_col::mark(b, 3122);
+            super::f1_profile("midg.vform", f1, b.tof);
+            #[cfg(test)] d4b_window(d4b_start, b.ops.len(), if lo == 0 { 2 } else { 4 }, act);
+            b.play(pk, false);
+            b.play(&sy7_normal, false);
+            b.x(ph);
+            for kb in lo..hi {
+                gate_on(b, kb, act);
+                fetch(b, kb - lo, &[(ak, false)]);
+                b.cx(c, ak);
+                add(b, kb, ak, false);
+                b.cx(c, ak);
+                let r = rotz(b, &[k + 1]);
+                b.play(&r, false);
+                mc_xor(b, &[(ak, false), (ring[k + 1], true)], c, &[], &dirty);
+                b.play(&r, true);
+                add(b, kb, ak, true);
+                gate_off(b, kb, act);
+            }
+            let f1 = b.tof;
+            if ph_r { b.x(ph); }
+            b.play(&vform, true);
+            if ph_r { b.x(ph); }
+            super::f1_profile("midg.vform", f1, b.tof);
+        }
+        set_act(b);
+    }
+    if cp.ht && !chunk {
+        let set_act = |b: &mut B| { if zoff_on && cp.dq { b.play(&zshift, false); } ht_act(b, fd, cp, sc, act, &sx[..1], x128, &dirty); if zoff_on && cp.dq { b.play(&zshift, true); } };
+        set_act(b);
+        // X += qY (back to r_{j-1}), q's bits from their in-place lanes (X-index sy + kb, free while
+        // X < 2^kb Y) to the headroom
+        let (sylo, syhi) = (cp.sy.0.max(1), cp.sy.1.min(nq));
+        for kb in 0..kmax {
+            if old5 {
+                fetch(b, kb, &[(act, false)]);
+            } else {
+                let lane = |vv: usize| { let i = n as isize - 1 - vv as isize - kb as isize;
+                                         if i >= 0 { Some(ring[i as usize]) } else { None } };
+                super::mid2::dec_swap(b, &fd.sy, sylo, syhi, &lane, c, &[(act, false)], &sx[..VB], &[], &dirty);
+            }
+            add(b, kb, c, false);
+            fetch(b, kb, &[(act, false)]);
+        }
+        b.x(ph);
+        b.play(&sy7_normal, false);
+        b.play(&park, false);
+        #[cfg(test)] let d4b_start = b.ops.len();
+        let f1 = b.tof;
+        b.play(&vform_pk, false);
+        super::f1_profile("midg.vform", f1, b.tof);
+        #[cfg(test)] d4b_window(d4b_start, b.ops.len(), 2, act);
+        b.play(&park, false);
+        b.play(&sy7_normal, false);
+        b.x(ph);
+        for kb in 0..kmax {
+            gate_on(b, kb, act);
+            fetch(b, kb, &[(ak, false)]);
+            // trial X += 2^kb Y where ak & !c (X = r_{j+1} + (q_{>kb} + 2^kb) Y either way): c = 1 only where ak
+            b.cx(c, ak);
+            add(b, kb, ak, false);
+            b.cx(c, ak);
+            // c ^= ak & !over = q_kb: erased
+            let r = rotz(b, &[k + 1]);
+            b.play(&r, false);
+            mc_xor(b, &[(ak, false), (ring[k + 1], true)], c, &[], &dirty);
+            b.play(&r, true);
+            add(b, kb, ak, true);
+            gate_off(b, kb, act);
+        }
+        let f1 = b.tof;
+        if ph_r { b.x(ph); }
+        b.play(&vform, true);
+        if ph_r { b.x(ph); }
+        super::f1_profile("midg.vform", f1, b.tof);
+        set_act(b);
+    }
+    if !stage(b) { return; } // 6
+    b.play(&zshift, false);
+    let _ = stage(b); // 7
+}
