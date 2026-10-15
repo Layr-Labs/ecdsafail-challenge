@@ -11,7 +11,7 @@
 //! Payload P[i] = lambda * R[i] (mod p): the same four add-halve steps (the head's replay cells) and a
 //! controlled modular 2^-e. Division seed P = (y, 0); at park R = (+-1, +-1) and P = (+-lambda, +-lambda).
 //! Reference model and envelope: scratchpad walksim/lf_ref.py, lf_env.py.
-use super::builder::Builder;
+use super::builder::{Builder,Y42Checkpoint};
 use super::const_arith::{add_const, cadd_const_trunc, csub_const_trunc, sub_const};
 use super::heo::gidney_add;
 use super::modular::{f, go_fs, mod_addsub};
@@ -79,7 +79,7 @@ pub(crate) const Y42_SPEND_REV: &[(usize, usize)] = if Y42 { &[(0, 999)] } else 
 /// does nothing under YP8_VETO), and so is [`Y42_BOUND`]'s pass. Each stops the build on any change of the stream, so
 /// a gate list with other switch values than the kept ones is built and compared without them, against the base built
 /// without them.
-pub(crate) const Y42_UNBOUND: bool = false;
+pub(crate) const Y42_UNBOUND: bool = true;
 /// y42: the passes bound to the base's stream are replaced by one pass (y42_bound_pass.rs) with one table, bound to
 /// this tree's own stream with the switches above as kept: the same edits, carried to their new op indices (27,533 of
 /// the base's 27,537 edited ops; the other four lie at ops the tree's simplifiers write differently on this stream).
@@ -89,7 +89,7 @@ pub(crate) const Y42_BOUND: bool = Y42 && !Y42_UNBOUND;
 /// (leapfrog_data/y42_alloc.txt, dumped by a build with the pads held and [`Y42_TRACE`]; the state before the op is
 /// checked against the table's fingerprint), so every later op takes the base's wires and bits and the bound table
 /// stays valid. false: the allocator is put back as it was before the op.
-pub(crate) const Y42_ALLOC: bool = Y42;
+pub(crate) const Y42_ALLOC: bool = false;
 /// One row of leapfrog_data/y42_alloc.txt: fingerprint of the state before the op; after it: next bit, the length of
 /// the free-bit list that is unchanged, the free wires, the rest of the free bits.
 struct Y42Row {
@@ -118,22 +118,15 @@ fn y42_row(rev: bool, t: usize) -> Option<&'static Y42Row> {
 }
 /// y42: after a payload op. A tick that spent its wire: the allocator set as the base leaves it ([`Y42_ALLOC`]) or
 /// put back. A tick with its pads released, under [`Y42_TRACE`]: the line of y42_alloc.txt for this tick.
-fn y42_after(c: &mut Builder, rev: bool, t: usize, before: &(Vec<u32>, Vec<u32>, u32), spent: bool) {
+fn y42_after(c: &mut Builder, rev: bool, t: usize, checkpoint: &Y42Checkpoint, spent: bool) {
+    let before=&checkpoint.0;
     if spent {
-        let row = if Y42_ALLOC { y42_row(rev, t) } else { None };
-        // narrow (narrow.rs): a narrowed compare before the op leaves another allocator; the op's state is put back
-        let narrowed = !super::narrow::NARROW.is_empty() && row.is_some_and(|r| Builder::y42_alloc_hash(before) != r.before);
-        if narrowed {
-            eprintln!("NARROW_Y42 {} {t} put back", if rev { "R" } else { "F" });
-        }
-        if Y42_ALLOC && !narrowed {
+        if Y42_ALLOC {
             let row = y42_row(rev, t).unwrap_or_else(|| panic!("y42: no recorded allocator state for {} tick {t}", if rev { "reverse" } else { "forward" }));
             assert_eq!(Builder::y42_alloc_hash(before), row.before, "y42: the allocator before the payload op of {} tick {t} is not the recorded one", if rev { "reverse" } else { "forward" });
             c.y42_alloc_set(before, &row.q, row.keep, &row.bits, row.next_bit);
         } else {
-            let (q, b, n) = before.clone();
-            let keep = b.len();
-            c.y42_alloc_set(before, &q, keep, &[], n);
+            c.y42_dynamic_restore(checkpoint);
         }
     } else if Y42_TRACE {
         let now = c.y42_alloc_state();
@@ -342,8 +335,6 @@ pub(crate) fn install_recipe() {
         ("LF_REORDER_MUL", if C35_MUL76 { "76" } else { "77" }),
         // spookyfrog: N1 split-carry phase deferral, N2 tail batch with a terminal sign-copy loan, RT0 + T0 one boundary
         ("SL_N2", "2"),
-        ("SL_N2_MD", "none"),
-        ("LF_SQUARE_CAP", "1234"),
         ("SL_N2_DROP", "all"),
         // y33-c35: the batch's one-fold ticks drop two carries where the room is 38 (see [`C35`]); "1" is the code default
         ("SL_N2_DROPN", if C35_DROPN2 { "2" } else { "1" }),
@@ -354,7 +345,7 @@ pub(crate) fn install_recipe() {
         ("SL_T0ONE", "1"),
         // this entry's switches as recipe values
         ("FM_PARK_LEND", "1:2"),
-        ("FM_PARK_HOLD", "0"),
+        ("FM_PARK_HOLD", "1"),
         ("ROOM_FOLD_ONLY", "1"),
         ("YP8_VETO", "1"),
         ("YP8_VETO_PAD", "0"),
@@ -373,8 +364,8 @@ pub(crate) fn install_recipe() {
         ("LF_SIGNWIRE", "1"),
         ("LF_SEAMS", "1"),
         // peak cap, tuned together with LF_REORDER
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", if C35_CAP { "1234" } else { "1236" }),
-        ("HEO_PIN_PP_CHUNK_SHAPE", "64:0,38:0,25:-3,0:-5"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1536"),
+        ("HEO_PIN_PP_CHUNK_SHAPE", "64:0,38:0,25:-3,0:-4"),
         // the merged step's shared core has 13 ANDs (the rank bound) where it had 14; every fit, split and plan rule
         // counts the wire it no longer holds
         ("LF_CORE_FREED", "all"),
@@ -4167,7 +4158,7 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     let mut y42_pads: Vec<QubitId> = Vec::new();
     let mut y42_hold: Vec<(QubitId, QubitId)> = Vec::new();
     let mut y42_cut = 0usize;
-    let mut y42_alloc: Option<(Vec<u32>, Vec<u32>, u32)> = None;
+    let mut y42_alloc: Option<Y42Checkpoint> = None;
     if Y42_RAIL_DIV != 0 && y15f && Y42_FWD_NEXT.with(|x| x.get()) && tail_forced(t + 1) >= 1 {
         let (w1, n01) = (st[t + 1][0], st[t + 1][1]);
         let w2 = st.get(t + 2).map(|r| r[0]).unwrap_or(w1);
@@ -4191,7 +4182,7 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
             if y42_cut > 0 {
                 Y42_FWD_CUT.with(|x| x.set(Some((t, kl))));
                 // the allocator with the cut wire free, before the payload op (see [`y42_after`])
-                y42_alloc = Some(c.y42_alloc_state());
+                y42_alloc = Some(c.y42_dynamic_checkpoint());
                 if !y42_spend(t, false) {
                     y42_pads = c.alloc_qubits(y42_cut);
                 }
@@ -4307,7 +4298,7 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
         // above have run (they read a rail's top wire as a control). Un-grow them through the payload op.
         let (y42_tr, y42_br) = (tr.len(), br.len());
         let mut y42_pads: Vec<QubitId> = Vec::new();
-        let mut y42_alloc: Option<(Vec<u32>, Vec<u32>, u32)> = None;
+        let mut y42_alloc: Option<Y42Checkpoint> = None;
         if let (true, Some((_, a_br, a_tr))) = (Y42_RAIL_MUL, y42_end) {
             assert!(a_tr >= 1 && a_br >= 1, "y42: recorded rail lengths");
             for (reg, a) in [(&mut *tr, a_tr), (&mut *br, a_br)] {
@@ -4319,7 +4310,7 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
             }
             if tr.len() + br.len() < y42_tr + y42_br {
                 // the allocator with the un-grown wires free, before the payload op (see [`y42_after`])
-                y42_alloc = Some(c.y42_alloc_state());
+                y42_alloc = Some(c.y42_dynamic_checkpoint());
                 if !y42_spend(t, true) {
                     y42_pads = c.alloc_qubits(y42_tr + y42_br - tr.len() - br.len());
                 }
@@ -6226,13 +6217,24 @@ fn n2_pay_fwd_last(c: &mut Builder, letter: &[QubitId], p: &mut [Vec<QubitId>; 2
     pacc(c, if merged.is_some() { "n2.fwd_last_merged" } else { "n2.fwd_last_barrel" }, q0);
 }
 /// Terminal payload-only kernel, reverse: [`rev_tick_fast`]'s merged branch alone ([`merged_rev`] rotates up itself).
+// Reserve the capacity used by merged_split's exact overflow-erasure proof:
+// room >= 1 + m_fold_need(true) + two top bits makes s <= N-2.
 fn n2_pay_rev_last(c: &mut Builder, letter: &[QubitId], p: &mut [Vec<QubitId>; 2]) {
+    let active=c.active_qubits() as usize;
+    let cap=cells::cap().max(active + 1 + m_fold_need(true) + 2);
+    TERMINAL_UNSEEDED.with(|flag|{assert!(!flag.replace(true));});
+    super::pingpong::with_phase_cap(Some(cap), || n2_pay_rev_last_exact(c,letter,p));
+    TERMINAL_UNSEEDED.with(|flag|flag.set(false));
+}
+fn n2_pay_rev_last_exact(c: &mut Builder, letter: &[QubitId], p: &mut [Vec<QubitId>; 2]) {
     let t = rounds() - 1;
     assert_eq!(tail_forced(t), 0, "N2: the last tick has no forced steps");
     assert_eq!(letter.len(), 3, "N2: the last tick's letter is (s3, k1, k2)");
     let [w, ..] = steps()[t];
     let (ti, si) = (t % 2, 1 - t % 2);
     let (fold, proxy) = proxy_fold(w, true);
+    let split=merged_split(c,proxy,true,true).expect("terminal exact overflow route must fit derived cap");
+    eprintln!("TERMINAL_EXACT tick={t} active={} cap={} split={split} fold_need={}",c.active_qubits(),cells::cap(),m_fold_need(true));
     let (s3, k1, k2) = (letter[0], letter[1], letter[2]);
     let (pt, ps) = (p[ti].clone(), p[si].clone());
     let q0 = pmark(c);
@@ -7717,3 +7719,6 @@ pub(crate) fn rt0_pilot() {
         sim.stats.toffoli_gates as f64 / shots as f64
     );
 }
+
+thread_local! {static TERMINAL_UNSEEDED:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
+pub(crate) fn terminal_unseeded()->bool {TERMINAL_UNSEEDED.with(|flag|flag.get())}
