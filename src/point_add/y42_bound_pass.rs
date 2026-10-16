@@ -68,6 +68,7 @@ fn fingerprint(ops: &[Op]) -> u64 {
 }
 
 pub(super) fn run(ops: Vec<Op>) -> Vec<Op> {
+    if super::leapfrog::unbind() { return ops; }
     if !super::leapfrog::Y42_BOUND {
         return ops;
     }

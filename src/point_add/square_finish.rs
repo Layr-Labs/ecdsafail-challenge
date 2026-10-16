@@ -9,6 +9,8 @@ fn mk(r:[u64;6])->Op {let mut o=Op::empty();
 o.kind=match r[0]{0=>K::Neg,3=>K::BitInvert,4=>K::BitStore0,5=>K::BitStore1,6=>K::X,7=>K::Z,8=>K::CX,9=>K::CZ,10=>K::Swap,11=>K::R,12=>K::Hmr,13=>K::CCX,14=>K::CCZ,15=>K::PushCondition,16=>K::PopCondition,_=>panic!("operation table kind")};
 o.q_control2=QubitId(r[1]);o.q_control1=QubitId(r[2]);o.q_target=QubitId(r[3]);o.c_target=BitId(r[4]);o.c_condition=BitId(r[5]);o}
 pub(super) fn run(ops:Vec<Op>)->Vec<Op>{
+
+    if super::leapfrog::unbind() { return ops; }
 if !ENABLED {return ops;}
 assert_eq!(ops.len(),11453250,"operation table input length");
 use sha3::{Digest,Sha3_256};let mut h=Sha3_256::new();for o in &ops {h.update((o.kind as u32).to_le_bytes());h.update([0u8;4]);for v in [o.q_control2.0,o.q_control1.0,o.q_target.0,o.c_target.0,o.c_condition.0,o.r_target.0]{h.update(v.to_le_bytes());}}

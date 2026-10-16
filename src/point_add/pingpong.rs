@@ -4048,6 +4048,15 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
     super::leapfrog::y17_log(circ,||format!("chunked(r={round},n={},room={ladder},loans={loans},bridge={},bounds={:?})",addend.len(),super::bridge::budget(),bounds.iter().map(|&(a,b)|b-a).collect::<Vec<_>>()));
     let mut carry_in: Option<QubitId> = None;
     let mut previous: Option<(QubitId, usize, usize)> = None;
+    // E003: when a y15 carry-in arrives with a first chunk too short to hold its kept low carries (layouts at a room
+    // other than the tuned one), merge the first two chunks: one longer ripple, same sum. Never fires in the tuned build.
+    let mut bounds = bounds;
+    if let Some((low, _)) = Y15_CARRY_IN.with(|k| k.get()) {
+        if bounds.len() > 1 && bounds[0].0 == 0 && low + 2 >= bounds[0].1 {
+            let merged = (bounds[0].0, bounds[1].1);
+            bounds.splice(0..2, [merged]);
+        }
+    }
 
     for &(lo, hi) in &bounds {
         let room=walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
