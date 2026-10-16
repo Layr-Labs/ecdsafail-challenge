@@ -3831,8 +3831,23 @@ pub(super) fn ab_capr(round:usize,k:usize,phi:usize,floor:usize)->usize {
     k
 }
 
+/// E008: per-direction widening of the chunk-boundary compare. `E008_CHUNK_DIR` holds entries
+/// `lo-hi:d:delta` separated by ',' or '|', with d = f (divide), r (multiply) or a (both), keyed by round; the
+/// first match wins. Unset: 0, the same circuit byte for byte.
+fn chunk_compare_dir(round:usize,multiply:bool)->usize {
+    let dir=if multiply{"r"}else{"f"};
+    let d=env_raw("E008_CHUNK_DIR").and_then(|v|v.split(|c|c==','||c=='|').find_map(|it|{
+        let f:Vec<&str>=it.split(':').collect();
+        assert!(f.len()==3,"E008_CHUNK_DIR entry lo-hi:d:delta");
+        let (lo,hi)=f[0].split_once('-').expect("lo-hi");
+        let (lo,hi):(usize,usize)=(lo.parse().unwrap(),hi.parse().unwrap());
+        (round>=lo && round<=hi && (f[1]=="a"||f[1]==dir)).then(||f[2].parse::<isize>().unwrap())
+    })).unwrap_or(0);
+    chunk_compare(round).checked_add_signed(d).expect("E008_CHUNK_DIR keeps the comparison positive")
+}
+
 fn boundary_repair_spec(round:usize,multiply:bool,lo:usize,hi:usize)->(usize,bool) {
-    let mut compare=chunk_compare(round).min(hi-lo);
+    let mut compare=chunk_compare_dir(round,multiply).min(hi-lo);
     let pre_seeded=multiply && policy_width(round)>=38 && compare<hi-lo
         && matches!(a5_policy(),"mul-b-seed"|"mul-fb-seed");
     let seeded_here=env_flag("CMP_SEED_ALL") && !pre_seeded && compare+1<hi-lo;
@@ -4048,6 +4063,15 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
     super::leapfrog::y17_log(circ,||format!("chunked(r={round},n={},room={ladder},loans={loans},bridge={},bounds={:?})",addend.len(),super::bridge::budget(),bounds.iter().map(|&(a,b)|b-a).collect::<Vec<_>>()));
     let mut carry_in: Option<QubitId> = None;
     let mut previous: Option<(QubitId, usize, usize)> = None;
+    // E003: when a y15 carry-in arrives with a first chunk too short to hold its kept low carries (layouts at a room
+    // other than the tuned one), merge the first two chunks: one longer ripple, same sum. Never fires in the tuned build.
+    let mut bounds = bounds;
+    if let Some((low, _)) = Y15_CARRY_IN.with(|k| k.get()) {
+        if bounds.len() > 1 && bounds[0].0 == 0 && low + 2 >= bounds[0].1 {
+            let merged = (bounds[0].0, bounds[1].1);
+            bounds.splice(0..2, [merged]);
+        }
+    }
 
     for &(lo, hi) in &bounds {
         let room=walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
@@ -4066,7 +4090,7 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
         // Erase the previous chunk's carry as soon as it has been consumed.
         if let Some((carry, plo, phi)) = previous {
             let tie=tie_borrow();
-            let(compare,seeded)=if tie.is_some(){(chunk_compare(round).min(phi-plo),false)}else{boundary_repair_spec(round,multiply,plo,phi)};
+            let(compare,seeded)=if tie.is_some(){(chunk_compare_dir(round,multiply).min(phi-plo),false)}else{boundary_repair_spec(round,multiply,plo,phi)};
             if super::leapfrog::C35_TRACE{eprintln!("C35_CMP\t{}\t{}\t{}\t{}\t{}\t{}\t{}",round,multiply as u8,plo,phi,compare,seeded as u8,tie.is_some() as u8);}
             let borrow = if tie.is_some() {
                 // B3b fix: a whole leading chunk is compared EXACTLY with its true
