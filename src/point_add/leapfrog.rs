@@ -456,6 +456,27 @@ pub(crate) fn install_recipe() {
         ("LF_T6_SEEDFUSE", "1"),
         ("LF_MERGED_WIN", "54"),
         ("LF_YP8_LATE", "1:13,6:17,11:22,90:19,100:17,112:15,118:13,124:11"),
+        // E003/E004/E008/E009 low-Λ checkpoint: walk widths +6 bits, 4 more ticks, cap 1255, stream-bound post-passes off
+        ("LF_STEPS_PAD", "6"),
+        ("LF_EXTRA_TICKS", "4"),
+        ("LF_UNBIND", "1"),
+        ("LF_NO_TICK_LOANS", "1"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1255"),
+        ("LF_SQUARE_CAP", "1255"),
+        // E009: the head's fold window on forward ticks 126 on and reverse ticks 124 on, so the dropped-carry ladder
+        // fits there (the E003 window add stays elsewhere: no change in wrong outputs on 360,960 paired shots)
+        ("E009_WIN0", "126:124"),
+        // E008: chunk-boundary compares +2 bits (divide rounds 0-600, every multiply round), +1 on the late divide
+        // rounds where the cap binds. They were the main source of phase garbage; the freed Λ pays for the walk above.
+        ("E008_CHUNK_DIR", "0-600:f:2|601-999:f:1|0-999:r:2"),
+        // E003 payload-window buy-backs (override the values set earlier in this list / the Skywalk recipe)
+        ("LF_MERGED_WIN", "62"),
+        ("LF_MERGED_LATE_WIN", "62"),
+        ("LF_CELL_FOLD_MIN", "60"),
+        ("LF_CMP_FROM", "0"),
+        ("HEO_PIN_ERASE_COMPARE", "30"),
+        ("LF_Y15_WIN_ADD", "4"),
+        ("LF_Y15_GUARD", "0"),
     ] {
         std::env::set_var(k, v);
     }
@@ -1076,8 +1097,47 @@ fn steps() -> &'static Vec<[usize; 5]> {
                 let v: Vec<usize> = l.split_whitespace().map(|x| x.parse().unwrap()).collect();
                 [v[0], v[1], v[2], v[3], v[4]]
             })
-            .collect()
+            .collect::<Vec<_>>()
+            .pipe_extra_ticks()
     })
+}
+
+/// E003 `LF_EXTRA_TICKS=k` (unset = this table byte for byte): k more ticks, each a copy of the table's last row.
+/// E003 `LF_STEPS_PAD=m` (unset = byte for byte): then every row but the last m bits wider in each column, capped at
+/// that column's row-0 width. The last row keeps its width: it holds the parked rails (+-1), and the tail batch
+/// (SL_N2) relies on its 5-wire rails.
+trait ExtraTicks {
+    fn pipe_extra_ticks(self) -> Self;
+}
+impl ExtraTicks for Vec<[usize; 5]> {
+    fn pipe_extra_ticks(mut self) -> Self {
+        let k: usize = std::env::var("LF_EXTRA_TICKS").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        let last = *self.last().unwrap();
+        self.extend(std::iter::repeat_n(last, k));
+        let m = steps_pad();
+        let n = self.len();
+        // no move makes a rail wider than both its inputs (|(T +- B)/2| <= max(|T|, |B|)), so no column needs more than
+        // its row-0 (seed) width: early full-width rows stay as they are
+        let cap = self[0];
+        for row in &mut self[..n - 1] {
+            for (j, x) in row.iter_mut().enumerate() {
+                *x = (*x + m).min(cap[j].max(*x));
+            }
+        }
+        self
+    }
+}
+
+/// E003: extra bits added to every column of the per-tick width table (`LF_STEPS_PAD`, default 0).
+fn steps_pad() -> usize {
+    std::env::var("LF_STEPS_PAD").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+}
+
+/// E003: skip the post-passes keyed to the exact tuned op stream (`y42_bound_pass`, `linear_restore`, `square_finish`)
+/// and the empirical census cuts (`census_anchored`: Toffolis removed because their control pattern never occurred
+/// on a random-input census, i.e. not proven exact). `LF_UNBIND=1`; unset = unchanged.
+pub(crate) fn unbind() -> bool {
+    std::env::var("LF_UNBIND").is_ok_and(|v| v == "1")
 }
 
 /// Forced step `t <- (t + (-1)^sign b)/2`, sign = t1 ^ b1: bit 0 sums to 0 (carry 1), bit 1 sums to 1 with carry

@@ -19,16 +19,18 @@
 //! erase of m0 and m1) and y15-room (copies of W, measured clear, two lean wires, fused ticks); see Y15_KEEP_ROOM for
 //! how a reverse tick-pass chooses between the kept carries and the copies, and for the builder counts.
 use super::*;
-fn reverse_loan_selected(rev:bool,t:usize)->bool {rev && (124..=126).contains(&t) && CONSUMER_LOANS}
+fn reverse_loan_selected(rev:bool,t:usize)->bool {rev && (124..=126).contains(&t) && CONSUMER_LOANS_ON()}
 
 
 // Measure and regenerate the carry while the payload ladder uses its wire.
 thread_local! { static LOAN_ACTIVE: std::cell::Cell<bool> = const {std::cell::Cell::new(false)}; }
-fn carry_loan_selected(rev:bool,t:usize)->bool {CONSUMER_LOANS && !rev && (128..137).contains(&t)}
+fn carry_loan_selected(rev:bool,t:usize)->bool {CONSUMER_LOANS_ON() && !rev && (128..137).contains(&t)}
 fn carry_loan_on()->bool {LOAN_ACTIVE.with(|x|x.get())}
 
 // Consumer carry loans are enabled for the selected payload ticks.
-const CONSUMER_LOANS: bool = true;
+// E003 `LF_NO_TICK_LOANS=1` (unset = on, byte for byte): off, for layouts other than the 138-tick / cap-1234 one
+#[allow(non_snake_case)]
+fn CONSUMER_LOANS_ON() -> bool { !std::env::var("LF_NO_TICK_LOANS").is_ok_and(|v| v == "1") }
 thread_local! { static PAYLOAD_AT: std::cell::Cell<Option<(bool,usize)>> = const { std::cell::Cell::new(None) }; }
 
 
@@ -47,14 +49,29 @@ pub(super) const Y15_FWD_TO: usize = 999;
 pub(super) const Y15_REV_FROM: usize = 1;
 pub(super) const Y15_REV_TO: usize = 999;
 /// Fold window (bits [0, MW) of the payload).
-const Y15_WIN: usize = 56;
+const Y15_WIN_BASE: usize = 56;
+/// E003 `LF_Y15_WIN_ADD=k` (unset = 0, byte for byte): k more bits on every fold window of the tick.
+fn y15_win_add() -> usize { std::env::var("LF_Y15_WIN_ADD").ok().and_then(|v| v.parse().ok()).unwrap_or(0) }
+/// E009 `E009_WIN0=F:R` (unset: no change, byte for byte): forward ticks from F and reverse ticks from R on use
+/// the head's fold window (no `LF_Y15_WIN_ADD`), so the dropped-carry ladder plans apply where room is tightest.
+fn y15_win_add_at(t: usize, rev: bool) -> usize {
+    let late = std::env::var("E009_WIN0").ok().map(|v| {
+        let (f, r) = v.split_once(':').expect("E009_WIN0=F:R");
+        if rev { t >= r.trim().parse::<usize>().unwrap() } else { t >= f.trim().parse::<usize>().unwrap() }
+    });
+    if late == Some(true) { 0 } else { y15_win_add() }
+}
+#[allow(non_snake_case)]
+fn Y15_WIN() -> usize { Y15_WIN_BASE + PAYLOAD_AT.with(|x| x.get()).map_or_else(y15_win_add, |(rev, t)| y15_win_add_at(t, rev)) }
 // Use the larger forward fold window on the initial payload ticks.
 const PAYLOAD_FOLD_PREFIX: bool = true;
 fn fold_window(t: usize, rev: bool) -> usize {
-    if PAYLOAD_FOLD_PREFIX && !rev && t <= 99 { 57 } else { Y15_WIN }
+    if PAYLOAD_FOLD_PREFIX && !rev && t <= 99 { 57 + y15_win_add_at(t, rev) } else { Y15_WIN_BASE + y15_win_add_at(t, rev) }
 }
 /// Bits below the compare window of m0 on which add 1's carries are built again.
-const Y15_GUARD: usize = 0;
+/// E003 `LF_Y15_GUARD=g` overrides (unset = 0, byte for byte).
+#[allow(non_snake_case)]
+fn Y15_GUARD() -> usize { std::env::var("LF_Y15_GUARD").ok().and_then(|v| v.parse().ok()).unwrap_or(0) }
 /// Research knob: bits added to every chunk-boundary compare of the tick (the cells' own shift is kept). 0 = as the cells.
 const Y15_CMP_EXTRA: isize = 0;
 /// y15-core (9 October 2026): three switches, all on. Builder counts at peak 1236, each on top of the one before:
@@ -617,7 +634,7 @@ fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usi
     let need = fixed + min_budget - drop - 2 * usize::from(Y15_LEAN45);
     let (short_f, short_m) = (need.saturating_sub(room_fold), need_m.saturating_sub(room_m));
     // y18-next: the guard carries of m0's rebuilt chain come first for its erase (see Y18_GSHED)
-    let gmax = if Y18_GSHED { Y15_GUARD.saturating_sub(1) } else { 0 };
+    let gmax = if Y18_GSHED { Y15_GUARD().saturating_sub(1) } else { 0 };
     let block = short_f.max(short_m.saturating_sub(gmax)).max(Y16_SHED_MIN).min(pool);
     // y18-next: past the three top wires the fold sheds wires of its own (see Y18_FIN)
     let fmax = if Y18_FIN { fmax } else { 0 };
@@ -2389,7 +2406,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     let (k0, seed0) = cells::y15_split_spec(proxy, rev, N - 1 + dcut);
     let (kk1, seed1) = cells::y15_split_spec(proxy, rev, N - 2 + dcut);
     // (swap01: it is the first add's carry m1 whose erase builds a chain again, on its window and the guard)
-    let kwin = if swap01 { (kk1 + Y15_GUARD).max(k0) } else { (k0 + Y15_GUARD).max(kk1) };
+    let kwin = if swap01 { (kk1 + Y15_GUARD()).max(k0) } else { (k0 + Y15_GUARD()).max(kk1) };
     // y20: the closed ripple leaves only the steps into the top wires open (and bit 255's without the direct cuts)
     let sp2 = if close { N - 3 + dcut } else { N - 3 + dcut - kwin };
     let (m2, kept2) = low_keep_add(c, &b[..sp2], &tg[2..2 + sp2], proxy, rev, keep[2]);
@@ -2475,7 +2492,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
             fixed,
             room_now,
             cells::cap().saturating_sub(a_start as usize + live_m),
-            if swap01 { kk1 + Y15_GUARD + kk1 - 1 } else { k0 + Y15_GUARD + k0 - 1 + if close { kwin + Y20_G2 } else { 0 } },
+            if swap01 { kk1 + Y15_GUARD() + kk1 - 1 } else { k0 + Y15_GUARD() + k0 - 1 + if close { kwin + Y20_G2 } else { 0 } },
             (N - 4).saturating_sub(sp2),
             fmax,
             tops_max,
@@ -2530,7 +2547,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     }
     assert!(!swap01 || (shed, tops, c3m, gsh, fin) == (0, 0, 0, 0, 0), "y17: reverse tick 0 has no shed");
     let fin = if swap01 || !Y15_CORE_V2 { 0 } else { fin.max(Y18_FIN_MIN.min(fmax)) };
-    let gsh = if swap01 { 0 } else { gsh.max(Y18_GSHED_MIN.min(Y15_GUARD.saturating_sub(1))) };
+    let gsh = if swap01 { 0 } else { gsh.max(Y18_GSHED_MIN.min(Y15_GUARD().saturating_sub(1))) };
     let (sh_lo, sh_hi) = (N - 3 - shed, N - 3);
     // y21, deep shed: reverse, cq(N - 3) first (the top carries are gone); forward, the fold sheds all of them itself
     if deep && rev {
@@ -2573,9 +2590,9 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
                 let mut ph = T0Phase::new(c, k1, k2, N, bits);
                 // X's bits: written below add 2's open ripple, a form of register, source and carry in it
                 let xf: Vec<Lin> = (0..N).map(|i| if i < sp2 + 2 { l(tg[i]) } else { Lin::of(&[tg[i], b[i - 2], cc[i - 2 - sp2]]) }).collect();
-                let (w, mut recs) = fold_fwd_forms(c, &xf[..Y15_WIN], &[l(x256), l(x257), l(x258)], s, k1, k2);
+                let (w, mut recs) = fold_fwd_forms(c, &xf[..Y15_WIN()], &[l(x256), l(x257), l(x258)], s, k1, k2);
                 for i in 0..N {
-                    ph.z(c, (i + N - 3) % N, if i < Y15_WIN { &w[i] } else { &xf[i] });
+                    ph.z(c, (i + N - 3) % N, if i < Y15_WIN() { &w[i] } else { &xf[i] });
                 }
                 pop_chain(c, &mut recs);
                 ph.finish(c);
@@ -2702,7 +2719,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         let split1 = N - 2;
         let lo1 = split1 - kk1;
         let jmin = lo1 + 1;
-        let i0 = jmin - Y15_GUARD;
+        let i0 = jmin - Y15_GUARD();
         assert!(sp2 + 2 <= i0 && i0 >= 1);
         let bit_o = c.alloc_bit();
         c.hmr(m1, bit_o);
@@ -2774,10 +2791,10 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         c.free_bit(bit_o);
     } else if top1 {
         // y21, top cut: x257 (on m1) is measured first; x256 (on m0) holds X1[256]
-        assert!(cut && !close && gsh == 0 && Y15_GUARD == 0);
+        assert!(cut && !close && gsh == 0 && Y15_GUARD() == 0);
         let split = N;
         let lo = split - k0;
-        let i0 = lo - 1 - Y15_GUARD;
+        let i0 = lo - 1 - Y15_GUARD();
         assert!(sp2 + 2 <= i0 + 1 && i0 >= 1);
         let s1f = |i: usize| Lin::of(&[b[i], s[2], s[1]]);
         lin_xor_into(c, &s1f(N - 1), m0); // m0 = g0 ^ h1
@@ -2866,7 +2883,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         // m1's own chunk compare runs only when m0's branch did not (a quarter of the shots, not a half).
         let split = N - 1 + dcut;
         let lo = split - k0;
-        let i0 = lo - 1 - Y15_GUARD;
+        let i0 = lo - 1 - Y15_GUARD();
         assert!((close || sp2 + 2 <= i0 + 1) && i0 >= 1);
         let s1f = |i: usize| Lin::of(&[b[i], s[2], s[1]]);
         // y20, closed ripple: add 2's last sum bit (without the direct cuts) is written now, and m2 is measured with
@@ -2957,7 +2974,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         }
         // y18-next: the guard carries rr[0..gsh) (C1[i0 + 1 ..= i0 + gsh]) are idle through the compare and no window
         // form reads them (those read r[Y15_GUARD..]); their own forms read tg below the window, which is as it was
-        assert!(gsh == 0 || (gsh < Y15_GUARD && gsh < rr.len()));
+        assert!(gsh == 0 || (gsh < Y15_GUARD() && gsh < rr.len()));
         for m in (0..gsh).rev() {
             let (q, fa, fb, ci) = rr[m].clone();
             lin_xor_into(c, &ci, q);
@@ -3071,7 +3088,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
         {
             let split = N - 1;
             let lo = split - k0;
-            let i0 = lo - 1 - Y15_GUARD;
+            let i0 = lo - 1 - Y15_GUARD();
             assert!(sp2 + 2 <= i0 + 1 && i0 >= 1);
             let s1f = |i: usize| Lin::of(&[b[i], s[2], s[1]]);
             let bit = c.alloc_bit();
@@ -3852,7 +3869,7 @@ fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: 
         rec: (0..=CS_TOP).map(|_| [None, None, None]).collect(),
         live: vec![false; CS_TOP + 1],
     };
-    assert!((0..N).all(|i| i < wf || !fc.bit(i)) && wf < Y15_WIN);
+    assert!((0..N).all(|i| i < wf || !fc.bit(i)) && wf < Y15_WIN());
     // the doubling's window: g[i] = the carry into bit i of (2 H) + ov f, ov = H's top bit; bit 0 of 2 H is 0
     let mut grec: Vec<Option<MRec>> = vec![None; wf];
     for i in 0..wf - 1 {
@@ -3863,21 +3880,21 @@ fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: 
     }
     let e_g = c.expected_total();
     // the low chunk: every position the fold's window reads
-    const B0: usize = Y15_WIN - 1;
-    for p in 1..=B0 {
+    let b0: usize = Y15_WIN() - 1;
+    for p in 1..=b0 {
         st.build(c, p);
     }
     // the chunk plan: the top chunk (open through the fold) as long as the room allows, the rest in the fewest
     // middle chunks
-    let fold_wires = 31 + (Y15_WIN - 7);
+    let fold_wires = 31 + (Y15_WIN() - 7);
     let room = cells::cap().saturating_sub(c.active_qubits() as usize);
     let (mut nb, mut top_len) = (0usize, 0usize);
     let mut mids: Vec<usize> = Vec::new();
     loop {
         // the top chunk's positions hold 3 wires each, less the three that are identically 0
         let avail = room.checked_sub(3 * nb + fold_wires).unwrap_or_else(|| panic!("y26: no room for the fold: {room}"));
-        top_len = ((avail + 3) / 3).min(CS_TOP - B0);
-        let rest = CS_TOP - B0 - top_len;
+        top_len = ((avail + 3) / 3).min(CS_TOP - b0);
+        let rest = CS_TOP - b0 - top_len;
         // middle chunk j is built over j boundaries
         let caps: Vec<usize> = (0..nb).map(|j| (room - 3 * j) / 3).collect();
         if caps.iter().sum::<usize>() >= rest && (rest == 0) == (nb == 0) {
@@ -3895,7 +3912,7 @@ fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: 
         nb += 1;
         assert!(nb < 40, "y26: no chunk plan at room {room}");
     }
-    let mut edges = vec![B0];
+    let mut edges = vec![b0];
     for &w in &mids {
         edges.push(edges.last().unwrap() + w);
     }
@@ -3907,7 +3924,7 @@ fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: 
             st.build(c, p);
         }
         a_mid = a_mid.max(c.active_qubits());
-        for i in (lo + 1..=hi).filter(|&i| i >= Y15_WIN && i < N) {
+        for i in (lo + 1..=hi).filter(|&i| i >= Y15_WIN() && i < N) {
             // Y26_FAULT (a control of the test, never a build): two positions of the layer swapped
             let at = if (Y26_FAULT || t0one_fault()) && (i == 100 || i == 101) { i ^ 1 } else { i };
             ph.z(c, vpos(at), &st.xf(i));
@@ -3920,13 +3937,13 @@ fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: 
     for p in lo_top + 1..=CS_TOP {
         st.build(c, p);
     }
-    for i in (lo_top + 1..N).filter(|&i| i >= Y15_WIN) {
+    for i in (lo_top + 1..N).filter(|&i| i >= Y15_WIN()) {
         let at = if t0one_fault() && (i == 100 || i == 101) { i ^ 1 } else { i };
         ph.z(c, vpos(at), &st.xf(i));
     }
     let e_adds = c.expected_total();
     // the fold on forms
-    let x: Vec<Lin> = (0..Y15_WIN).map(|i| st.xf(i)).collect();
+    let x: Vec<Lin> = (0..Y15_WIN()).map(|i| st.xf(i)).collect();
     let e = [st.xf(N), st.xf(N + 1), st.xf(N + 2)];
     let (w, mut recs) = fold_fwd_forms(c, &x, &e, s, k1, k2);
     let a_fold = c.active_qubits();
@@ -3943,7 +3960,7 @@ fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: 
         st.close_boundary(c, edges[j - 1], edges[j]);
     }
     let e_bound = c.expected_total();
-    for p in (1..=B0).rev() {
+    for p in (1..=b0).rev() {
         st.erase(c, p);
     }
     if Y26_FUSE_DBL {

@@ -13,6 +13,8 @@ fn hash(ops: &[Op]) -> String {
     format!("{:x}",h.finalize())
 }
 pub(super) fn run(ops: Vec<Op>) -> Vec<Op> {
+
+    if super::leapfrog::unbind() { return ops; }
     let mut rows=super::census_cut::rows();rows.sort_by_key(|r|r.0);
     let a:Vec<Vec<&str>>=ANCHORS.lines().map(|l|l.split_whitespace().collect()).collect();
     assert_eq!(a.len(),rows.len(),"census one anchor per inherited row");
