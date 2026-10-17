@@ -19,18 +19,6 @@
 //! erase of m0 and m1) and y15-room (copies of W, measured clear, two lean wires, fused ticks); see Y15_KEEP_ROOM for
 //! how a reverse tick-pass chooses between the kept carries and the copies, and for the builder counts.
 use super::*;
-fn reverse_loan_selected(rev:bool,t:usize)->bool {rev && (124..=126).contains(&t) && CONSUMER_LOANS}
-
-
-// Measure and regenerate the carry while the payload ladder uses its wire.
-thread_local! { static LOAN_ACTIVE: std::cell::Cell<bool> = const {std::cell::Cell::new(false)}; }
-fn carry_loan_selected(rev:bool,t:usize)->bool {CONSUMER_LOANS && !rev && (128..137).contains(&t)}
-fn carry_loan_on()->bool {LOAN_ACTIVE.with(|x|x.get())}
-
-// Consumer carry loans are enabled for the selected payload ticks.
-const CONSUMER_LOANS: bool = true;
-thread_local! { static PAYLOAD_AT: std::cell::Cell<Option<(bool,usize)>> = const { std::cell::Cell::new(None) }; }
-
 
 /// Ticks [FROM, TO) of the payload-only forward passes run the one-fold tick. FROM = TO = 0: off.
 /// Builder counts on candidate C1 (base 786219.5 x 1236), 9 October 2026:
@@ -48,11 +36,6 @@ pub(super) const Y15_REV_FROM: usize = 1;
 pub(super) const Y15_REV_TO: usize = 999;
 /// Fold window (bits [0, MW) of the payload).
 const Y15_WIN: usize = 56;
-// Use the larger forward fold window on the initial payload ticks.
-const PAYLOAD_FOLD_PREFIX: bool = true;
-fn fold_window(t: usize, rev: bool) -> usize {
-    if PAYLOAD_FOLD_PREFIX && !rev && t <= 99 { 57 } else { Y15_WIN }
-}
 /// Bits below the compare window of m0 on which add 1's carries are built again.
 const Y15_GUARD: usize = 0;
 /// Research knob: bits added to every chunk-boundary compare of the tick (the cells' own shift is kept). 0 = as the cells.
@@ -78,7 +61,7 @@ const Y16_CORE: bool = true;
 /// `sum - S'` is the carry into that bit of `pre + S'`), so those ANDs are not built twice. [5, 4, 3] = all twelve;
 /// [0, 0, 0] = off. The adds' chunk plans and boundary compares do not move (equal split while the room is 86 or
 /// more for adds 0 and 1, 77 or more for add 2).
-const Y15_KEEP_LOW: [usize; 3] = [5, 3, 3];
+const Y15_KEEP_LOW: [usize; 3] = [5, 4, 3];
 /// y15-core: erase the held carries m0 and m1 together. m0's fix already builds add 1's carries again on its window;
 /// one step more gives m1's own value, so m1's chunk compare runs on a quarter of the shots and not a half. Same
 /// outputs; m1's phase fix reads a 23-bit rebuilt chain in place of its 19-bit window on the shots where m0's branch
@@ -455,7 +438,7 @@ const Y28_PLAN8: ([usize; 10], [usize; 2]) = ([7, 7, 7, 6, 6, 5, 4, 3, 2, 3], [0
 /// expected=776909.8 (17814295); only y15-room's on expected=778076.0 (32616b2f).
 /// y18-next: with Y18_LATE_TOPS add 1 sees one wire more, so the kept form builds at room 96 (tick 77, 5.4 cheaper
 /// than gate wires there); 92 to 95 do not build (add 1's own four kept carries count against its first chunk).
-const Y15_KEEP_ROOM: usize = 95;
+const Y15_KEEP_ROOM: usize = 96;
 
 /// y15-room: fused ticks [FROM, TO) (above the boundary, rails and payload in one pass) whose three payload ops run
 /// as one one-fold tick at the merged op's place. FROM = TO = 0: off. FROM = 0 follows the boundary. As built the
@@ -611,7 +594,7 @@ fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usi
         return (0, 0, 0, 0, 0);
     }
     // the ladder's least budget on bits [6, MW): 10 at window 57 (as [`fold_plan`] finds it)
-    let nbits = fold_window(at.1, at.0) - 6;
+    let nbits = Y15_WIN - 6;
     let min_budget = (1..=nbits).find(|&b| merged_plan(nbits - 1, b).is_some() || merged_plan(nbits, b).is_some()).expect("y16: a ladder budget");
     // y28: the ladder with `drop` kept carries dropped early runs on that many wires fewer
     let need = fixed + min_budget - drop - 2 * usize::from(Y15_LEAN45);
@@ -1190,7 +1173,7 @@ struct TtLate {
 }
 impl TtLate {
     fn build(&self, c: &mut Builder) {
-        if !carry_loan_on() {lin_and_into(c, self.q, &l(self.k1), &l(self.k2));}
+        lin_and_into(c, self.q, &l(self.k1), &l(self.k2));
         c.bit_store1(self.need);
     }
 }
@@ -1717,7 +1700,6 @@ fn fold_undo_recs_m(c: &mut Builder, mut recs: Vec<Rec>, acc: &[QubitId], a4: &L
                 c.release_clean(c6);
                 c.push_condition(m);
                 lin_and_into(c, c4, &l(acc[3]), &l(c3));
-                if carry_loan_on() {c.cx(c3,c4);}
                 // c5 = MAJ(X[4], a4, c4) with X[4] ^ c4 = acc[4] ^ a4 (acc[4] holds the sum)
                 lin_and_into(c, c5, &l(acc[4]).x(a4), &a4.x(&l(c4)));
                 c.cx(c4, c5);
@@ -1754,12 +1736,11 @@ fn fold_undo_low_c(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], cw: [Qubit
     if let Some(m) = c4m {
         c.push_condition(m);
     }
-    if carry_loan_on() {c.cx(c3,c4);}
     lin_and_erase(c, c4, &l(acc[3]), &l(c3));
     if c4m.is_some() {
         c.pop_condition();
     }
-    if !carry_loan_on() {c.cx(c3, acc[3]);}
+    c.cx(c3, acc[3]);
     maj_wire_erase(c, c3, &l(acc[2]), &l(e[2]), &l(c2));
     c.cx(e[2], acc[2]);
     c.cx(c2, acc[2]);
@@ -1776,9 +1757,6 @@ fn fold_undo_low_c(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], cw: [Qubit
 /// part by one either way, 1 for its sign. 32 fixed wires (6 low carries, 4 gate wires, 22 core ANDs).
 #[allow(clippy::too_many_arguments)]
 fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3], k1: QubitId, k2: QubitId, fin: usize, mut esh: Option<&mut ESh>, ttm: bool, drop: usize) -> Vec<usize> {
-    let loan=PAYLOAD_AT.with(|x|x.get().is_some_and(|(rev,t)|carry_loan_selected(rev,t)));
-    LOAN_ACTIVE.with(|x|x.set(loan));
-
     let mw = acc.len();
     let c1 = lin_and(c, &l(acc[0]), &l(e[0]));
     let c2 = maj_wire(c, &l(acc[1]), &l(e[1]), &l(c1));
@@ -1828,7 +1806,7 @@ fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     k.push(t.clone());
     let k7 = r_and(c, &mut recs, t, fc3);
     k.push(k7);
-    let mut add = if Y16_CORE { addend_prog(c, &mut recs, &k, &Y16_FWD_GATES, &Y16_FWD_OUT, mw) } else { addend_from_k(c, &mut recs, &k, mw) };
+    let add = if Y16_CORE { addend_prog(c, &mut recs, &k, &Y16_FWD_GATES, &Y16_FWD_OUT, mw) } else { addend_from_k(c, &mut recs, &k, mw) };
     if room_trace() {
         eprintln!("Y18_IDLE fwd recs={} idle={:?}", recs.len(), y18_idle(&recs, &add));
     }
@@ -1836,28 +1814,12 @@ fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     // and then it comes back only under the measured bits of y5 and y3
     let tt_q = tt.w[0];
     let (y5_q, y3_q) = (y5.w[0], y3.w[0]);
-    if loan {
-        // Write the low bit3 sum and change y3's basis. All core values
-        // were formed already. Every field loses its direct c3 read.
-        c.cx(c3,acc[3]);c.cx(c3,y3_q);
-        for f in add.iter_mut() {
-            if f.w.contains(&y3_q) {*f=f.x(&l(c3));}
-            assert!(!f.w.contains(&c3),"C3 field still reads measured carry");
-        }
-        let m=c.alloc_bit();c.hmr(c3,m);c.release_clean(c3);
-        c.push_condition(m);
-        lin_cz(c,&Lin::k(true),&l(y3_q));
-        let loan_gate=Lin::of(&[k1,k2,tt_q]);
-        lin_cz(c,&loan_gate,&l(acc[3]));
-        c.pop_condition();c.free_bit(m);
-    }
     if fin >= 3 || ttm {
         lin_and_erase(c, tt_q, &l(k1), &l(k2));
     }
     let (plan, lean45, drops) = fold_plan_d(c, mw, "forward", drop);
     // y28 (s2-2): sums 4 and 5 are written here and the two carries come back only under c6's measured bit
     let lean_m = lean45 && Y28_LEAN_FWD;
-    assert!(!loan || !lean45 || lean_m,"C3 supports the shipped deferred lean form");
     if lean45 {
         if lean_m {
             lin_xor_into(c, &a5, acc[5]);
@@ -1868,8 +1830,7 @@ fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
             lin_xor_into(c, &a4, acc[4]);
             c.cx(c4, acc[4]);
         }
-        if loan {lin_and_erase(c,c4,&l(acc[3]).x(&Lin::k(true)),&l(y3_q));}
-        else {lin_and_erase(c, c4, &l(acc[3]), &l(c3));}
+        lin_and_erase(c, c4, &l(acc[3]), &l(c3));
     }
     ladder_d(c, acc, &add, 6, c6, &plan, &drops);
     let (c4, c5) = if lean_m {
@@ -1881,33 +1842,16 @@ fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     } else {
         (c4, c5)
     };
-    let c3 = if loan {
-        let reserved=if fin>=3 || ttm {c.n2_take(tt_q)} else {false};
-        let q=c.alloc_qubit();assert!(q!=tt_q,"C3/tt version alias");
-        if reserved {c.release_clean(tt_q);}
-        y18_subst(&mut recs,c3,q);q
-    } else {c3};
-    let mut current_tt=tt_q;
     let mut late: Option<TtUndo> = None;
     if ttm {
-        let q = if loan {lin_and(c,&l(k1),&l(k2))} else {c.alloc_qubit()};
-        current_tt=q;
+        let q = c.alloc_qubit();
         let need = c.alloc_bit();
-        if loan {c.bit_store1(need);} else {c.bit_store0(need);}
+        c.bit_store0(need);
         y18_subst(&mut recs, tt_q, q);
         late = Some(TtUndo { t: TtLate { k1, k2, q, need }, y5: y5_q, y3: y3_q, n5: None });
     } else if fin >= 3 {
         let q = lin_and(c, &l(k1), &l(k2));
-        current_tt=q;
         y18_subst(&mut recs, tt_q, q);
-    }
-    if loan {
-        // c3 = y3' XOR OR(k1,k2)*bit3'; one AND, then invert y3's basis.
-        let gate=Lin::of(&[k1,k2,current_tt]);
-        lin_and_into(c,c3,&gate,&l(acc[3]));c.cx(y3_q,c3);c.cx(c3,y3_q);
-        for r in recs.iter_mut() {
-            if let Rec::And(q,_,b)=r {if *q==y3_q {*b=l(acc[3]);}}
-        }
     }
     let c4m = if lean_m {
         Some(fold_undo_recs_m(c, recs, acc, &a4, &a5, c3, [c4, c5, c6], &mut late))
@@ -1929,7 +1873,6 @@ fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     if let Some(m) = c4m {
         c.free_bit(m);
     }
-    LOAN_ACTIVE.with(|x|x.set(false));
     plan
 }
 
@@ -1988,9 +1931,6 @@ fn low_keep_add(c: &mut Builder, b: &[QubitId], acc: &[QubitId], proxy: usize, r
 #[allow(clippy::too_many_arguments)]
 fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3], k1: QubitId, k2: QubitId, src: &[QubitId], kept: &[Vec<QubitId>; 3], wc: &[QubitId], lean: bool, order: [usize; 3], yg: &[QubitId], fin: usize, drop: usize) -> Vec<usize> {
     let mw = acc.len();
-    let loan_r=PAYLOAD_AT.with(|x|x.get().is_some_and(|(r,t)|reverse_loan_selected(r,t)));
-    let mut loan_m4:Option<crate::circuit::BitId>=None;
-
     let one = Lin::k(true);
     let c1 = lin_and(c, &l(acc[0]), &l(e[0]));
     let c2 = maj_wire(c, &l(acc[1]), &l(e[1]), &l(c1));
@@ -2012,11 +1952,6 @@ fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     recs.push(Rec::UndoC5);
     let c6 = maj_wire(c, &l(acc[5]), &n1, &l(c5));
     recs.push(Rec::UndoC6);
-    if loan_r {
-        // c3's MAJ inputs are still coherent here; pay its phase now.
-        maj_wire_erase(c,c3,&l(acc[2]),&l(e[2]),&l(c2));
-    }
-
     // W mod 64 = (low(X_r) - 4 S2' - 2 S1' - S0') mod 64: bits 2..5 from the copies, or by the borrow chains
     let mark = recs.len();
     let mut w: Vec<Lin> = (0..6).map(|i| l(acc[i])).collect();
@@ -2113,7 +2048,6 @@ fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     let (plan, lean45, drops) = fold_plan_d(c, mw, "reverse", drop);
     // y28 (s2-5): sums 4 and 5 are written here; the two carries come back only on the branches that read them
     let lean_r = lean45 && Y28_LEAN_REV && (ygate.is_some() || lean_y.is_some());
-    assert!(!loan_r || (lean_r && ygate.is_some()),"reverse C3 loan requires shipped lean ygate");
     if lean45 {
         if lean_r {
             lin_xor_into(c, &n1, acc[5]);
@@ -2124,9 +2058,7 @@ fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
             lin_xor_into(c, &n0, acc[4]);
             c.cx(c4, acc[4]);
         }
-        if loan_r {
-            let m=c.alloc_bit();c.hmr(c4,m);c.release_clean(c4);loan_m4=Some(m);
-        } else {lin_and_erase(c, c4, &l(acc[3]), &l(c3));}
+        lin_and_erase(c, c4, &l(acc[3]), &l(c3));
     }
     ladder_d(c, acc, &add, 6, c6, &plan, &drops);
     let mut l45: Option<Late45> = None;
@@ -2146,13 +2078,6 @@ fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     };
     let c1 = if fin >= 2 { lin_and(c, &l(acc[0]), &l(e[0])) } else { c1 };
     let c2 = if fin >= 1 { maj_wire(c, &l(acc[1]), &l(e[1]), &l(c1)) } else { c2 };
-    let c3=if loan_r {
-        let q=maj_wire(c,&l(acc[2]),&l(e[2]),&l(c2));
-        l45.as_mut().expect("reverse loan late45").c3=q;
-        let m=loan_m4.take().expect("reverse loan carry4 debt");c.push_condition(m);
-        lin_cz(c,&l(acc[3]),&l(q));c.pop_condition();c.free_bit(m);q
-    } else {c3};
-
     if !wc.is_empty() {
         // erase every wire that read the copies (all built after `mark`); acc[0..6) still holds low(X_r): clear the
         // copies as [`fold_rev`] does
@@ -2249,7 +2174,6 @@ fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
 /// The three unfolded adds, the fold and the erase of every wire they left (see the module text). `rev`: the reverse
 /// tick (the letters already flipped by the caller, the multiply direction's compare rules, the reverse fold).
 fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b: &[QubitId], tg: &[QubitId], proxy: usize, rev: bool) {
-    PAYLOAD_AT.with(|x|x.set(Some((rev,t))));
     let (e_start, a_start) = (c.expected_total(), c.active_qubits());
     if room_trace() {
         eprintln!("Y15_ROOM {} t={t} active={a_start} room={}", if rev { "rev" } else { "fwd" }, cells::cap().saturating_sub(a_start as usize));
@@ -2461,11 +2385,11 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     let fmax = (if rev { 2 } else if top1 { 4 } else if cut { 5 } else { 6 }) + usize::from(deep);
     let tops_max = if cut { if close { 1 } else { 2 } } else { Y17_TOPS_MAX };
     let shed_fixed = if !rev {
-        Y16_FIXED_FWD - usize::from(carry_loan_selected(rev,t))
+        Y16_FIXED_FWD
     } else if lean_here {
         Y17_FIXED_REV_LEAN
     } else if yg_here {
-        Y17_FIXED_REV_YGATE - usize::from(reverse_loan_selected(rev,t))
+        Y17_FIXED_REV_YGATE
     } else {
         Y16_FIXED_REV_COPY
     };
@@ -2554,9 +2478,9 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
             c.cx(s[2], b[j]);
         }
         let plan = if Y15_CORE_V2 {
-            fold_rev_v2(c, &tg[..fold_window(t, true)], [x256, x257, x258], s, k1, k2, &b[..6], &kept, &wc, lean_here, if swap01 { [2, 0, 1] } else { [2, 1, 0] }, &yg, fin.min(2), drop_n)
+            fold_rev_v2(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, &b[..6], &kept, &wc, lean_here, if swap01 { [2, 0, 1] } else { [2, 1, 0] }, &yg, fin.min(2), drop_n)
         } else {
-            fold_rev(c, &tg[..fold_window(t, true)], [x256, x257, x258], s, k1, k2, &b[..6], &wc)
+            fold_rev(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, &b[..6], &wc)
         };
         for j in 0..6 {
             c.cx(s[2], b[j]);
@@ -2581,9 +2505,9 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
                 ph.finish(c);
             }
         }
-        fold_fwd_v2(c, &tg[..fold_window(t, false)], [x256, x257, x258], s, k1, k2, fin, esh.as_mut(), ttm, drop_n)
+        fold_fwd_v2(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2, fin, esh.as_mut(), ttm, drop_n)
     } else {
-        fold_fwd(c, &tg[..fold_window(t, false)], [x256, x257, x258], s, k1, k2)
+        fold_fwd(c, &tg[..Y15_WIN], [x256, x257, x258], s, k1, k2)
     };
     super::room_fold_end(c, room_fold_n);
     // y21, deep shed, reverse: the block and cq(N - 3) again, bottom up
@@ -3325,7 +3249,7 @@ fn body_t0_one(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, b: &[
     c.cx(s[0], a1);
     c.cx(s[2], a0);
     let zz = c.alloc_qubit();
-    let _ = fold_fwd_v2(c, &tg[..fold_window(0, false)], [z[0], z[1], x258], [a1, a0, zz], k1, k2, 0, None, false, 0);
+    let _ = fold_fwd_v2(c, &tg[..Y15_WIN], [z[0], z[1], x258], [a1, a0, zz], k1, k2, 0, None, false, 0);
     c.release_clean(zz); // never written
     c.cx(s[2], a0);
     c.cx(s[0], a1);
