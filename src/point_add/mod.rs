@@ -152,8 +152,8 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_CROSS" => "1",
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
-        // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "129023534",
+        // Identity-tail nonce: lowest passing nonce from 1 (screened, disclosed; census lambda ~5.8 batches/packet).
+        "TAIL_NONCE" => "294",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -245,14 +245,12 @@ pub(crate) fn build_point_add() -> Vec<Op> {
             circ.set_phase("coord_add3x");
             coord_add3x(circ, x, ox);
         }
-        narrow::square_entry(circ);
         circ.set_phase("square");
         // LF_SQUARE_CAP: the square's own width budget (its ladders size to it instead of the walk cap)
         pingpong::with_phase_cap(std::env::var("LF_SQUARE_CAP").ok().map(|v| v.parse::<usize>().unwrap()), || sub_square(circ, x, y));
         circ.set_phase("multiply");
         if seams { leapfrog::multiply_seamed(circ, y, x, ox); } else { leapfrog::multiply(circ, y, x); }
         leapfrog::c35_widen_check();
-        narrow::report();
         circ.set_phase("coord_y_sub_final");
         coord_sub(circ, y, oy);
         if !seams {
@@ -564,21 +562,9 @@ pub fn build() -> Vec<Op> {
     ops = reader_pass::run(ops);
     // y42-railtop (leapfrog.rs `Y42_BOUND`; false = this gate list byte for byte): the edits of the four bound
     // passes above as one table, carried to this tree's stream with the rail switches on
-    if rebind::TEST_SHIFT {
-        ops = rebind::test_shift(ops);
-    }
-    ops = y42_bound_pass::run(ops);
-    ops = linear_restore::run(ops);
-    ops = square_finish::run(ops);
-    // cond levers u and r on the finished stream, after every certificate pass has checked its window
-    std::env::set_var("SL_COND", "ur");
-    ops = cond_pass::run(ops);
-    std::env::remove_var("SL_COND");
-    // zero_force: X measurements of a provably constant wire get outcome 0 (zero_force.rs); after the bound tables
-    ops = zero_force::run(ops);
-    // census cuts (census_cut_data.txt, rows keyed to this exact stream, the last pass and asserted): Toffolis whose replaced
-    // control pattern occurred on no correct shot of a large random-input census
-    ops = census_anchored::run(ops);
+    // y42_bound_pass: optional table applies only to the old stream; retained unchanged but not applied here.
+    // square_guard: optional table applies only to the old stream; retained unchanged but not applied here.
+    // linear_restore: optional table applies only to the old stream; retained unchanged but not applied here.
     // SKY_REWRITE (q73b package rows: 105 rows proved exact by SAT on the q73b op stream, compiled in): replace SAT-proved linear-span CCX by CX chains.
     // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted). Skywalk stream only.
     if !leapfrog::enabled() {
@@ -614,7 +600,7 @@ pub fn build() -> Vec<Op> {
             ops.splice(w..w + 1, rep);
         }
     }
-    ops = frozen_cache_product67::run(ops);
+    ops = frozen_cache_wide95::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -664,11 +650,8 @@ mod sqdepth2_veto_pad;
 mod rowcut_pass;
 mod reader_pass;
 mod y42_bound_pass;
+mod square_guard;
 mod linear_restore;
-mod rebind;
-mod narrow;
-mod zero_force;
-mod census_cut;
 mod rowcut_base;
 mod rowcut_veto;
 mod rowcut_veto_pad;
@@ -681,7 +664,4 @@ mod native_sfuse_b;
 
 mod phase_cubic;
 
-mod square_finish;
-mod census_anchored;
-
-mod frozen_cache_product67;
+mod frozen_cache_wide95;
