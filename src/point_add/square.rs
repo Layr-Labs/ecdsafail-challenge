@@ -161,6 +161,7 @@ fn tri_square_cin(circ:&mut Builder, x:&[QubitId], product:&[QubitId], inverse:b
     let m=x.len();
     assert_eq!(product.len(),2*m);
     assert!(m>=3);
+    if inverse && row0_copy() {super::const_arith::sub_const(circ,product,U256::from(4));}
     if inverse {
         circ.cx(x[m-1],product[2*m-1]);
         diag_correction_known_top(circ,x,product);
@@ -200,6 +201,7 @@ fn tri_square_cin(circ:&mut Builder, x:&[QubitId], product:&[QubitId], inverse:b
     if !inverse {
         circ.cx(x[m-1],product[2*m-1]);
         diag_correction(circ,x,product,true);
+        if row0_copy() {super::const_arith::add_const(circ,product,U256::from(4));}
     }
 }
 
@@ -773,7 +775,7 @@ fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
     let replan=super::leapfrog::C35_SQ_REPLAN&&inverse&&held.is_empty()&&xkept.is_empty()&&recover.as_ref().is_some_and(|(p,f)|p.sizes.len()==1&&f.is_empty());
     let recover=if replan{None}else{recover};
     let full=acc;
-    let acc=match super::optional_env::<usize>("SQ_ASM_TAIL"){Some(e)=>&full[..full.len().min(cross.len()+e)],None=>full};
+    let acc=full; // Exact full assembly for the +2 producer prototype.
     let mut room=super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
     if inverse&&!xkept.is_empty()&&recover.is_none(){
         assert!(held.is_empty());super::modular::sub_low_kept(circ,cross,acc,std::mem::take(xkept));return None;
@@ -942,7 +944,7 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
     } else if cut_sqident() {addsub_wide_low(circ,b2,&cross,true,Carry0::Zero,Carry1::CopiesCarry0);}
     else {sub_wide(circ,b2,&cross);}
     });
-    if row0_copy() {circ.x(b2[1]);}
+    // Uniform +2: keep b2 as unbiased b² through assembly.
     if let Some(q)=k0{circ.cx(cross[1],q);circ.release_clean(q);}
     // product += 2ab << lo, exact full ripple to the top (x^2 < 2^(2m), so the
     // top never overflows).
@@ -982,20 +984,20 @@ fn tri_square_k2r_inv(
     if lo < m - lo && super::env_flag("SQ_ODD_NODE_TOPS") {
         // 2ab + b^2 = b(2a+b) < 2^(2hi+1) when lo = hi-1: zero top after the re-add.
         let (c0,c1)=if cut_sqident(){(Carry0::Zero,Carry1::CopiesCarry0)}else{(Carry0::Full,Carry1::Full)};
-        if row0_copy() {circ.x(b2[1]);}
+        // b2 is already unbiased b²; restore +2 only before its inverse.
         super::modular::addsub_wide_known_top(circ,b2,&cross,false,c0,c1,false);
-        if row0_copy() {circ.x(b2[1]);}
+        // b2 is already unbiased b²; restore +2 only before its inverse.
         if cut_sqident() { addsub_wide_low(circ, a2, &cross, false, first, Carry1::CopiesCarry0); }
         else { addsub_wide_low(circ,a2,&cross,false,first,Carry1::Full); }
     } else if cut_sqident() {
-        if row0_copy() {circ.x(b2[1]);}
+        // b2 is already unbiased b²; restore +2 only before its inverse.
         addsub_wide_low(circ, b2, &cross, false, Carry0::Zero, Carry1::CopiesCarry0);
-        if row0_copy() {circ.x(b2[1]);}
+        // b2 is already unbiased b²; restore +2 only before its inverse.
         addsub_wide_low(circ, a2, &cross, false, first, Carry1::CopiesCarry0);
     } else {
-        if row0_copy() {circ.x(b2[1]);}
+        // b2 is already unbiased b²; restore +2 only before its inverse.
         add_wide(circ, b2, &cross);
-        if row0_copy() {circ.x(b2[1]);}
+        // b2 is already unbiased b²; restore +2 only before its inverse.
         addsub_wide_low(circ,a2,&cross,false,first,Carry1::Full);
     }
     square_half_inv(circ, &t, &cross, sum);
@@ -1009,6 +1011,7 @@ fn tri_square_k2r_inv(
         if let Some(q)=k1{assert!(super::modular::go_c0_clear());circ.release_clean(q);}
     }else{sum_bank_inverse(circ,a,&t,flat_sum_carries);}
     circ.free(carry);
+    if row0_copy() {circ.x(b2[1]);}
     square_b_inv(circ, bs, b2, high);
 }
 
@@ -1048,9 +1051,8 @@ fn retained_cross2_bits(r:&K2Retained,x:&[QubitId],out:&mut Vec<Cross2Loan>) {
 }
 fn cross2_erase(circ:&mut Builder,l:Cross2Loan) {
     // cross[2] = a0*t1 ^ a1*t0 ^ a0*t0 ^ a0, for t=a+b.
-    // SQ_ROW0_COPY: bit 2 is flipped (see cross2_restore); unflip it first so
-    // the phase repair below stays exact rather than off by (-1)^m.
-    if row0_copy(){circ.x(l.q);}
+    // Cross offset is zero under the uniform +2 producer contract.
+    // Uniform +2 node bias makes retained cross offset zero.
     let m=circ.alloc_bit();circ.hmr(l.q,m);
     circ.cz_if(l.a0,l.t1,m);circ.cz_if(l.a1,l.t0,m);
     circ.cz_if(l.a0,l.t0,m);circ.z_if(l.a0,m);circ.free_bit(m);
@@ -1059,9 +1061,8 @@ fn cross2_restore(circ:&mut Builder,l:Cross2Loan) {
     // Two products after an exactly restored Clifford source-frame change.
     circ.cx(l.t0,l.t1);circ.x(l.t1);circ.ccx(l.a0,l.t1,l.q);
     circ.x(l.t1);circ.cx(l.t0,l.t1);circ.ccx(l.a1,l.t0,l.q);
-    // SQ_ROW0_COPY: every node's cross offset is 4 (mod 8), which flips bit 2
-    // and leaves bits 0 and 1 alone. The erase only changes by a global phase.
-    if row0_copy(){circ.x(l.q);}
+    // Restore the unbiased cross bit; no offset-dependent Clifford flip.
+    // Uniform +2 node bias makes retained cross offset zero.
 }
 
 /// Materialise `x^2` in a fresh register, run `folds` against it, then uncompute
@@ -1072,6 +1073,9 @@ fn cross2_restore(circ:&mut Builder,l:Cross2Loan) {
 /// uncompute exact rather than a second square. Having the three uses go through
 /// here means a fold cannot be added without its inverse, or a register leaked.
 fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl FnOnce(&mut Builder, &[QubitId])) {
+    super::modular::shared_exact_split_scope(circ, |circ| with_square_exact_body(circ,x,policy_name,folds));
+}
+fn with_square_exact_body(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl FnOnce(&mut Builder, &[QubitId])) {
     let price_branches=super::env_flag("SQ_MODEL_BRANCHES");
     if price_branches {circ.set_phase(match policy_name{"SQ_A_POLICY"=>"square_a","SQ_B_POLICY"=>"square_b","SQ_C_POLICY"=>"square_c",_=>"square_test"});}
     let old_policy = OUTER_SQUARE_POLICY.with(|p| p.replace(super::optional_env::<usize>(policy_name)));
@@ -1134,6 +1138,7 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
 /// `x^2 + Na + c 2^lo + Nb 2^(2 lo)`, where its cross holds `2ab + c` with
 /// `c = Nt - Na - Nb + 2` (the 2 is the cleared bit 1 of b2).
 fn k2r_offset(m: usize, flat: bool) -> U256 {
+    if row0_copy() {return U256::from(2);}
     let p = super::SECP256K1_P;
     let leaf = p - U256::from(2);
     let lo = m / 2;
@@ -1441,3 +1446,7 @@ mod g3_tests {
         assert_eq!(bad, 0);
     }
 }
+
+#[cfg(test)]
+#[path="tests_positive_bias.rs"]
+mod research_positive_bias;

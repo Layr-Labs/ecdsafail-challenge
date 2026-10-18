@@ -4081,8 +4081,6 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
             let compare=if seeded{refined_seeded_width(compare,phi-plo,"PP_REFINE_SEEDED_B")}else{compare};
             // C35_WIDEN: a table compare reads 2 more bits, its predictor wire kept (leapfrog.rs)
             let (compare,c35_pads)=super::leapfrog::c35_widen(multiply,round,plo,phi,compare,seeded);
-            // narrow (narrow.rs): a seeded compare in a NARROW class reads fewer bits, its seed moving with the window
-            let (compare,borrow)=if c35_pads==0{super::narrow::chunk(multiply,phi,compare,addend,borrow,tie.is_some())}else{(compare,borrow)};
             circ.record_replay_site('B', round, phi, compare);
             trace_replay_predictor('B',round,multiply,phi,compare,addend,borrow);
             // y33-c35 diagnostic (inert at C35_FAULT = 0): faults 4 and 5 read 2 bits
@@ -4790,6 +4788,13 @@ pub(crate) mod heo_hooks {
         let (k, seeded) = boundary_repair_spec(round, multiply, 0, split);
         let borrow = seeded.then(|| addend[split - k - 1]);
         let k = if seeded { refined_seeded_width(k, split, "PP_REFINE_SEEDED_B") } else { k };
+        // A source bit is a statistical borrow predictor, not an arithmetic
+        // carry. The terminal policy uses an unseeded window one bit wider.
+        let (k,borrow)=if super::super::leapfrog::terminal_unseeded(){
+            let widened=(k+usize::from(borrow.is_some())).min(split);
+            eprintln!("TERMINAL_UNSEEDED split={split} old_width={k} new_width={widened} old_seed={}",borrow.is_some());
+            (widened,None)
+        }else{(k,borrow)};
         circ.record_replay_site('B', round, split, k);
         erase_with_compare(circ, m, &acc[split - k..split], &addend[split - k..split], borrow);
         circ.free(m);
