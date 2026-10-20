@@ -153,7 +153,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "7614812",
+        "TAIL_NONCE" => "1050066314463",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -614,12 +614,11 @@ pub fn build() -> Vec<Op> {
             ops.splice(w..w + 1, rep);
         }
     }
-    ops = frozen_cache_product67::run(ops);
-    ops = retained_products::run(ops);
-    ops = zero_product::run(ops);
-    ops = retained_product_pareto::run(ops);
+    ops = and_cache::run(ops);
+    ops = product_relay::run(ops);
+    ops = product_copy::run(ops);
     ops = classical_factors_xor::simplify_classical(ops);
-    ops = classical_xor_control::run(ops);
+    ops = xor_control::run(ops);
     ops = classical_wide::simplify_classical(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
@@ -690,14 +689,19 @@ mod phase_cubic;
 mod square_finish;
 mod census_anchored;
 
-mod frozen_cache_product67;
 
-mod retained_products;
-mod zero_product;
 
-mod retained_product_pareto;
+
+
+
+
 
 mod classical_factors_xor;
-mod classical_xor_control;
+
 
 mod classical_wide;
+
+mod and_cache;
+mod product_relay;
+mod product_copy;
+mod xor_control;
