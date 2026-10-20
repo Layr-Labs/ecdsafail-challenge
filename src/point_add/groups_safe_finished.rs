@@ -1,0 +1,4 @@
+use crate::circuit::{Op,OperationType,QubitId};use sha3::{Digest,Sha3_256};
+pub(super)const IDENTITY_NONCE:u64=282;
+fn bind(ops:&[Op],n:usize,want:&str){assert_eq!(ops.len(),n);let mut h=Sha3_256::new();for o in ops{for v in[o.kind as u64,o.q_control2.0,o.q_control1.0,o.q_target.0,o.c_target.0,o.c_condition.0,o.r_target.0]{h.update(v.to_le_bytes());}}assert_eq!(format!("{:x}",h.finalize()),want,"Every grouped-safe raw/output record");}
+pub(super)fn run(ops:Vec<Op>)->Vec<Op>{bind(&ops,10978762,"17482bbcdb61e571467d0def683f119ff639c5e1dd7a61c06f3d759c86fef592");let mut ops=super::breakthrough_generic::run(ops);bind(&ops,10980912,"ac03fcf4c7b57bce6c4a04ae85c03f72f99b79997d63142609069b2f60dea385");assert!(IDENTITY_NONCE<(1u64<<48));for bit in 0..48{let mut o=Op::empty();o.kind=OperationType::X;o.q_target=QubitId((IDENTITY_NONCE>>bit)&1);o.validate();ops.extend([o,o]);}ops}
