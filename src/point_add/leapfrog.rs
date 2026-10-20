@@ -90,6 +90,8 @@ pub(crate) const Y42_BOUND: bool = Y42 && !Y42_UNBOUND;
 /// checked against the table's fingerprint), so every later op takes the base's wires and bits and the bound table
 /// stays valid. false: the allocator is put back as it was before the op.
 pub(crate) const Y42_ALLOC: bool = Y42;
+fn research_y42_pool()->bool{Y42_ALLOC && !std::env::var("RESEARCH_PLAIN_POOL").is_ok_and(|v|v=="1")}
+
 /// One row of leapfrog_data/y42_alloc.txt: fingerprint of the state before the op; after it: next bit, the length of
 /// the free-bit list that is unchanged, the free wires, the rest of the free bits.
 struct Y42Row {
@@ -120,13 +122,13 @@ fn y42_row(rev: bool, t: usize) -> Option<&'static Y42Row> {
 /// put back. A tick with its pads released, under [`Y42_TRACE`]: the line of y42_alloc.txt for this tick.
 fn y42_after(c: &mut Builder, rev: bool, t: usize, before: &(Vec<u32>, Vec<u32>, u32), spent: bool) {
     if spent {
-        let row = if Y42_ALLOC { y42_row(rev, t) } else { None };
+        let row = if research_y42_pool() { y42_row(rev, t) } else { None };
         // narrow (narrow.rs): a narrowed compare before the op leaves another allocator; the op's state is put back
         let narrowed = !super::narrow::NARROW.is_empty() && row.is_some_and(|r| Builder::y42_alloc_hash(before) != r.before);
         if narrowed {
             eprintln!("NARROW_Y42 {} {t} put back", if rev { "R" } else { "F" });
         }
-        if Y42_ALLOC && !narrowed {
+        if research_y42_pool() && !narrowed {
             let row = y42_row(rev, t).unwrap_or_else(|| panic!("y42: no recorded allocator state for {} tick {t}", if rev { "reverse" } else { "forward" }));
             assert_eq!(Builder::y42_alloc_hash(before), row.before, "y42: the allocator before the payload op of {} tick {t} is not the recorded one", if rev { "reverse" } else { "forward" });
             c.y42_alloc_set(before, &row.q, row.keep, &row.bits, row.next_bit);
@@ -447,8 +449,7 @@ pub(crate) fn install_recipe() {
         // retained-AND lend mask 3 -> 4 (-9 T). Combined model 770,787 at Q 1236; 512-nonce eval mean 770,692.40,
         // score ~952.58M; λ paired vs glam_base 512 fails -0.777 +- 0.158, proj+2se 19.193 (vs T3 -0.143 +- 0.101).
         ("LF_REORDER_DIV", "42"),
-        // round-11 retune: with G1M the C branch (mask 4) has no with_square; A and B lend instead (-2.0 by the builder)
-        ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "3"),
+        ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "4"),
         // C1 spend of the combined point's λ margin (192-nonce screens paired vs the combined point, then 512):
         // T6 seed fusion on (-46.6 T, phase-only), merged window 56 -> 54 (-128 T, mism +0.057), late rule windows
         // one bit shorter from tick 90 (-162 T, mism +0.115). Totals: Q 1236, model 770,449.75, 512-nonce eval mean
@@ -546,65 +547,6 @@ thread_local! {
     static Y28_HOOK: std::cell::Cell<Option<(usize, crate::circuit::BitId)>> = const { std::cell::Cell::new(None) };
     /// (kept, applied) in this divide
     static Y28_COUNT: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
-    /// rail-strip R1: request / ladder flag / applied flag for the choice add's effective carry
-    static R1_REQ: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
-    static R1_LADDER: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
-    static R1_DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// rail-strip: the R1 garbage form L = b1 ^ s3 handed to the next strip barrel
-    static SB_SP: std::cell::Cell<Option<(QubitId, QubitId)>> = const { std::cell::Cell::new(None) };
-    /// rail-strip EXT: next carry_out_xor's first carry: 1 = a0 ^ b0 (forward split under R1), 2 = b0 (reverse split)
-    static CMP_MODE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
-}
-
-include!("strip_barrel.rs");
-include!("strip_small.rs");
-
-fn r1_on() -> bool {
-    !std::env::var("LF_R1").is_ok_and(|v| v == "0")
-}
-/// The kept bit's boundary waiting for the step now running, if any (y28_fetch without taking it).
-fn y28_peek_delta() -> Option<usize> {
-    if !y28_pending() {
-        return None;
-    }
-    let key = Y28_KEY.with(|k| k.get());
-    Y28_BITS.with(|b| b.borrow().get(&key).map(|v| v.0))
-}
-/// Will the reverse choice subtract (n wires, `room` free when it runs) take R1? Mirrors rail_add / capped_add.
-fn r1_rev_predict(n: usize, room: usize, pend: Option<usize>) -> bool {
-    if let Some(d) = pend {
-        return d >= 4 && n >= 3 && !std::env::var("LF_R1Y28").is_ok_and(|v| v == "0"); // the mirrored subtract is one whole ladder
-    }
-    if n <= 3 {
-        return false;
-    }
-    let off = std::env::var("LF_RAIL_SPLIT").is_ok_and(|v| v == "0");
-    let st = split_tight() as usize;
-    let deep = rail_capped() && !off && n - 3 > room && {
-        let delta = (n - room).saturating_sub(st);
-        delta + 3 > room || delta + 1 >= n
-    };
-    if deep {
-        return false;
-    }
-    if off || n - 3 <= room {
-        return true;
-    }
-    let delta = n - room - st;
-    delta + 3 > room || delta + 1 >= n || (delta >= 4 && !std::env::var("LF_R1SPLIT").is_ok_and(|v| v == "0"))
-}
-fn r1_rev_on() -> bool {
-    r1_on() && !std::env::var("LF_R1REV").is_ok_and(|v| v == "0")
-}
-
-/// [`fast_k_erase`] on the R1 reverse target X^ = X - 2 L [e >= 1]: wires 1, 2 read X ^ L wherever the letters'
-/// phase fix reads them (k2 = !x0 & !(x1 ^ L), k1 = !x0 ^ (k2 & (x2 ^ L))), so L is hosted on them around the fixes.
-fn fast_k_erase_g(c: &mut Builder, t: &[QubitId], k1: QubitId, k2: QubitId, l: &Lin) {
-    lin_xor_into(c, l, t[1]);
-    lin_xor_into(c, l, t[2]);
-    fast_k_erase(c, t, k1, k2);
-    lin_xor_into(c, l, t[2]);
-    lin_xor_into(c, l, t[1]);
 }
 fn y28_key(k: usize) {
     Y28_KEY.with(|x| x.set(k));
@@ -864,22 +806,11 @@ fn carry_out_xor(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, ou
     // Phase-only form: the top carry is never built. carry[n] = c ^ (a ^ c)(b ^ c) with c = carry[n - 1], so
     // (-1)^(NOT carry[n]) is one CZ on the two operand wires (while they hold a ^ c, b ^ c) times (-1)^(NOT c).
     let m = if out.is_none() && n >= 1 { n - 1 } else { n };
-    let mode = CMP_MODE.with(|x| x.replace(0));
-    assert!(mode == 0 || m >= 2, "rail-strip compare mode on a short compare");
     let mut carry = vec![cin];
     for i in 0..m {
         let ci = carry[i];
-        if i == 0 && mode == 2 {
-            carry.push(b[0]); // the effective carry t1 (round11/rail-strip): exact from position delta >= 4 on
-            continue;
-        }
         c.cx(ci, a[i]);
         c.cx(ci, b[i]);
-        if i == 0 && mode == 1 {
-            c.cx(a[0], b[0]); // carry into position 1 = c1 - g = a0 ^ b0 on the R1 sum
-            carry.push(b[0]);
-            continue;
-        }
         let t = and_new(c, a[i], b[i]);
         c.cx(ci, t);
         carry.push(t);
@@ -902,15 +833,8 @@ fn carry_out_xor(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, ou
     }
     for i in (0..m).rev() {
         let (ci, t) = (carry[i], carry[i + 1]);
-        if i == 0 && mode == 2 {
-            continue;
-        }
-        if i == 0 && mode == 1 {
-            c.cx(a[0], b[0]);
-        } else {
-            c.cx(ci, t);
-            and_erase(c, t, a[i], b[i]);
-        }
+        c.cx(ci, t);
+        and_erase(c, t, a[i], b[i]);
         c.cx(ci, a[i]);
         c.cx(ci, b[i]);
     }
@@ -956,6 +880,7 @@ fn rail_signed_add(c: &mut Builder, sign: QubitId, src: &[QubitId], dst: &[Qubit
 /// [`gidney_add`] with the top carry XORed straight into the top sum wire (one CCX, nothing to erase): the same
 /// n - 1 Toffoli on n - 2 carry wires instead of n - 1.
 fn gidney_add_lean(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>) {
+    if a.len()==b.len(){let rows:Vec<_>=a.iter().map(|&q|vec![q]).collect();if phase_plain_try(c,b,&rows,cin){return;}}
     let n = a.len();
     assert!(n >= 1 && b.len() == n);
     if n < 2 {
@@ -964,23 +889,12 @@ fn gidney_add_lean(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<Qu
     let mut carry: Vec<Option<QubitId>> = vec![None; n];
     carry[0] = cin;
     let mut y28h = Y28_HOOK.with(|x| x.take());
-    // rail-strip R1 (choice add only, cin = None): the carry into position 1 is taken as the complemented target bit
-    // b[0] itself; the sum is then off by 2g below the stripped bits only (round11/rail-strip), no AND for it
-    let r1m = R1_LADDER.with(|x| x.replace(0));
-    let r1 = r1m != 0;
-    assert!(!r1 || (cin.is_none() && n >= 3 && y28h.map_or(true, |h| h.0 >= 2)), "R1 ladder misuse");
     for i in 0..n - 1 {
         if let Some(ci) = carry[i] {
             c.cx(ci, a[i]);
             c.cx(ci, b[i]);
         }
-        if r1 && i == 0 {
-            if r1m == 2 {
-                c.cx(a[0], b[0]);
-                c.x(b[0]);
-            }
-            carry[1] = Some(b[0]);
-        } else if i + 2 == n {
+        if i + 2 == n {
             c.ccx(a[i], b[i], b[n - 1]);
             if let Some(ci) = carry[i] {
                 c.cx(ci, b[n - 1]);
@@ -997,15 +911,11 @@ fn gidney_add_lean(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<Qu
     assert!(y28h.is_none(), "y28: the kept bit's boundary carry is on no wire of this ladder");
     c.cx(a[n - 1], b[n - 1]);
     for i in (0..n - 1).rev() {
-        if let Some(next) = carry[i + 1].filter(|_| !(r1 && i == 0)) {
+        if let Some(next) = carry[i + 1] {
             if let Some(ci) = carry[i] {
                 c.cx(ci, next);
             }
             and_erase(c, next, a[i], b[i]);
-        }
-        if r1m == 2 && i == 0 {
-            c.x(b[0]); // b[0] = a0 ^ b0: the position-0 sum already
-            continue;
         }
         c.cx(a[i], b[i]);
         if let Some(ci) = carry[i] {
@@ -1023,14 +933,7 @@ fn capped_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId
     let room = cells::cap().saturating_sub(c.active_qubits() as usize);
     let off = std::env::var("LF_RAIL_SPLIT").is_ok_and(|v| v == "0");
     // the lean ladder holds n - 2 carries (its top carry goes straight into the top sum wire)
-    let r1req = R1_REQ.with(|x| x.replace(0));
-    // the R1 ladder holds one carry wire fewer (n - 3), so it stays whole one wire of room earlier
-    let r1fit = (r1req != 0 && cin.is_none() && n >= 3) as usize;
-    if off || n <= 3 || n - 2 - r1fit <= room {
-        if r1fit == 1 {
-            R1_LADDER.with(|x| x.set(r1req));
-            R1_DONE.with(|x| x.set(true));
-        }
+    if off || n <= 3 || n - 2 <= room {
         gidney_add_lean(c, a, b, cin);
         return;
     }
@@ -1039,26 +942,14 @@ fn capped_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId
         eprintln!("LF_SPLIT n={n} room={room} delta={delta}");
     }
     if delta + 3 > room || delta + 1 >= n {
-        if r1fit == 1 {
-            R1_LADDER.with(|x| x.set(r1req));
-            R1_DONE.with(|x| x.set(true));
-        }
         gidney_add_lean(c, a, b, cin);
         return;
     }
-    // rail-strip EXT: R1 on the low ladder when the kept carry sits above every garbage bit (delta >= 4); its compare
-    // then takes a linear first carry (forward: a0 ^ b0 on the R1 sum; reverse: the effective carry b0)
-    let r1s = r1req != 0 && cin.is_none() && delta >= 4 && !std::env::var("LF_R1SPLIT").is_ok_and(|v| v == "0");
-    assert!(r1req != 2 || r1s, "R1 reverse: split with delta {delta} < 4 was not predicted");
     let (za, cq) = (c.alloc_qubit(), c.alloc_qubit());
     let mut al = a[..delta].to_vec();
     al.push(za);
     let mut bl = b[..delta].to_vec();
     bl.push(cq);
-    if r1s {
-        R1_LADDER.with(|x| x.set(r1req));
-        R1_DONE.with(|x| x.set(true));
-    }
     gidney_add_lean(c, &al, &bl, cin);
     c.free(za);
     gidney_add_lean(c, &a[delta..], &b[delta..], Some(cq));
@@ -1083,17 +974,11 @@ fn capped_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId
         // y28: in the divide's fused pass the outcome is kept and its phase applied in the mirrored subtract
         if !y28_store(delta, n, m) {
             c.push_condition(m);
-            if r1s {
-                CMP_MODE.with(|x| x.set(r1req));
-            }
             carry_out_xor(c, &a[..delta], &b[..delta], ncin, None);
             c.pop_condition();
             c.free_bit(m);
         }
     } else {
-        if r1s {
-            CMP_MODE.with(|x| x.set(r1req));
-        }
         carry_out_xor(c, &a[..delta], &b[..delta], ncin, Some(cq));
         c.x(cq);
         c.free(cq);
@@ -1172,7 +1057,7 @@ fn steps() -> &'static Vec<[usize; 5]> {
         } else if yp8().is_some() && std::env::var("LF_G10_TABLE").is_ok_and(|v| v == "770") {
             // G10 port of krishparadox's ac43304 (d7df7706, board #1 971,660,388): the same peel fit refit at the
             // looser budget 7.7e-4 per walk under the 22-bit rule (LF_YP8=22, late 20/18/16/14/12)
-            include_str!("leapfrog_data/pack_t0hat_tail0_138_steps_k770_lw2.txt")
+            if std::env::var("RESEARCH_WALK_SCHEDULE").is_ok_and(|v|v=="public140"){include_str!("leapfrog_data/public_toffoli_140_steps.txt")}else{include_str!("leapfrog_data/pack_t0hat_tail0_138_steps_k770_lw2.txt")}
         } else if yp8().is_some() {
             // 138 ticks, fitted for the pinned recipe: the LF_YP8 rule with its late window lengths, tick 0 on its
             // own rule (LF_T0_FREE) and a last tick without forced steps (LF_TAIL_FORCED=0)
@@ -1215,16 +1100,8 @@ fn rail_capped() -> bool {
 /// shared by every such position of the parity ladder); same split policy under the walk cap as the full-width add.
 fn rail_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>) {
     let n = b.len();
-    let r1req = R1_REQ.with(|x| x.replace(0));
     let room = cells::cap().saturating_sub(c.active_qubits() as usize);
     if let Some(h) = y28_fetch(n) {
-        if r1req == 2 {
-            // rail-strip EXT: the R1-reverse ladder's carries agree with the plain one's from position e + 1 on, so the
-            // kept bit's Z goes on the same carry (boundary >= 4)
-            assert!(h.0 >= 4 && a.len() >= b.len(), "R1 reverse: y28 boundary below 4");
-            R1_LADDER.with(|x| x.set(2));
-            R1_DONE.with(|x| x.set(true));
-        }
         // y28: the mirrored subtract of a split forward add. It is one whole ladder here (the same gates as below),
         // which holds the carry into the forward boundary on a wire: the kept outcome's phase goes on there.
         assert!(n <= 3 || n - 2 <= room, "y28: the mirrored subtract must be one whole ladder");
@@ -1243,15 +1120,13 @@ fn rail_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>)
     let off = std::env::var("LF_RAIL_SPLIT").is_ok_and(|v| v == "0");
     // LF_RAIL_CAPPED=1: an add whose two-way split does not fit either (n > ~2 room) goes through the recursive
     // room-sized split of the fold ladders ([`lpa_capped`]) instead of a full-width ladder that overruns the cap
-    let deep = rail_capped() && !off && n > 3 && n - 2 - (r1req != 0 && cin.is_none()) as usize > room && {
+    let deep = rail_capped() && !off && n > 3 && n - 2 > room && {
         let delta = (n - room).saturating_sub(split_tight() as usize);
         delta + 3 > room || delta + 1 >= n || (a.len() < n && delta >= a.len())
     };
     if a.len() >= b.len() && !deep {
-        R1_REQ.with(|x| x.set(r1req));
         return capped_add(c, a, b, cin);
     }
-    assert!(r1req != 2, "R1 reverse: predicted a whole lean add");
     let sg = *a.last().unwrap();
     let add: Vec<Vec<QubitId>> = (0..b.len()).map(|i| vec![if i < a.len() { a[i] } else { sg }]).collect();
     if deep {
@@ -1896,11 +1771,6 @@ fn lin_rail_barrel(c: &mut Builder, k1: QubitId, k2: QubitId, t: &[QubitId], inv
 
 /// Rail barrel with the 3-Toffoli sign fill (h = k2 & sg -> t1, t0; h2 = k1 & h -> t2, t0; k1 & sg -> t0).
 fn fast_rail_barrel(c: &mut Builder, k1: QubitId, k2: QubitId, t: &[QubitId], inverse: bool, drop0: bool) -> bool {
-    let sp = SB_SP.with(|x| x.take());
-    if strip_on() && sb_avail(t.len(), inverse, sp.is_some()) && (inverse || drop0) {
-        return strip_barrel(c, k1, k2, t, inverse, sp);
-    }
-    assert!(sp.is_none(), "R1 garbage reached a barrel that does not take it");
     if !std::env::var("LF_RAILLIN").is_ok_and(|v| v == "0") {
         return lin_rail_barrel(c, k1, k2, t, inverse, drop0);
     }
@@ -2168,6 +2038,7 @@ fn v_off(c: &mut Builder, list: &[QubitId], comp: bool, ci: Option<QubitId>) {
 /// Gidney ripple `acc += addend + cin (mod 2^len)` where addend bit i is the parity of the wires `add[i]`
 /// (possibly none). Carries that are provably 0 are skipped; carries are measurement-uncomputed.
 fn ladder_parity_add(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], cin: Option<QubitId>) {
+    if phase_plain_try(c,acc,add,cin){return;}
     let n = acc.len();
     let mut y28h = Y28_HOOK.with(|x| x.take());
     let mut carry: Vec<Option<QubitId>> = vec![None; n];
@@ -2230,6 +2101,7 @@ fn ladder_parity_add(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], cin
 /// `out ^= carry_out(acc + addend + cin)` (addend bits: parity of `add[i]`, complemented when `comp`);
 /// acc unchanged; Gidney carries, measurement-uncomputed.
 fn carry_out_parity_xor(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], comp: bool, cin: QubitId, out: Option<QubitId>) {
+    if super::phase_fit::cap()<1234&&out.is_none()&&acc.len()>=2&&c.active_qubits()as usize+acc.len()-1>super::phase_fit::cap(){if super::phase_fusion::apply(c,acc,add,comp,cin,true){return;}}
     let n = acc.len();
     // Phase-only form: the top carry is never built (see `carry_out_xor`): one CZ on the two AND inputs of the
     // top position and the phase (-1)^(NOT carry[n - 1]).
@@ -2881,6 +2753,7 @@ fn m_fold_y16(c: &mut Builder, acc: &[QubitId], ov: QubitId, recs: &mut Recs, pl
         // lean final chunk: the carry into its top bit is used once, so it goes straight into that bit's wire (one
         // CCX, nothing to erase) and the chunk holds w - 2 carries ([`m_fold_plan`] gives it the extra bit)
         let direct = last && w >= 2 && m_fold_lean();
+        if let Some(out)=phase_chunk_try(c,&acc[lo..hi],&add[lo..hi],cin,!last,direct){if let Some(out)=out{kept.push((lo,hi,cin,out));cin=out;}lo=hi;continue;}
         let mut cc = vec![cin]; // cc[k] = carry into bit lo + k
         for i in lo..(if last { hi - 1 - direct as usize } else { hi }) {
             let t = m_carry(c, acc[i], &add[i], cc[i - lo]);
@@ -2985,6 +2858,11 @@ fn lin_cz(c: &mut Builder, a: &Lin, b: &Lin) {
 /// Phase (-1)^[a < add + cin] on the current condition (a: w wires, add: w forms, cin: a wire): the carry-out of
 /// NOT a + add + cin, Gidney carries measurement-uncomputed, the top carry as three CZs; w - 1 ANDs.
 fn lin_lt_phase(c: &mut Builder, a: &[QubitId], add: &[Lin], cin: QubitId) {
+    if super::phase_fit::cap()<1234&&a.len()>=2&&c.active_qubits()as usize+a.len()-1>super::phase_fit::cap(){
+        let rows:Vec<_>=add.iter().map(|v|v.w.clone()).collect();if super::phase_fit::source_ok(a,&rows,cin){let w=a.len();c.x_all(a);let mut d=vec![cin];for i in 0..w-2{let q=m_carry(c,a[i],&add[i],d[i]);d.push(q);}
+            assert!(super::phase_fusion::pair(c,a[w-2],a[w-1],d[w-2],&add[w-2].w,add[w-2].one,&add[w-1].w,add[w-1].one,false));for i in(1..w-1).rev(){m_carry_erase(c,d[i],a[i-1],&add[i-1],d[i-1]);}c.x_all(a);return;}
+    }
+
     let w = a.len();
     c.x_all(a);
     let mut d = vec![cin];
@@ -3327,7 +3205,7 @@ fn m_fold_lean() -> bool {
 fn m_fold_plan(c: &Builder, fixed: usize, mw: usize) -> (Vec<usize>, usize) {
     super::pingpong::y17_fold_true_cap();
     let plan_at = |k: usize| -> Option<Vec<usize>> {
-        let budget = cells::cap().saturating_sub((c.active_qubits() as usize + fixed - m_fold_slack()).saturating_sub(g4_fake() + k));
+        let budget = super::phase_fit::cap().saturating_sub((c.active_qubits() as usize + fixed - m_fold_slack()).saturating_sub(g4_fake() + k));
         // lean final chunk ([`m_fold`]): it holds one carry fewer, so plan one bit less and give that bit to the final
         // chunk. The fit rule ([`merged_fits`]) keeps the plain plan, so the same ticks run the merged op.
         let lean = if m_fold_lean() && mw >= 7 { merged_plan(mw - 5, budget) } else { None };
@@ -3344,7 +3222,7 @@ fn m_fold_plan(c: &Builder, fixed: usize, mw: usize) -> (Vec<usize>, usize) {
         .filter_map(|k| plan_at(k).map(|p| (p, k)))
         .min_by_key(|(p, k)| (plan_x2(p) + k, *k))
         .expect("merged fold plan (checked by merged_fits)");
-    y17_log(c, || format!("mfold(room={},k={k},plan={plan:?})", cells::cap().saturating_sub(c.active_qubits() as usize)));
+    y17_log(c, || format!("mfold(room={},k={k},plan={plan:?})", super::phase_fit::cap().saturating_sub(c.active_qubits() as usize)));
     if lf_merged_trace() && (plan.len() > 1 || k > 0) {
         eprintln!("LF_MERGED_PLAN k={k} plan={plan:?} x2={}", plan_x2(&plan));
     }
@@ -4257,13 +4135,10 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     let q0 = pmark(c);
     y28_key(t * 4 + 2);
     if lr {
-        R1_REQ.with(|x| x.set((r1_on() && strip_on() && sb_avail(nb, false, true)) as u8));
         fast_add_halve_choice_lr(c, s3, br, tr);
-        R1_REQ.with(|x| x.set(0));
     } else {
         fast_add_halve_choice(c, s3, br, tr);
     }
-    let r1_done = R1_DONE.with(|x| x.replace(false));
     y28_key(usize::MAX);
     pacc(c, &format!("fwd{fk}.rail_choice"), q0);
     if trim {
@@ -4291,9 +4166,6 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     pacc(c, &format!("fwd{fk}.pay_cell"), q0);
     resize(c, tr, nb);
     let q0 = pmark(c);
-    if r1_done {
-        SB_SP.with(|x| x.set(Some((br[0], s3))));
-    }
     if fast_rail_barrel(c, k1, k2, tr, false, lr) {
         tr.remove(0); // released inside the barrel
     } else if lr {
@@ -4330,6 +4202,7 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
             if y42_cut > 0 {
                 Y42_FWD_CUT.with(|x| x.set(Some((t, kl))));
                 // the allocator with the cut wire free, before the payload op (see [`y42_after`])
+                if !research_y42_pool(){c.research_prime_clean_pool(cells::cap());}
                 y42_alloc = Some(c.y42_alloc_state());
                 if !y42_spend(t, false) {
                     y42_pads = c.alloc_qubits(y42_cut);
@@ -4458,6 +4331,7 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
             }
             if tr.len() + br.len() < y42_tr + y42_br {
                 // the allocator with the un-grown wires free, before the payload op (see [`y42_after`])
+                if !research_y42_pool(){c.research_prime_clean_pool(cells::cap());}
                 y42_alloc = Some(c.y42_alloc_state());
                 if !y42_spend(t, true) {
                     y42_pads = c.alloc_qubits(y42_tr + y42_br - tr.len() - br.len());
@@ -4557,38 +4431,16 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     if lr {
         lr_restore(c, tr);
     }
-    // rail-strip R1 reverse: predict that the choice step's subtract below is one whole lean ladder (no y28 bit, full
-    // source, fits the room it will see: tr grows to n2 - 1, k1 and k2 are released), then run the strip barrel's
-    // inverse onto X^ and the effective-carry ladder (asserted inside rail_add / capped_add)
-    let r1r = lr && r1_rev_on() && strip_on() && sb_avail(tr.len(), true, true) && br.len() >= n2 - 1 && {
-        y28_key(t * 4 + 2);
-        let pend = y28_peek_delta();
-        y28_key(usize::MAX);
-        let n = n2 - 1;
-        let act = (c.active_qubits() as usize + n.saturating_sub(tr.len())).saturating_sub(2);
-        let room = cells::cap().saturating_sub(act);
-        n >= tr.len() && r1_rev_predict(n, room, pend)
-    };
-    if r1r {
-        SB_SP.with(|x| x.set(Some((br[0], s3))));
-    }
     fast_rail_barrel(c, k1, k2, tr, true, false);
     pacc(c, &format!("rev{fk}.rail_barrel"), q0);
     resize(c, tr, n2 - 1);
     let q0 = pmark(c);
-    if r1r {
-        fast_k_erase_g(c, tr, k1, k2, &Lin::of(&[br[0], s3]));
-    } else {
-        fast_k_erase(c, tr, k1, k2);
-    }
+    fast_k_erase(c, tr, k1, k2);
     pacc(c, &format!("rev{fk}.k_erase"), q0);
     let q0 = pmark(c);
     y28_key(t * 4 + 2);
     if lr {
-        R1_REQ.with(|x| x.set(if r1r { 2 } else { 0 }));
         fast_double_sub_choice_lr(c, s3, br, tr);
-        R1_REQ.with(|x| x.set(0));
-        assert_eq!(R1_DONE.with(|x| x.replace(false)), r1r, "R1 reverse prediction");
     } else {
         fast_double_sub_choice(c, s3, br, tr);
     }
@@ -4764,6 +4616,7 @@ fn yp8() -> Option<usize> {
 /// between the carry sweep and the sum sweep: `mid(c, carry)` runs with `acc` untouched and carry[i] = the carry into
 /// position i (carry[0] = cin). `mid` must leave every wire as it found it.
 fn ladder_parity_add_mid(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], cin: Option<QubitId>, mid: &mut dyn FnMut(&mut Builder, &[Option<QubitId>])) {
+    if phase_pause_try(c,acc,add,cin,mid){return;}
     let n = acc.len();
     let mut y28h = Y28_HOOK.with(|x| x.take());
     let mut carry: Vec<Option<QubitId>> = vec![None; n];
@@ -5444,9 +5297,11 @@ fn yp8_add_halve_forced_choice(c: &mut Builder, sign: QubitId, b: &[QubitId], t:
     c.free(low);
     let acc = t.clone();
     let reserve = yp8_reserve(acc.len(), b.len(), tick, true);
+    let _phase_pause=phase_pause_scope(&acc,tick,reserve,true);
     rail_add_mid(c, &b[1..], &acc, b[0], reserve, true, None, &mut |c, add, delta, carry| {
         let flip = |c: &mut Builder| {
             for (j, cj) in carry.iter().enumerate() {
+                if super::phase_fit::cap()<1234&&cj.is_none(){continue;} // This dropped position already holds its completed sum.
                 for &q in &add[delta + j] {
                     c.cx(q, acc[delta + j]);
                 }
@@ -5474,6 +5329,7 @@ fn yp8_double_sub_forced_erase(c: &mut Builder, sign: QubitId, b: &[QubitId], t:
     c.x_all(t);
     let acc = t.clone();
     let reserve = yp8_reserve(acc.len(), b.len(), tick, false);
+    let _phase_pause=phase_pause_scope(&acc,tick,reserve,false);
     let n = acc.len();
     let room = cells::cap().saturating_sub(c.active_qubits() as usize);
     // the logic reads the target's bits 1..4 (positions 0..4 here) and, below the sign, only its window
@@ -7877,4 +7733,38 @@ pub(crate) fn rt0_pilot() {
         if rt0 { format!("SL_RT0={}", y15::sl_rt0()) } else { "head".to_string() },
         sim.stats.toffoli_gates as f64 / shots as f64
     );
+}
+fn phase_plain_try(c:&mut Builder,acc:&[QubitId],rows:&[Vec<QubitId>],cin:Option<QubitId>)->bool{
+    let mut h=Y28_HOOK.with(|v|v.take());let before=c.op_count();
+    if super::phase_fit::plain_optional(c,acc,rows,&vec![false;acc.len()],cin,&mut|c,i,q|y28_apply(c,&mut h,i,q)){
+        assert!(h.is_none(),"phase optional carry hook not consumed");true
+    }else{assert_eq!(before,c.op_count());Y28_HOOK.with(|v|v.set(h));false}
+}
+// The returned outer Option indicates that the entire original chunk ran.
+fn phase_chunk_try(c:&mut Builder,acc:&[QubitId],add:&[Lin],cin:QubitId,output:bool,direct:bool)->Option<Option<QubitId>>{
+    if super::phase_fit::cap()>=1234||acc.len()<3||!output&&!direct{return None;}
+    let owned=if output{acc.len()}else{acc.len()-2};let need=(c.active_qubits()as usize+owned).saturating_sub(super::phase_fit::cap());if need==0{return None;}
+    let mut rows:Vec<_>=add.iter().map(|v|v.w.clone()).collect();let mut ones:Vec<_>=add.iter().map(|v|v.one).collect();if !super::phase_fit::source_ok(acc,&rows,cin){return None;}
+    let mut target=acc.to_vec();if output{rows.push(Vec::new());ones.push(false);}
+    let Some(drops)=super::phase_fit::choose(&rows,need,false,&vec![true;rows.len()])else{return None;};
+    let out=output.then(||c.alloc_qubit());if let Some(q)=out{target.push(q);}let before=c.op_count();
+    assert!(super::phase_pebble::add(c,&target,&rows,&ones,cin,&drops));eprintln!("PHASE_PEBBLE_CHUNK\t{}\t{before}\t{}\t{}\t{need}\t{drops:?}",c.current_phase(),c.op_count(),acc.len());Some(out)
+}
+fn yp8_phase_reads(n:usize,tick:usize)->Vec<usize>{
+    let view=(n+1).max(6);let mut set=std::collections::BTreeSet::new();for p in[1,2,3,4,view-1]{set.insert((p-1).min(n-1));}
+    let h=w1_anchor(tick).saturating_sub(w1_kt(tick));for p in h..h+w1_kt(tick)+2{if p>0&&p+1<view{set.insert((p-1).min(n-1));}}set.into_iter().collect()
+}
+#[derive(Clone)]struct PhasePause{reserve:usize,forward:bool,reads:Vec<QubitId>}
+thread_local!{static PHASE_PAUSE:std::cell::RefCell<Option<PhasePause>>=const{std::cell::RefCell::new(None)};}
+struct PhasePauseScope(Option<PhasePause>);impl Drop for PhasePauseScope{fn drop(&mut self){PHASE_PAUSE.with(|v|*v.borrow_mut()=self.0.take());}}
+fn phase_pause_scope(acc:&[QubitId],tick:usize,reserve:usize,forward:bool)->PhasePauseScope{
+    PhasePauseScope(PHASE_PAUSE.with(|v|v.replace(Some(PhasePause{reserve,forward,reads:yp8_phase_reads(acc.len(),tick).into_iter().map(|i|acc[i]).collect()}))))
+}
+fn phase_pause_try(c:&mut Builder,acc:&[QubitId],rows:&[Vec<QubitId>],cin:Option<QubitId>,mid:&mut dyn FnMut(&mut Builder,&[Option<QubitId>]))->bool{
+    let Some(cin)=cin else{return false;};let Some(context)=PHASE_PAUSE.with(|v|v.borrow().clone())else{return false;};let n=acc.len();if super::phase_fit::cap()>=1234||n<3||!super::phase_fit::source_ok(acc,rows,cin){return false;}
+    let need=(c.active_qubits()as usize+n-1+context.reserve).saturating_sub(super::phase_fit::cap());if need==0{return false;}
+    let allowed:Vec<_>=acc.iter().map(|q|context.forward||!context.reads.contains(q)).collect();let Some(drops)=super::phase_fit::choose(rows,need,true,&allowed)else{return false;};
+    let mut h=Y28_HOOK.with(|v|v.take());let before=c.op_count();
+    assert!(super::phase_pebble::with_pause(c,acc,rows,&vec![false;n],cin,&drops,&mut|c,i,q|y28_apply(c,&mut h,i,q),mid));
+    assert!(h.is_none(),"phase-pebble paused carry hook not consumed");eprintln!("PHASE_PEBBLE_PAUSED\t{}\t{before}\t{}\t{n}\t{need}\t{drops:?}",c.current_phase(),c.op_count());true
 }
