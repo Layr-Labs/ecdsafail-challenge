@@ -1,9 +1,0 @@
-use crate::circuit::{Op,OperationType as K,QubitId,BitId,RegisterId};
-use sha3::{Digest,Sha3_256};
-fn row(o:&Op)->[u64;7]{[o.kind as u64,o.q_control2.0,o.q_control1.0,o.q_target.0,o.c_target.0,o.c_condition.0,o.r_target.0]}
-fn op(r:[u64;7])->Op{let kind=match r[0]{8=>K::CX,13=>K::CCX,15=>K::PushCondition,16=>K::PopCondition,_=>panic!("edit kind")};let o=Op{kind,q_control2:QubitId(r[1]),q_control1:QubitId(r[2]),q_target:QubitId(r[3]),c_target:BitId(r[4]),c_condition:BitId(r[5]),r_target:RegisterId(r[6])};o.validate();o}
-pub(super) fn run(v:Vec<Op>)->Vec<Op>{
-assert_eq!(v.len(),11628740,"xor control source count");let mut h=Sha3_256::new();for o in &v{for x in row(o){h.update(x.to_le_bytes());}}assert_eq!(format!("{:x}",h.finalize()),"97cc4958d9a9bca7670275316b48358c8133183397263e4e09860d080c8de01e","xor control source hash");
-let edits:&[(usize,&[[u64;7]],&[[u64;7]])]=&[
-(5384696,&[[13, 706, 816, 703, 18446744073709551615, 18446744073709551615, 18446744073709551615]],&[[15, 18446744073709551615, 18446744073709551615, 18446744073709551615, 18446744073709551615, 773, 18446744073709551615], [8, 18446744073709551615, 816, 703, 18446744073709551615, 18446744073709551615, 18446744073709551615], [16, 18446744073709551615, 18446744073709551615, 18446744073709551615, 18446744073709551615, 18446744073709551615, 18446744073709551615], [15, 18446744073709551615, 18446744073709551615, 18446744073709551615, 18446744073709551615, 774, 18446744073709551615], [8, 18446744073709551615, 816, 703, 18446744073709551615, 18446744073709551615, 18446744073709551615], [16, 18446744073709551615, 18446744073709551615, 18446744073709551615, 18446744073709551615, 18446744073709551615, 18446744073709551615]]),
-];let mut out=Vec::new();let mut at=0;for &(i,old,new) in edits{out.extend_from_slice(&v[at..i]);assert_eq!(v[i..i+old.len()].iter().map(row).collect::<Vec<_>>(),old);out.extend(new.iter().copied().map(op));at=i+old.len();}out.extend_from_slice(&v[at..]);out}
