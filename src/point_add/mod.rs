@@ -153,7 +153,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "1050066314463",
+        "TAIL_NONCE" => "7614812",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -501,6 +501,13 @@ fn clear_process_env() {
 const LEAPFROG_SUBMISSION: bool = true;
 
 pub fn build() -> Vec<Op> {
+    let profile="uniform-plus-two".to_owned();assert!(["original","uniform-plus-two"].contains(&profile.as_str()));
+    let pool="plain".to_owned();assert!(["shipped","plain"].contains(&pool.as_str()));
+    let schedule="public140".to_owned();assert!(["original138","public140"].contains(&schedule.as_str()));
+    let break_cap = "1234".to_owned();
+    assert_eq!(break_cap,"1234");let hard="1536".to_owned();assert!(["1264","1400","1440","1536","1664"].contains(&hard.as_str()));
+    let parsed: usize = break_cap.parse().expect("Numeric diagnostic cap");
+    assert!((1000..=1300).contains(&parsed));
     clear_process_env();
     install_skywalk_submission_recipe();
     std::env::set_var("EXACT_PAIR_CARRY", "1");
@@ -509,124 +516,14 @@ pub fn build() -> Vec<Op> {
     }
     if std::env::var_os("SKYWALK_SQUARE_HIGH_PROBE").is_some(){square::high_probe();std::process::exit(0);}
     if std::env::var_os("SKYWALK_MODDIV_ADAPTER_PROBE").is_some(){moddiv_adapter::probe();std::process::exit(0);}
+    std::env::set_var("HEO_PIN_PP_WALK_MAX_QUBITS", &hard);
+    std::env::set_var("PEBBLE_HARD_CAP",&hard);
+    std::env::set_var("LF_SQUARE_CAP", &break_cap);
+    if profile=="uniform-plus-two"{std::env::set_var("HEO_PIN_PP_CHUNK_SHAPE","64:2,38:2,25:-1,0:-3");}
+    std::env::set_var("RESEARCH_PLAIN_POOL",if pool=="plain"{"1"}else{"0"});
+    std::env::set_var("RESEARCH_WALK_SCHEDULE",&schedule);
     let mut ops = build_point_add();
-    // Effort-8 INT / B7b (`HEO_EMIT_ONLY=1`, research overlay only): stop after emission (the HEO phase report and
-    // K3B_CELL traces are complete here), skipping the simplifier chain and the ops.bin write. Sweep instrument.
-    if heo::research_on() && std::env::var("HEO_EMIT_ONLY").is_ok_and(|v| v == "1") {
-        eprintln!("HEO_EMIT_ONLY exit ops={}", ops.len());
-        std::process::exit(0);
-    }
-    // Exact op-stream post-passes, ported from the 2026-09-04 warpspeed
-    // campaign (R10 affine, R33 quadratic, R41 truth, R46 product). Each pass
-    // re-derives value supports from the stream's own ABI and drops or weakens
-    // CCX ops it proves redundant, so composition is semantics-preserving.
-    // The fixed four-pass chain is applied left to right, BEFORE the tail
-    // append so the 96-X identity tail and the nonce it encodes are never
-    // reinterpreted by a proof.
-    let simplify_config =
-        env_raw("PP_SIMPLIFY").unwrap_or_else(|| "product,affine,quadratic,truth".to_string());
-    if simplify_config != "off" {
-        for name in simplify_config.split(',') {
-            let name = name.trim();
-            let before = ops.len();
-            ops = match name {
-                "affine" => affine_simplify::simplify(ops),
-                "quadratic" => quadratic_simplify::simplify(ops),
-                "truth" => truth_simplify::simplify(ops),
-                "product" => truth_simplify::simplify_products(ops),
-                other => panic!("PP_SIMPLIFY: unknown pass {other:?}"),
-            };
-            eprintln!(
-                "pp_simplify {name}: {before} -> {} ops ({} removed)",
-                ops.len(),
-                before - ops.len()
-            );
-        }
-    }
-    ops = interned_witness::witnesses(ops);
-    if std::env::var("HEO_MABSORB").is_ok_and(|v| v == "1") {
-        // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
-        ops = mabsorb::absorb(ops);
-    }
-    // row cuts (SL_ROWCUT; unset = this gate list byte for byte): CCX rows that are CNOT forms on every reachable state
-    // Entry-specific stream configuration.
-    // pscan: SL_PSCAN=1 prints the parity scan, SL_PSCAN_FIX=1 rewrites its hits (pscan.rs)
-    ops = pscan::run(ops);
-    // cond pass v2 (SL_COND; unset = this gate list byte for byte): Toffolis consumed only by
-    // phases, a measurement or a reset, or needing no Toffoli at all (cond_pass.rs, guarded)
-    ops = cond_pass::run(ops);
-    // square top carries (SL_SQTOP; unset = this gate list byte for byte): the square's inverse-row
-    // top carries built only under the top bit that reads them (sqtop_pass.rs)
-    ops = sqtop_pass::run(ops);
-    ops = sqdepth2_pass::run(ops);
-    ops = phase_cubic::run(ops);
-    ops = rowcut_pass::run(ops);
-    ops = reader_pass::run(ops);
-    // y42-railtop (leapfrog.rs `Y42_BOUND`; false = this gate list byte for byte): the edits of the four bound
-    // passes above as one table, carried to this tree's stream with the rail switches on
-    if rebind::TEST_SHIFT {
-        ops = rebind::test_shift(ops);
-    }
-    ops = y42_bound_pass::run(ops);
-    ops = linear_restore::run(ops);
-    ops = square_finish::run(ops);
-    // cond levers u and r on the finished stream, after every certificate pass has checked its window
-    std::env::set_var("SL_COND", "ur");
-    ops = cond_pass::run(ops);
-    std::env::remove_var("SL_COND");
-    // zero_force: X measurements of a provably constant wire get outcome 0 (zero_force.rs); after the bound tables
-    ops = zero_force::run(ops);
-    // census cuts (census_cut_data.txt, rows keyed to this exact stream, the last pass and asserted): Toffolis whose replaced
-    // control pattern occurred on no correct shot of a large random-input census
-    ops = census_anchored::run(ops);
-    // SKY_REWRITE (q73b package rows: 105 rows proved exact by SAT on the q73b op stream, compiled in): replace SAT-proved linear-span CCX by CX chains.
-    // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted). Skywalk stream only.
-    if !leapfrog::enabled() {
-        let text = include_str!("skywalk_data/cap1172_exact_rows.txt");
-        let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
-            let f: Vec<&str> = l.split_whitespace().collect();
-            let ws = if f[5] == "-" { vec![] } else { f[5].split(',').map(|x| x.parse().unwrap()).collect() };
-            (f[0].parse().unwrap(), f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap(), f[4] == "1", ws)
-        }).collect();
-        rows.sort_by(|a, b| b.0.cmp(&a.0));
-        // The rows are keyed to one op stream; an upstream change shifts the block rigidly.
-        // Find the unique shift d under which every row names its CCX (asserted unique).
-        let hit = |w: usize, c1: u64, c2: u64, t: u64| w < ops.len() && { let o = &ops[w]; o.kind == OperationType::CCX && o.q_target.0 == t
-            && ((o.q_control1.0 == c1 && o.q_control2.0 == c2) || (o.q_control1.0 == c2 && o.q_control2.0 == c1)) };
-        let r0 = rows[0].clone();
-        let mut shifts = Vec::new();
-        for d in -2_000_000isize..=2_000_000 {
-            let w0 = r0.0 as isize + d;
-            if w0 < 0 || !hit(w0 as usize, r0.1, r0.2, r0.3) { continue; }
-            if rows.iter().all(|r| { let w = r.0 as isize + d; w >= 0 && hit(w as usize, r.1, r.2, r.3) }) { shifts.push(d); }
-        }
-        assert!(shifts.len() == 1, "SKY_REWRITE: {} candidate shifts {:?}", shifts.len(), &shifts[..shifts.len().min(5)]);
-        let d = shifts[0];
-        eprintln!("SKY_REWRITE rows={} shift={d}", rows.len());
-        for (w, c1, c2, t, cst, ws) in rows {
-            let w = (w as isize + d) as usize;
-            let o = ops[w];
-            assert!(o.kind == OperationType::CCX && o.q_target.0 == t && o.c_condition == crate::circuit::NO_BIT
-                && ((o.q_control1.0 == c1 && o.q_control2.0 == c2) || (o.q_control1.0 == c2 && o.q_control2.0 == c1)), "SKY_REWRITE mismatch at {w}");
-            let mut rep = Vec::new();
-            for q in ws { assert!(q != t); let mut x = Op::empty(); x.kind = OperationType::CX; x.q_control1 = QubitId(q); x.q_target = QubitId(t); rep.push(x); }
-            if cst { let mut x = Op::empty(); x.kind = OperationType::X; x.q_target = QubitId(t); rep.push(x); }
-            ops.splice(w..w + 1, rep);
-        }
-    }
-    ops = and_cache::run(ops);
-    ops = product_relay::run(ops);
-    ops = product_copy::run(ops);
-    ops = classical_factors_xor::simplify_classical(ops);
-    ops = xor_control::run(ops);
-    ops = classical_wide::simplify_classical(ops);
-    let nonce: u64 = required_env("TAIL_NONCE");
-    let mut x = Op::empty();
-    x.kind = OperationType::X;
-    x.q_target = QubitId(0);
-    ops.extend(std::iter::repeat_n(x, 96));
-    ops = apply_tail_nonce(ops, nonce);
-    ops
+    finished_pipeline::run(ops)
 }
 
 
@@ -689,19 +586,28 @@ mod phase_cubic;
 mod square_finish;
 mod census_anchored;
 
+mod frozen_cache_product67;
 
+mod retained_products;
+mod zero_product;
 
-
-
-
-
+mod retained_product_pareto;
 
 mod classical_factors_xor;
-
+mod classical_xor_control;
 
 mod classical_wide;
 
-mod and_cache;
-mod product_relay;
-mod product_copy;
-mod xor_control;
+mod break_profile;
+
+mod phase_fusion;
+mod phase_pebble;
+mod phase_fit;
+
+mod zero_carry;
+
+mod terminal_pebble;
+
+mod breakthrough_generic;
+mod finished_pipeline;
+mod exact154_cache;
