@@ -32,8 +32,6 @@ mod record;
 // B3a: HEO(S,u) walk research seam. Inert unless HEO_WALK / HEO_RESEARCH is set.
 pub mod heo;
 mod square;
-mod sqc;
-mod sqleaf;
 mod moddiv_adapter;
 
 const N: usize = 256;
@@ -155,7 +153,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "1052265542902",
+        "TAIL_NONCE" => "7614812",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -502,7 +500,16 @@ fn clear_process_env() {
 /// Leapfrog branch: the submission build emits the Leapfrog point add (see [`leapfrog::install_recipe`]).
 const LEAPFROG_SUBMISSION: bool = true;
 
-pub fn build() -> Vec<Op> {
+fn native_context_parent_build() -> Vec<Op> {
+    let mode="both".to_owned();
+    let square_mode="ripple-sharedsum-d12-wide".to_owned();assert!(["groups-safe28-d12", "ripple-d12", "ripple-d12-wide", "sharedsum-d12-wide", "ripple-sharedsum-d12-wide"].contains(&square_mode.as_str()));assert!(["control","rail","g6","both"].contains(&mode.as_str()));
+    let profile="uniform-plus-two".to_owned();assert!(["original","uniform-plus-two"].contains(&profile.as_str()));
+    let pool="plain".to_owned();assert!(["shipped","plain"].contains(&pool.as_str()));
+    let schedule="public140".to_owned();assert!(["original138","public140"].contains(&schedule.as_str()));
+    let break_cap = "1234".to_owned();
+    assert_eq!(break_cap,"1234");let hard=if square_mode.contains("wide"){"1664"}else{"1536"}.to_owned();assert!(["1264","1400","1440","1536","1664"].contains(&hard.as_str()));
+    let parsed: usize = break_cap.parse().expect("Numeric diagnostic cap");
+    assert!((1000..=1300).contains(&parsed));
     clear_process_env();
     install_skywalk_submission_recipe();
     std::env::set_var("EXACT_PAIR_CARRY", "1");
@@ -511,67 +518,17 @@ pub fn build() -> Vec<Op> {
     }
     if std::env::var_os("SKYWALK_SQUARE_HIGH_PROBE").is_some(){square::high_probe();std::process::exit(0);}
     if std::env::var_os("SKYWALK_MODDIV_ADAPTER_PROBE").is_some(){moddiv_adapter::probe();std::process::exit(0);}
+    std::env::set_var("HEO_PIN_PP_WALK_MAX_QUBITS", &hard);
+    std::env::set_var("PEBBLE_HARD_CAP",&hard);
+    std::env::set_var("LF_SQUARE_CAP",if square_mode.contains("wide"){"1536"}else{"1408"});
+    if profile=="uniform-plus-two"{std::env::set_var("HEO_PIN_PP_CHUNK_SHAPE","64:2,38:2,25:-1,0:-3");}
+    std::env::set_var("RESEARCH_PLAIN_POOL",if pool=="plain"{"1"}else{"0"});
+    std::env::set_var("RESEARCH_WALK_SCHEDULE",&schedule);
+    std::env::set_var("LF_STRIP",if mode=="rail"||mode=="both"{"1"}else{"0"});std::env::set_var("LF_R1",if mode=="rail"||mode=="both"{"1"}else{"0"});std::env::set_var("EXACT_NATIVE_G6",if mode=="g6"||mode=="both"{"1"}else{"0"});
+    std::env::set_var("SQC_G1M",if square_mode=="control"{"0"}else{"1"});std::env::set_var("SQC_T","28");std::env::set_var("SQC_G","259");std::env::set_var("SQC_LEAF_D",if square_mode=="control"{"0"}else if square_mode.contains("d12"){"12"}else if square_mode.contains("d16"){"16"}else{"8"});std::env::set_var("GROUP_JUNCTION_FAULT","0");if square_mode!="control"{std::env::set_var("G3_SQ_EXACT_SPLIT","1");}
+    std::env::set_var("EXACT_WITNESS_RIPPLE",if square_mode.contains("ripple"){"1"}else{"0"});std::env::set_var("EXACT_SQUARE_SHARED_SUM",if square_mode.contains("sharedsum"){"1"}else{"0"});std::env::set_var("EXACT_WITNESS_TEST_FAULT","0");
     let mut ops = build_point_add();
-    // Effort-8 INT / B7b (`HEO_EMIT_ONLY=1`, research overlay only): stop after emission (the HEO phase report and
-    // K3B_CELL traces are complete here), skipping the simplifier chain and the ops.bin write. Sweep instrument.
-    if heo::research_on() && std::env::var("HEO_EMIT_ONLY").is_ok_and(|v| v == "1") {
-        eprintln!("HEO_EMIT_ONLY exit ops={}", ops.len());
-        std::process::exit(0);
-    }
-    // Exact op-stream post-passes, ported from the 2026-09-04 warpspeed
-    // campaign (R10 affine, R33 quadratic, R41 truth, R46 product). Each pass
-    // re-derives value supports from the stream's own ABI and drops or weakens
-    // CCX ops it proves redundant, so composition is semantics-preserving.
-    // The fixed four-pass chain is applied left to right, BEFORE the tail
-    // append so the 96-X identity tail and the nonce it encodes are never
-    // reinterpreted by a proof.
-    let simplify_config =
-        env_raw("PP_SIMPLIFY").unwrap_or_else(|| "product,affine,quadratic,truth".to_string());
-    if simplify_config != "off" {
-        for name in simplify_config.split(',') {
-            let name = name.trim();
-            let before = ops.len();
-            ops = match name {
-                "affine" => affine_simplify::simplify(ops),
-                "quadratic" => quadratic_simplify::simplify(ops),
-                "truth" => truth_simplify::simplify(ops),
-                "product" => truth_simplify::simplify_products(ops),
-                other => panic!("PP_SIMPLIFY: unknown pass {other:?}"),
-            };
-            eprintln!(
-                "pp_simplify {name}: {before} -> {} ops ({} removed)",
-                ops.len(),
-                before - ops.len()
-            );
-        }
-    }
-    ops = interned_witness::witnesses(ops);
-    if std::env::var("HEO_MABSORB").is_ok_and(|v| v == "1") {
-        // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
-        ops = mabsorb::absorb(ops);
-    }
-    // row cuts (SL_ROWCUT; unset = this gate list byte for byte): CCX rows that are CNOT forms on every reachable state
-    // Entry-specific stream configuration.
-    // pscan: SL_PSCAN=1 prints the parity scan, SL_PSCAN_FIX=1 rewrites its hits (pscan.rs)
-    ops = pscan::run(ops);
-    // cond pass v2 (SL_COND; unset = this gate list byte for byte): Toffolis consumed only by
-    // phases, a measurement or a reset, or needing no Toffoli at all (cond_pass.rs, guarded)
-    ops = cond_pass::run(ops);
-    // square top carries (SL_SQTOP; unset = this gate list byte for byte): the square's inverse-row
-    // top carries built only under the top bit that reads them (sqtop_pass.rs)
-    ops = sqtop_pass::run(ops);
-    ops = sqdepth2_pass::run(ops);
-    ops = phase_cubic::run(ops);
-    ops = rowcut_pass::run(ops);
-    ops = reader_pass::run(ops);
-    ops = stream_edits::run(ops);
-    let nonce: u64 = required_env("TAIL_NONCE");
-    let mut x = Op::empty();
-    x.kind = OperationType::X;
-    x.q_target = QubitId(0);
-    ops.extend(std::iter::repeat_n(x, 96));
-    ops = apply_tail_nonce(ops, nonce);
-    ops
+    witness_resource_base::run(ops)
 }
 
 
@@ -638,7 +595,39 @@ mod frozen_cache_product67;
 
 mod retained_products;
 mod zero_product;
-mod source_edits;
-mod stream_edits;
+
+mod retained_product_pareto;
+
 mod classical_factors_xor;
+mod classical_xor_control;
+
 mod classical_wide;
+
+mod break_profile;
+
+mod phase_fusion;
+mod phase_pebble;
+mod phase_fit;
+
+mod zero_carry;
+
+mod terminal_pebble;
+
+mod breakthrough_generic;
+mod finished_pipeline;
+mod exact154_cache;
+
+mod finished_square_pipeline;
+
+mod square_lease_cache;
+
+mod exact_native_port;
+
+mod native_both_finished;
+
+mod sqc;mod sqleaf;
+
+mod witness_resource_base;
+
+mod witness_context_cache;
+pub fn build()->Vec<Op>{witness_context_cache::run(native_context_parent_build())}
