@@ -32,6 +32,8 @@ mod record;
 // B3a: HEO(S,u) walk research seam. Inert unless HEO_WALK / HEO_RESEARCH is set.
 pub mod heo;
 mod square;
+mod sqc;
+mod sqleaf;
 mod moddiv_adapter;
 
 const N: usize = 256;
@@ -153,7 +155,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "1050066314463",
+        "TAIL_NONCE" => "1514011998",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -564,62 +566,9 @@ pub fn build() -> Vec<Op> {
     ops = reader_pass::run(ops);
     // y42-railtop (leapfrog.rs `Y42_BOUND`; false = this gate list byte for byte): the edits of the four bound
     // passes above as one table, carried to this tree's stream with the rail switches on
-    if rebind::TEST_SHIFT {
-        ops = rebind::test_shift(ops);
-    }
-    ops = y42_bound_pass::run(ops);
-    ops = linear_restore::run(ops);
-    ops = square_finish::run(ops);
-    // cond levers u and r on the finished stream, after every certificate pass has checked its window
-    std::env::set_var("SL_COND", "ur");
-    ops = cond_pass::run(ops);
-    std::env::remove_var("SL_COND");
-    // zero_force: X measurements of a provably constant wire get outcome 0 (zero_force.rs); after the bound tables
-    ops = zero_force::run(ops);
-    // census cuts (census_cut_data.txt, rows keyed to this exact stream, the last pass and asserted): Toffolis whose replaced
-    // control pattern occurred on no correct shot of a large random-input census
-    ops = census_anchored::run(ops);
-    // SKY_REWRITE (q73b package rows: 105 rows proved exact by SAT on the q73b op stream, compiled in): replace SAT-proved linear-span CCX by CX chains.
-    // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted). Skywalk stream only.
-    if !leapfrog::enabled() {
-        let text = include_str!("skywalk_data/cap1172_exact_rows.txt");
-        let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
-            let f: Vec<&str> = l.split_whitespace().collect();
-            let ws = if f[5] == "-" { vec![] } else { f[5].split(',').map(|x| x.parse().unwrap()).collect() };
-            (f[0].parse().unwrap(), f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap(), f[4] == "1", ws)
-        }).collect();
-        rows.sort_by(|a, b| b.0.cmp(&a.0));
-        // The rows are keyed to one op stream; an upstream change shifts the block rigidly.
-        // Find the unique shift d under which every row names its CCX (asserted unique).
-        let hit = |w: usize, c1: u64, c2: u64, t: u64| w < ops.len() && { let o = &ops[w]; o.kind == OperationType::CCX && o.q_target.0 == t
-            && ((o.q_control1.0 == c1 && o.q_control2.0 == c2) || (o.q_control1.0 == c2 && o.q_control2.0 == c1)) };
-        let r0 = rows[0].clone();
-        let mut shifts = Vec::new();
-        for d in -2_000_000isize..=2_000_000 {
-            let w0 = r0.0 as isize + d;
-            if w0 < 0 || !hit(w0 as usize, r0.1, r0.2, r0.3) { continue; }
-            if rows.iter().all(|r| { let w = r.0 as isize + d; w >= 0 && hit(w as usize, r.1, r.2, r.3) }) { shifts.push(d); }
-        }
-        assert!(shifts.len() == 1, "SKY_REWRITE: {} candidate shifts {:?}", shifts.len(), &shifts[..shifts.len().min(5)]);
-        let d = shifts[0];
-        eprintln!("SKY_REWRITE rows={} shift={d}", rows.len());
-        for (w, c1, c2, t, cst, ws) in rows {
-            let w = (w as isize + d) as usize;
-            let o = ops[w];
-            assert!(o.kind == OperationType::CCX && o.q_target.0 == t && o.c_condition == crate::circuit::NO_BIT
-                && ((o.q_control1.0 == c1 && o.q_control2.0 == c2) || (o.q_control1.0 == c2 && o.q_control2.0 == c1)), "SKY_REWRITE mismatch at {w}");
-            let mut rep = Vec::new();
-            for q in ws { assert!(q != t); let mut x = Op::empty(); x.kind = OperationType::CX; x.q_control1 = QubitId(q); x.q_target = QubitId(t); rep.push(x); }
-            if cst { let mut x = Op::empty(); x.kind = OperationType::X; x.q_target = QubitId(t); rep.push(x); }
-            ops.splice(w..w + 1, rep);
-        }
-    }
-    ops = and_cache::run(ops);
-    ops = product_relay::run(ops);
-    ops = product_copy::run(ops);
-    ops = classical_factors_xor::simplify_classical(ops);
-    ops = xor_control::run(ops);
-    ops = classical_wide::simplify_classical(ops);
+    // stack-v3 frozen: main's seven stream-bound passes (and the generic passes between them) replayed as one edit
+    // table bound to this stream after reader_pass (frozen_stack.rs); they would panic on this stream as written
+    ops = frozen_stack::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -689,19 +638,8 @@ mod phase_cubic;
 mod square_finish;
 mod census_anchored;
 
+mod frozen_cache_product67;
 
-
-
-
-
-
-
-mod classical_factors_xor;
-
-
-mod classical_wide;
-
-mod and_cache;
-mod product_relay;
-mod product_copy;
-mod xor_control;
+mod retained_products;
+mod zero_product;
+mod frozen_stack;

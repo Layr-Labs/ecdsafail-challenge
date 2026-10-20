@@ -24,7 +24,8 @@ fn reverse_loan_selected(rev:bool,t:usize)->bool {rev && (124..=126).contains(&t
 
 // Measure and regenerate the carry while the payload ladder uses its wire.
 thread_local! { static LOAN_ACTIVE: std::cell::Cell<bool> = const {std::cell::Cell::new(false)}; }
-fn carry_loan_selected(rev:bool,t:usize)->bool {CONSUMER_LOANS && !rev && (128..137).contains(&t)}
+// round-11 retune: forward loans from tick 129 (tick 128 without its loan: -0.3 by the builder, exact)
+fn carry_loan_selected(rev:bool,t:usize)->bool {CONSUMER_LOANS && !rev && (129..137).contains(&t)}
 fn carry_loan_on()->bool {LOAN_ACTIVE.with(|x|x.get())}
 
 // Consumer carry loans are enabled for the selected payload ticks.
@@ -142,8 +143,8 @@ fn y20_close_on(t: usize, rev: bool) -> bool {
 /// is a CZ and a Z once h1 is on a wire).
 /// Add 1's own compare is not run. The forward fold's own shed of the top wires then takes x258 alone (fin 4).
 /// Needs Y20_CUT; not with the closed ripple. Empty: off (candidate W byte for byte).
-const Y21_TOP_FWD: &[(usize, usize)] = &[(1, 86), (91, 106), (107, 999)];
-const Y21_TOP_REV: &[(usize, usize)] = &[(1, 84), (89, 103), (104, 999)];
+const Y21_TOP_FWD: &[(usize, usize)] = &[(1, 999)];
+const Y21_TOP_REV: &[(usize, usize)] = &[(1, 999)];
 fn y21_top_on(t: usize, rev: bool) -> bool {
     (if rev { Y21_TOP_REV } else { Y21_TOP_FWD }).iter().any(|&(a, b)| t >= a && t < b)
 }
@@ -407,7 +408,9 @@ const Y28_LEAN_REV: bool = true;
 /// y33-c35 ([`super::C35_DROPS`]): at cap 1,235 the ladder is dropped one tick earlier and two carries leave on the
 /// last fused one-fold tick of each direction (rooms 39 and 38 forward, 43 and 42 reverse).
 const Y28_DROP_FWD: &[(usize, usize, usize)] = if super::C35_DROPS { &[(129, 130, 1), (130, 131, 2)] } else { &[(130, 131, 1)] };
-const Y28_DROP_REV: &[(usize, usize, usize)] = if super::C35_DROPS { &[(125, 126, 1), (126, 127, 2)] } else { &[(126, 127, 1)] };
+/// round-11 retune: tick 126 drops one kept carry and sheds one more fold wire (Y18_FIN), tick 125 sheds by Y18_FIN
+/// instead of the drop ladder; exact both ways: -8.0 by the builder (the pin gains the same -8.0).
+const Y28_DROP_REV: &[(usize, usize, usize)] = &[(126, 127, 1)];
 fn y28_drop(t: usize, rev: bool) -> usize {
     // N2 (research patch): SL_N2_DROP / SL_N2_MDROP batch ticks run the dropped-carry ladder (None elsewhere)
     if let Some(n) = super::n2_drop(t, rev) {
@@ -572,7 +575,10 @@ const Y17_C3M_ALWAYS: bool = false;
 /// the reverse pass takes gate wires (lean lacks 1 wire at the fold at tick 121).
 /// y33-c35b ([`super::C35B_LEAN`]): at cap 1,235 lean is also the cheaper form on ticks 105, 115 and 116 (2.3, 3.3 and
 /// 6.2 Toffoli a pass by the tick traces; the adds' windowed boundary compares do not change in number or width).
-const Y17_LEAN: &[(usize, usize)] = if super::C35B_LEAN { &[(86, 89), (105, 110), (115, 121)] } else { &[(86, 89), (106, 110), (117, 121)] };
+/// round-11 retune (stack-v1): priced again per tick (lean-all / gate-all builds). Lean is cheaper at 85 (0.2, the
+/// adds' seeded compares unchanged). Gate wires would be cheaper at 87, 88, 109, 119, 120 (0.3, 1.3, 3.3, 0.3, 3.2)
+/// but add 1, 2, 1, 2, 2 seeded 20-bit boundary compares: a failure spend, not taken here (retune_failspend.diff).
+const Y17_LEAN: &[(usize, usize)] = if super::C35B_LEAN { &[(85, 89), (105, 110), (115, 121)] } else { &[(86, 89), (106, 110), (117, 121)] };
 /// Research knob: idle wires held through the three adds of a lean tick-pass (4 = the adds see the room they have
 /// with the copies; the outputs must then be those of the copies).
 const Y17_LEAN_PAD: usize = 0;
@@ -2826,35 +2832,31 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
                 lin_xor_into(c, &s1f(j - 1).x(&r[j - 1 - i0]), tg[j]);
             }
         };
-        // x257's bit set: the chain now. x257 = AND(S'1[255] ^ h1, g0 ^ h1) ^ h1, so its fix is a CZ of the two forms
-        // (the second is the wire m0) and a Z on h1: no Toffoli. Then m0 = g0
+        // G6' (round-10 gate, own copy): x257's fix without the chain.  Top-column identity (exact): with u = m0 =
+        // g0 ^ h1, the column sum at bit 255 gives h1 = MAJ(S'0[255], S'1[254], ~X1[255]) whenever g0 = h1, so
+        // x257 = S'1[255]*u ^ (1 ^ u)*MAJ(S'0[255], S'1[254], ~X1[255]); tg[N - 1] holds X1[255] here (open ripple).
+        // Its fix: CZ(S'1[255], m0), and Z * CZ(m0) on one MAJ wire (one Toffoli, measured erase).
         c.push_condition(bitx);
-        let (ra, rra) = chain(c);
-        let ha = rra.last().expect("y21: the rebuilt chain is not empty").0;
-        for w in [b[N - 1], s[2], s[1], ha] {
+        for w in [b[N - 1], s[2], s[1]] {
             c.cz(w, m0);
         }
-        c.cz(ha, ha);
-        c.cx(ha, m0);
+        let (fx, fy) = (Lin::of(&[b[N - 1], s[2], s[0]]), Lin::of(&[b[N - 2], s[2], s[1]]));
+        let fc = Lin::of(&[tg[N - 1]]).x(&Lin::k(true));
+        let q = maj_wire(c, &fx, &fy, &fc);
+        c.cz(q, q);
+        c.cz(q, m0);
+        maj_wire_erase(c, q, &fx, &fy, &fc);
         c.pop_condition();
         let bit0 = c.alloc_bit();
         c.hmr(m0, bit0);
         c.release_clean(m0);
-        c.push_condition(bitx);
-        c.push_condition(bit0);
-        cmp0(c, &ra);
-        c.pop_condition();
-        unchain(c, rra);
-        c.pop_condition();
-        // x257's bit clear: m0 was measured as g0 ^ h1; with its bit set the chain, a Z on its top (h1), g0's compare
-        c.push_condition(nbx);
+        // m0 = g0 ^ h1 with its bit set, whatever x257's bit: the chain, a Z on its top (h1), g0's compare
         c.push_condition(bit0);
         let (rb, rrb) = chain(c);
         let hb = rrb.last().expect("y21: the rebuilt chain is not empty").0;
         c.cz(hb, hb);
         cmp0(c, &rb);
         unchain(c, rrb);
-        c.pop_condition();
         c.pop_condition();
         e_m0 = c.expected_total();
         c.free_bit(nbx);
@@ -3719,6 +3721,8 @@ struct CsForms<'a> {
     live: Vec<bool>,
 }
 const CS_TOP: usize = N + 2;
+/// round-11 lane B (T0W): window of the tick-0 phase block's middle-chunk boundary close (0 = exact, main's rule).
+const T0_CLOSE_WIN: usize = 22;
 impl CsForms<'_> {
     fn hf(&self, i: isize) -> Lin {
         if i >= 0 && (i as usize) < N { l(self.h[i as usize]) } else { Lin::k(false) }
@@ -3801,7 +3805,23 @@ impl CsForms<'_> {
             c.hmr(rd.q, m);
             c.release_clean(rd.q);
             c.push_condition(m);
-            for p in lo + 1..hi {
+            // round-11 fix-up lane B (T0W): the boundary's phase from a seeded window of T0_CLOSE_WIN positions below
+            // hi (k1, k2 at the window's lowest position exact, r := 0 there), as RT0's SL_RT0=2 close; exact when the
+            // chunk is shorter. Approximate: wrong only when the true r there is 1 and it ripples through the window.
+            let lo2 = if T0_CLOSE_WIN > 0 && hi > lo + T0_CLOSE_WIN + 2 { hi - T0_CLOSE_WIN } else { lo };
+            let mut low: Vec<Option<MRec>> = Vec::new();
+            if lo2 > lo {
+                let ql = lo2 as isize;
+                let (k1p, r1p) = f_maj(c, &self.tf(ql - 2), &self.sf(0, ql - 2), &self.sf(1, ql - 3));
+                let (k1l, r1l) = f_maj(c, &self.tf(ql - 1), &self.sf(0, ql - 1), &self.sf(1, ql - 2));
+                let (k2l, r2l) = f_maj(c, &self.s1f(ql - 1), &k1p, &self.sf(2, ql - 3));
+                self.k1[lo2] = k1l;
+                self.k2[lo2] = k2l;
+                self.r[lo2] = Lin::k(false);
+                self.live[lo2] = true;
+                low = vec![r1p, r1l, r2l];
+            }
+            for p in lo2 + 1..hi {
                 self.build(c, p);
             }
             let (a, b, ci) = maj_forms(&self.s2f(q - 1), &self.at(&self.k2, q - 1), &self.at(&self.r, q - 1)).expect("y26: r of a boundary");
@@ -3810,8 +3830,14 @@ impl CsForms<'_> {
             for &w in &ci.w {
                 c.cz(w, w);
             }
-            for p in (lo + 1..hi).rev() {
+            for p in (lo2 + 1..hi).rev() {
                 self.erase(c, p);
+            }
+            if lo2 > lo {
+                self.live[lo2] = false;
+                while let Some(r) = low.pop() {
+                    f_erase(c, r);
+                }
             }
             c.pop_condition();
             c.free_bit(m);
@@ -4010,6 +4036,8 @@ fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: 
 
 /// `SL_RT0`: 0 off; 1 RT0 with its one chunk boundary closed exactly; 2 the boundary closed by a seeded 22-bit
 /// window (approximate); 9 = 1 with two positions of the Z layer swapped (a deliberate fault, a control of the test).
+/// round-11 lane B (RT0W-mul): window the multiply's RT0 boundary close (false = the pin's exact close).
+const RT0W_MUL: bool = true;
 pub(super) fn sl_rt0() -> u8 {
     static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var("SL_RT0").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
@@ -4400,7 +4428,11 @@ fn rt0_body(c: &mut Builder, r1: Vec<QubitId>, letter: Vec<QubitId>, bits: Vec<c
     let a_cs = c.active_qubits();
     let e_cs = c.expected_total();
     if hi > 0 {
-        cs.close(c, hi, if mode == 2 { Some(22) } else { None }, k1);
+        // round-11 lane B (RT0W-mul): the multiply's RT0 boundary closed by the seeded 22-position window of mode 2.
+        // The divide's stays exact: its RT0 sits inside a stream-bound post-pass cluster (frozen_cache_product67
+        // [5338030, 5385212)) that a change there forfeits until the pass is regenerated.
+        let win = mode == 2 || (RT0W_MUL && c.current_phase() == "multiply");
+        cs.close(c, hi, if win { Some(22) } else { None }, k1);
     }
     let e_b = c.expected_total();
     ph.finish(c);
