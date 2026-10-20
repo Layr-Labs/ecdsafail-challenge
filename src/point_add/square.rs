@@ -157,55 +157,10 @@ fn diag_correction_known_top(circ:&mut Builder, x:&[QubitId], product:&[QubitId]
 /// SQ_CIN_SPREAD leaf: rows carry the whole diagonal spread through their
 /// carry-in, the top spread bit x[m-1]*2^(2m-1) is one CX onto a still-zero
 /// wire, and only the correction subtract remains. No preload, no spread add.
-/// round10/square-chains: one row of tri_square_cin (the loop body, verbatim; `continue` -> `return`).
-fn tri_row(circ:&mut Builder, x:&[QubitId], product:&[QubitId], inverse:bool, i:usize) {
-    let m=x.len();
-        let row=&product[2*i+1..i+m+1];
-        let borrowed=super::env_flag("SQ_BORROW_ROW_CARRIES").then(|| &product[m+i+1..2*m-1]);
-        if i==0 && row0_copy() {
-            // SQ_ROW0_COPY: row 0 on the zero window would leave
-            // F = x0 ? v+1 : 2^k - v. Store F - 1 = x0 ? v : ~v instead (top bit
-            // zero), which is Clifford and self-inverse. The leaf then holds
-            // x^2 - 2; see [`sub_square_offset`] for where the 2 goes.
-            for j in 0..m-1 { circ.cx(x[j+1],row[j]); circ.x(row[j]); circ.cx(x[0],row[j]); }
-            return;
-        }
-        if inverse && i==1 && row0_copy() && super::env_flag("SQ_ROW1_INVERSE_CARRIES") {
-            let out=row1_known_output(x);
-            if super::env_flag("I48_TRACE"){eprintln!("I48_ROW1 {} {}",m,circ.active_qubits());}
-            row_addsub_cin(circ,x[1],&x[2..],row,true,false,Some(&out),borrowed);
-            return;
-        }
-        if inverse && i==0 && super::env_flag("SQ_ROW0_INVERSE_CARRIES") {
-            // Before row 0 the product is all zero, so every framed output bit
-            // is known: x0 on the k low bits, 1 on the top.
-            let k=m-1;
-            let mut out=vec![(false,vec![x[0]]);k];
-            out.push((true,Vec::new()));
-            row_addsub_cin(circ,x[0],&x[1..],row,true,false,Some(&out),borrowed);
-            return;
-        }
-        // Forward row 0 sees a zero window: framed acc[0] = NOT x0 = NOT carry_in,
-        // so its first carry is x[1].
-        let first=super::env_flag("SQ_ROW0_CARRY") && !inverse && i==0;
-        row_addsub_cin(circ,x[i],&x[i+1..],row,inverse,first,None,borrowed);
-}
-
-/// round10/square-chains: leaf inverse with rows m-2..2 emitted by sqleaf (depth-D conditioned), rows 1, 0 as main.
-fn tri_square_cin_inv_native(circ:&mut Builder, x:&[QubitId], product:&[QubitId]) {
-    let m=x.len();
-    circ.cx(x[m-1],product[2*m-1]);
-    diag_correction_known_top(circ,x,product);
-    super::sqleaf::rows(circ,x,product);
-    tri_row(circ,x,product,true,1);
-    tri_row(circ,x,product,true,0);
-}
-
 fn tri_square_cin(circ:&mut Builder, x:&[QubitId], product:&[QubitId], inverse:bool) {
     let m=x.len();
     assert_eq!(product.len(),2*m);
     assert!(m>=3);
-    if inverse && m>=8 && super::sqleaf::active() { return tri_square_cin_inv_native(circ,x,product); }
     if inverse {
         circ.cx(x[m-1],product[2*m-1]);
         diag_correction_known_top(circ,x,product);
@@ -1214,12 +1169,6 @@ pub(super) fn sub_square_offset() -> U256 {
     let na = square_offset(h, "SQ_A_POLICY");
     let nb = square_offset(h, "SQ_B_POLICY");
     let nc = square_offset(h + 1, "SQ_C_POLICY");
-    if super::sqc::on() {
-        // C direct has no product offset; its correction ripple leaves out short by 2^129 in frame 2^128.
-        let wa = U256::from(1).add_mod(p - pow(h), p);
-        let wb = two_n.add_mod(p - pow(h), p);
-        return na.mul_mod(wa, p).add_mod(nb.mul_mod(wb, p), p).add_mod(pow(h + 1).mul_mod(pow(h), p), p);
-    }
     // out -= A (1 - 2^h) + B (2^N - 2^h) + C 2^h.
     let wa = U256::from(1).add_mod(p - pow(h), p);
     let wb = two_n.add_mod(p - pow(h), p);
@@ -1246,54 +1195,9 @@ fn sub_square_x(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
     }
 }
 
-/// round10/square-chains: the leaf square, for the C-direct wrap witness.
-pub(super) fn sqc_leaf(c: &mut Builder, x: &[QubitId], product: &[QubitId], inverse: bool) {
-    super::sqleaf::scoped(inverse, || tri_square_cin(c, x, product, inverse))
-}
-
-/// round10/square-chains (SQC_G1M=1): A folded in frame 1; out slid to frame 2^128 (one-digit REDC);
-/// C = (a+b)^2 added directly with chained rows; B folded in frame 2^128 (weight 2^128 - 1); slide back.
-fn sub_square_g1m(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
-    let h = N / 2;
-    let (y_lo, y_hi) = y.split_at(h);
-    let trace = std::env::var_os("SQC_TRACE").is_some();
-    let tt = |c: &Builder| c.report_totals().map(|t| t.1).unwrap_or(0.0);
-    let t0 = tt(circ);
-    super::sqleaf::scoped(!std::env::var("SQC_LEAF_A").is_ok_and(|v| v == "0"), || with_square(circ, y_lo, "SQ_A_POLICY", |circ, a2| {
-        mod_addsub(circ, true, a2, out);
-        fold_shifted(circ, false, a2, out, h);
-    }));
-    let t1 = tt(circ);
-    let (p0, k1) = (circ.take_win_peak(), super::sqc::redc(circ, out, false));
-    let p1 = circ.take_win_peak(); let t2 = tt(circ);
-    let outx: Vec<QubitId> = out[h..].iter().chain(out[..h].iter()).copied().collect();
-    let sum_carry = circ.alloc_qubit();
-    let mut sum = y_hi.to_vec();
-    sum.push(sum_carry);
-    add_wide(circ, y_lo, &sum);
-    let t3 = tt(circ);
-    let k2 = super::sqc::c_direct(circ, &outx, &sum);
-    let p2 = circ.take_win_peak(); let t4 = tt(circ);
-    restore_square_sum(circ, y_lo, &sum);
-    circ.free(sum_carry);
-    let t5 = tt(circ);
-    super::sqleaf::scoped(true, || with_square(circ, y_hi, "SQ_B_POLICY", |circ, b2| {
-        fold_shifted(circ, true, b2, &outx, h);
-        mod_addsub(circ, false, b2, &outx);
-    }));
-    let t6 = tt(circ);
-    let k3 = super::sqc::redc(circ, out, true);
-    let p3 = circ.take_win_peak(); let t7 = tt(circ);
-    if trace {
-        eprintln!("SQC_G1M A={:.1} slide_in={:.1}({}) peak={} sum={:.1} c_direct={:.1}({}) peak={} restore={:.1} B={:.1} slide_out={:.1}({}) peak={} p0={}",
-            t1 - t0, t2 - t1, k1, p1, t3 - t2, t4 - t3, k2, p2, t5 - t4, t6 - t5, t7 - t6, k3, p3, p0);
-    }
-}
-
 fn sub_square_body(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
     assert_eq!(y.len(), N);
     assert_eq!(out.len(), N);
-    if super::sqc::on() { return sub_square_g1m(circ, out, y); }
     let h = N / 2;
     let (y_lo, y_hi) = y.split_at(h);
 
