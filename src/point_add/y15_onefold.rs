@@ -19,12 +19,12 @@
 //! erase of m0 and m1) and y15-room (copies of W, measured clear, two lean wires, fused ticks); see Y15_KEEP_ROOM for
 //! how a reverse tick-pass chooses between the kept carries and the copies, and for the builder counts.
 use super::*;
-fn reverse_loan_selected(rev:bool,t:usize)->bool {rev && (124..=126).contains(&t) && CONSUMER_LOANS}
+fn reverse_loan_selected(rev:bool,t:usize)->bool {rev && (124..=126).contains(&t) && CONSUMER_LOANS && super::super::phase_fit::cap()<=1248}
 
 
 // Measure and regenerate the carry while the payload ladder uses its wire.
 thread_local! { static LOAN_ACTIVE: std::cell::Cell<bool> = const {std::cell::Cell::new(false)}; }
-fn carry_loan_selected(rev:bool,t:usize)->bool {CONSUMER_LOANS && !rev && (128..137).contains(&t)}
+fn carry_loan_selected(rev:bool,t:usize)->bool {CONSUMER_LOANS && !rev && (128..137).contains(&t) && super::super::phase_fit::cap()<=1248}
 fn carry_loan_on()->bool {LOAN_ACTIVE.with(|x|x.get())}
 
 // Consumer carry loans are enabled for the selected payload ticks.
@@ -437,6 +437,7 @@ fn y28_pads(t: usize, rev: bool) -> usize {
 /// The ladder's plans on bits [6, 56) for budgets 9 and 8 with the 0-based chunks whose kept carry is dropped
 /// (experiments/y28-loop/s2/ladder_drop.py: the cheapest of each kind).
 const Y28_PLAN9: ([usize; 10], [usize; 1]) = ([4, 8, 8, 7, 6, 5, 4, 3, 2, 3], [0]);
+const Y28_PLAN7: ([usize; 12], [usize; 5]) = ([7,6,6,5,5,4,4,3,3,2,2,3], [0,2,4,6,8]);
 const Y28_PLAN8: ([usize; 10], [usize; 2]) = ([7, 7, 7, 6, 6, 5, 4, 3, 2, 3], [0, 2]);
 /// y15-pack: with Y15_CORE_V2, Y15_KEEP_LOW and Y15_REV_COPY all on, the way a reverse tick-pass gets W's low bits is
 /// chosen by its room (the walk cap less the wires live when the tick's body starts): the adds' kept carries (no AND,
@@ -606,7 +607,7 @@ const Y17_FIXED_REV_LEAN: usize = Y16_FIXED_REV_COPY + 2;
 /// m0's erase will have with nothing shed; `need_m`: what it takes (its rebuilt chain and its compare); `pool`: the
 /// carries of the block; `fixed`: the wires the fold holds beside its ladder's carries.
 #[allow(clippy::too_many_arguments)]
-fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usize, pool: usize, fmax: usize, tops_max: usize, at: (bool, usize), drop: usize) -> (usize, usize, usize, usize, usize) {
+fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usize, pool: usize, fmax: usize, tops_max: usize, at: (bool, usize), drop: usize, core_route: Option<usize>) -> (usize, usize, usize, usize, usize) {
     if !Y16_SHED || !Y15_CORE_V2 || !Y15_JOINT_M || !on {
         return (0, 0, 0, 0, 0);
     }
@@ -614,7 +615,8 @@ fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usi
     let nbits = fold_window(at.1, at.0) - 6;
     let min_budget = (1..=nbits).find(|&b| merged_plan(nbits - 1, b).is_some() || merged_plan(nbits, b).is_some()).expect("y16: a ladder budget");
     // y28: the ladder with `drop` kept carries dropped early runs on that many wires fewer
-    let need = fixed + min_budget - drop - 2 * usize::from(Y15_LEAN45);
+    let reverse7=at.0&&nbits==50&&min_budget==10&&drop<=2&&super::super::phase_fit::cap()<1233&&cells::cap()<1233;
+    let need = if let Some(fin)=core_route{31-fin}else{fixed + min_budget - drop - 2 * usize::from(Y15_LEAN45)-usize::from(reverse7)};
     let (short_f, short_m) = (need.saturating_sub(room_fold), need_m.saturating_sub(room_m));
     // y18-next: the guard carries of m0's rebuilt chain come first for its erase (see Y18_GSHED)
     let gmax = if Y18_GSHED { Y15_GUARD.saturating_sub(1) } else { 0 };
@@ -634,7 +636,7 @@ fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usi
         at.1,
         usize::from(Y17_C3M)
     );
-    (block, tops, c3m, gsh, fin)
+    (block, tops, c3m, gsh, core_route.unwrap_or(fin))
 }
 
 pub(super) fn fused_fwd_on(t: usize) -> bool {
@@ -781,6 +783,8 @@ fn ladder_d(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: Qub
         let hi = lo + w;
         let last = j + 1 == plan.len();
         let direct = last && w >= 2;
+        if let Some(out)=phase_chunk_try(c,&acc[lo..hi],&add[lo..hi],cin,!last,direct){if let Some(out)=out{kept.push((lo,hi,cin,out));cin=out;}lo=hi;continue;}
+
         let mut cc = vec![cin];
         for i in lo..(if last { hi - 1 - direct as usize } else { hi }) {
             let t = m_carry(c, acc[i], &add[i], cc[i - lo]);
@@ -826,6 +830,8 @@ fn ladder_d(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: Qub
 /// One chunk of the fold's ladder, as [`ladder`] runs it: carries, sums written back, the carries erased. Returns the
 /// chunk's carry-out wire (a non-final chunk keeps it).
 fn ladder_chunk(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo: usize, w: usize, cin: QubitId, last: bool) -> Option<QubitId> {
+    if let Some(out)=phase_chunk_try(c,&acc[lo..lo+w],&add[lo..lo+w],cin,!last,last&&w>=2){return out;}
+
     let hi = lo + w;
     let direct = last && w >= 2;
     let mut cc = vec![cin];
@@ -867,6 +873,14 @@ fn kept_erase(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo: usize, hi: usiz
 }
 /// y28 (card s2-1): [`ladder`] with the kept carries of the chunks in `drops` dropped early.
 fn ladder_drop(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: QubitId, plan: &[usize], drops: &[usize]) {
+    let hard=super::super::phase_fit::cap();
+    let selected=if hard<1234&&plan==Y28_PLAN8.0&&drops==Y28_PLAN8.1&&c.active_qubits()as usize+8>hard{
+        assert!(c.active_qubits()as usize+7<=hard);Some((&Y28_PLAN7.0[..],&Y28_PLAN7.1[..]))
+    }else if hard<1234&&plan==Y28_PLAN9.0&&drops==Y28_PLAN9.1&&c.active_qubits()as usize+9>hard{
+        assert!(c.active_qubits()as usize+8<=hard);Some((&Y28_PLAN8.0[..],&Y28_PLAN8.1[..]))
+    }else{None};
+    let (plan,drops)=if let Some((p,d))=selected{eprintln!("PHASE_LOCAL_BOUNDARY_PLAN\t{}\t{}\t{}\t{:?}\t{:?}",c.current_phase(),c.op_count(),c.active_qubits(),p,d);(p,d)}else{(plan,drops)};
+
     let mw = acc.len();
     assert_eq!(plan.iter().sum::<usize>(), mw - lo0, "y15 fold plan covers bits [lo, MW)");
     // (lo, hi, carry-in wire, carry-out wire, still live)
@@ -1594,7 +1608,11 @@ fn fold_plan_d(c: &Builder, mw: usize, what: &str, drop: usize) -> (Vec<usize>, 
     let nbits = mw - 6;
     let lean45 = Y15_LEAN45 && merged_plan(nbits - 1, budget).is_none() && merged_plan(nbits, budget).is_none();
     let budget = budget + 2 * usize::from(lean45);
+    if what=="reverse"&&nbits==50&&(7..=9).contains(&budget)&&super::super::phase_fit::cap()<1233&&merged_plan(nbits-1,budget).is_none()&&merged_plan(nbits,budget).is_none(){
+        let (p,d):(&[usize],&[usize])=match budget{7=>(&Y28_PLAN7.0,&Y28_PLAN7.1),8=>(&Y28_PLAN8.0,&Y28_PLAN8.1),_=>(&Y28_PLAN9.0,&Y28_PLAN9.1)};return(p.to_vec(),lean45,d.to_vec());
+    }
     if drop > 0 && merged_plan(nbits - 1, budget).is_none() && merged_plan(nbits, budget).is_none() {
+
         assert!(nbits == 50 && budget + drop >= 10 && (8..=9).contains(&budget), "y28: the {what} fold's ladder with {drop} dropped carries does not fit: budget {budget}, active {}, cap {}", c.active_qubits(), cells::cap());
         return if budget == 9 { (Y28_PLAN9.0.to_vec(), lean45, Y28_PLAN9.1.to_vec()) } else { (Y28_PLAN8.0.to_vec(), lean45, Y28_PLAN8.1.to_vec()) };
     }
@@ -1829,6 +1847,9 @@ fn fold_fwd_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
     let k7 = r_and(c, &mut recs, t, fc3);
     k.push(k7);
     let mut add = if Y16_CORE { addend_prog(c, &mut recs, &k, &Y16_FWD_GATES, &Y16_FWD_OUT, mw) } else { addend_from_k(c, &mut recs, &k, mw) };
+    if core_loans_fin1::selected(mw,fin,ttm,esh.is_none()){LOAN_ACTIVE.with(|x|x.set(false));return core_loans_fin1::fold(c,acc,e,nm,k1,k2,[c1,c3,c4,c5,c6],recs,&a4,&a5,drop);}
+    if core_loans::selected(c,mw,fin,ttm,loan,esh.is_none()){LOAN_ACTIVE.with(|x|x.set(false));return core_loans::fold(c,acc,e,nm,k1,k2,[c1,c2,c3,c4,c5,c6],recs,&a4,&a5,drop);}
+
     if room_trace() {
         eprintln!("Y18_IDLE fwd recs={} idle={:?}", recs.len(), y18_idle(&recs, &add));
     }
@@ -2469,6 +2490,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     } else {
         Y16_FIXED_REV_COPY
     };
+    let core_room=room_now+(N-4).saturating_sub(sp2)+tops_max;let core_route=if !rev&&!close&&!deep&&!swap01&&Y18_FIN_MIN==0&&fold_window(t,false)==56&&super::super::phase_fit::cap()<1234&&cells::cap()<1234{if core_room>=31{Some(0)}else if core_room>=30{Some(1)}else{None}}else{None};
     let shed_for = |fixed: usize, fmax: usize| {
         y16_shed(
             shed_on,
@@ -2481,6 +2503,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
             tops_max,
             (rev, t),
             drop_n,
+            core_route,
         )
     };
     let shed0 = shed_for(shed_fixed, fmax);
@@ -3485,7 +3508,7 @@ thread_local! {
 struct T0Phase {
     k1: QubitId,
     k2: QubitId,
-    t: QubitId,
+    t: Option<QubitId>,
     /// per position j of the register the layer is on: (monomial, kept bit)
     at: Vec<Vec<(usize, crate::circuit::BitId)>>,
     done: Vec<bool>,
@@ -3494,6 +3517,12 @@ struct T0Phase {
 impl T0Phase {
     /// The plan of [`rot4_phase`] (`inv` = false) for an n-wire register; builds the AND of the shift letter.
     fn new(c: &mut Builder, k1: QubitId, k2: QubitId, n: usize, bits: Vec<crate::circuit::BitId>) -> T0Phase {
+        Self::make(c,k1,k2,n,bits,false)
+    }
+    fn owned(c: &mut Builder, k1: QubitId, k2: QubitId, n: usize, bits: Vec<crate::circuit::BitId>) -> T0Phase {
+        Self::make(c,k1,k2,n,bits,true)
+    }
+    fn make(c: &mut Builder, k1: QubitId, k2: QubitId, n: usize, bits: Vec<crate::circuit::BitId>, owned: bool) -> T0Phase {
         assert_eq!(bits.len(), n);
         let maps: Vec<Vec<usize>> = (0..4).map(|e| rot4_map(n, e)).collect();
         let anf: [&[usize]; 4] = [&[0, 1, 2, 3], &[1, 3], &[2, 3], &[3]];
@@ -3511,7 +3540,9 @@ impl T0Phase {
                 }
             }
         }
-        let t = and_new(c, k1, k2);
+        let hard=super::super::phase_fit::cap();
+        let direct=!owned&&Y29_FAULT==0&&k1!=k2&&hard<1234;
+        let t=if direct{eprintln!("PHASE_CUBIC_DIRECT\t{}\t{}\t{}\t{n}",c.current_phase(),c.op_count(),c.active_qubits());None}else{Some(and_new(c,k1,k2))};
         let mut at: Vec<Vec<(usize, crate::circuit::BitId)>> = vec![Vec::new(); n];
         for (&(j, mono), l) in acc.iter() {
             for &i in l {
@@ -3524,12 +3555,19 @@ impl T0Phase {
     fn z(&mut self, c: &mut Builder, j: usize, f: &Lin) {
         assert!(!self.done[j], "y26: position {j} twice");
         self.done[j] = true;
+        if self.t.is_none()&&self.at[j].iter().any(|&(mono,_)|mono==3){
+            let parity=c.alloc_bit();c.bit_store0(parity);
+            for &(mono,bit)in &self.at[j]{if mono==3{c.bit_xor_into(parity,bit);}}
+            c.push_condition(parity);phase_cubic_lin(c,self.k1,self.k2,f);c.pop_condition();c.free_bit(parity);
+        }
         for &(mono, bit) in &self.at[j] {
+            if mono==3&&self.t.is_none(){continue;}
+
             let ctl = match mono {
                 0 => None,
                 1 => Some(self.k1),
                 2 => Some(self.k2),
-                _ => Some(self.t),
+                _ => self.t,
             };
             for &q in &f.w {
                 match ctl {
@@ -3554,7 +3592,7 @@ impl T0Phase {
     /// Clear the AND of the shift letter as [`rot4_phase`] does and free the bits.
     fn finish(self, c: &mut Builder) {
         assert!(self.done.iter().all(|&d| d), "y26: a position of the Z layer was left out");
-        y29_phrot_clear(c, self.t, self.k1, self.k2);
+        if let Some(t)=self.t{y29_phrot_clear(c,t,self.k1,self.k2);}
         for b in self.bits {
             c.free_bit(b);
         }
@@ -3565,6 +3603,9 @@ impl T0Phase {
 /// the last on a wire of its own here). Returns the forms of W's bits [0, MW) and the undo list: every wire is erased
 /// by measurement with its build forms, last built first ([`pop_chain`]).
 fn fold_fwd_forms(c: &mut Builder, x: &[Lin], e: &[Lin; 3], nm: [QubitId; 3], k1: QubitId, k2: QubitId) -> (Vec<Lin>, Vec<Rec>) {
+    fold_fwd_forms_borrowed(c,x,e,nm,k1,k2,None)
+}
+fn fold_fwd_forms_borrowed(c: &mut Builder, x: &[Lin], e: &[Lin; 3], nm: [QubitId; 3], k1: QubitId, k2: QubitId, borrowed_tt: Option<QubitId>) -> (Vec<Lin>, Vec<Rec>) {
     assert!(Y15_CORE_V2 && Y16_CORE);
     let mw = x.len();
     let mut recs: Vec<Rec> = Vec::new();
@@ -3574,7 +3615,7 @@ fn fold_fwd_forms(c: &mut Builder, x: &[Lin], e: &[Lin; 3], nm: [QubitId; 3], k1
     let c3 = r_maj(c, &mut recs, x[2].clone(), e[2].clone(), c2.clone());
     let c4 = r_and(c, &mut recs, x[3].clone(), c3.clone());
     let v3 = x[3].x(&c3);
-    let tt = r_and(c, &mut recs, l(k1), l(k2));
+    let tt=if let Some(q)=borrowed_tt{assert!(q!=k1&&q!=k2);l(q)}else{r_and(c,&mut recs,l(k1),l(k2))};
     let g1 = Lin::of(&[k1, k2]).x(&tt);
     // r = Nm + X[0..3)
     let r1 = r_and(c, &mut recs, l(nm[0]), x[0].clone());
@@ -3835,7 +3876,7 @@ pub(super) fn t0_phase_forms(c: &mut Builder, letter: &[QubitId], h: &[QubitId],
 fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: &[QubitId], bits: Vec<crate::circuit::BitId>) {
     assert_eq!(h.len(), N);
     let (e_start, a_start) = (c.expected_total(), c.active_qubits());
-    let mut ph = T0Phase::new(c, k1, k2, N, bits);
+    let shared=super::super::phase_fit::cap()<1234;let mut ph=if shared{T0Phase::owned(c,k1,k2,N,bits)}else{T0Phase::new(c,k1,k2,N,bits)};
     let vpos = |i: usize| (i + N - 3) % N; // W[i] is the layer's position (i - 3) mod N (the three rot1)
     let wf = go_fs("GO_FG_P");
     let fc = f();
@@ -3869,7 +3910,7 @@ fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: 
     }
     // the chunk plan: the top chunk (open through the fold) as long as the room allows, the rest in the fewest
     // middle chunks
-    let fold_wires = 31 + (Y15_WIN - 7);
+    let fold_wires = 31-usize::from(shared) + (Y15_WIN - 7);
     let room = cells::cap().saturating_sub(c.active_qubits() as usize);
     let (mut nb, mut top_len) = (0usize, 0usize);
     let mut mids: Vec<usize> = Vec::new();
@@ -3928,7 +3969,7 @@ fn t0_forms_body(c: &mut Builder, s: [QubitId; 3], k1: QubitId, k2: QubitId, h: 
     // the fold on forms
     let x: Vec<Lin> = (0..Y15_WIN).map(|i| st.xf(i)).collect();
     let e = [st.xf(N), st.xf(N + 1), st.xf(N + 2)];
-    let (w, mut recs) = fold_fwd_forms(c, &x, &e, s, k1, k2);
+    let (w, mut recs)=fold_fwd_forms_borrowed(c,&x,&e,s,k1,k2,if shared{ph.t}else{None});
     let a_fold = c.active_qubits();
     assert!(a_fold as usize <= cells::cap(), "y26: the fold on forms is over the walk cap: {a_fold} > {}", cells::cap());
     for (i, f) in w.iter().enumerate() {
@@ -4535,3 +4576,169 @@ fn rt0_letter_erase(c: &mut Builder, r1: &[QubitId], r0v: &[Lin], letter: &[Qubi
 /// chain is read by m1's Z alone, so it is built and erased only when m1's bit is set as well: a quarter of a Toffoli
 /// a pass. Exact (the same measurements in the same order). false: built on every shot with m0's bit set.
 const Y36_TOP_M1: bool = true;
+
+#[cfg(test)]mod plan7_tests{
+    use super::*;
+    use crate::circuit::{analyze_ops,OperationType};
+    use crate::sim::Simulator;
+    use sha3::{Shake256,digest::{Update,ExtendableOutput,XofReader}};
+    struct Words{data:Vec<u8>,pos:usize}
+    impl XofReader for Words{fn read(&mut self,b:&mut[u8]){let end=self.pos+b.len();assert!(end<=self.data.len());b.copy_from_slice(&self.data[self.pos..end]);self.pos=end;}}
+    fn rng(words:&[u64])->Words{Words{data:words.iter().flat_map(|w|w.to_le_bytes()).collect(),pos:0}}
+    fn put<R:XofReader>(s:&mut Simulator<'_,R>,q:QubitId,lane:usize,bit:u64){if bit&1!=0{s.qubits[q.0 as usize]|=1u64<<lane;}}
+
+    #[test]fn plan7_and_plan8_full_fifty_bit_affine_addition_and_phase(){
+        let mut input_hash=Shake256::default();input_hash.update(b"exact-plan7-native-control-v1");let mut input=input_hash.finalize_xof();
+        let cases:Vec<_>=(0..65536).map(|_|{let mut b=[0u8;24];input.read(&mut b);(u64::from_le_bytes(b[..8].try_into().unwrap()),u64::from_le_bytes(b[8..16].try_into().unwrap()),b[16]&1,b[17]&1)}).collect();
+        for (plan,drops,wanted_peak)in[(Y28_PLAN8.0.to_vec(),Y28_PLAN8.1.to_vec(),8usize),(Y28_PLAN7.0.to_vec(),Y28_PLAN7.1.to_vec(),7usize)]{
+            let mut b=Builder::new();let source=b.alloc_qubits(56);let target=b.alloc_qubits(56);let cin=b.alloc_qubit();let sign=b.alloc_qubit();
+            let add:Vec<Lin>=source.iter().enumerate().map(|(i,&q)|{
+                let mut v=l(q);if i%3==0{v=v.x(&l(sign));}if i%5==0{v=v.x(&Lin::k(true));}v
+            }).collect();
+            let active=b.active_qubits();let((),peak)=b.r3_peak(|b|ladder_drop(b,&target,&add,6,cin,&plan,&drops));
+            assert_eq!(peak as usize,active as usize+wanted_peak);
+            let ops=b.take_ops();let(nq,nb,_,_)=analyze_ops(ops.iter());
+            let nr=ops.iter().filter(|o|matches!(o.kind,OperationType::R|OperationType::Hmr)).count();
+            eprintln!("PLAN7_COMPONENT budget={wanted_peak} physical_peak={peak} ops={} rng={nr} emitted_ccx={}",ops.len(),ops.iter().filter(|o|o.kind==OperationType::CCX).count());
+            for(first,chunk)in cases.chunks(64).enumerate(){
+                let words:Vec<_>=(0..nr).map(|j|0xD1B54A32D192ED03u64.wrapping_mul((first+j+1)as u64).rotate_left((j%64)as u32)).collect();let mut random=rng(&words);
+                let mut s=Simulator::new(nq as usize,nb as usize,&mut random);
+                for(lane,&(a,t,c,sg))in chunk.iter().enumerate(){for i in 0..56{put(&mut s,source[i],lane,a>>i);put(&mut s,target[i],lane,t>>i);}put(&mut s,cin,lane,c as u64);put(&mut s,sign,lane,sg as u64);}
+                let original=s.qubits.clone();s.apply_iter(ops.iter());
+                for(lane,&(a,t,c,sg))in chunk.iter().enumerate(){let mut aa=0u64;for i in 6..56{let bit=(a>>i&1)^u64::from(i%3==0&&sg!=0)^u64::from(i%5==0);aa|=bit<<(i-6);}
+                    let expected=(((t>>6)+aa+c as u64)&((1u64<<50)-1))<<6|(t&63);
+                    for i in 0..56{assert_eq!(s.qubits[target[i].0 as usize]>>lane&1,expected>>i&1);}
+                }
+                for i in 0..nq as usize{if !target.iter().any(|q|q.0 as usize==i){assert_eq!(s.qubits[i],original[i]);}}assert_eq!(s.phase,0);
+            }
+        }
+    }
+
+    #[test]#[should_panic(expected="a dropped carry needs")]
+    fn adjacent_drops_are_rejected_by_existing_contract(){
+        let mut b=Builder::new();let a=b.alloc_qubits(56);let target=b.alloc_qubits(56);let cin=b.alloc_qubit();
+        let terms:Vec<_>=a.iter().map(|&q|l(q)).collect();ladder_drop(&mut b,&target,&terms,6,cin,&Y28_PLAN7.0,&[0,1]);
+    }
+}
+
+fn phase_cubic_lin(c:&mut Builder,k1:QubitId,k2:QubitId,f:&Lin){
+    let constant=f.one^f.w.contains(&k1)^f.w.contains(&k2);if constant{c.cz(k1,k2);}
+    let other:Vec<_>=f.w.iter().copied().filter(|q|*q!=k1&&*q!=k2).collect();
+    if let Some((&pivot,rest))=other.split_first(){for &q in rest{c.cx(q,pivot);}c.ccz(k1,k2,pivot);for &q in rest.iter().rev(){c.cx(q,pivot);}}
+}
+
+#[cfg(test)]mod phase_cubic_cap_tests{
+ use super::*;use crate::circuit::{analyze_ops,Op,OperationType};use crate::sim::Simulator;use sha3::{Shake256,digest::{Update,ExtendableOutput,XofReader}};
+ struct Words{data:Vec<u8>,pos:usize}impl XofReader for Words{fn read(&mut self,b:&mut[u8]){let end=self.pos+b.len();assert!(end<=self.data.len());b.copy_from_slice(&self.data[self.pos..end]);self.pos=end;}}
+ fn draws(ops:&[Op])->usize{ops.iter().filter(|o|matches!(o.kind,OperationType::R|OperationType::Hmr)).count()}
+ fn build(n:usize,pattern:usize,direct:bool)->(Vec<Op>,Vec<QubitId>,Vec<Lin>,Vec<crate::circuit::BitId>,crate::circuit::BitId,Vec<Vec<(usize,crate::circuit::BitId)>>){
+  let mut c=Builder::new();let data=c.alloc_qubits(n);let k1=c.alloc_qubit();let k2=c.alloc_qubit();let bits=c.alloc_bits(n);let guard=c.alloc_bit();let all:Vec<_>=data.iter().copied().chain([k1,k2]).collect();c.declare_qubit_register(&all);
+  let rows:Vec<_>=(0..n).map(|j|match pattern{0=>l(data[j]),1=>Lin::of(&[data[j],data[(j+1)%n]]),2=>l(data[j]).x(&if j%2==0{l(k1)}else{l(k2)}).x(&Lin::k(j%3==0)),_=>match j%4{0=>Lin::k(true),1=>l(k1),2=>l(k2),_=>Lin::of(&[data[j],k1,k2])}}).collect();
+  let base=c.active_qubits();std::env::set_var("PEBBLE_HARD_CAP",if direct{base.to_string()}else{"1234".into()});c.push_condition(guard);let mut groups=Vec::new();let((),peak)=c.r3_peak(|c|{let mut p=T0Phase::new(c,k1,k2,n,bits.clone());assert_eq!(p.t.is_none(),direct);groups=p.at.clone();for j in 0..n{p.z(c,j,&rows[j]);}p.finish(c);});c.pop_condition();std::env::set_var("PEBBLE_HARD_CAP","1234");assert_eq!(peak,base+u32::from(!direct));(c.take_ops(),all,rows,bits,guard,groups)
+ }
+ fn fixture(n:usize,pattern:usize,guard_word:u64,probe:Option<usize>){
+  let old=build(n,pattern,false);let new=build(n,pattern,true);assert_eq!(old.1,new.1);let(nq,nb,_,_)=analyze_ops(old.0.iter().chain(&new.0));let starts:Vec<_>=if probe.is_some(){vec![0x4AC0]}else{(0..1usize<<(2*n+2)).step_by(64).collect()};
+  for start in starts{for(direct,item)in[(false,&old),(true,&new)]{let(ops,all,rows,bits,guard,groups)=item;let nr=draws(ops);let mut data=vec![0u8;nr*8];if let Some(p)=probe{for j in 0..nr{let word=if p==j||p==nr{u64::MAX}else{0};data[j*8..j*8+8].copy_from_slice(&word.to_le_bytes());}}else{let mut h=Shake256::default();h.update(b"phase-cubic-cap-measurements-v1");h.update(&(start as u64).to_le_bytes());h.finalize_xof().read(&mut data);}
+   let mut rng=Words{data,pos:0};let mut s=Simulator::new(nq as usize,nb as usize,&mut rng);s.bits[guard.0 as usize]=guard_word;
+   for lane in 0..64{let value=start+lane;for(i,&q)in all.iter().enumerate(){if value>>i&1!=0{s.qubits[q.0 as usize]|=1u64<<lane;}}for(i,&bit)in bits.iter().enumerate(){if value>>(n+2+i)&1!=0{s.bits[bit.0 as usize]|=1u64<<lane;}}}let initial=s.qubits.clone();let initial_bits=s.bits.clone();let mut phase=0u64;
+   for lane in 0..64{let e=(s.qubits[all[n].0 as usize]>>lane&1)+2*(s.qubits[all[n+1].0 as usize]>>lane&1);let mut p=0u64;for i in 0..n{let row=&rows[(i+e as usize)%n];let f=row.w.iter().fold(u64::from(row.one),|x,q|x^(s.qubits[q.0 as usize]>>lane&1));p^=(initial_bits[bits[i].0 as usize]>>lane&1)&f;}if p!=0&&guard_word>>lane&1!=0{phase|=1u64<<lane;}}
+   let wanted_t=if !direct{guard_word.count_ones()as u64}else{let mut total=0u64;for j in 0..n{if rows[j].w.iter().any(|q|*q!=all[n]&&*q!=all[n+1]){let parity=groups[j].iter().filter(|(m,_)|*m==3).fold(0u64,|x,(_,bit)|x^initial_bits[bit.0 as usize]);total+=(parity&guard_word).count_ones()as u64;}}total};
+   s.apply_iter(ops.iter());assert_eq!(s.qubits,initial);assert_eq!(s.phase,phase,"n={n} pattern={pattern} direct={direct} start={start}");assert_eq!(s.stats.toffoli_gates as u64,wanted_t);drop(s);assert_eq!(rng.pos,nr*8);
+  }}
+ }
+ #[test]fn exact_rotated_linear_phase_without_clean_workspace_and_all_controls(){
+  for n in 3usize..=7{for e in 0..4{assert_eq!(rot4_map(n,e),(0..n).map(|i|(i+e)%n).collect::<Vec<_>>());}for pattern in 0..4{for guard in[u64::MAX,0xA9563C78F012DE4B]{fixture(n,pattern,guard,None);}}}
+  for pattern in 0..4{for guard in[0u64,u64::MAX,0xAA55AA55AA55AA55]{let old=build(9,pattern,false).0;for probe in 0..draws(&old)+2{fixture(9,pattern,guard,Some(probe));}}}
+ }
+}
+
+mod core_loans{include!("core_loan_runtime.rs");}
+
+#[cfg(test)]mod core_loan_fold_tests{
+ use super::*;use crate::circuit::{Op,OperationType,analyze_ops};use crate::sim::Simulator;use sha3::{Shake256,digest::{Update,ExtendableOutput,XofReader}};
+ struct Words{bytes:Vec<u8>,pos:usize}impl XofReader for Words{fn read(&mut self,b:&mut[u8]){b.copy_from_slice(&self.bytes[self.pos..self.pos+b.len()]);self.pos+=b.len();}}
+ fn draws(ops:&[Op])->usize{ops.iter().filter(|o|matches!(o.kind,OperationType::R|OperationType::Hmr)).count()}
+ fn build(budget:usize,ttm:bool,new:bool)->(Vec<Op>,Vec<QubitId>,crate::circuit::BitId,u32){
+  let mut c=Builder::new();let acc=c.alloc_qubits(56);let e=c.alloc_qubits(3);let nm=c.alloc_qubits(3);let k1=c.alloc_qubit();let k2=c.alloc_qubit();let guard=c.alloc_bit();let pad=c.alloc_qubits(1234-budget-(64+31-usize::from(ttm)));let interface:Vec<_>=acc.iter().chain(&e).chain(&nm).copied().chain([k1,k2]).collect();let all:Vec<_>=interface.iter().chain(&pad).copied().collect();c.declare_qubit_register(&all);
+  std::env::set_var("PEBBLE_HARD_CAP",if new{"1233"}else{"1234"});core_loans::force(Some(new));c.push_condition(guard);let reference_cap=if !new&&budget<6{1250}else{1234};let(_,peak)=super::super::super::pingpong::with_phase_cap(Some(reference_cap),||c.r3_peak(|c|fold_fwd_v2(c,&acc,[e[0],e[1],e[2]],[nm[0],nm[1],nm[2]],k1,k2,0,None,ttm,2)));c.pop_condition();core_loans::force(None);std::env::set_var("PEBBLE_HARD_CAP","1234");assert!((peak as usize)<=if new{1233}else{reference_cap},"budget{budget} ttm{ttm} new{new} peak{peak}");(c.take_ops(),interface,guard,peak)
+ }
+ fn fixture(budget:usize,ttm:bool,guard_word:u64,probe:Option<usize>){
+  let old=build(budget,ttm,false);let new=build(budget,ttm,true);assert_eq!(old.1,new.1);assert_eq!(old.2,new.2);let(nq,nb,_,_)=analyze_ops(old.0.iter().chain(&new.0));let batches:Vec<_>=if probe.is_some(){vec![73]}else{(0..256).collect()};let mut totals=[0u64;2];
+  for batch in batches{let mut initialized=vec![0u64;nq as usize];let mut h=Shake256::default();h.update(b"core-loan-full-fold-upper-v1");h.update(&(batch as u64).to_le_bytes());let mut upper=h.finalize_xof();for &q in &old.1[6..56]{let mut b=[0u8;8];upper.read(&mut b);initialized[q.0 as usize]=u64::from_le_bytes(b);}let core:Vec<_>=old.1[..6].iter().chain(&old.1[56..]).copied().collect();for lane in 0..64{let value=batch*64+lane;for(i,&q)in core.iter().enumerate(){if value>>i&1!=0{initialized[q.0 as usize]|=1u64<<lane;}}}
+   let mut outputs=Vec::new();for(index,item)in[&old,&new].into_iter().enumerate(){let n=draws(&item.0);let mut bytes=vec![0u8;n*8];let mut h=Shake256::default();h.update(b"core-loan-full-fold-measurements-v1");h.update(&(batch as u64).to_le_bytes());h.finalize_xof().read(&mut bytes);if let Some(p)=probe{for j in 0..n{bytes[j*8..j*8+8].copy_from_slice(&(if j==p||p==n{u64::MAX}else{0u64}).to_le_bytes());}}let mut rng=Words{bytes,pos:0};let mut s=Simulator::new(nq as usize,nb as usize,&mut rng);s.qubits.copy_from_slice(&initialized);s.bits[item.2.0 as usize]=guard_word;s.apply_iter(item.0.iter());assert_eq!(s.phase,0,"budget{budget} ttm{ttm} new{} batch{batch} probe{probe:?}",index==1);for i in 0..nq as usize{if !item.1[..56].iter().any(|q|q.0 as usize==i){assert_eq!(s.qubits[i],initialized[i],"nonoutput wire{i}");}}totals[index]+=s.stats.toffoli_gates;outputs.push(s.qubits.clone());drop(s);assert_eq!(rng.pos,n*8);
+   }assert_eq!(outputs[0],outputs[1],"budget{budget} ttm{ttm} batch{batch}");
+  }if probe.is_none(){eprintln!("CORE_LOAN_FULL_FOLD budget{budget} ttm{ttm} guard{guard_word:016x} shots16384 old_peak{} new_peak{} old_t{} new_t{} diagnostic_delta{}",old.3,new.3,totals[0],totals[1],(totals[1]as f64-totals[0]as f64)/16384.0);}
+ }
+ #[test]fn complete_forward_fold_with_eleven_helper_loans_all_small_inputs_guards_and_measurements(){
+  for budget in 1..=5{for guard in[0,0xA55A_DD33_FF00_1701,u64::MAX]{fixture(budget,false,guard,None);}}
+  for budget in 6..=10{for ttm in[false,true]{for guard in[0,0xA55A_DD33_FF00_1701,u64::MAX]{fixture(budget,ttm,guard,None);}}}
+  let max=draws(&build(6,true,false).0).max(draws(&build(6,true,true).0));for p in 0..=max{fixture(6,true,0xA55A_DD33_FF00_1701,Some(p));}
+ }
+}
+
+#[cfg(test)]mod t0_shared_product_tests{
+ use super::*;use crate::circuit::{Op,OperationType,analyze_ops};use crate::sim::Simulator;use sha3::{Shake256,digest::{Update,ExtendableOutput,XofReader}};
+ struct Words{bytes:Vec<u8>,pos:usize}impl XofReader for Words{fn read(&mut self,b:&mut[u8]){b.copy_from_slice(&self.bytes[self.pos..self.pos+b.len()]);self.pos+=b.len();}}
+ fn draws(ops:&[Op])->usize{ops.iter().filter(|o|matches!(o.kind,OperationType::Hmr|OperationType::R)).count()}
+ fn build(n:usize,shared:bool)->(Vec<Op>,Vec<QubitId>,Vec<crate::circuit::BitId>,crate::circuit::BitId,u32){
+  let mut c=Builder::new();let x=c.alloc_qubits(n);let e=c.alloc_qubits(3);let nm=c.alloc_qubits(3);let k1=c.alloc_qubit();let k2=c.alloc_qubit();let bits=c.alloc_bits(n);let guard=c.alloc_bit();let input:Vec<_>=x.iter().chain(&e).chain(&nm).copied().chain([k1,k2]).collect();c.declare_qubit_register(&input);c.push_condition(guard);
+  let(_,peak)=c.r3_peak(|c|{let mut ph=T0Phase::owned(c,k1,k2,n,bits.clone());let xf:Vec<_>=x.iter().copied().map(l).collect();let ef=[l(e[0]),l(e[1]),l(e[2])];let(w,mut recs)=fold_fwd_forms_borrowed(c,&xf,&ef,[nm[0],nm[1],nm[2]],k1,k2,if shared{ph.t}else{None});for(i,f)in w.iter().enumerate(){ph.z(c,i,f);}pop_chain(c,&mut recs);ph.finish(c);});c.pop_condition();assert_eq!(c.active_qubits(),input.len()as u32);(c.take_ops(),input,bits,guard,peak)
+ }
+ fn fixture(n:usize,guard:u64,flag:Option<usize>,probe:Option<usize>){
+  let old=build(n,false);let new=build(n,true);assert_eq!(old.1,new.1);assert_eq!(old.2,new.2);assert_eq!(old.3,new.3);assert_eq!(old.4,new.4+1);let(nq,nb,_,_)=analyze_ops(old.0.iter().chain(&new.0));let batches:Vec<_>=if probe.is_some(){vec![73]}else{(0..256).collect()};
+  for batch in batches{let mut init=vec![0u64;nq as usize];let mut h=Shake256::default();h.update(b"t0-shared-product-upper-v1");h.update(&(batch as u64).to_le_bytes());let mut reader=h.finalize_xof();for &q in &old.1[6..n]{let mut b=[0u8;8];reader.read(&mut b);init[q.0 as usize]=u64::from_le_bytes(b);}let core:Vec<_>=old.1[..6].iter().chain(&old.1[n..]).copied().collect();assert_eq!(core.len(),14);for lane in 0..64{let v=batch*64+lane;for(i,&q)in core.iter().enumerate(){if v>>i&1!=0{init[q.0 as usize]|=1u64<<lane;}}}let flag_words:Vec<u64>=(0..n).map(|i|if let Some(j)=flag{if i==j{u64::MAX}else{0}}else{let mut b=[0u8;8];reader.read(&mut b);u64::from_le_bytes(b)}).collect();let mut phases=Vec::new();let mut counts=Vec::new();
+   for item in [&old,&new]{let nd=draws(&item.0);let mut bytes=vec![0u8;nd*8];let mut h=Shake256::default();h.update(b"t0-shared-product-measurements-v1");h.update(&(batch as u64).to_le_bytes());h.finalize_xof().read(&mut bytes);if let Some(p)=probe{for i in 0..nd{bytes[i*8..i*8+8].copy_from_slice(&(if i==p||p==nd{u64::MAX}else{0u64}).to_le_bytes());}}let mut rng=Words{bytes,pos:0};let mut s=Simulator::new(nq as usize,nb as usize,&mut rng);s.qubits.copy_from_slice(&init);s.bits[item.3.0 as usize]=guard;for(i,&bit)in item.2.iter().enumerate(){s.bits[bit.0 as usize]=flag_words[i];}s.apply_iter(item.0.iter());assert_eq!(s.qubits,init,"data n{n} batch{batch}");phases.push(s.phase);counts.push(s.stats.toffoli_gates);drop(s);assert_eq!(rng.pos,nd*8);
+   }assert_eq!(phases[0],phases[1],"phase n{n} batch{batch} flag{flag:?} probe{probe:?}");assert_eq!(counts[0],counts[1]+u64::from(guard.count_ones()));
+  }
+ }
+ #[test]fn shared_immutable_letter_product_preserves_forms_oracle_and_saves_one_qubit_and_and(){
+  std::env::set_var("PEBBLE_HARD_CAP","1234");for n in[8,56]{for guard in[0,0xA55A_DD33_FF00_1701,u64::MAX]{fixture(n,guard,None,None);}let max=draws(&build(n,false).0).max(draws(&build(n,true).0));for p in 0..=max{fixture(n,0xA55A_DD33_FF00_1701,Some(5),Some(p));}for flag in 0..n{fixture(n,u64::MAX,Some(flag),Some(0));}}
+ }
+}
+
+mod core_loans_fin1{include!("fin1_fold_runtime.rs");}
+
+#[cfg(test)]mod fin1_fold_tests{
+ use super::*;use crate::circuit::{Op,OperationType,analyze_ops};use crate::sim::Simulator;use sha3::{Shake256,digest::{Update,ExtendableOutput,XofReader}};
+ struct Words{bytes:Vec<u8>,pos:usize}impl XofReader for Words{fn read(&mut self,b:&mut[u8]){b.copy_from_slice(&self.bytes[self.pos..self.pos+b.len()]);self.pos+=b.len();}}
+ fn draws(ops:&[Op])->usize{ops.iter().filter(|o|matches!(o.kind,OperationType::R|OperationType::Hmr)).count()}
+ fn build(budget:usize,ttm:bool,new:bool)->(Vec<Op>,Vec<QubitId>,crate::circuit::BitId,u32){
+  let mut c=Builder::new();let acc=c.alloc_qubits(56);let e=c.alloc_qubits(3);let nm=c.alloc_qubits(3);let k1=c.alloc_qubit();let k2=c.alloc_qubit();let guard=c.alloc_bit();let pad=c.alloc_qubits(1232-budget-(64+30));let interface:Vec<_>=acc.iter().chain(&e).chain(&nm).copied().chain([k1,k2]).collect();let all:Vec<_>=interface.iter().chain(&pad).copied().collect();c.declare_qubit_register(&all);
+  std::env::set_var("PEBBLE_HARD_CAP",if new{"1232"}else{"1234"});core_loans_fin1::force(Some(new));c.push_condition(guard);let(_,peak)=super::super::super::pingpong::with_phase_cap(Some(if new{1232}else{1250}),||c.r3_peak(|c|fold_fwd_v2(c,&acc,[e[0],e[1],e[2]],[nm[0],nm[1],nm[2]],k1,k2,1,None,ttm,2)));c.pop_condition();core_loans_fin1::force(None);std::env::set_var("PEBBLE_HARD_CAP","1234");assert!(peak<=if new{1232}else{1250},"budget{budget} ttm{ttm} new{new} peak{peak}");(c.take_ops(),interface,guard,peak)
+ }
+ fn fixture(budget:usize,ttm:bool,guard_word:u64,probe:Option<usize>){
+  let old=build(budget,ttm,false);let new=build(budget,ttm,true);assert_eq!(old.1,new.1);assert_eq!(old.2,new.2);let(nq,nb,_,_)=analyze_ops(old.0.iter().chain(&new.0));let batches:Vec<_>=if probe.is_some(){vec![73]}else{(0..256).collect()};let mut totals=[0u64;2];
+  for batch in batches{let mut initialized=vec![0u64;nq as usize];let mut h=Shake256::default();h.update(b"core-loan-full-fold-upper-v1");h.update(&(batch as u64).to_le_bytes());let mut upper=h.finalize_xof();for &q in &old.1[6..56]{let mut b=[0u8;8];upper.read(&mut b);initialized[q.0 as usize]=u64::from_le_bytes(b);}let core:Vec<_>=old.1[..6].iter().chain(&old.1[56..]).copied().collect();for lane in 0..64{let value=batch*64+lane;for(i,&q)in core.iter().enumerate(){if value>>i&1!=0{initialized[q.0 as usize]|=1u64<<lane;}}}
+   let mut outputs=Vec::new();for(index,item)in[&old,&new].into_iter().enumerate(){let n=draws(&item.0);let mut bytes=vec![0u8;n*8];let mut h=Shake256::default();h.update(b"core-loan-full-fold-measurements-v1");h.update(&(batch as u64).to_le_bytes());h.finalize_xof().read(&mut bytes);if let Some(p)=probe{for j in 0..n{bytes[j*8..j*8+8].copy_from_slice(&(if j==p||p==n{u64::MAX}else{0u64}).to_le_bytes());}}let mut rng=Words{bytes,pos:0};let mut s=Simulator::new(nq as usize,nb as usize,&mut rng);s.qubits.copy_from_slice(&initialized);s.bits[item.2.0 as usize]=guard_word;s.apply_iter(item.0.iter());assert_eq!(s.phase,0,"budget{budget} ttm{ttm} new{} batch{batch} probe{probe:?}",index==1);for i in 0..nq as usize{if !item.1[..56].iter().any(|q|q.0 as usize==i){assert_eq!(s.qubits[i],initialized[i],"nonoutput wire{i}");}}totals[index]+=s.stats.toffoli_gates;outputs.push(s.qubits.clone());drop(s);assert_eq!(rng.pos,n*8);
+   }assert_eq!(outputs[0],outputs[1],"budget{budget} ttm{ttm} batch{batch}");
+  }if probe.is_none(){eprintln!("FIN1_COMPLETE_FOLD budget{budget} ttm{ttm} guard{guard_word:016x} shots16384 old_peak{} new_peak{} old_t{} new_t{} diagnostic_delta{}",old.3,new.3,totals[0],totals[1],(totals[1]as f64-totals[0]as f64)/16384.0);}
+ }
+ #[test]fn complete_forward_fold_with_eleven_helper_loans_all_small_inputs_guards_and_measurements(){
+  for budget in 0..=6{for ttm in[false]{for guard in[0,0xA55A_DD33_FF00_1701,u64::MAX]{fixture(budget,ttm,guard,None);}}}
+  let max=draws(&build(0,false,false).0).max(draws(&build(0,false,true).0));for p in 0..=max{fixture(0,false,0xA55A_DD33_FF00_1701,Some(p));}
+ }
+}
+
+#[cfg(test)]mod reverse_budget_tests{
+ use super::*;use crate::circuit::{Op,OperationType,analyze_ops};use crate::sim::Simulator;use sha3::{Shake256,digest::{Update,ExtendableOutput,XofReader}};
+ struct Words{bytes:Vec<u8>,pos:usize}impl XofReader for Words{fn read(&mut self,b:&mut[u8]){b.copy_from_slice(&self.bytes[self.pos..self.pos+b.len()]);self.pos+=b.len();}}
+ fn build(budget:usize,inverse:bool)->(Vec<Op>,Vec<QubitId>,Vec<QubitId>,QubitId,QubitId,crate::circuit::BitId,u32){
+  let mut c=Builder::new();let a=c.alloc_qubits(56);let b=c.alloc_qubits(56);let cin=c.alloc_qubit();let sign=c.alloc_qubit();let guard=c.alloc_bit();let fake=c.alloc_qubits(2);let pad=c.alloc_qubits(1232-(budget-2)-c.active_qubits()as usize);let all:Vec<_>=a.iter().chain(&b).copied().chain([cin,sign]).chain(pad.iter().copied()).collect();c.declare_qubit_register(&all);let rows:Vec<_>=a.iter().enumerate().map(|(i,&q)|{let mut f=l(q);if i%3==0{f=f.x(&l(sign));}if i%5==0{f=f.x(&Lin::k(true));}if i%7==0{f=f.x(&l(a[(i+7)%56]));}f}).collect();std::env::set_var("PEBBLE_HARD_CAP","1232");c.push_condition(guard);
+  let(_,peak)=super::super::super::pingpong::with_phase_cap(Some(1232),||c.r3_peak(|c|{let(plan,lean,drops)=fold_plan_d(c,56,"reverse",9-budget);assert!(lean);let(p,d):(&[usize],&[usize])=match budget{7=>(&Y28_PLAN7.0,&Y28_PLAN7.1),8=>(&Y28_PLAN8.0,&Y28_PLAN8.1),_=>(&Y28_PLAN9.0,&Y28_PLAN9.1)};assert_eq!(plan,p);assert_eq!(drops,d);for q in fake{c.release_clean(q);}ladder_d(c,&b,&rows,6,cin,&plan,&drops);if inverse{for &q in &b{c.x(q);}ladder_d(c,&b,&rows,6,cin,&plan,&drops);for &q in &b{c.x(q);}}}));c.pop_condition();std::env::set_var("PEBBLE_HARD_CAP","1234");assert_eq!(peak,1232);(c.take_ops(),a,b,cin,sign,guard,peak)
+ }
+ fn run(budget:usize,inverse:bool,guard:u64,probe:Option<usize>){let(ops,a,b,cin,sign,bit,_)=build(budget,inverse);let(nq,nb,_,_)=analyze_ops(ops.iter());assert_eq!(nq,1232);let nd=ops.iter().filter(|o|matches!(o.kind,OperationType::R|OperationType::Hmr)).count();let batches:Vec<_>=if probe.is_some(){vec![73]}else{(0..1024).collect()};
+  for batch in batches{let mut h=Shake256::default();h.update(b"reverse-plan7-independent-inputs-v1");h.update(&(batch as u64).to_le_bytes());let mut reader=h.finalize_xof();let mut init=vec![0u64;nq as usize];for q in a.iter().chain(&b).copied().chain([cin,sign]){let mut bytes=[0u8;8];reader.read(&mut bytes);init[q.0 as usize]=u64::from_le_bytes(bytes);}let mut bytes=vec![0u8;nd*8];let mut h=Shake256::default();h.update(b"reverse-plan7-independent-measurements-v1");h.update(&(batch as u64).to_le_bytes());h.finalize_xof().read(&mut bytes);if let Some(p)=probe{if p==nd{for x in &mut bytes{*x=255;}}else{for x in &mut bytes[p*8..p*8+8]{*x^=255;}}}let mut rng=Words{bytes,pos:0};let mut s=Simulator::new(nq as usize,nb as usize,&mut rng);s.qubits.copy_from_slice(&init);s.bits[bit.0 as usize]=guard;s.apply_iter(ops.iter());assert_eq!(s.phase,0,"inverse{inverse} batch{batch} probe{probe:?}");
+   for lane in 0..64{let mut source=0u64;let mut target=0u64;for i in 0..56{source|=((init[a[i].0 as usize]>>lane)&1)<<i;target|=((init[b[i].0 as usize]>>lane)&1)<<i;}let sg=init[sign.0 as usize]>>lane&1;let carry=init[cin.0 as usize]>>lane&1;let mut add=0u64;for i in 6..56{let v=(source>>i&1)^(u64::from(i%3==0)*sg)^u64::from(i%5==0)^(if i%7==0{source>>((i+7)%56)&1}else{0});add|=v<<(i-6);}let want=if inverse||guard>>lane&1==0{target}else{((((target>>6)+add+carry)&((1u64<<50)-1))<<6)|(target&63)};for i in 0..56{assert_eq!(s.qubits[b[i].0 as usize]>>lane&1,want>>i&1);}}
+   for i in 0..nq as usize{if !b.iter().any(|q|q.0 as usize==i){assert_eq!(s.qubits[i],init[i]);}}drop(s);assert_eq!(rng.pos,nd*8);
+  }
+ }
+ #[test]fn reverse_budget_seven_is_admitted_and_matches_full_affine_addition_inverse_guards_and_rng(){for budget in 7..=9{for inverse in[false,true]{for g in[0,0xA55A_DD33_FF00_1701,u64::MAX]{run(budget,inverse,g,None);}let(ops,..)=build(budget,inverse);let nd=ops.iter().filter(|o|matches!(o.kind,OperationType::R|OperationType::Hmr)).count();for p in 0..=nd{run(budget,inverse,0xA55A_DD33_FF00_1701,Some(p));}}}}
+}
+
+#[cfg(test)]mod wide_loan_policy_tests{
+ use super::*;
+ #[test]fn narrow_consumer_loan_scope_tracks_both_preflight_and_runtime(){
+  for hard in [1232,1233,1234,1248,1256,1264,1280,1296,1360]{std::env::set_var("PEBBLE_HARD_CAP",hard.to_string());for t in 0..150{for rev in [false,true]{assert_eq!(reverse_loan_selected(rev,t),rev&&(124..=126).contains(&t)&&hard<=1248);assert_eq!(carry_loan_selected(rev,t),!rev&&(128..137).contains(&t)&&hard<=1248);}}}
+  std::env::set_var("PEBBLE_HARD_CAP","1234");
+ }
+}
