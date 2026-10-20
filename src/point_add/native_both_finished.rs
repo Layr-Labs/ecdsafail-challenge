@@ -1,0 +1,4 @@
+use crate::circuit::{Op,OperationType,QubitId};use sha3::{Digest,Sha3_256};
+pub(super)const IDENTITY_NONCE:u64=95;
+fn bind(ops:&[Op],count:usize,want:&str){assert_eq!(ops.len(),count,"Fixed both-port operation count");let mut h=Sha3_256::new();for o in ops{for v in[o.kind as u64,o.q_control2.0,o.q_control1.0,o.q_target.0,o.c_target.0,o.c_condition.0,o.r_target.0]{h.update(v.to_le_bytes());}}assert_eq!(format!("{:x}",h.finalize()),want,"Every canonical fixed both-port record");}
+pub(super)fn run(ops:Vec<Op>)->Vec<Op>{bind(&ops,10591703,"5c1a34e7ff8fa738530d2f497ffce4335587edbd26370e88d8665c19b9db3867");let mut ops=super::breakthrough_generic::run(ops);bind(&ops,10596932,"1f068b1622b378b0b85b6885aa698e389573d1c3981b333bbfe58d450e2f1f8e");assert!(IDENTITY_NONCE<(1u64<<48));for bit in 0..48{let mut o=Op::empty();o.kind=OperationType::X;o.q_target=QubitId((IDENTITY_NONCE>>bit)&1);o.validate();ops.extend([o,o]);}ops}
