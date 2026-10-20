@@ -90,6 +90,8 @@ pub(crate) const Y42_BOUND: bool = Y42 && !Y42_UNBOUND;
 /// checked against the table's fingerprint), so every later op takes the base's wires and bits and the bound table
 /// stays valid. false: the allocator is put back as it was before the op.
 pub(crate) const Y42_ALLOC: bool = Y42;
+fn research_y42_pool()->bool{Y42_ALLOC && !std::env::var("RESEARCH_PLAIN_POOL").is_ok_and(|v|v=="1")}
+
 /// One row of leapfrog_data/y42_alloc.txt: fingerprint of the state before the op; after it: next bit, the length of
 /// the free-bit list that is unchanged, the free wires, the rest of the free bits.
 struct Y42Row {
@@ -120,13 +122,13 @@ fn y42_row(rev: bool, t: usize) -> Option<&'static Y42Row> {
 /// put back. A tick with its pads released, under [`Y42_TRACE`]: the line of y42_alloc.txt for this tick.
 fn y42_after(c: &mut Builder, rev: bool, t: usize, before: &(Vec<u32>, Vec<u32>, u32), spent: bool) {
     if spent {
-        let row = if Y42_ALLOC { y42_row(rev, t) } else { None };
+        let row = if research_y42_pool() { y42_row(rev, t) } else { None };
         // narrow (narrow.rs): a narrowed compare before the op leaves another allocator; the op's state is put back
         let narrowed = !super::narrow::NARROW.is_empty() && row.is_some_and(|r| Builder::y42_alloc_hash(before) != r.before);
         if narrowed {
             eprintln!("NARROW_Y42 {} {t} put back", if rev { "R" } else { "F" });
         }
-        if Y42_ALLOC && !narrowed {
+        if research_y42_pool() && !narrowed {
             let row = y42_row(rev, t).unwrap_or_else(|| panic!("y42: no recorded allocator state for {} tick {t}", if rev { "reverse" } else { "forward" }));
             assert_eq!(Builder::y42_alloc_hash(before), row.before, "y42: the allocator before the payload op of {} tick {t} is not the recorded one", if rev { "reverse" } else { "forward" });
             c.y42_alloc_set(before, &row.q, row.keep, &row.bits, row.next_bit);
@@ -447,8 +449,7 @@ pub(crate) fn install_recipe() {
         // retained-AND lend mask 3 -> 4 (-9 T). Combined model 770,787 at Q 1236; 512-nonce eval mean 770,692.40,
         // score ~952.58M; λ paired vs glam_base 512 fails -0.777 +- 0.158, proj+2se 19.193 (vs T3 -0.143 +- 0.101).
         ("LF_REORDER_DIV", "42"),
-        // round-11 retune: with G1M the C branch (mask 4) has no with_square; A and B lend instead (-2.0 by the builder)
-        ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "3"),
+        ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "4"),
         // C1 spend of the combined point's λ margin (192-nonce screens paired vs the combined point, then 512):
         // T6 seed fusion on (-46.6 T, phase-only), merged window 56 -> 54 (-128 T, mism +0.057), late rule windows
         // one bit shorter from tick 90 (-162 T, mism +0.115). Totals: Q 1236, model 770,449.75, 512-nonce eval mean
@@ -956,6 +957,7 @@ fn rail_signed_add(c: &mut Builder, sign: QubitId, src: &[QubitId], dst: &[Qubit
 /// [`gidney_add`] with the top carry XORed straight into the top sum wire (one CCX, nothing to erase): the same
 /// n - 1 Toffoli on n - 2 carry wires instead of n - 1.
 fn gidney_add_lean(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>) {
+    if a.len()==b.len(){let rows:Vec<_>=a.iter().map(|&q|vec![q]).collect();if phase_plain_try(c,b,&rows,cin){return;}}
     let n = a.len();
     assert!(n >= 1 && b.len() == n);
     if n < 2 {
@@ -1172,7 +1174,7 @@ fn steps() -> &'static Vec<[usize; 5]> {
         } else if yp8().is_some() && std::env::var("LF_G10_TABLE").is_ok_and(|v| v == "770") {
             // G10 port of krishparadox's ac43304 (d7df7706, board #1 971,660,388): the same peel fit refit at the
             // looser budget 7.7e-4 per walk under the 22-bit rule (LF_YP8=22, late 20/18/16/14/12)
-            include_str!("leapfrog_data/pack_t0hat_tail0_138_steps_k770_lw2.txt")
+            if std::env::var("RESEARCH_WALK_SCHEDULE").is_ok_and(|v|v=="public140"){include_str!("leapfrog_data/public_toffoli_140_steps.txt")}else{include_str!("leapfrog_data/pack_t0hat_tail0_138_steps_k770_lw2.txt")}
         } else if yp8().is_some() {
             // 138 ticks, fitted for the pinned recipe: the LF_YP8 rule with its late window lengths, tick 0 on its
             // own rule (LF_T0_FREE) and a last tick without forced steps (LF_TAIL_FORCED=0)
@@ -2168,6 +2170,7 @@ fn v_off(c: &mut Builder, list: &[QubitId], comp: bool, ci: Option<QubitId>) {
 /// Gidney ripple `acc += addend + cin (mod 2^len)` where addend bit i is the parity of the wires `add[i]`
 /// (possibly none). Carries that are provably 0 are skipped; carries are measurement-uncomputed.
 fn ladder_parity_add(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], cin: Option<QubitId>) {
+    if phase_plain_try(c,acc,add,cin){return;}
     let n = acc.len();
     let mut y28h = Y28_HOOK.with(|x| x.take());
     let mut carry: Vec<Option<QubitId>> = vec![None; n];
@@ -2230,6 +2233,7 @@ fn ladder_parity_add(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], cin
 /// `out ^= carry_out(acc + addend + cin)` (addend bits: parity of `add[i]`, complemented when `comp`);
 /// acc unchanged; Gidney carries, measurement-uncomputed.
 fn carry_out_parity_xor(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], comp: bool, cin: QubitId, out: Option<QubitId>) {
+    if super::phase_fit::cap()<1234&&out.is_none()&&acc.len()>=2&&c.active_qubits()as usize+acc.len()-1>super::phase_fit::cap(){if super::phase_fusion::apply(c,acc,add,comp,cin,true){return;}}
     let n = acc.len();
     // Phase-only form: the top carry is never built (see `carry_out_xor`): one CZ on the two AND inputs of the
     // top position and the phase (-1)^(NOT carry[n - 1]).
@@ -2881,6 +2885,7 @@ fn m_fold_y16(c: &mut Builder, acc: &[QubitId], ov: QubitId, recs: &mut Recs, pl
         // lean final chunk: the carry into its top bit is used once, so it goes straight into that bit's wire (one
         // CCX, nothing to erase) and the chunk holds w - 2 carries ([`m_fold_plan`] gives it the extra bit)
         let direct = last && w >= 2 && m_fold_lean();
+        if let Some(out)=phase_chunk_try(c,&acc[lo..hi],&add[lo..hi],cin,!last,direct){if let Some(out)=out{kept.push((lo,hi,cin,out));cin=out;}lo=hi;continue;}
         let mut cc = vec![cin]; // cc[k] = carry into bit lo + k
         for i in lo..(if last { hi - 1 - direct as usize } else { hi }) {
             let t = m_carry(c, acc[i], &add[i], cc[i - lo]);
@@ -2985,6 +2990,11 @@ fn lin_cz(c: &mut Builder, a: &Lin, b: &Lin) {
 /// Phase (-1)^[a < add + cin] on the current condition (a: w wires, add: w forms, cin: a wire): the carry-out of
 /// NOT a + add + cin, Gidney carries measurement-uncomputed, the top carry as three CZs; w - 1 ANDs.
 fn lin_lt_phase(c: &mut Builder, a: &[QubitId], add: &[Lin], cin: QubitId) {
+    if super::phase_fit::cap()<1234&&a.len()>=2&&c.active_qubits()as usize+a.len()-1>super::phase_fit::cap(){
+        let rows:Vec<_>=add.iter().map(|v|v.w.clone()).collect();if super::phase_fit::source_ok(a,&rows,cin){let w=a.len();c.x_all(a);let mut d=vec![cin];for i in 0..w-2{let q=m_carry(c,a[i],&add[i],d[i]);d.push(q);}
+            assert!(super::phase_fusion::pair(c,a[w-2],a[w-1],d[w-2],&add[w-2].w,add[w-2].one,&add[w-1].w,add[w-1].one,false));for i in(1..w-1).rev(){m_carry_erase(c,d[i],a[i-1],&add[i-1],d[i-1]);}c.x_all(a);return;}
+    }
+
     let w = a.len();
     c.x_all(a);
     let mut d = vec![cin];
@@ -3327,7 +3337,7 @@ fn m_fold_lean() -> bool {
 fn m_fold_plan(c: &Builder, fixed: usize, mw: usize) -> (Vec<usize>, usize) {
     super::pingpong::y17_fold_true_cap();
     let plan_at = |k: usize| -> Option<Vec<usize>> {
-        let budget = cells::cap().saturating_sub((c.active_qubits() as usize + fixed - m_fold_slack()).saturating_sub(g4_fake() + k));
+        let budget = super::phase_fit::cap().saturating_sub((c.active_qubits() as usize + fixed - m_fold_slack()).saturating_sub(g4_fake() + k));
         // lean final chunk ([`m_fold`]): it holds one carry fewer, so plan one bit less and give that bit to the final
         // chunk. The fit rule ([`merged_fits`]) keeps the plain plan, so the same ticks run the merged op.
         let lean = if m_fold_lean() && mw >= 7 { merged_plan(mw - 5, budget) } else { None };
@@ -3344,7 +3354,7 @@ fn m_fold_plan(c: &Builder, fixed: usize, mw: usize) -> (Vec<usize>, usize) {
         .filter_map(|k| plan_at(k).map(|p| (p, k)))
         .min_by_key(|(p, k)| (plan_x2(p) + k, *k))
         .expect("merged fold plan (checked by merged_fits)");
-    y17_log(c, || format!("mfold(room={},k={k},plan={plan:?})", cells::cap().saturating_sub(c.active_qubits() as usize)));
+    y17_log(c, || format!("mfold(room={},k={k},plan={plan:?})", super::phase_fit::cap().saturating_sub(c.active_qubits() as usize)));
     if lf_merged_trace() && (plan.len() > 1 || k > 0) {
         eprintln!("LF_MERGED_PLAN k={k} plan={plan:?} x2={}", plan_x2(&plan));
     }
@@ -4330,6 +4340,7 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
             if y42_cut > 0 {
                 Y42_FWD_CUT.with(|x| x.set(Some((t, kl))));
                 // the allocator with the cut wire free, before the payload op (see [`y42_after`])
+                if !research_y42_pool(){c.research_prime_clean_pool(cells::cap());}
                 y42_alloc = Some(c.y42_alloc_state());
                 if !y42_spend(t, false) {
                     y42_pads = c.alloc_qubits(y42_cut);
@@ -4458,6 +4469,7 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
             }
             if tr.len() + br.len() < y42_tr + y42_br {
                 // the allocator with the un-grown wires free, before the payload op (see [`y42_after`])
+                if !research_y42_pool(){c.research_prime_clean_pool(cells::cap());}
                 y42_alloc = Some(c.y42_alloc_state());
                 if !y42_spend(t, true) {
                     y42_pads = c.alloc_qubits(y42_tr + y42_br - tr.len() - br.len());
@@ -4764,6 +4776,7 @@ fn yp8() -> Option<usize> {
 /// between the carry sweep and the sum sweep: `mid(c, carry)` runs with `acc` untouched and carry[i] = the carry into
 /// position i (carry[0] = cin). `mid` must leave every wire as it found it.
 fn ladder_parity_add_mid(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>], cin: Option<QubitId>, mid: &mut dyn FnMut(&mut Builder, &[Option<QubitId>])) {
+    if phase_pause_try(c,acc,add,cin,mid){return;}
     let n = acc.len();
     let mut y28h = Y28_HOOK.with(|x| x.take());
     let mut carry: Vec<Option<QubitId>> = vec![None; n];
@@ -5444,9 +5457,11 @@ fn yp8_add_halve_forced_choice(c: &mut Builder, sign: QubitId, b: &[QubitId], t:
     c.free(low);
     let acc = t.clone();
     let reserve = yp8_reserve(acc.len(), b.len(), tick, true);
+    let _phase_pause=phase_pause_scope(&acc,tick,reserve,true);
     rail_add_mid(c, &b[1..], &acc, b[0], reserve, true, None, &mut |c, add, delta, carry| {
         let flip = |c: &mut Builder| {
             for (j, cj) in carry.iter().enumerate() {
+                if super::phase_fit::cap()<1234&&cj.is_none(){continue;} // This dropped position already holds its completed sum.
                 for &q in &add[delta + j] {
                     c.cx(q, acc[delta + j]);
                 }
@@ -5474,6 +5489,7 @@ fn yp8_double_sub_forced_erase(c: &mut Builder, sign: QubitId, b: &[QubitId], t:
     c.x_all(t);
     let acc = t.clone();
     let reserve = yp8_reserve(acc.len(), b.len(), tick, false);
+    let _phase_pause=phase_pause_scope(&acc,tick,reserve,false);
     let n = acc.len();
     let room = cells::cap().saturating_sub(c.active_qubits() as usize);
     // the logic reads the target's bits 1..4 (positions 0..4 here) and, below the sign, only its window
@@ -7877,4 +7893,58 @@ pub(crate) fn rt0_pilot() {
         if rt0 { format!("SL_RT0={}", y15::sl_rt0()) } else { "head".to_string() },
         sim.stats.toffoli_gates as f64 / shots as f64
     );
+}
+fn phase_plain_try(c:&mut Builder,acc:&[QubitId],rows:&[Vec<QubitId>],cin:Option<QubitId>)->bool{
+    let mut h=Y28_HOOK.with(|v|v.take());let before=c.op_count();
+    if super::phase_fit::plain_optional(c,acc,rows,&vec![false;acc.len()],cin,&mut|c,i,q|y28_apply(c,&mut h,i,q)){
+        assert!(h.is_none(),"phase optional carry hook not consumed");true
+    }else{assert_eq!(before,c.op_count());Y28_HOOK.with(|v|v.set(h));false}
+}
+// The returned outer Option indicates that the entire original chunk ran.
+fn phase_chunk_try(c:&mut Builder,acc:&[QubitId],add:&[Lin],cin:QubitId,output:bool,direct:bool)->Option<Option<QubitId>>{
+    if super::phase_fit::cap()>=1234||acc.len()<3||!output&&!direct{return None;}
+    let owned=if output{acc.len()}else{acc.len()-2};let need=(c.active_qubits()as usize+owned).saturating_sub(super::phase_fit::cap());if need==0{return None;}
+    let mut rows:Vec<_>=add.iter().map(|v|v.w.clone()).collect();let mut ones:Vec<_>=add.iter().map(|v|v.one).collect();if !super::phase_fit::source_ok(acc,&rows,cin){return None;}
+    let mut target=acc.to_vec();if output{rows.push(Vec::new());ones.push(false);}
+    let Some(drops)=super::phase_fit::choose(&rows,need,false,&vec![true;rows.len()])else{return None;};
+    let out=output.then(||c.alloc_qubit());if let Some(q)=out{target.push(q);}let before=c.op_count();
+    assert!(super::phase_pebble::add(c,&target,&rows,&ones,cin,&drops));eprintln!("PHASE_PEBBLE_CHUNK\t{}\t{before}\t{}\t{}\t{need}\t{drops:?}",c.current_phase(),c.op_count(),acc.len());Some(out)
+}
+fn yp8_phase_reads(n:usize,tick:usize)->Vec<usize>{
+    let view=(n+1).max(6);let mut set=std::collections::BTreeSet::new();for p in[1,2,3,4,view-1]{set.insert((p-1).min(n-1));}
+    let h=w1_anchor(tick).saturating_sub(w1_kt(tick));for p in h..h+w1_kt(tick)+2{if p>0&&p+1<view{set.insert((p-1).min(n-1));}}set.into_iter().collect()
+}
+#[derive(Clone)]struct PhasePause{reserve:usize,forward:bool,reads:Vec<QubitId>}
+thread_local!{static PHASE_PAUSE:std::cell::RefCell<Option<PhasePause>>=const{std::cell::RefCell::new(None)};}
+struct PhasePauseScope(Option<PhasePause>);impl Drop for PhasePauseScope{fn drop(&mut self){PHASE_PAUSE.with(|v|*v.borrow_mut()=self.0.take());}}
+fn phase_pause_scope(acc:&[QubitId],tick:usize,reserve:usize,forward:bool)->PhasePauseScope{
+    PhasePauseScope(PHASE_PAUSE.with(|v|v.replace(Some(PhasePause{reserve,forward,reads:yp8_phase_reads(acc.len(),tick).into_iter().map(|i|acc[i]).collect()}))))
+}
+fn phase_pause_try(c:&mut Builder,acc:&[QubitId],rows:&[Vec<QubitId>],cin:Option<QubitId>,mid:&mut dyn FnMut(&mut Builder,&[Option<QubitId>]))->bool{
+    let Some(cin)=cin else{return false;};let Some(context)=PHASE_PAUSE.with(|v|v.borrow().clone())else{return false;};let n=acc.len();if super::phase_fit::cap()>=1234||n<3||!super::phase_fit::source_ok(acc,rows,cin){return false;}
+    let need=(c.active_qubits()as usize+n-1+context.reserve).saturating_sub(super::phase_fit::cap());if need==0{return false;}
+    let allowed:Vec<_>=acc.iter().map(|q|context.forward||!context.reads.contains(q)).collect();let Some(drops)=super::phase_fit::choose(rows,need,true,&allowed)else{return false;};
+    let mut h=Y28_HOOK.with(|v|v.take());let before=c.op_count();
+    assert!(super::phase_pebble::with_pause(c,acc,rows,&vec![false;n],cin,&drops,&mut|c,i,q|y28_apply(c,&mut h,i,q),mid));
+    assert!(h.is_none(),"phase-pebble paused carry hook not consumed");eprintln!("PHASE_PEBBLE_PAUSED\t{}\t{before}\t{}\t{n}\t{need}\t{drops:?}",c.current_phase(),c.op_count());true
+}
+
+
+#[cfg(test)]mod exact_strip_port_tests{
+ use super::*;use crate::sim::Simulator;use sha3::digest::XofReader;
+ struct Fixed(u8);impl XofReader for Fixed{fn read(&mut self,out:&mut[u8]){out.fill(self.0);}}
+ #[test]fn exact_strip_signed_all_inputs_phase_garbage_inverse_and_fault(){
+  let mut checked=0u64;let mut faults=0u64;std::env::remove_var("LF_STRIP");
+  for w in(4usize..=18).chain([25,26,31,32,63,64]){let mask=if w==64{u64::MAX}else{(1u64<<w)-1};let total=if w<=16{1usize<<w}else{4096};for inverse in[false,true]{for garbage in[false,true]{if !sb_avail(w,inverse,garbage){continue;}for combo in 0..if garbage{4}else{1}{
+   let mut c=Builder::new();let ks=c.alloc_qubits(2);let t=c.alloc_qubits(w);let aux=c.alloc_qubits(2);let dropped=strip_barrel(&mut c,ks[0],ks[1],&t,inverse,garbage.then_some((aux[0],aux[1])));assert_eq!(dropped,!inverse);let(nq,nb)=c.i13_dims();let ops=c.take_ops();let faulty:Vec<_>=ops.iter().filter(|o|!matches!(o.kind,crate::circuit::OperationType::CZ|crate::circuit::OperationType::Z)).copied().collect();
+   for begin in(0..total).step_by(64){for pattern in[0u8,255,0xa5,0x5a]{let mut rng=Fixed(pattern);let mut frng=Fixed(pattern);let mut s=Simulator::new(nq,nb,&mut rng);let mut f=Simulator::new(nq,nb,&mut frng);let mut expected=vec![0u64;nq];
+    for lane in 0..64{let index=(begin+lane)as u64;let mut x=if w<=16{index}else{index.wrapping_mul(0x9e3779b97f4a7c15).rotate_left((index%63)as u32)}&mask;if x&15==0{x^=1;}let k2=u64::from(x&3==0);let k1=u64::from(x&1==0)^(k2*((x>>2)&1));let e=(k1+2*k2)as usize;let sign=x>>(w-1)&1;let y=if e==0{x}else{(x>>e)|if sign==1{mask^(mask>>e)}else{0}};assert_eq!(y&1,1);let ell=((combo&1)^((combo>>1)&1))as u64;let garbage_x=if garbage&&e>0{x.wrapping_sub(2*ell)&mask}else{x};let input=if inverse{y}else{garbage_x};let output=if inverse{garbage_x}else{y};
+     for i in 0..w{s.qubits[t[i].0 as usize]|=((input>>i)&1)<<lane;expected[t[i].0 as usize]|=((if !inverse&&i==0{0}else{output>>i&1}))<<lane;}
+     for(i,value)in[k1,k2].into_iter().enumerate(){s.qubits[ks[i].0 as usize]|=value<<lane;expected[ks[i].0 as usize]|=value<<lane;}
+     for i in 0..2{let value=(combo>>i&1)as u64;s.qubits[aux[i].0 as usize]|=value<<lane;expected[aux[i].0 as usize]|=value<<lane;}
+    }
+    f.qubits.clone_from(&s.qubits);s.apply_iter(ops.iter());f.apply_iter(faulty.iter());assert_eq!(s.qubits,expected,"w={w} inverse={inverse} garbage={garbage} combo={combo} begin={begin} pattern={pattern}");assert_eq!(s.phase,0,"strip phase w={w} inverse={inverse} garbage={garbage} combo={combo} begin={begin} pattern={pattern}");faults+=u64::from(f.phase!=0);checked+=64;
+   }}
+  }}}}assert!(faults>0,"Missing phase repair must be detected");eprintln!("EXACT_STRIP_NATIVE checked={checked} phase_fault_batches={faults} exhaustive_widths=4..16 sampled_widths=17,18,25,26,31,32,63,64");
+ }
 }

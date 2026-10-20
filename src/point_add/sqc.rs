@@ -39,7 +39,7 @@ fn delta(c: &mut Builder, recs: &[Rec], tw: &[Option<QubitId>], i: usize) {
     // XOR into x the sum updates of the later records of the same column (affine prelude)
     let mut k = i + 1;
     while k < recs.len() && recs[k].col == recs[i].col {
-        if recs[k].ocomp { c.x(recs[i].x); } // complement contributes a constant to the later sum
+        assert!(!recs[k].ocomp, "ocomp only in single-stream lines");
         if let Some(o) = rw(recs[k].o, tw) { c.cx(o, recs[i].x); }
         if let Some(q) = rw(recs[k].ci, tw) { c.cx(q, recs[i].x); }
         for &q in &recs[k].flips {c.cx(q,recs[i].x);}
@@ -111,12 +111,12 @@ pub(super) fn emit(c: &mut Builder, recs: &[Rec], inverse: bool) -> usize {
 pub(super) fn plan_redc(reg: &[QubitId], g: usize) -> Vec<Rec> {
     assert_eq!(reg.len(), 256);
     let st: [(bool, usize); 4] = [(true, 4), (false, 6), (true, 10), (true, 32)];
-    let merges:Vec<(usize,usize,usize)>=vec![(134,0,1),(138,1,2),(160,2,3)];
+    let merges: [(usize, usize, usize); 2] = [(138, 0, 2), (160, 2, 3)];
     let top = 256.min(161 + g);
     let mut carry: [Option<W>; 4] = [None; 4]; let mut dead = [false; 4]; let mut recs = Vec::new();
     for j in 0..top {
-        let mut feed: [Option<W>; 4] = [None; 4]; let mut complement=[false;4];
-        for &(col, a, b) in &merges { if col == j { feed[b] = carry[a]; complement[b] = st[a].0!=st[b].0; carry[a] = None; dead[a] = true; } }
+        let mut feed: [Option<W>; 4] = [None; 4];
+        for &(col, a, b) in &merges { if col == j { feed[b] = carry[a]; carry[a] = None; dead[a] = true; } }
         for r in 0..4 {
             if dead[r] { continue; }
             let (neg, s) = st[r];
@@ -124,7 +124,7 @@ pub(super) fn plan_redc(reg: &[QubitId], g: usize) -> Vec<Rec> {
             let o = if feed[r].is_some() { assert!(own.is_none()); feed[r] } else { own };
             if o.is_none() && carry[r].is_none() { continue; }
             let cf = j + 1 < top;
-            recs.push(Rec { col: j, x: reg[j], o, ci: carry[r], neg, carry: cf, flips: vec![], ocomp: complement[r], frame: None });
+            recs.push(Rec { col: j, x: reg[j], o, ci: carry[r], neg, carry: cf, flips: vec![], ocomp: false, frame: None });
             carry[r] = cf.then(|| W::T(recs.len() - 1));
         }
     }
@@ -217,12 +217,15 @@ pub(super) fn c_direct(c: &mut Builder, outx: &[QubitId], s: &[QubitId]) -> usiz
     };
     ands += topbits(c, &a, &reg[220..256], true, &w, None);            // w = floor((A + ~B)/2^36) = ceil((A-B)/2^36)
     ands += line(c, &ext, &[Some(w[0]), Some(w[1]), Some(w[2])], None);   // [S|ext] += w 2^256
-    ands+=witness_product(c,&reg,&w);
+    if std::env::var("EXACT_WITNESS_RIPPLE").is_ok_and(|v|v=="1"){assert!(g>=n,"Exact replacement requires every old tail fullwidth");ands+=witness_product(c,&reg,&w);}else{
+    for &(sft, neg) in &[(0usize, false), (4, false), (6, true), (10, false), (32, false)] {   // -= w f
+        let hi = n.min(sft + 3 + g);
+        let ops: Vec<Option<QubitId>> = (sft..hi).map(|j| (j - sft < 3).then(|| w[j - sft])).collect();
+        ands += if neg { line(c, &reg[sft..hi], &ops, None) } else { sub_line(c, &reg[sft..hi], &ops) };
+    }
+    }
     c.x_all(&reg);                                               // complement frame: rows ADD s^2
-    let chains = chain_plan(m);
-    
-        ands+=chain_groups::run(c,&reg,s);
-    
+    ands += chain_groups::run(c,&reg,s);
     // correction: + (~s) + 1 + sum_{i in NT} s_i 2^(i+m)  (exact value -s + .. + 2^m: 2^m X goes to the offset)
     let tops: Vec<usize> = Vec::new();
     let ops: Vec<Option<QubitId>> = (0..n).map(|j| if j < m { Some(s[j]) }
@@ -250,7 +253,6 @@ pub(super) fn c_direct(c: &mut Builder, outx: &[QubitId], s: &[QubitId]) -> usiz
 }
 
 mod chain_groups;
-
 
 fn witness_product(c:&mut Builder,reg:&[QubitId],w:&[QubitId])->usize{
  let m=c.alloc_qubits(4);c.ccx(w[0],w[1],m[0]);c.ccx(w[0],w[2],m[1]);c.ccx(w[1],w[2],m[2]);c.ccx(m[0],w[2],m[3]);
@@ -292,8 +294,10 @@ fn witness_product(c:&mut Builder,reg:&[QubitId],w:&[QubitId])->usize{
  c.cx(atoms[4],prod[12]);
  c.cx(atoms[5],prod[12]);
  c.cx(atoms[6],prod[12]);
- let ops:Vec<Option<QubitId>>=(0..59).map(|j|if j<13{Some(prod[j])}else if (32..35).contains(&j){Some(w[j-32])}else{None}).collect();
- let ands=sub_line(c,&reg[..59],&ops)+4;
+ let ops:Vec<Option<QubitId>>=(0..reg.len()).map(|j|if j<13{Some(prod[j])}else if (32..35).contains(&j){Some(w[j-32])}else{None}).collect();
+ #[cfg(test)]
+ if std::env::var("EXACT_WITNESS_TEST_FAULT").is_ok_and(|v|v=="1"){c.x(prod[0]);}
+ let ands=sub_line(c,reg,&ops)+4;
  c.cx(atoms[0],prod[0]);
  c.cx(atoms[1],prod[1]);
  c.cx(atoms[3],prod[2]);
@@ -335,3 +339,27 @@ fn witness_product(c:&mut Builder,reg:&[QubitId],w:&[QubitId])->usize{
  erase_and(c,m[3],m[0],w[2]);erase_and(c,m[2],w[1],w[2]);erase_and(c,m[1],w[0],w[2]);erase_and(c,m[0],w[0],w[1]);ands
 }
 
+
+#[cfg(test)]
+mod exact_witness_ripple_tests {
+ use super::*;
+ use alloy_primitives::U512;
+ use crate::{circuit::analyze_ops,sim::Simulator};
+ use sha3::digest::{Update,ExtendableOutput};
+ fn init(){super::super::clear_process_env();std::env::set_var("PEBBLE_HARD_CAP","1664");super::super::install_skywalk_submission_recipe();std::env::set_var("EXACT_WITNESS_TEST_FAULT","0");}
+ fn exercise(n:usize,case:usize,new:bool,fault:bool)->bool{
+  init();if fault{std::env::set_var("EXACT_WITNESS_TEST_FAULT","1");}
+  let mut c=Builder::new();let reg=c.alloc_qubits(n);let w=c.alloc_qubits(3);let guard=c.alloc_bit();c.push_condition(guard);
+  if new{witness_product(&mut c,&reg,&w);}else{for(sft,negative)in[(0usize,false),(4,false),(6,true),(10,false),(32,false)]{let ops:Vec<_>=(sft..n).map(|j|if j-sft<3{Some(w[j-sft])}else{None}).collect();if negative{line(&mut c,&reg[sft..],&ops,None);}else{sub_line(&mut c,&reg[sft..],&ops);}}}
+  c.pop_condition();c.declare_qubit_register(&reg);c.declare_qubit_register(&w);let ops=c.take_ops();let(nq,nb,_,_)=analyze_ops(ops.iter());let mut seed=sha3::Shake256::default();seed.update(b"exact-fullwidth-witness-native-20261020-v1");seed.update(&(case as u64).to_le_bytes());let mut rng=seed.finalize_xof();let mut sim=Simulator::new(nq as usize,nb as usize,&mut rng);let mask=(U512::from(1)<<n)-U512::from(1);let guard_mask=if case%3==0{u64::MAX}else if case%3==1{0xaaaa_aaaa_aaaa_aaaa}else{0x5aa5_33cc_ff00_0ff0};sim.bits[guard.0 as usize]=guard_mask;let mut initial=vec![];let mut random=0x9e37_79b9_7f4a_7c15u64^(case as u64);
+  for lane in 0..64{let value=if case==0{U512::ZERO}else if case==1{mask}else if case==2{U512::from(1)<<((lane*7)%n)}else{let mut v=U512::ZERO;for j in 0..5{random^=random<<13;random^=random>>7;random^=random<<17;v|=U512::from(random)<<(64*j);}v&mask};let witness=(lane%8)as u64;initial.push((value,witness));for(i,q)in reg.iter().enumerate(){sim.qubits[q.0 as usize]|=(value.bit(i)as u64)<<lane;}for(i,q)in w.iter().enumerate(){sim.qubits[q.0 as usize]|=((witness>>i)&1)<<lane;}}
+  sim.apply_iter(ops.iter());let mut okay=sim.phase==0;
+  for(lane,(value,witness))in initial.into_iter().enumerate(){let expected=if(guard_mask>>lane)&1!=0{value.wrapping_sub(U512::from(witness)*((U512::from(1)<<32usize)+U512::from(977)))&mask}else{value};for(i,q)in reg.iter().enumerate(){okay&=((sim.qubits[q.0 as usize]>>lane)&1)==expected.bit(i)as u64;}for(i,q)in w.iter().enumerate(){okay&=((sim.qubits[q.0 as usize]>>lane)&1)==((witness>>i)&1);}}
+  for(q,&value)in sim.qubits.iter().enumerate(){if !reg.iter().chain(w.iter()).any(|id|id.0 as usize==q){okay&=value==0;}}okay
+ }
+ #[test]fn polynomial_all8_witnesses_matches_full_modular_translation(){for n in[35,59,64,129,259]{for case in 0..4{assert!(exercise(n,case,true,false),"n{n}case{case}");}}}
+ #[test]fn full259_original_and_consolidated_are_phase_clean_under_captured_guards(){for case in 0..16{assert!(exercise(259,case,false,false));assert!(exercise(259,case,true,false));}}
+ #[test]fn deliberate_low_product_fault_is_detected(){assert!(!exercise(259,3,true,true));}
+ #[test]fn deliberate_fault_then_clean_component_are_independent(){assert!(!exercise(259,3,true,true));assert!(exercise(259,3,true,false));}
+
+}
