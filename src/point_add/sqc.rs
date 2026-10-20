@@ -13,7 +13,7 @@ pub(super) fn t_top() -> usize { std::env::var("SQC_T").ok().and_then(|v| v.pars
 #[derive(Clone, Copy)]
 pub(super) enum W { Q(QubitId), T(usize) }
 pub(super) struct Rec { pub col: usize, pub x: QubitId, pub o: Option<W>, pub ci: Option<W>, pub neg: bool,
-                        pub carry: bool, pub flips: Vec<QubitId>, pub ocomp: bool }
+                        pub carry: bool, pub flips: Vec<QubitId>, pub ocomp: bool, pub frame: Option<QubitId> }
 
 fn erase_and(c: &mut Builder, t: QubitId, u: QubitId, v: QubitId) {
     let m = c.alloc_bit(); c.hmr(t, m); c.cz_if(u, v, m); c.free_bit(m); c.release_clean(t);
@@ -42,6 +42,7 @@ fn delta(c: &mut Builder, recs: &[Rec], tw: &[Option<QubitId>], i: usize) {
         assert!(!recs[k].ocomp, "ocomp only in single-stream lines");
         if let Some(o) = rw(recs[k].o, tw) { c.cx(o, recs[i].x); }
         if let Some(q) = rw(recs[k].ci, tw) { c.cx(q, recs[i].x); }
+        for &q in &recs[k].flips {c.cx(q,recs[i].x);}
         k += 1;
     }
 }
@@ -51,7 +52,7 @@ pub(super) fn emit(c: &mut Builder, recs: &[Rec], inverse: bool) -> usize {
     let n = recs.len(); let mut tw: Vec<Option<QubitId>> = vec![None; n]; let mut ands = 0;
     let fa = |c: &mut Builder, r: &Rec, tw: &mut Vec<Option<QubitId>>, i: usize, fwd: bool| {
         let (o, ci) = (rw(r.o, tw), rw(r.ci, tw));
-        if r.neg { c.x(r.x); }
+        if r.neg { c.x(r.x); } if let Some(k)=r.frame {c.cx(k,r.x);}
         if r.ocomp { if let Some(o) = o { c.x(o); } }
         if fwd {
             if let Some(q) = ci { for &f in &r.flips { c.cx(f, q); } }
@@ -78,17 +79,17 @@ pub(super) fn emit(c: &mut Builder, recs: &[Rec], inverse: bool) -> usize {
             if let Some(q) = ci { for &f in r.flips.iter().rev() { c.cx(f, q); } }
         }
         if r.ocomp { if let Some(o) = o { c.x(o); } }
-        if r.neg { c.x(r.x); }
+        if r.neg { c.x(r.x); } if let Some(k)=r.frame {c.cx(k,r.x);}
     };
     let hold = |c: &mut Builder, recs: &[Rec], tw: &mut Vec<Option<QubitId>>, i: usize, compute: bool| {
         let r = &recs[i];
         if !r.carry || (r.o.is_none() && r.ci.is_none()) { return; }
-        delta(c, recs, tw, i); if r.neg { c.x(r.x); }
+        delta(c, recs, tw, i); if r.neg { c.x(r.x); } if let Some(k)=r.frame {c.cx(k,r.x);}
         let (o, ci) = (rw(r.o, tw), rw(r.ci, tw)); let mut slot = tw[i];
         if r.ocomp { if let Some(o) = o { c.x(o); } }
         and_io(c, r.x, o, ci, &mut slot, compute); tw[i] = slot;
         if r.ocomp { if let Some(o) = o { c.x(o); } }
-        if r.neg { c.x(r.x); } delta(c, recs, tw, i);
+        if r.neg { c.x(r.x); } if let Some(k)=r.frame {c.cx(k,r.x);} delta(c, recs, tw, i);
     };
     if !inverse {
         for i in 0..n { fa(c, &recs[i], &mut tw, i, true); if tw[i].is_some() { ands += 1; } }
@@ -123,7 +124,7 @@ pub(super) fn plan_redc(reg: &[QubitId], g: usize) -> Vec<Rec> {
             let o = if feed[r].is_some() { assert!(own.is_none()); feed[r] } else { own };
             if o.is_none() && carry[r].is_none() { continue; }
             let cf = j + 1 < top;
-            recs.push(Rec { col: j, x: reg[j], o, ci: carry[r], neg, carry: cf, flips: vec![], ocomp: false });
+            recs.push(Rec { col: j, x: reg[j], o, ci: carry[r], neg, carry: cf, flips: vec![], ocomp: false, frame: None });
             carry[r] = cf.then(|| W::T(recs.len() - 1));
         }
     }
@@ -135,7 +136,7 @@ pub(super) fn plan_line(xs: &[QubitId], ops: &[Option<QubitId>], flips: &[Vec<Qu
     let mut recs: Vec<Rec> = Vec::new(); let mut carry = cin.map(W::Q);
     for (j, &x) in xs.iter().enumerate() {
         let cf = j + 1 < xs.len();
-        recs.push(Rec { col: j, x, o: ops[j].map(W::Q), ci: carry, neg: false, carry: cf, flips: flips[j].clone(), ocomp: false });
+        recs.push(Rec { col: j, x, o: ops[j].map(W::Q), ci: carry, neg: false, carry: cf, flips: flips[j].clone(), ocomp: false, frame: None });
         carry = cf.then(|| W::T(recs.len() - 1));
     }
     recs
@@ -222,23 +223,9 @@ pub(super) fn c_direct(c: &mut Builder, outx: &[QubitId], s: &[QubitId]) -> usiz
         ands += if neg { line(c, &reg[sft..hi], &ops, None) } else { sub_line(c, &reg[sft..hi], &ops) };
     }
     c.x_all(&reg);                                               // complement frame: rows ADD s^2
-    let chains = chain_plan(m);
-    for ch in &chains {
-        let (mut xs, mut ops, mut fl, mut ctl) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-        for (idx, &(i, pos, k)) in ch.iter().enumerate() {
-            for tt in 0..k {
-                xs.push(reg[pos + tt]); ops.push(Some(s[i + 1 + tt])); ctl.push(s[i]);
-                fl.push(if tt == 0 && idx > 0 { vec![s[ch[idx - 1].0], s[i]] } else { Vec::new() });
-            }
-        }
-        let (li, lp, lk) = *ch.last().unwrap();
-        for q in lp + lk..n.min(lp + lk + g) { xs.push(reg[q]); ops.push(None); ctl.push(s[li]); fl.push(Vec::new()); }
-        for (&q, &k) in xs.iter().zip(ctl.iter()) { c.x(q); c.cx(k, q); }
-        ands += emit(c, &plan_line(&xs, &ops, &fl, Some(s[ch[0].0])), false);
-        for (&q, &k) in xs.iter().zip(ctl.iter()) { c.x(q); c.cx(k, q); }
-    }
+    ands += chain_groups::run(c,&reg,s);
     // correction: + (~s) + 1 + sum_{i in NT} s_i 2^(i+m)  (exact value -s + .. + 2^m: 2^m X goes to the offset)
-    let tops: Vec<usize> = chains.iter().map(|ch| ch.last().unwrap().0).collect();
+    let tops: Vec<usize> = Vec::new();
     let ops: Vec<Option<QubitId>> = (0..n).map(|j| if j < m { Some(s[j]) }
         else if j < 2 * m && !tops.contains(&(j - m)) { Some(s[j - m]) } else { None }).collect();
     let one = c.alloc_qubit(); c.x(one);
@@ -262,3 +249,5 @@ pub(super) fn c_direct(c: &mut Builder, outx: &[QubitId], s: &[QubitId]) -> usiz
     for &q in &ct { c.release_clean(q); }
     ands
 }
+
+mod chain_groups;

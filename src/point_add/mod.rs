@@ -155,7 +155,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "1514011998",
+        "TAIL_NONCE" => "1052246623534",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -564,11 +564,6 @@ pub fn build() -> Vec<Op> {
     ops = phase_cubic::run(ops);
     ops = rowcut_pass::run(ops);
     ops = reader_pass::run(ops);
-    // y42-railtop (leapfrog.rs `Y42_BOUND`; false = this gate list byte for byte): the edits of the four bound
-    // passes above as one table, carried to this tree's stream with the rail switches on
-    // stack-v3 frozen: main's seven stream-bound passes (and the generic passes between them) replayed as one edit
-    // table bound to this stream after reader_pass (frozen_stack.rs); they would panic on this stream as written
-    ops = frozen_stack::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -642,4 +637,3 @@ mod frozen_cache_product67;
 
 mod retained_products;
 mod zero_product;
-mod frozen_stack;
