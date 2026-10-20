@@ -206,6 +206,7 @@ mod tests {
         let batches: usize = std::env::var("SQLEAF_BATCHES").ok().and_then(|v| v.parse().ok()).unwrap_or(64);
         let d = std::env::var("SQC_LEAF_D").unwrap_or_else(|_| "8".into());
         super::super::clear_process_env();
+        std::env::set_var("PEBBLE_HARD_CAP","1536");
         super::super::install_skywalk_submission_recipe();
         std::env::set_var("EXACT_PAIR_CARRY", "1");
         super::super::leapfrog::install_recipe();
