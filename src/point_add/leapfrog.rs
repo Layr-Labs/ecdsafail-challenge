@@ -447,8 +447,7 @@ pub(crate) fn install_recipe() {
         // retained-AND lend mask 3 -> 4 (-9 T). Combined model 770,787 at Q 1236; 512-nonce eval mean 770,692.40,
         // score ~952.58M; λ paired vs glam_base 512 fails -0.777 +- 0.158, proj+2se 19.193 (vs T3 -0.143 +- 0.101).
         ("LF_REORDER_DIV", "42"),
-        // round-11 retune: with G1M the C branch (mask 4) has no with_square; A and B lend instead (-2.0 by the builder)
-        ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "3"),
+        ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "4"),
         // C1 spend of the combined point's λ margin (192-nonce screens paired vs the combined point, then 512):
         // T6 seed fusion on (-46.6 T, phase-only), merged window 56 -> 54 (-128 T, mism +0.057), late rule windows
         // one bit shorter from tick 90 (-162 T, mism +0.115). Totals: Q 1236, model 770,449.75, 512-nonce eval mean
@@ -546,65 +545,6 @@ thread_local! {
     static Y28_HOOK: std::cell::Cell<Option<(usize, crate::circuit::BitId)>> = const { std::cell::Cell::new(None) };
     /// (kept, applied) in this divide
     static Y28_COUNT: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
-    /// rail-strip R1: request / ladder flag / applied flag for the choice add's effective carry
-    static R1_REQ: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
-    static R1_LADDER: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
-    static R1_DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// rail-strip: the R1 garbage form L = b1 ^ s3 handed to the next strip barrel
-    static SB_SP: std::cell::Cell<Option<(QubitId, QubitId)>> = const { std::cell::Cell::new(None) };
-    /// rail-strip EXT: next carry_out_xor's first carry: 1 = a0 ^ b0 (forward split under R1), 2 = b0 (reverse split)
-    static CMP_MODE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
-}
-
-include!("strip_barrel.rs");
-include!("strip_small.rs");
-
-fn r1_on() -> bool {
-    !std::env::var("LF_R1").is_ok_and(|v| v == "0")
-}
-/// The kept bit's boundary waiting for the step now running, if any (y28_fetch without taking it).
-fn y28_peek_delta() -> Option<usize> {
-    if !y28_pending() {
-        return None;
-    }
-    let key = Y28_KEY.with(|k| k.get());
-    Y28_BITS.with(|b| b.borrow().get(&key).map(|v| v.0))
-}
-/// Will the reverse choice subtract (n wires, `room` free when it runs) take R1? Mirrors rail_add / capped_add.
-fn r1_rev_predict(n: usize, room: usize, pend: Option<usize>) -> bool {
-    if let Some(d) = pend {
-        return d >= 4 && n >= 3 && !std::env::var("LF_R1Y28").is_ok_and(|v| v == "0"); // the mirrored subtract is one whole ladder
-    }
-    if n <= 3 {
-        return false;
-    }
-    let off = std::env::var("LF_RAIL_SPLIT").is_ok_and(|v| v == "0");
-    let st = split_tight() as usize;
-    let deep = rail_capped() && !off && n - 3 > room && {
-        let delta = (n - room).saturating_sub(st);
-        delta + 3 > room || delta + 1 >= n
-    };
-    if deep {
-        return false;
-    }
-    if off || n - 3 <= room {
-        return true;
-    }
-    let delta = n - room - st;
-    delta + 3 > room || delta + 1 >= n || (delta >= 4 && !std::env::var("LF_R1SPLIT").is_ok_and(|v| v == "0"))
-}
-fn r1_rev_on() -> bool {
-    r1_on() && !std::env::var("LF_R1REV").is_ok_and(|v| v == "0")
-}
-
-/// [`fast_k_erase`] on the R1 reverse target X^ = X - 2 L [e >= 1]: wires 1, 2 read X ^ L wherever the letters'
-/// phase fix reads them (k2 = !x0 & !(x1 ^ L), k1 = !x0 ^ (k2 & (x2 ^ L))), so L is hosted on them around the fixes.
-fn fast_k_erase_g(c: &mut Builder, t: &[QubitId], k1: QubitId, k2: QubitId, l: &Lin) {
-    lin_xor_into(c, l, t[1]);
-    lin_xor_into(c, l, t[2]);
-    fast_k_erase(c, t, k1, k2);
-    lin_xor_into(c, l, t[2]);
-    lin_xor_into(c, l, t[1]);
 }
 fn y28_key(k: usize) {
     Y28_KEY.with(|x| x.set(k));
@@ -864,22 +804,11 @@ fn carry_out_xor(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, ou
     // Phase-only form: the top carry is never built. carry[n] = c ^ (a ^ c)(b ^ c) with c = carry[n - 1], so
     // (-1)^(NOT carry[n]) is one CZ on the two operand wires (while they hold a ^ c, b ^ c) times (-1)^(NOT c).
     let m = if out.is_none() && n >= 1 { n - 1 } else { n };
-    let mode = CMP_MODE.with(|x| x.replace(0));
-    assert!(mode == 0 || m >= 2, "rail-strip compare mode on a short compare");
     let mut carry = vec![cin];
     for i in 0..m {
         let ci = carry[i];
-        if i == 0 && mode == 2 {
-            carry.push(b[0]); // the effective carry t1 (round11/rail-strip): exact from position delta >= 4 on
-            continue;
-        }
         c.cx(ci, a[i]);
         c.cx(ci, b[i]);
-        if i == 0 && mode == 1 {
-            c.cx(a[0], b[0]); // carry into position 1 = c1 - g = a0 ^ b0 on the R1 sum
-            carry.push(b[0]);
-            continue;
-        }
         let t = and_new(c, a[i], b[i]);
         c.cx(ci, t);
         carry.push(t);
@@ -902,15 +831,8 @@ fn carry_out_xor(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, ou
     }
     for i in (0..m).rev() {
         let (ci, t) = (carry[i], carry[i + 1]);
-        if i == 0 && mode == 2 {
-            continue;
-        }
-        if i == 0 && mode == 1 {
-            c.cx(a[0], b[0]);
-        } else {
-            c.cx(ci, t);
-            and_erase(c, t, a[i], b[i]);
-        }
+        c.cx(ci, t);
+        and_erase(c, t, a[i], b[i]);
         c.cx(ci, a[i]);
         c.cx(ci, b[i]);
     }
@@ -964,23 +886,12 @@ fn gidney_add_lean(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<Qu
     let mut carry: Vec<Option<QubitId>> = vec![None; n];
     carry[0] = cin;
     let mut y28h = Y28_HOOK.with(|x| x.take());
-    // rail-strip R1 (choice add only, cin = None): the carry into position 1 is taken as the complemented target bit
-    // b[0] itself; the sum is then off by 2g below the stripped bits only (round11/rail-strip), no AND for it
-    let r1m = R1_LADDER.with(|x| x.replace(0));
-    let r1 = r1m != 0;
-    assert!(!r1 || (cin.is_none() && n >= 3 && y28h.map_or(true, |h| h.0 >= 2)), "R1 ladder misuse");
     for i in 0..n - 1 {
         if let Some(ci) = carry[i] {
             c.cx(ci, a[i]);
             c.cx(ci, b[i]);
         }
-        if r1 && i == 0 {
-            if r1m == 2 {
-                c.cx(a[0], b[0]);
-                c.x(b[0]);
-            }
-            carry[1] = Some(b[0]);
-        } else if i + 2 == n {
+        if i + 2 == n {
             c.ccx(a[i], b[i], b[n - 1]);
             if let Some(ci) = carry[i] {
                 c.cx(ci, b[n - 1]);
@@ -997,15 +908,11 @@ fn gidney_add_lean(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<Qu
     assert!(y28h.is_none(), "y28: the kept bit's boundary carry is on no wire of this ladder");
     c.cx(a[n - 1], b[n - 1]);
     for i in (0..n - 1).rev() {
-        if let Some(next) = carry[i + 1].filter(|_| !(r1 && i == 0)) {
+        if let Some(next) = carry[i + 1] {
             if let Some(ci) = carry[i] {
                 c.cx(ci, next);
             }
             and_erase(c, next, a[i], b[i]);
-        }
-        if r1m == 2 && i == 0 {
-            c.x(b[0]); // b[0] = a0 ^ b0: the position-0 sum already
-            continue;
         }
         c.cx(a[i], b[i]);
         if let Some(ci) = carry[i] {
@@ -1023,14 +930,7 @@ fn capped_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId
     let room = cells::cap().saturating_sub(c.active_qubits() as usize);
     let off = std::env::var("LF_RAIL_SPLIT").is_ok_and(|v| v == "0");
     // the lean ladder holds n - 2 carries (its top carry goes straight into the top sum wire)
-    let r1req = R1_REQ.with(|x| x.replace(0));
-    // the R1 ladder holds one carry wire fewer (n - 3), so it stays whole one wire of room earlier
-    let r1fit = (r1req != 0 && cin.is_none() && n >= 3) as usize;
-    if off || n <= 3 || n - 2 - r1fit <= room {
-        if r1fit == 1 {
-            R1_LADDER.with(|x| x.set(r1req));
-            R1_DONE.with(|x| x.set(true));
-        }
+    if off || n <= 3 || n - 2 <= room {
         gidney_add_lean(c, a, b, cin);
         return;
     }
@@ -1039,26 +939,14 @@ fn capped_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId
         eprintln!("LF_SPLIT n={n} room={room} delta={delta}");
     }
     if delta + 3 > room || delta + 1 >= n {
-        if r1fit == 1 {
-            R1_LADDER.with(|x| x.set(r1req));
-            R1_DONE.with(|x| x.set(true));
-        }
         gidney_add_lean(c, a, b, cin);
         return;
     }
-    // rail-strip EXT: R1 on the low ladder when the kept carry sits above every garbage bit (delta >= 4); its compare
-    // then takes a linear first carry (forward: a0 ^ b0 on the R1 sum; reverse: the effective carry b0)
-    let r1s = r1req != 0 && cin.is_none() && delta >= 4 && !std::env::var("LF_R1SPLIT").is_ok_and(|v| v == "0");
-    assert!(r1req != 2 || r1s, "R1 reverse: split with delta {delta} < 4 was not predicted");
     let (za, cq) = (c.alloc_qubit(), c.alloc_qubit());
     let mut al = a[..delta].to_vec();
     al.push(za);
     let mut bl = b[..delta].to_vec();
     bl.push(cq);
-    if r1s {
-        R1_LADDER.with(|x| x.set(r1req));
-        R1_DONE.with(|x| x.set(true));
-    }
     gidney_add_lean(c, &al, &bl, cin);
     c.free(za);
     gidney_add_lean(c, &a[delta..], &b[delta..], Some(cq));
@@ -1083,17 +971,11 @@ fn capped_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId
         // y28: in the divide's fused pass the outcome is kept and its phase applied in the mirrored subtract
         if !y28_store(delta, n, m) {
             c.push_condition(m);
-            if r1s {
-                CMP_MODE.with(|x| x.set(r1req));
-            }
             carry_out_xor(c, &a[..delta], &b[..delta], ncin, None);
             c.pop_condition();
             c.free_bit(m);
         }
     } else {
-        if r1s {
-            CMP_MODE.with(|x| x.set(r1req));
-        }
         carry_out_xor(c, &a[..delta], &b[..delta], ncin, Some(cq));
         c.x(cq);
         c.free(cq);
@@ -1215,16 +1097,8 @@ fn rail_capped() -> bool {
 /// shared by every such position of the parity ladder); same split policy under the walk cap as the full-width add.
 fn rail_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>) {
     let n = b.len();
-    let r1req = R1_REQ.with(|x| x.replace(0));
     let room = cells::cap().saturating_sub(c.active_qubits() as usize);
     if let Some(h) = y28_fetch(n) {
-        if r1req == 2 {
-            // rail-strip EXT: the R1-reverse ladder's carries agree with the plain one's from position e + 1 on, so the
-            // kept bit's Z goes on the same carry (boundary >= 4)
-            assert!(h.0 >= 4 && a.len() >= b.len(), "R1 reverse: y28 boundary below 4");
-            R1_LADDER.with(|x| x.set(2));
-            R1_DONE.with(|x| x.set(true));
-        }
         // y28: the mirrored subtract of a split forward add. It is one whole ladder here (the same gates as below),
         // which holds the carry into the forward boundary on a wire: the kept outcome's phase goes on there.
         assert!(n <= 3 || n - 2 <= room, "y28: the mirrored subtract must be one whole ladder");
@@ -1243,15 +1117,13 @@ fn rail_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>)
     let off = std::env::var("LF_RAIL_SPLIT").is_ok_and(|v| v == "0");
     // LF_RAIL_CAPPED=1: an add whose two-way split does not fit either (n > ~2 room) goes through the recursive
     // room-sized split of the fold ladders ([`lpa_capped`]) instead of a full-width ladder that overruns the cap
-    let deep = rail_capped() && !off && n > 3 && n - 2 - (r1req != 0 && cin.is_none()) as usize > room && {
+    let deep = rail_capped() && !off && n > 3 && n - 2 > room && {
         let delta = (n - room).saturating_sub(split_tight() as usize);
         delta + 3 > room || delta + 1 >= n || (a.len() < n && delta >= a.len())
     };
     if a.len() >= b.len() && !deep {
-        R1_REQ.with(|x| x.set(r1req));
         return capped_add(c, a, b, cin);
     }
-    assert!(r1req != 2, "R1 reverse: predicted a whole lean add");
     let sg = *a.last().unwrap();
     let add: Vec<Vec<QubitId>> = (0..b.len()).map(|i| vec![if i < a.len() { a[i] } else { sg }]).collect();
     if deep {
@@ -1896,11 +1768,6 @@ fn lin_rail_barrel(c: &mut Builder, k1: QubitId, k2: QubitId, t: &[QubitId], inv
 
 /// Rail barrel with the 3-Toffoli sign fill (h = k2 & sg -> t1, t0; h2 = k1 & h -> t2, t0; k1 & sg -> t0).
 fn fast_rail_barrel(c: &mut Builder, k1: QubitId, k2: QubitId, t: &[QubitId], inverse: bool, drop0: bool) -> bool {
-    let sp = SB_SP.with(|x| x.take());
-    if strip_on() && sb_avail(t.len(), inverse, sp.is_some()) && (inverse || drop0) {
-        return strip_barrel(c, k1, k2, t, inverse, sp);
-    }
-    assert!(sp.is_none(), "R1 garbage reached a barrel that does not take it");
     if !std::env::var("LF_RAILLIN").is_ok_and(|v| v == "0") {
         return lin_rail_barrel(c, k1, k2, t, inverse, drop0);
     }
@@ -4257,13 +4124,10 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     let q0 = pmark(c);
     y28_key(t * 4 + 2);
     if lr {
-        R1_REQ.with(|x| x.set((r1_on() && strip_on() && sb_avail(nb, false, true)) as u8));
         fast_add_halve_choice_lr(c, s3, br, tr);
-        R1_REQ.with(|x| x.set(0));
     } else {
         fast_add_halve_choice(c, s3, br, tr);
     }
-    let r1_done = R1_DONE.with(|x| x.replace(false));
     y28_key(usize::MAX);
     pacc(c, &format!("fwd{fk}.rail_choice"), q0);
     if trim {
@@ -4291,9 +4155,6 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     pacc(c, &format!("fwd{fk}.pay_cell"), q0);
     resize(c, tr, nb);
     let q0 = pmark(c);
-    if r1_done {
-        SB_SP.with(|x| x.set(Some((br[0], s3))));
-    }
     if fast_rail_barrel(c, k1, k2, tr, false, lr) {
         tr.remove(0); // released inside the barrel
     } else if lr {
@@ -4557,38 +4418,16 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     if lr {
         lr_restore(c, tr);
     }
-    // rail-strip R1 reverse: predict that the choice step's subtract below is one whole lean ladder (no y28 bit, full
-    // source, fits the room it will see: tr grows to n2 - 1, k1 and k2 are released), then run the strip barrel's
-    // inverse onto X^ and the effective-carry ladder (asserted inside rail_add / capped_add)
-    let r1r = lr && r1_rev_on() && strip_on() && sb_avail(tr.len(), true, true) && br.len() >= n2 - 1 && {
-        y28_key(t * 4 + 2);
-        let pend = y28_peek_delta();
-        y28_key(usize::MAX);
-        let n = n2 - 1;
-        let act = (c.active_qubits() as usize + n.saturating_sub(tr.len())).saturating_sub(2);
-        let room = cells::cap().saturating_sub(act);
-        n >= tr.len() && r1_rev_predict(n, room, pend)
-    };
-    if r1r {
-        SB_SP.with(|x| x.set(Some((br[0], s3))));
-    }
     fast_rail_barrel(c, k1, k2, tr, true, false);
     pacc(c, &format!("rev{fk}.rail_barrel"), q0);
     resize(c, tr, n2 - 1);
     let q0 = pmark(c);
-    if r1r {
-        fast_k_erase_g(c, tr, k1, k2, &Lin::of(&[br[0], s3]));
-    } else {
-        fast_k_erase(c, tr, k1, k2);
-    }
+    fast_k_erase(c, tr, k1, k2);
     pacc(c, &format!("rev{fk}.k_erase"), q0);
     let q0 = pmark(c);
     y28_key(t * 4 + 2);
     if lr {
-        R1_REQ.with(|x| x.set(if r1r { 2 } else { 0 }));
         fast_double_sub_choice_lr(c, s3, br, tr);
-        R1_REQ.with(|x| x.set(0));
-        assert_eq!(R1_DONE.with(|x| x.replace(false)), r1r, "R1 reverse prediction");
     } else {
         fast_double_sub_choice(c, s3, br, tr);
     }
