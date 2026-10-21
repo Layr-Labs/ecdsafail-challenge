@@ -90,6 +90,170 @@ pub fn run() {
         println!("{{\"kind\":\"actual-rust-codec-lifecycle\",\"trits\":{n},\"first_read_reverse\":{},\"valid_cases\":{},\"ccx\":{ccx},\"peak\":{peak},\"hmr\":{hmr},\"measurement_branches\":\"symbolically exhaustive\",\"value\":\"pass\",\"phase\":\"pass\",\"cleanup\":\"pass\"}}",order==1,3usize.pow(n as u32));
     }}
     run_synth();
+    run_thin();
+}
+
+/// Every five-trit word, both traversal directions, with repeated temporary
+/// three-trit packing around each read.  Measurement phases are symbolic.
+fn run_thin() {
+    for order in 0..2 {
+        let mut c=Builder::new();let mut tape=Tape::new(5);
+        let mut input=Vec::new();let mut reads=Vec::new();
+        for t in 0..5 {
+            let qs=c.alloc_qubits(2);let pair=(qs[0],qs[1]);
+            input.push((c.op_count(),pair.0,pair.1));tape.raw[t]=Some(pair);
+        }
+        tape.pack3(&mut c,0);tape.pack5(&mut c,0);
+        for pass in 0..2 {
+            let mut sequence=(0..5).collect::<Vec<_>>();
+            if (pass+order)%2==1 {sequence.reverse();}
+            for t in sequence {
+                tape.ensure_group_raw(&mut c,0,5);
+                let thin=tape.thin_begin(&mut c,t).expect("five raw trits");
+                let (typ,s)=tape.get(t);
+                reads.push(Read{at:c.op_count(),trit:t,typ,s});
+                tape.thin_end(&mut c,thin);
+            }
+            if pass==0 {tape.repack(&mut c,0,5);}
+        }
+        let mut output=Vec::new();
+        for t in 0..5 {output.push(tape.raw[t].take().unwrap());}
+        assert!(tape.all_consumed());
+        let (nq,nb)=c.i13_dims();let peak=c.peak_total();let ops=c.take_ops();
+        for word in 0..243usize {
+            let mut digits=word;let mut original=Vec::new();
+            let mut q=vec![false;nq];let mut bits=vec![0u128;nb];let mut phase=0u128;let mut measurements=0;
+            for _ in 0..5 {
+                let trit=digits%3;digits/=3;let h=trit==2;let l=trit==1;
+                original.push((true^h^l,h));
+            }
+            let mut read=0;
+            for pos in 0..=ops.len() {
+                for (i,(at,typ,s)) in input.iter().enumerate() {if *at==pos {
+                    q[typ.0 as usize]=original[i].0;q[s.0 as usize]=original[i].1;
+                }}
+                while read<reads.len() && reads[read].at==pos {
+                    let r=&reads[read];
+                    assert_eq!((q[r.typ.0 as usize],q[r.s.0 as usize]),original[r.trit],
+                        "thin read order={order} word={word} t={}",r.trit);
+                    read+=1;
+                }
+                if pos<ops.len(){sim(&ops[pos],&mut q,&mut bits,&mut phase,&mut measurements);}
+            }
+            assert_eq!(phase,0,"thin phase order={order} word={word}");
+            for (i,(typ,s)) in output.iter().enumerate(){
+                assert_eq!((q[typ.0 as usize],q[s.0 as usize]),original[i]);
+                q[typ.0 as usize]=false;q[s.0 as usize]=false;
+            }
+            assert!(q.iter().all(|v|!*v));
+        }
+        println!("C29_THIN_GATE order={order} cases=243 peak={peak} value=pass phase=pass cleanup=pass");
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn c29_thin_codec_exact() { run_thin(); }
+
+#[cfg(test)]
+#[test]
+fn c29_tight_triple_all_wire() {
+    let mut c = Builder::new();
+    let wires = c.alloc_qubits(5);
+    tight_triple(&mut c, wires[0], wires[1], wires[2], wires[3], wires[4]);
+    assert_eq!(c.peak_total(), 5);
+    let (nq, nb) = c.i13_dims();
+    let ops = c.take_ops();
+    for word in 0..32usize {
+        let mut q: Vec<bool> = (0..5).map(|i| word >> i & 1 != 0).collect();
+        q.resize(nq, false);
+        let before = q.clone();
+        let mut bits = vec![0u128; nb];
+        let mut phase = 0;
+        let mut measurements = 0;
+        for op in &ops { sim(op, &mut q, &mut bits, &mut phase, &mut measurements); }
+        assert_eq!(q[3], before[3] ^ (before[0] & before[1] & before[2]));
+        for i in [0, 1, 2, 4] { assert_eq!(q[i], before[i], "word={word} wire={i}"); }
+        assert_eq!(phase, 0);
+        assert_eq!(measurements, 0);
+    }
+    println!("C29_TIGHT_TRIPLE cases=32 peak=5 value=pass dirty=pass phase=pass");
+}
+
+#[cfg(test)]
+#[test]
+fn c29_pair_support_map() {
+    use std::collections::BTreeMap;
+    C29_PAIR_TRACE.with(|v| v.borrow_mut().clear());
+    let mut c = Builder::new();
+    let mut tape = Tape::new(5);
+    let mut input = Vec::new();
+    for t in 0..5 {
+        let qs = c.alloc_qubits(2);
+        input.push((qs[0], qs[1]));
+        tape.raw[t] = Some((qs[0], qs[1]));
+    }
+    tape.pack3(&mut c, 0);
+    tape.pack5(&mut c, 0);
+    tape.ensure_raw(&mut c, 4);
+    let traces = C29_PAIR_TRACE.with(|v| v.borrow().clone());
+    assert_eq!(traces.len(), 1);
+    let (start, end, four) = traces[0];
+    let (nq, nb) = c.i13_dims();
+    let ops = c.take_ops();
+    let mut map = BTreeMap::new();
+    for word in 0..243usize {
+        let mut digits = word;
+        let mut q = vec![false; nq];
+        for &(typ, s) in &input {
+            let trit = digits % 3; digits /= 3;
+            let h = trit == 2; let l = trit == 1;
+            q[typ.0 as usize] = true ^ h ^ l;
+            q[s.0 as usize] = h;
+        }
+        let mut bits = vec![0u128; nb];
+        let mut phase = 0u128;
+        let mut measurements = 0;
+        let mut before = None;
+        let mut after = None;
+        for pos in 0..=ops.len() {
+            let four_value = |q: &[bool]| four.iter().enumerate().fold(0u8, |v, (i, id)| v | u8::from(q[id.0 as usize]) << i);
+            if pos == start { before = Some(four_value(&q)); }
+            if pos == end { after = Some(four_value(&q)); }
+            if pos < ops.len() { sim(&ops[pos], &mut q, &mut bits, &mut phase, &mut measurements); }
+        }
+        let (x, y) = (before.unwrap(), after.unwrap());
+        if let Some(old) = map.insert(x, y) { assert_eq!(old, y, "pair map depends on outer word {word}"); }
+    }
+    println!("C29_PAIR_SUPPORT {:?}", map);
+}
+
+#[cfg(test)]
+#[test]
+fn c29_pair_anc0_all_wire() {
+    const PERM: [u8; 16] = [0, 5, 2, 7, 4, 11, 6, 3, 8, 13, 10, 15, 1, 14, 9, 12];
+    let mut c = Builder::new();
+    let q = c.alloc_qubits(4);
+    let dirty = c.alloc_qubit();
+    pair_unpack_ancfree(&mut c, [q[0], q[1], q[2], q[3]], dirty);
+    assert_eq!(c.peak_total(), 5);
+    let (nq, nb) = c.i13_dims();
+    let ops = c.take_ops();
+    for x in 0..16u8 { for d in 0..2u8 {
+        let mut state = vec![false; nq];
+        for i in 0..4 { state[q[i].0 as usize] = x >> i & 1 != 0; }
+        state[dirty.0 as usize] = d != 0;
+        let mut bits = vec![0u128; nb];
+        let mut phase = 0u128;
+        let mut measurements = 0;
+        for op in &ops { sim(op, &mut state, &mut bits, &mut phase, &mut measurements); }
+        let y = (0..4).fold(0u8, |v, i| v | u8::from(state[q[i].0 as usize]) << i);
+        assert_eq!(y, PERM[x as usize], "input={x} dirty={d}");
+        assert_eq!(state[dirty.0 as usize], d != 0);
+        assert_eq!(phase, 0);
+        assert_eq!(measurements, 0);
+    }}
+    println!("C29_PAIR_ANC0 cases=32 peak=5 value=pass dirty=pass phase=pass");
 }
 
 fn run_synth() {
