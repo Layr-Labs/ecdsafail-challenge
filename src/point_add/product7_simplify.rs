@@ -1,5 +1,6 @@
 //! Current physical-slot witnesses for an exact control product.
 //!
+//! This index observes the same original-op truth state as the older proofs.
 //! It makes no Rust allocator-lifetime claim and never creates a value atom.
 
 use super::{Rewrite, Support, Truth, SUPPORT_CAP};
