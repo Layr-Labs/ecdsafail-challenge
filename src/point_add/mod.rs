@@ -155,7 +155,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "1052265542902",
+        "TAIL_NONCE" => "101034479433",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -564,7 +564,12 @@ pub fn build() -> Vec<Op> {
     ops = phase_cubic::run(ops);
     ops = rowcut_pass::run(ops);
     ops = reader_pass::run(ops);
-    ops = stream_edits::run(ops);
+    // y42-railtop (leapfrog.rs `Y42_BOUND`; false = this gate list byte for byte): the edits of the four bound
+    // passes above as one table, carried to this tree's stream with the rail switches on
+    // round17 a2-build v5w: main's seven stream-bound passes (and cond_pass ur / zero_force between them) replayed as
+    // one edit table bound to this stream after reader_pass (frozen_stack.rs): the harness's re-anchoring of main's
+    // edits on lever A's stream (2 census_anchored clusters) plus the generic passes' result, op for op
+    ops = frozen_stack::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -638,7 +643,4 @@ mod frozen_cache_product67;
 
 mod retained_products;
 mod zero_product;
-mod source_edits;
-mod stream_edits;
-mod classical_factors_xor;
-mod classical_wide;
+mod frozen_stack;

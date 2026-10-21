@@ -1267,19 +1267,14 @@ fn sub_square_g1m(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
     let (p0, k1) = (circ.take_win_peak(), super::sqc::redc(circ, out, false));
     let p1 = circ.take_win_peak(); let t2 = tt(circ);
     let outx: Vec<QubitId> = out[h..].iter().chain(out[..h].iter()).copied().collect();
-    let sum_carry=circ.alloc_qubit();
-    let held_sum=circ.alloc_qubits(h);
-    circ.cx_pairs(y_hi,&held_sum);
-    let mut sum=held_sum.clone();
+    let sum_carry = circ.alloc_qubit();
+    let mut sum = y_hi.to_vec();
     sum.push(sum_carry);
     add_wide(circ, y_lo, &sum);
     let t3 = tt(circ);
     let k2 = super::sqc::c_direct(circ, &outx, &sum);
     let p2 = circ.take_win_peak(); let t4 = tt(circ);
-    let a:Vec<Option<QubitId>>=(0..sum.len()).map(|j|y_lo.get(j).copied()).collect();
-    let b:Vec<Option<QubitId>>=(0..sum.len()).map(|j|y_hi.get(j).copied()).collect();
-    super::sqc::erase_sum(circ,&sum,&a,&b);
-    for &q in held_sum.iter().rev(){circ.release_clean(q);}
+    restore_square_sum(circ, y_lo, &sum);
     circ.free(sum_carry);
     let t5 = tt(circ);
     super::sqleaf::scoped(true, || with_square(circ, y_hi, "SQ_B_POLICY", |circ, b2| {
