@@ -13,7 +13,7 @@ pub(super) fn t_top() -> usize { std::env::var("SQC_T").ok().and_then(|v| v.pars
 #[derive(Clone, Copy)]
 pub(super) enum W { Q(QubitId), T(usize) }
 pub(super) struct Rec { pub col: usize, pub x: QubitId, pub o: Option<W>, pub ci: Option<W>, pub neg: bool,
-                        pub carry: bool, pub flips: Vec<QubitId>, pub ocomp: bool }
+                        pub carry: bool, pub flips: Vec<QubitId>, pub ocomp: bool, pub frame: Option<QubitId> }
 
 fn erase_and(c: &mut Builder, t: QubitId, u: QubitId, v: QubitId) {
     let m = c.alloc_bit(); c.hmr(t, m); c.cz_if(u, v, m); c.free_bit(m); c.release_clean(t);
@@ -39,9 +39,10 @@ fn delta(c: &mut Builder, recs: &[Rec], tw: &[Option<QubitId>], i: usize) {
     // XOR into x the sum updates of the later records of the same column (affine prelude)
     let mut k = i + 1;
     while k < recs.len() && recs[k].col == recs[i].col {
-        assert!(!recs[k].ocomp, "ocomp only in single-stream lines");
+        if recs[k].ocomp { c.x(recs[i].x); } // complement contributes a constant to the later sum
         if let Some(o) = rw(recs[k].o, tw) { c.cx(o, recs[i].x); }
         if let Some(q) = rw(recs[k].ci, tw) { c.cx(q, recs[i].x); }
+        for &q in &recs[k].flips {c.cx(q,recs[i].x);}
         k += 1;
     }
 }
@@ -51,7 +52,7 @@ pub(super) fn emit(c: &mut Builder, recs: &[Rec], inverse: bool) -> usize {
     let n = recs.len(); let mut tw: Vec<Option<QubitId>> = vec![None; n]; let mut ands = 0;
     let fa = |c: &mut Builder, r: &Rec, tw: &mut Vec<Option<QubitId>>, i: usize, fwd: bool| {
         let (o, ci) = (rw(r.o, tw), rw(r.ci, tw));
-        if r.neg { c.x(r.x); }
+        if r.neg { c.x(r.x); } if let Some(k)=r.frame {c.cx(k,r.x);}
         if r.ocomp { if let Some(o) = o { c.x(o); } }
         if fwd {
             if let Some(q) = ci { for &f in &r.flips { c.cx(f, q); } }
@@ -78,17 +79,17 @@ pub(super) fn emit(c: &mut Builder, recs: &[Rec], inverse: bool) -> usize {
             if let Some(q) = ci { for &f in r.flips.iter().rev() { c.cx(f, q); } }
         }
         if r.ocomp { if let Some(o) = o { c.x(o); } }
-        if r.neg { c.x(r.x); }
+        if r.neg { c.x(r.x); } if let Some(k)=r.frame {c.cx(k,r.x);}
     };
     let hold = |c: &mut Builder, recs: &[Rec], tw: &mut Vec<Option<QubitId>>, i: usize, compute: bool| {
         let r = &recs[i];
         if !r.carry || (r.o.is_none() && r.ci.is_none()) { return; }
-        delta(c, recs, tw, i); if r.neg { c.x(r.x); }
+        delta(c, recs, tw, i); if r.neg { c.x(r.x); } if let Some(k)=r.frame {c.cx(k,r.x);}
         let (o, ci) = (rw(r.o, tw), rw(r.ci, tw)); let mut slot = tw[i];
         if r.ocomp { if let Some(o) = o { c.x(o); } }
         and_io(c, r.x, o, ci, &mut slot, compute); tw[i] = slot;
         if r.ocomp { if let Some(o) = o { c.x(o); } }
-        if r.neg { c.x(r.x); } delta(c, recs, tw, i);
+        if r.neg { c.x(r.x); } if let Some(k)=r.frame {c.cx(k,r.x);} delta(c, recs, tw, i);
     };
     if !inverse {
         for i in 0..n { fa(c, &recs[i], &mut tw, i, true); if tw[i].is_some() { ands += 1; } }
@@ -110,12 +111,12 @@ pub(super) fn emit(c: &mut Builder, recs: &[Rec], inverse: bool) -> usize {
 pub(super) fn plan_redc(reg: &[QubitId], g: usize) -> Vec<Rec> {
     assert_eq!(reg.len(), 256);
     let st: [(bool, usize); 4] = [(true, 4), (false, 6), (true, 10), (true, 32)];
-    let merges: [(usize, usize, usize); 2] = [(138, 0, 2), (160, 2, 3)];
+    let merges:Vec<(usize,usize,usize)>=vec![(134,0,1),(138,1,2),(160,2,3)];
     let top = 256.min(161 + g);
     let mut carry: [Option<W>; 4] = [None; 4]; let mut dead = [false; 4]; let mut recs = Vec::new();
     for j in 0..top {
-        let mut feed: [Option<W>; 4] = [None; 4];
-        for &(col, a, b) in &merges { if col == j { feed[b] = carry[a]; carry[a] = None; dead[a] = true; } }
+        let mut feed: [Option<W>; 4] = [None; 4]; let mut complement=[false;4];
+        for &(col, a, b) in &merges { if col == j { feed[b] = carry[a]; complement[b] = st[a].0!=st[b].0; carry[a] = None; dead[a] = true; } }
         for r in 0..4 {
             if dead[r] { continue; }
             let (neg, s) = st[r];
@@ -123,7 +124,7 @@ pub(super) fn plan_redc(reg: &[QubitId], g: usize) -> Vec<Rec> {
             let o = if feed[r].is_some() { assert!(own.is_none()); feed[r] } else { own };
             if o.is_none() && carry[r].is_none() { continue; }
             let cf = j + 1 < top;
-            recs.push(Rec { col: j, x: reg[j], o, ci: carry[r], neg, carry: cf, flips: vec![], ocomp: false });
+            recs.push(Rec { col: j, x: reg[j], o, ci: carry[r], neg, carry: cf, flips: vec![], ocomp: complement[r], frame: None });
             carry[r] = cf.then(|| W::T(recs.len() - 1));
         }
     }
@@ -135,7 +136,7 @@ pub(super) fn plan_line(xs: &[QubitId], ops: &[Option<QubitId>], flips: &[Vec<Qu
     let mut recs: Vec<Rec> = Vec::new(); let mut carry = cin.map(W::Q);
     for (j, &x) in xs.iter().enumerate() {
         let cf = j + 1 < xs.len();
-        recs.push(Rec { col: j, x, o: ops[j].map(W::Q), ci: carry, neg: false, carry: cf, flips: flips[j].clone(), ocomp: false });
+        recs.push(Rec { col: j, x, o: ops[j].map(W::Q), ci: carry, neg: false, carry: cf, flips: flips[j].clone(), ocomp: false, frame: None });
         carry = cf.then(|| W::T(recs.len() - 1));
     }
     recs
@@ -166,7 +167,7 @@ pub(super) fn chain_plan(m: usize) -> Vec<Vec<(usize, usize, usize)>> {
 /// Erase e = a + b (an out-of-place sum, no carry-in) while a and b are live, for 0 Toffolis: CNOTs turn each
 /// e_i into the carry c_i, then c_39..c_1 are X-measured top-down; c_i = MAJ(a, b, c_{i-1}) (or AND / 0), so every
 /// phase fix-up is CZ on live wires (round-10 G5: an out-of-place sum is free to erase while its summands live).
-fn erase_sum(c: &mut Builder, e: &[QubitId], a: &[Option<QubitId>], b: &[Option<QubitId>]) {
+pub(super) fn erase_sum(c: &mut Builder, e: &[QubitId], a: &[Option<QubitId>], b: &[Option<QubitId>]) {
     for i in 0..e.len() { if let Some(x) = a[i] { c.cx(x, e[i]); } if let Some(y) = b[i] { c.cx(y, e[i]); } }
     for i in (1..e.len()).rev() {
         match (a[i - 1], b[i - 1]) {
@@ -216,29 +217,14 @@ pub(super) fn c_direct(c: &mut Builder, outx: &[QubitId], s: &[QubitId]) -> usiz
     };
     ands += topbits(c, &a, &reg[220..256], true, &w, None);            // w = floor((A + ~B)/2^36) = ceil((A-B)/2^36)
     ands += line(c, &ext, &[Some(w[0]), Some(w[1]), Some(w[2])], None);   // [S|ext] += w 2^256
-    for &(sft, neg) in &[(0usize, false), (4, false), (6, true), (10, false), (32, false)] {   // -= w f
-        let hi = n.min(sft + 3 + g);
-        let ops: Vec<Option<QubitId>> = (sft..hi).map(|j| (j - sft < 3).then(|| w[j - sft])).collect();
-        ands += if neg { line(c, &reg[sft..hi], &ops, None) } else { sub_line(c, &reg[sft..hi], &ops) };
-    }
+    ands+=witness_product(c,&reg,&w);
     c.x_all(&reg);                                               // complement frame: rows ADD s^2
     let chains = chain_plan(m);
-    for ch in &chains {
-        let (mut xs, mut ops, mut fl, mut ctl) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-        for (idx, &(i, pos, k)) in ch.iter().enumerate() {
-            for tt in 0..k {
-                xs.push(reg[pos + tt]); ops.push(Some(s[i + 1 + tt])); ctl.push(s[i]);
-                fl.push(if tt == 0 && idx > 0 { vec![s[ch[idx - 1].0], s[i]] } else { Vec::new() });
-            }
-        }
-        let (li, lp, lk) = *ch.last().unwrap();
-        for q in lp + lk..n.min(lp + lk + g) { xs.push(reg[q]); ops.push(None); ctl.push(s[li]); fl.push(Vec::new()); }
-        for (&q, &k) in xs.iter().zip(ctl.iter()) { c.x(q); c.cx(k, q); }
-        ands += emit(c, &plan_line(&xs, &ops, &fl, Some(s[ch[0].0])), false);
-        for (&q, &k) in xs.iter().zip(ctl.iter()) { c.x(q); c.cx(k, q); }
-    }
+    
+        ands+=chain_groups::run(c,&reg,s);
+    
     // correction: + (~s) + 1 + sum_{i in NT} s_i 2^(i+m)  (exact value -s + .. + 2^m: 2^m X goes to the offset)
-    let tops: Vec<usize> = chains.iter().map(|ch| ch.last().unwrap().0).collect();
+    let tops: Vec<usize> = Vec::new();
     let ops: Vec<Option<QubitId>> = (0..n).map(|j| if j < m { Some(s[j]) }
         else if j < 2 * m && !tops.contains(&(j - m)) { Some(s[j - m]) } else { None }).collect();
     let one = c.alloc_qubit(); c.x(one);
@@ -262,3 +248,90 @@ pub(super) fn c_direct(c: &mut Builder, outx: &[QubitId], s: &[QubitId]) -> usiz
     for &q in &ct { c.release_clean(q); }
     ands
 }
+
+mod chain_groups;
+
+
+fn witness_product(c:&mut Builder,reg:&[QubitId],w:&[QubitId])->usize{
+ let m=c.alloc_qubits(4);c.ccx(w[0],w[1],m[0]);c.ccx(w[0],w[2],m[1]);c.ccx(w[1],w[2],m[2]);c.ccx(m[0],w[2],m[3]);
+ let prod=c.alloc_qubits(13);let atoms=[w[0],w[1],m[0],w[2],m[1],m[2],m[3]];
+ c.cx(atoms[0],prod[0]);
+ c.cx(atoms[1],prod[1]);
+ c.cx(atoms[3],prod[2]);
+ c.cx(atoms[0],prod[4]);
+ c.cx(atoms[1],prod[5]);
+ c.cx(atoms[0],prod[6]);
+ c.cx(atoms[3],prod[6]);
+ c.cx(atoms[0],prod[7]);
+ c.cx(atoms[1],prod[7]);
+ c.cx(atoms[4],prod[7]);
+ c.cx(atoms[0],prod[8]);
+ c.cx(atoms[1],prod[8]);
+ c.cx(atoms[2],prod[8]);
+ c.cx(atoms[3],prod[8]);
+ c.cx(atoms[4],prod[8]);
+ c.cx(atoms[6],prod[8]);
+ c.cx(atoms[0],prod[9]);
+ c.cx(atoms[1],prod[9]);
+ c.cx(atoms[2],prod[9]);
+ c.cx(atoms[3],prod[9]);
+ c.cx(atoms[4],prod[9]);
+ c.cx(atoms[5],prod[9]);
+ c.cx(atoms[6],prod[9]);
+ c.cx(atoms[1],prod[10]);
+ c.cx(atoms[2],prod[10]);
+ c.cx(atoms[3],prod[10]);
+ c.cx(atoms[4],prod[10]);
+ c.cx(atoms[5],prod[10]);
+ c.cx(atoms[6],prod[10]);
+ c.cx(atoms[2],prod[11]);
+ c.cx(atoms[3],prod[11]);
+ c.cx(atoms[4],prod[11]);
+ c.cx(atoms[5],prod[11]);
+ c.cx(atoms[6],prod[11]);
+ c.cx(atoms[4],prod[12]);
+ c.cx(atoms[5],prod[12]);
+ c.cx(atoms[6],prod[12]);
+ let ops:Vec<Option<QubitId>>=(0..59).map(|j|if j<13{Some(prod[j])}else if (32..35).contains(&j){Some(w[j-32])}else{None}).collect();
+ let ands=sub_line(c,&reg[..59],&ops)+4;
+ c.cx(atoms[0],prod[0]);
+ c.cx(atoms[1],prod[1]);
+ c.cx(atoms[3],prod[2]);
+ c.cx(atoms[0],prod[4]);
+ c.cx(atoms[1],prod[5]);
+ c.cx(atoms[0],prod[6]);
+ c.cx(atoms[3],prod[6]);
+ c.cx(atoms[0],prod[7]);
+ c.cx(atoms[1],prod[7]);
+ c.cx(atoms[4],prod[7]);
+ c.cx(atoms[0],prod[8]);
+ c.cx(atoms[1],prod[8]);
+ c.cx(atoms[2],prod[8]);
+ c.cx(atoms[3],prod[8]);
+ c.cx(atoms[4],prod[8]);
+ c.cx(atoms[6],prod[8]);
+ c.cx(atoms[0],prod[9]);
+ c.cx(atoms[1],prod[9]);
+ c.cx(atoms[2],prod[9]);
+ c.cx(atoms[3],prod[9]);
+ c.cx(atoms[4],prod[9]);
+ c.cx(atoms[5],prod[9]);
+ c.cx(atoms[6],prod[9]);
+ c.cx(atoms[1],prod[10]);
+ c.cx(atoms[2],prod[10]);
+ c.cx(atoms[3],prod[10]);
+ c.cx(atoms[4],prod[10]);
+ c.cx(atoms[5],prod[10]);
+ c.cx(atoms[6],prod[10]);
+ c.cx(atoms[2],prod[11]);
+ c.cx(atoms[3],prod[11]);
+ c.cx(atoms[4],prod[11]);
+ c.cx(atoms[5],prod[11]);
+ c.cx(atoms[6],prod[11]);
+ c.cx(atoms[4],prod[12]);
+ c.cx(atoms[5],prod[12]);
+ c.cx(atoms[6],prod[12]);
+ for &q in &prod{c.release_clean(q);}
+ erase_and(c,m[3],m[0],w[2]);erase_and(c,m[2],w[1],w[2]);erase_and(c,m[1],w[0],w[2]);erase_and(c,m[0],w[0],w[1]);ands
+}
+

@@ -3997,10 +3997,6 @@ fn drop_lead_first_compare(round:usize,multiply:bool,phi:usize)->(usize,bool) {
 /// positions [0, low) (sums written, carries kept) and the first chunk's ripple runs on [low, hi) with this carry-in.
 /// The chunk plan and the boundary compares are those of the plain add. Unset (the default) changes nothing.
 thread_local! { static Y15_CARRY_IN:std::cell::Cell<Option<(usize,QubitId)>>=const{std::cell::Cell::new(None)}; }
-thread_local! {
-    /// T0C (round 18): an exact boundary-carry erase installed by the divide's tick-0 one-add (y15 body_t0_one).
-    pub(crate) static T0C_HOOK: std::cell::RefCell<Option<Box<dyn Fn(&mut Builder, QubitId, usize)>>> = const { std::cell::RefCell::new(None) };
-}
 fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: usize, multiply: bool) -> QubitId {
     let _dirty_trace=super::dirty_boundary_probe::Trace::new(circ,"chunked_add",acc.len());
 
@@ -4093,8 +4089,7 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
             let compare=if super::leapfrog::C35_CMP_FX.with(|x|x.get()){compare.min(2)}else{compare};
             let window = phi - compare..phi;
             super::leapfrog::C35_PADS.with(|p|p.set(c35_pads));
-            let hooked = T0C_HOOK.with(|h| h.borrow().as_ref().map(|f| f(circ, carry, phi)).is_some());
-            if !hooked { erase_with_compare(circ, carry, &acc[window.clone()], &addend[window], borrow); }
+            erase_with_compare(circ, carry, &acc[window.clone()], &addend[window], borrow);
             circ.free(carry);
         }
         carry_in = Some(next);
