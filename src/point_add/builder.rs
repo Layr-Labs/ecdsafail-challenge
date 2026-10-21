@@ -158,6 +158,7 @@ impl Builder {
     /// stdout -- which is what `build_circuit` prints -- and start a new one.
     pub(crate) fn phase_name(&self) -> &'static str { self.phase }
     pub fn set_phase(&mut self, p: &'static str) {
+
         self.report_phase();
         if self.model {
             eprintln!("MODEL_PHASE {} {} {} {}", self.phase, self.peak_qubits,
@@ -200,6 +201,10 @@ impl Builder {
 
     /// Print the closing phase's line of the B3a report (no-op when off).
     fn report_phase(&mut self) {
+        eprintln!("BREAK_PHASE\t{}\t{}\t{}\t{}\t{}\t{}", self.phase,
+            self.ops.len(), self.active_qubits, self.peak_qubits,
+            self.phase_kind_ops[OperationType::CCX as usize],
+            self.phase_kind_ops[OperationType::CCZ as usize]);
         if let Some(r) = self.report.as_deref_mut() {
             eprintln!("HEO_PHASE {} native={} expected={:.1} peak={} ops={}", self.phase,
                 r.phase_native, r.phase_expected, self.peak_qubits, self.ops.len());
@@ -315,6 +320,13 @@ impl Builder {
     }
     /// y42-railtop: the allocator's state (free wires and free bits in the order later allocations take them, and the
     /// next fresh bit).
+
+    pub(crate) fn research_prime_clean_pool(&mut self, cap:usize) {
+        let active=self.active_qubits();assert!(active as usize<=cap);
+        let before=self.op_count();let idle=self.alloc_qubits(cap-active as usize);
+        for q in idle.into_iter().rev(){self.release_clean(q);}
+        assert_eq!(self.active_qubits(),active);assert_eq!(self.op_count(),before,"Priming must emit no operations");
+    }
     pub(crate) fn y42_alloc_state(&self) -> (Vec<u32>, Vec<u32>, u32) {
         (self.free_qubits.clone(), self.free_bits.clone(), self.next_bit)
     }
@@ -489,6 +501,21 @@ impl Builder {
         op.c_condition = cond;
         self.push_op(op);
     }
+    /// Three-body phase with the same scored-gate attribution as CCX.
+    #[track_caller]
+    pub fn ccz(&mut self, a: QubitId, b: QubitId, d: QubitId) {
+        if a == b { self.cz(a, d); return; }
+        if a == d { self.cz(a, b); return; }
+        if b == d { self.cz(a, b); return; }
+        let mut op = Op::empty();
+        op.kind = OperationType::CCZ;
+        op.q_control2 = a; op.q_control1 = b; op.q_target = d;
+        if self.ccx_census.watching() {
+            let at = self.at();
+            self.ccx_census.on_gate(at, OperationType::CCZ, std::panic::Location::caller());
+        }
+        self.push_op(op);
+    }
     pub fn cz(&mut self, a: QubitId, b: QubitId) {
         self.cz_if(a, b, NO_BIT);
     }
@@ -605,6 +632,7 @@ impl Builder {
 
     /// Record one replay repair site; see [`ReplaySites::record`].
     pub fn record_replay_site(&mut self, kind: char, round: usize, pos: usize, width: usize) {
+
         let at = self.at();
         let p = 2.0_f64.powi(-(width as i32));
         if kind == 'B' { if pos != width { self.k3b_sites.0 += 1; self.k3b_sites.1 += p; } } else { self.k3b_sites.2 += 1; self.k3b_sites.3 += p; }
@@ -637,4 +665,18 @@ impl Builder {
         self.ccx_census.finalize();
         self.replay_sites.finalize();
     }
+}
+
+#[cfg(test)]mod prime_clean_pool_tests{
+ use super::*;
+ #[test]fn strict_free_set_regression_remains_active_and_clean_growth_is_primed(){
+  let run=|prime|{let mut c=Builder::new();let inputs=c.alloc_qubits(2);if prime{c.research_prime_clean_pool(64);}let before=c.y42_alloc_state();let temporary=c.alloc_qubits(40);for q in temporary.into_iter().rev(){c.release_clean(q);}let(q,b,n)=before.clone();c.y42_alloc_set(&before,&q,b.len(),&[],n);assert_eq!(c.active_qubits(),2);assert_eq!(inputs.len(),2);};
+  assert!(std::panic::catch_unwind(||run(false)).is_err());run(true);
+ }
+ fn trace(prime:bool)->(Vec<[u64;7]>,Vec<u64>){
+  let mut c=Builder::new();let inputs=c.alloc_qubits(3);let padding=c.alloc_qubits(5);for &j in &[0usize,2,4]{c.release_clean(padding[j]);}if prime{c.research_prime_clean_pool(96);}let mut held=Vec::new();let mut ids=Vec::new();
+  for step in 0..512{if held.len()<2||step%3!=0{let q=c.alloc_qubit();ids.push(q.0);c.cx(inputs[0],q);c.ccx(inputs[0],inputs[1],q);if step%7==0{c.x(q);}held.push(q);}else{c.free(held.pop().unwrap());}if held.len()>20{c.free(held.remove(0));}}
+  while let Some(q)=held.pop(){c.free(q);}c.declare_qubit_register(&inputs);let fields=c.take_ops().iter().map(|o|[o.kind as u64,o.q_control2.0,o.q_control1.0,o.q_target.0,o.c_target.0,o.c_condition.0,o.r_target.0]).collect();(fields,ids)
+ }
+ #[test]fn priming_preserves_every_emitted_operation_and_future_allocation(){let(a,ai)=trace(false);let(b,bi)=trace(true);assert_eq!(ai,bi);assert_eq!(a,b);}
 }

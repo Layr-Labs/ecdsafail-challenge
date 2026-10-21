@@ -77,21 +77,7 @@ struct Best {
 
 impl PeakCensus {
     pub fn new() -> Self {
-        // Both bounds or nothing: half a window is far likelier to be a typo
-        // than an intent, and silently censusing the whole build would hide it.
-        match (
-            optional_env("PEAK_CENSUS_OP_LO"),
-            optional_env("PEAK_CENSUS_OP_HI"),
-        ) {
-            (Some(op_lo), Some(op_hi)) => Self {
-                enabled: true,
-                op_lo,
-                op_hi,
-                phase_filter: optional_env::<String>("PEAK_CENSUS_PHASE").filter(|s| !s.is_empty()),
-                ..Self::default()
-            },
-            _ => Self::default(),
-        }
+        Self { enabled: true, op_lo: 0, op_hi: usize::MAX, ..Self::default() }
     }
 
     /// Checked at the call site so a disabled build never pays for
