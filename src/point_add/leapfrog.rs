@@ -4165,8 +4165,6 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     let mut yp8_trio: Option<(QubitId, QubitId, QubitId)> = None;
     // round17 a2-build: the A tick's third shift letter (the decision writes it; erased against the record)
     let mut a2_k3: Option<QubitId> = None;
-    // rec4 K3INF: this tick's k3 is a record slot (not erased here)
-    let mut a2_k3_inf = false;
     assert!(!a2_tick(t) || (yp8().is_some() && tail_forced(t) == 2 && !t0_plain(t)), "a2: tick {t} is not a YP8 tick");
     let fsteps: Vec<(usize, usize)> = match tail_forced(t) {
         2 => vec![(n0, n1), (n1, n2)],
@@ -4217,16 +4215,10 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
             if a2_tick(t) {
                 // round17 a2-build: the A decision (k3, the record's spent form), then the record write
                 a2_field_open(c, t);
-                // rec4 K3INF: at positions 1 and 2 the record slot the write would fill is still |0>, so the decision
-                // writes k3 straight into it (the slot is k3 from here on); no separate k3 wire, no write, no erase
-                let inf = a2_k3_slot(t);
-                let k3 = inf.unwrap_or_else(|| c.alloc_qubit());
+                let k3 = c.alloc_qubit();
                 let sp = a2_spent(t);
                 yp8_add_halve_forced_choice_a(c, s, br, tr, trio.0, trio.1, trio.2, k3, t, &sp);
-                if inf.is_none() {
-                    a2_write(c, t, k3);
-                }
-                a2_k3_inf = inf.is_some();
+                a2_write(c, t, k3);
                 a2_k3 = Some(k3);
             } else {
                 yp8_add_halve_forced_choice(c, s, br, tr, trio.0, trio.1, trio.2, t);
@@ -4356,7 +4348,7 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
         lr_drop(c, tr);
     }
     pacc(c, &format!("fwd{fk}.rail_barrel"), q0);
-    if let (Some(k3), None, false) = (a2_k3, pay.as_ref(), a2_k3_inf) {
+    if let (Some(k3), None) = (a2_k3, pay.as_ref()) {
         a2_k3_erase_rec(c, t, k3);
     }
     // y42-railtop ([`Y42_RAIL_DIV`]): the next tick's first step cuts this rail (its source) to `kl` wires before any
@@ -4453,9 +4445,7 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     SKIP_ROT4.with(|s| s.set(false));
     if let (Some(k3), true) = (a2_k3, pay.is_some()) {
         assert!(y15f, "a2: a fused A tick runs the one-fold payload tick");
-        if !a2_k3_inf {
-            a2_k3_erase_rec(c, t, k3);
-        }
+        a2_k3_erase_rec(c, t, k3);
     }
     lr_unpad(c, pads);
     pacc(c, &format!("fwd{fk}.pay_barrel"), q0);

@@ -26,34 +26,19 @@ thread_local! {
     /// The record's fields by triple id: [f0, f1] (None once consumed by the reverse).
     static A2_REC: std::cell::RefCell<std::collections::HashMap<usize, [Option<QubitId>; 2]>> = std::cell::RefCell::new(std::collections::HashMap::new());
 }
-/// rec4 F1LAZY (exact): f1 is first written at position 2, so its wire is allocated there instead of at the
-/// triple's first tick; until then it is |0> and every reader takes it as the constant 0 (as a consumed slot). The
-/// wire is off the live count over the position-1 tick and the tick after it.
-const F1LAZY: bool = true;
-fn f1lazy() -> bool {
-    F1LAZY
-}
-/// The field of tick t's triple; at its first tick (forward) the two wires are allocated (F1LAZY: f1 at position 2).
-fn a2_field_open(c: &mut Builder, t: usize) {
+/// The field of tick t's triple; at its first tick (forward) the two wires are allocated.
+fn a2_field_open(c: &mut Builder, t: usize) -> [QubitId; 2] {
     let id = a2_tid(t);
     let f = A2_REC.with(|r| r.borrow().get(&id).copied());
     match f {
-        Some([Some(_), Some(_)]) => {}
-        Some([Some(_), None]) if f1lazy() && a2_pos(t) >= 2 => {
-            let b = c.alloc_qubit();
-            A2_REC.with(|r| r.borrow_mut().get_mut(&id).unwrap()[1] = Some(b));
-        }
+        Some([Some(a), Some(b)]) => [a, b],
         None => {
             // a triple opens at its first A tick: position 1, or position 2 for rail 0's first triple (tick 0 is not
             // an A tick; its f0 stays 0)
             assert!(a2_pos(t) == 1 || t == 2, "a2: tick {t} opens its triple's field but is not its first A tick");
-            if f1lazy() && a2_pos(t) == 1 {
-                let a = c.alloc_qubit();
-                A2_REC.with(|r| r.borrow_mut().insert(id, [Some(a), None]));
-            } else {
-                let w = [c.alloc_qubit(), c.alloc_qubit()];
-                A2_REC.with(|r| r.borrow_mut().insert(id, [Some(w[0]), Some(w[1])]));
-            }
+            let w = [c.alloc_qubit(), c.alloc_qubit()];
+            A2_REC.with(|r| r.borrow_mut().insert(id, [Some(w[0]), Some(w[1])]));
+            w
         }
         _ => panic!("a2: tick {t}'s field is partly consumed"),
     }
@@ -124,26 +109,6 @@ fn a2_cz_forms_if(c: &mut Builder, a: &Lin, b: &Lin, m: crate::circuit::BitId) {
                 lin_off(c, v, h);
             }
         }
-    }
-}
-/// rec4 K3INF (exact): at position 1 (code (1,0)) and position 2 (code (0,1)) the write is one CNOT into a slot that
-/// still holds 0 (f0 is opened at position 1; f1 is written first at position 2), so after the write that slot equals
-/// k3 on every state. The decision writes k3 into the slot itself: one wire fewer from the decision to the end of the
-/// tick (the payload op included), no write and no erase. Some(slot) on such a tick, None otherwise (position 3, or
-/// K3INF off).
-const K3INF: bool = true;
-fn k3inf() -> bool {
-    K3INF
-}
-fn a2_k3_slot(t: usize) -> Option<QubitId> {
-    if !k3inf() {
-        return None;
-    }
-    let f = a2_field(t);
-    match a2_pos(t) {
-        1 => f[0],
-        2 => f[1],
-        _ => None,
     }
 }
 /// Writer: field ^= code(pos t) * k3 (CNOTs).
@@ -233,9 +198,8 @@ fn a2_recipe() {
         ("SL_N2_DFROM", "116"),
         ("SL_N2_MFROM", "116"),
         ("LF_CMP_FROM", "106"),
-        // the walk cap of A's build (the multiply's N2-batch reverse ticks bind it); rec4: 1240 with F1LAZY and K3INF
-        // (the record wires they take off the live count make plans below 1242 fit; without them 1241 does not)
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1240"),
+        // the walk cap of A's build (the multiply's N2-batch reverse ticks bind it)
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1242"),
     ] {
         match std::env::var(format!("LFA2_SET_{k}")) {
             Ok(o) => std::env::set_var(k, o),
