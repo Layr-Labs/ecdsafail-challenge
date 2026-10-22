@@ -6,6 +6,8 @@
 use super::Builder;
 use crate::circuit::{BitId, QubitId};
 
+/// [`c_direct`]'s w read off the live top-bit sum E while E is alive; no W register (false = the parent's gates).
+const W_FUSE: bool = true;
 pub(super) fn on() -> bool { !std::env::var("SQC_G1M").is_ok_and(|v| v == "0") }
 pub(super) fn g() -> usize { std::env::var("SQC_G").ok().and_then(|v| v.parse().ok()).unwrap_or(24) }
 pub(super) fn t_top() -> usize { std::env::var("SQC_T").ok().and_then(|v| v.parse().ok()).unwrap_or(21) }
@@ -199,7 +201,8 @@ pub(super) fn c_direct(c: &mut Builder, outx: &[QubitId], s: &[QubitId]) -> usiz
     super::square::sqc_leaf(c, &s[m - t..], &ct, false);
     let sh = 220 - 2 * (m - t);
     let a: Vec<QubitId> = ct[sh..].to_vec();
-    let w = c.alloc_qubits(3);
+    let wfuse = W_FUSE;
+    let w = if wfuse { Vec::new() } else { c.alloc_qubits(3) };
     // top bits w of E = A + B'; the sum is erased for free (erase_sum). erase = Some(r): instead of copying w into
     // W, apply the phase (-1)^(r.w) that X-measuring W left (the caller runs this only under r != 0).
     let topbits = |c: &mut Builder, a: &[QubitId], b: &[QubitId], comp: bool, w: &[QubitId], erase: Option<&[BitId]>| -> usize {
@@ -215,9 +218,32 @@ pub(super) fn c_direct(c: &mut Builder, outx: &[QubitId], s: &[QubitId]) -> usiz
         for &q in &e { c.release_clean(q); }
         k
     };
+    if wfuse {
+        // W_FUSE: w is read by exactly two ops, the ext add and the witness product, both before the rows and both
+        // off the top bits B (they write ext and S's bits below 59). So they read w straight off E = A + ~B while E is
+        // alive, and E is then erased for free while its summands live (erase_sum). No W register is ever written: no
+        // X-measurement of W, and no 39-AND recomputation of the top bits on its outcome-nonzero shots (7/8 of them).
+        // The wrap leaf is uncomputed right away (nothing reads it later), so ct is not held through the rows.
+        let b = &reg[220..256];
+        let e = c.alloc_qubits(a.len() + 2);
+        for i in 0..a.len() { c.cx(a[i], e[i]); }
+        let ops: Vec<Option<QubitId>> = (0..e.len()).map(|i| (i < b.len()).then(|| b[i])).collect();
+        let aops: Vec<Option<QubitId>> = (0..e.len()).map(|i| (i < a.len()).then(|| a[i])).collect();
+        c.x_all(b);
+        ands += line(c, &e, &ops, None);                               // E = A + ~B; w = E >> 36 (3 bits)
+        let wv = [e[36], e[37], e[38]];
+        ands += line(c, &ext, &[Some(wv[0]), Some(wv[1]), Some(wv[2])], None);   // [S|ext] += w 2^256
+        ands += witness_product(c, &reg, &wv);
+        erase_sum(c, &e, &aops, &ops);
+        c.x_all(b);
+        for &q in &e { c.release_clean(q); }
+        super::square::sqc_leaf(c, &s[m - t..], &ct, true);
+        for &q in &ct { c.release_clean(q); }
+    } else {
     ands += topbits(c, &a, &reg[220..256], true, &w, None);            // w = floor((A + ~B)/2^36) = ceil((A-B)/2^36)
     ands += line(c, &ext, &[Some(w[0]), Some(w[1]), Some(w[2])], None);   // [S|ext] += w 2^256
     ands+=witness_product(c,&reg,&w);
+    }
     c.x_all(&reg);                                               // complement frame: rows ADD s^2
     let chains = chain_plan(m);
     
@@ -235,6 +261,10 @@ pub(super) fn c_direct(c: &mut Builder, outx: &[QubitId], s: &[QubitId]) -> usiz
     c.x_all(&reg);
     // erase W by X-measurement: w == floor((A + S_new>>220)/2^36), so the kicked phase (-1)^(r.w) is repaired by
     // recomputing those top bits ONLY when the outcome r != 0 (exact; executed with probability 7/8).
+    if wfuse {
+        for &q in ext.iter() { c.release_clean(q); }
+        return ands;
+    }
     let r: Vec<BitId> = (0..3).map(|_| c.alloc_bit()).collect();
     for i in 0..3 { c.hmr(w[i], r[i]); }
     let flag = c.alloc_bit(); c.bit_store0(flag);
