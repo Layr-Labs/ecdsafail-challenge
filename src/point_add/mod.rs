@@ -156,7 +156,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "3100049494057",
+        "TAIL_NONCE" => "4300035914671",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -597,6 +597,7 @@ pub fn build() -> Vec<Op> {
     // CCX cuts bound to this stream (compose_post.rs)
     ops = compose_post::run(ops);
     ops = stream_pipeline::run(ops);
+    ops = lane3_sigcut::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -683,3 +684,5 @@ mod copy_elision;
 mod value_rewrites;
 
 mod stream_pipeline;
+
+mod lane3_sigcut;
