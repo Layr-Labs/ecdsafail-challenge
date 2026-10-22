@@ -116,7 +116,7 @@ pub(super) fn rot8_phase(c: &mut Builder, k: [QubitId; 3], v: &[QubitId], bits: 
 // inverse tick, fold^-1 before the subtractions).
 // ======================================================================================================================
 /// LFA2_EXT: extra window bits of the reverse tick's value compares over the forward's erase compares (default 2 = v3w).
-fn a2_ext(t:usize,kind:usize) -> usize {compare_window_knob("EXT",true,t,kind,a_env("LFA2_EXT").unwrap_or(2))}
+fn a2_ext() -> usize { a_env("LFA2_EXT").unwrap_or(2) }
 /// LFA2_TICK=1: the builder's forward A ticks (LFA_FOLD=1) run [`a2_fwd_tick`] (rot8 and the IPK fold).
 pub(super) fn a2_tick_test() -> bool { std::env::var("LFA2_TICK").is_ok_and(|v| v == "1") }
 /// LFA2_REV=1: the builder's reverse one-fold ticks t in [1, LFA_TO) run [`a2_rev_tick`] (M6).
@@ -238,23 +238,11 @@ fn a2_sub_top(c: &mut Builder, addend: &[QubitId], acc: &[QubitId], proxy: usize
     let mut add = addend.to_vec();
     add.push(z);
     c.x_all(acc);
-    if A2_SUB_NOCOUT {
-        // the top bit of ~acc + addend is 1 (the result's top bit is 0)
-        cells::chunked_add_nocout(c, &add, acc, proxy, true, A2_SUB_KNOWN_TOP.then_some(true));
-    } else {
-        let cout = cells::chunked_add(c, &add, acc, proxy, true);
-        c.release_clean(cout);
-    }
+    let cout = cells::chunked_add(c, &add, acc, proxy, true);
+    c.release_clean(cout);
     c.release_clean(z);
     c.x_all(acc);
 }
-/// The subtraction's carry-out (0 whenever acc >= addend, which the caller guarantees) is not computed: one Toffoli
-/// less per subtraction, three per reverse tick. false = the parent's gate list.
-const A2_SUB_NOCOUT: bool = true;
-/// The subtraction's top wire (the held carry, cleared by the carry into it) is erased by an X measurement while the
-/// last chunk's carries are live (its value is their terminal carry: Clifford repair) in place of the terminal
-/// Toffoli that wrote that carry onto it (needs A2_SUB_NOCOUT).
-const A2_SUB_KNOWN_TOP: bool = true;
 
 /// The reverse A tick's body (M6): the exact inverse of the forward one-fold body in its A configuration (direct cuts,
 /// add 1 to the top, add 2's top ripple open, no closed ripple, no deep shed) with [`fold_inv_f`] in place of the fold.
@@ -273,7 +261,7 @@ const A2_SUB_KNOWN_TOP: bool = true;
 fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: usize, b: &[QubitId], tg: &[QubitId], proxy: usize) {
     let (e_start, a_start) = (c.expected_total(), c.active_qubits());
     let rev = true;
-    let ext = a2_ext(t,0); let ext2 = a2_ext(t,2);
+    let ext = a2_ext();
     let (k0, seed0) = cells::y15_split_spec(proxy, rev, N);
     let (kk1, _) = cells::y15_split_spec(proxy, rev, N - 1);
     let k0x = k0 + ext;
@@ -281,7 +269,7 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
     let kwin = k0x.max(kk1);
     let sp2 = N - 2 - kwin;
     let (kk2, seed2) = cells::y15_split_spec(proxy, rev, sp2);
-    let kk2x = kk2 + ext2;
+    let kk2x = kk2 + ext;
     let seed2x = seed2.map(|_| sp2 - kk2x - 1);
     let mw = fold_window(t, true);
     assert!(mw + 8 < sp2 - kk2x, "a2: the reverse tick's windows overlap the fold");
@@ -544,7 +532,7 @@ fn r8_data_ok(w: usize, stages: &[(Vec<(usize, usize)>, u8)], emax: usize) -> bo
 fn r8_solve(w: usize, stages: &[(Vec<(usize, usize)>, u8)], emax: usize, kinds: &[u8], konst: bool, no0_after: Option<usize>) -> Option<Vec<(usize, usize, u8)>> {
     let ns = stages.len();
     // odd widths need fills spread over the register (the k1-only sign fill); even widths stay near the ends
-    let nr = a_env("LFA2_R8NEAR").unwrap_or(if true { w } else if w % 2 == 1 { w } else { 24 });
+    let nr = a_env("LFA2_R8NEAR").unwrap_or(if w % 2 == 1 { w } else { 24 });
     let near: Vec<usize> = (0..w).filter(|&q| q < nr || q + nr >= w || (q + 12 >= w / 2 && q < w / 2 + 12)).collect();
     let vars: Vec<(usize, usize, u8)> = (0..=ns)
         .flat_map(|b| near.iter().flat_map(move |&q| kinds.iter().map(move |&f| (b, q, f))))
@@ -662,14 +650,11 @@ pub(super) fn rail8_plan(w: usize) -> Rail8 {
     }
     assert!(w >= 3, "a2: an 8-way rail barrel needs 3 wires");
     let emax = 7.min(w - 2);
-    let parked = true && w >= 9;
-    let domain = if parked { w - 1 } else { w };
     let masks: [u8; 4] = [1, 3, 6, 4];
     let refl = |x: isize| -> Vec<(usize, usize)> {
-        (0..domain).filter_map(|i| { let j = (x - i as isize).rem_euclid(domain as isize) as usize; (i < j).then_some((i, j)) }).collect()
+        (0..w).filter_map(|i| { let j = (x - i as isize).rem_euclid(w as isize) as usize; (i < j).then_some((i, j)) }).collect()
     };
-    let ax0 = if parked && w % 2 == 1 { [2, 1, -1, -5] } else { [1, 0, -2, -6] };
-    let mut cands: Vec<[isize; 4]> = vec![ax0];
+    let mut cands: Vec<[isize; 4]> = vec![[1, 0, -2, -6]];
     for a in -8..=8 { for b in -8..=8 { for c in -8..=8 { for d in -8..=8 { cands.push([a, b, c, d]); } } } }
     let mut best: Option<Rail8> = None;
     for ax in cands {
@@ -677,8 +662,8 @@ pub(super) fn rail8_plan(w: usize) -> Rail8 {
         if !r8_data_ok(w, &base, emax) { continue; }
         // stage 3 without (w-5, w-1), (w-4, w-2) where that still routes (round14's greedy removal at every width)
         let mut trial = base.clone();
-        if (parked || w >= 10) && ax == ax0 {
-            if parked { if w % 2 == 0 { trial[3].0.retain(|&p| p != (w - 5, w - 3)); } else { trial[3].0.retain(|&p| p != (w - 4, w - 3) && p != (w - 5, w - 2)); } } else { trial[3].0.retain(|&p| p != (w - 5, w - 1) && p != (w - 4, w - 2)); }
+        if w >= 10 && ax == [1, 0, -2, -6] {
+            trial[3].0.retain(|&p| p != (w - 5, w - 1) && p != (w - 4, w - 2));
             if !r8_data_ok(w, &trial, emax) { trial = base.clone(); }
         }
         for (st, no0) in [(trial.clone(), true), (trial, false), (base.clone(), true), (base, false)] {
@@ -1118,12 +1103,3 @@ mod a2_rail8_tests {
     }
 }
 include!("y15_a2r1.rs");
-
-fn compare_window_knob(name:&str,rev:bool,t:usize,kind:usize,default:usize)->usize {
- let spec=match name {"EXT"=>EXT_WINDOWS,"FOLD"=>"",_=>unreachable!()};let mut out=default;
- for row in spec.split(',').filter(|s|!s.is_empty()) {
-  let a:Vec<&str>=row.split(':').collect();assert_eq!(a.len(),4);
-  if (a[0]=="*"||a[0]==if rev{"R"}else{"F"})&&(a[1]=="*"||a[1].parse::<usize>().unwrap()==t)&&(a[2]=="*"||a[2].parse::<usize>().unwrap()==kind){out=a[3].parse().unwrap();}
- }assert!(out<=128);out
-}
-const EXT_WINDOWS:&str="R:120:0:0,R:119:0:0,R:118:0:0,R:117:0:0,R:116:0:0,R:115:0:0,R:114:0:0,R:113:0:0,R:68:0:0,R:67:0:0,R:66:0:0,R:65:0:0,R:64:0:0,R:63:0:0,R:62:0:0,R:61:0:0,R:60:0:0,R:59:0:0,R:58:0:0,R:57:0:0,R:56:0:0,R:55:0:0,R:54:0:0,R:53:0:0,R:52:0:0,R:51:0:0,R:50:0:0,R:49:0:0,R:48:0:0,R:47:0:0,R:46:0:0,R:45:0:0,R:44:0:0,R:43:0:0,R:42:0:0,R:41:0:0,R:40:0:0,R:39:0:0,R:38:0:0,R:37:0:0,R:36:0:0,R:35:0:0,R:34:0:0,R:33:0:0,R:32:0:0,R:31:0:0,R:30:0:0,R:29:0:0,R:28:0:0,R:27:0:0,R:26:0:0,R:25:0:0,R:24:0:0,R:23:0:0,R:22:0:0,R:21:0:0,R:20:0:0,R:19:0:0,R:18:0:0,R:17:0:0,R:16:0:0,R:15:0:0,R:14:0:0,R:13:0:0,R:12:0:0,R:11:0:0,R:10:0:0,R:9:0:0,R:8:0:0,R:7:0:0,R:6:0:0,R:5:0:0,R:4:0:0,R:3:0:0,R:2:0:0,R:1:0:0,R:105:0:0,R:104:0:0,R:103:0:0,R:102:0:0,R:101:0:0,R:100:0:0,R:99:0:0,R:98:0:0,R:97:0:0,R:96:0:0,R:95:0:0,R:94:0:0,R:93:0:0,R:92:0:0,R:91:0:0,R:90:0:0,R:89:0:0,R:88:0:0,R:87:0:0,R:86:0:0,R:85:0:0,R:84:0:0,R:83:0:0,R:82:0:0,R:81:0:0,R:80:0:0,R:79:0:0,R:78:0:0,R:77:0:0,R:76:0:0,R:75:0:0,R:74:0:0,R:73:0:0,R:72:0:0,R:71:0:0,R:70:0:0,R:69:0:0,R:120:2:1,R:119:2:1,R:118:2:1,R:117:2:1,R:116:2:1,R:115:2:1,R:114:2:1,R:113:2:1,R:68:2:0,R:67:2:0,R:66:2:0,R:65:2:0,R:64:2:0,R:63:2:0,R:62:2:0,R:61:2:0,R:60:2:0,R:59:2:0,R:58:2:0,R:57:2:0,R:56:2:0,R:55:2:0,R:54:2:0,R:53:2:0,R:52:2:0,R:51:2:0,R:50:2:0,R:49:2:0,R:48:2:0,R:47:2:0,R:46:2:0,R:45:2:0,R:44:2:0,R:43:2:0,R:42:2:0,R:41:2:0,R:40:2:0,R:39:2:0,R:38:2:0,R:37:2:0,R:36:2:0,R:35:2:0,R:34:2:0,R:33:2:0,R:32:2:0,R:31:2:0,R:30:2:0,R:29:2:0,R:28:2:0,R:27:2:0,R:26:2:0,R:25:2:0,R:24:2:0,R:23:2:0,R:22:2:0,R:21:2:0,R:20:2:0,R:19:2:0,R:18:2:0,R:17:2:0,R:16:2:0,R:15:2:0,R:14:2:0,R:13:2:0,R:12:2:0,R:11:2:0,R:10:2:0,R:9:2:0,R:8:2:0,R:7:2:0,R:6:2:0,R:5:2:0,R:4:2:0,R:3:2:0,R:2:2:0,R:1:2:0,R:105:2:0,R:104:2:0,R:103:2:0,R:102:2:0,R:101:2:0,R:100:2:0,R:99:2:0,R:98:2:0,R:97:2:0,R:96:2:0,R:95:2:0,R:94:2:0,R:93:2:0,R:92:2:0,R:91:2:0,R:90:2:0,R:89:2:0,R:88:2:0,R:87:2:0,R:86:2:0,R:85:2:0,R:84:2:0,R:83:2:0,R:82:2:0,R:81:2:0,R:80:2:0,R:79:2:0,R:78:2:0,R:77:2:0,R:76:2:0,R:75:2:0,R:74:2:0,R:73:2:0,R:72:2:0,R:71:2:0,R:70:2:0,R:69:2:0";

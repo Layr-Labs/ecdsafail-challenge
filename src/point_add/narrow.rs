@@ -74,13 +74,3 @@ pub(crate) fn square_entry(c: &mut Builder) {
     c.narrow_alloc_set(&rq, &rb, rn);
     eprintln!("NARROW_SQ set (was {})", if same { "equal" } else { "different" });
 }
-
-thread_local! {static COMPARE_WINDOW_CALL:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};}
-pub(crate)fn compare_window_compare(multiply:bool,round:usize,phi:usize,w:usize,a:&[QubitId],seed:Option<QubitId>)->(usize,usize,Option<QubitId>){
- let id=COMPARE_WINDOW_CALL.with(|x|{let n=x.get();x.set(n+1);n});
- let want=match (multiply as usize,w){(0,16)=>17,(0,18)=>19,(0,19)=>20,(0,20)=>21,(1,15)=>18,(1,18)=>20,_=>w};
- let eligible=want<=phi && (seed.is_none() || w<phi && seed==Some(a[phi-w-1]));
- let k=if eligible{want}else{w};
- if k==w{return(id,k,seed);}
- (id,k,if seed.is_some()&&k<phi{Some(a[phi-k-1])}else{None})
-}
