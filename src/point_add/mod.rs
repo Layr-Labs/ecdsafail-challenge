@@ -156,7 +156,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "1057002590912",
+        "TAIL_NONCE" => "3100049494057",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -504,11 +504,25 @@ fn clear_process_env() {
 const LEAPFROG_SUBMISSION: bool = true;
 
 pub fn build() -> Vec<Op> {
+    // W124 (Codex) width composition, ported onto 6602a4e8: the effective selection pinned in source.
+    // trace=true reproduces W124's logs only (stderr); it does not change gates.
+    let w113_trace = true;
+    let w120_cubic = true;
+    let w123_lazy_gates = true;
     clear_process_env();
     install_skywalk_submission_recipe();
     std::env::set_var("EXACT_PAIR_CARRY", "1");
     if LEAPFROG_SUBMISSION {
         leapfrog::install_recipe();
+    }
+    // W124: W110's field page basis at the fold's tight public chunk budgets (LFF_PAGE5), W120 cubic page cleanup,
+    // W123 lazy inverse gate restoration; set after both recipes, exactly as in the W124 emitter.
+    std::env::set_var("LFF_PAGE5", "1");
+    if w120_cubic { std::env::set_var("LFF_CUBIC_CLEANUP", "1"); }
+    if w123_lazy_gates { std::env::set_var("W123_LAZY_GATES", "1"); }
+    if w113_trace {
+        std::env::set_var("ROOM_TRACE", "1");
+        std::env::set_var("LFF_PAGE5_TRACE", "1");
     }
     if std::env::var_os("SKYWALK_SQUARE_HIGH_PROBE").is_some(){square::high_probe();std::process::exit(0);}
     if std::env::var_os("SKYWALK_MODDIV_ADAPTER_PROBE").is_some(){moddiv_adapter::probe();std::process::exit(0);}

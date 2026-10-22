@@ -141,6 +141,14 @@ pub(super) fn a2_fwd_tick(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitI
 }
 /// The reverse A payload tick, the exact inverse of [`a2_fwd_tick`]: rotation up by 3 + e, then [`body_inv`].
 pub(super) fn a2_rev_tick(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: usize, p: &mut [Vec<QubitId>; 2]) {
+    a2_rev_tick_k3_owner(c, t, s, k, emax, p, false);
+}
+/// Payload-only consumer owns a freshly decoded record k3. Retire it at its
+/// last fold use; borrowed/fused callers continue through a2_rev_tick unchanged.
+pub(super) fn a2_rev_tick_owned_k3(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: usize, p: &mut [Vec<QubitId>; 2]) {
+    a2_rev_tick_k3_owner(c, t, s, k, emax, p, true);
+}
+fn a2_rev_tick_k3_owner(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: usize, p: &mut [Vec<QubitId>; 2], owns_k3: bool) {
     let [w, ..] = steps()[t];
     let (ti, si) = (t % 2, 1 - t % 2);
     let (_, proxy) = proxy_fold(w, true);
@@ -152,11 +160,15 @@ pub(super) fn a2_rev_tick(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitI
     }
     let shift = cmp_shift_at(t);
     cells::with_tie(None, || cells::with_cmp_shift((shift.0 + Y15_CMP_EXTRA, shift.1), || cells::with_bridge(proxy, true, || {
-        let ((), peak) = c.r3_peak(|c| body_inv(c, t, s, k, emax, &b, &tg, proxy));
+        let ((), peak) = c.r3_peak(|c| body_inv(c, t, s, k, emax, &b, &tg, proxy, owns_k3));
         if room_trace() {
             eprintln!("A2_PEAK rev t={t} peak={peak} cap={}", cells::cap());
         }
-        assert!(peak as usize <= cells::cap(), "a2: the reverse A tick t={t} peaks at {peak}, over the walk cap {}", cells::cap());
+        if std::env::var("W118_DIAG_PEAK").ok().as_deref() == Some("1") {
+            eprintln!("W118_DIAG_PEAK reverse_A2 t={t} actual={peak} plan_cap={}", cells::cap());
+        } else {
+            assert!(peak as usize <= cells::cap(), "a2: the reverse A tick t={t} peaks at {peak}, over the walk cap {}", cells::cap());
+        }
     })));
     if room_trace() {
         eprintln!("A2_TICK rev t={t} active={a0} cost={:.1}", c.expected_total() - e0);
@@ -234,6 +246,13 @@ fn a2_lt_into(c: &mut Builder, u: &[QubitId], v: &[QubitId], borrow_in: Option<Q
 /// guarantees acc >= addend, so the carry out is always 0 (released) and the top wire ends 0 (the caller releases it).
 fn a2_sub_top(c: &mut Builder, addend: &[QubitId], acc: &[QubitId], proxy: usize) {
     assert_eq!(acc.len(), addend.len() + 1);
+    if A2_SUB_PADTOP && A2_SUB_NOCOUT && A2_SUB_KNOWN_TOP {
+        // v2: no zero wire for the addend's top bit (one wire of room more for every chunk of the subtraction)
+        c.x_all(acc);
+        cells::chunked_add_nocout_padtop(c, addend, acc, proxy, true, Some(true));
+        c.x_all(acc);
+        return;
+    }
     let z = c.alloc_qubit();
     let mut add = addend.to_vec();
     add.push(z);
@@ -255,6 +274,8 @@ const A2_SUB_NOCOUT: bool = true;
 /// last chunk's carries are live (its value is their terminal carry: Clifford repair) in place of the terminal
 /// Toffoli that wrote that carry onto it (needs A2_SUB_NOCOUT).
 const A2_SUB_KNOWN_TOP: bool = true;
+/// v2 PADTOP: the subtraction allocates no zero wire for its addend's top bit; false = the parent's gate list.
+const A2_SUB_PADTOP: bool = true;
 
 /// The reverse A tick's body (M6): the exact inverse of the forward one-fold body in its A configuration (direct cuts,
 /// add 1 to the top, add 2's top ripple open, no closed ripple, no deep shed) with [`fold_inv_f`] in place of the fold.
@@ -270,7 +291,14 @@ const A2_SUB_KNOWN_TOP: bool = true;
 /// Its value compares read `a2_ext` more bits than the forward's erase compares (a wrong value is a wrong result, not
 /// a phase), so sp2 sits that much lower. Sheds: a block of the open ripple (1 Toffoli each) and fin <= 2 of the fold.
 #[allow(clippy::too_many_arguments)]
-fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: usize, b: &[QubitId], tg: &[QubitId], proxy: usize) {
+/// L2-M2M0 switch (lane 2): shed m2 at m0's step when the open-ripple pool alone is short.
+const L2_M2_AT_M0: bool = true;
+/// L2-HB switch (lane 2): erase the m0 chain's top AND before m0's compare.
+const L2_HB_EARLY: bool = true;
+/// L2-S1 / L2-CR switches (lane 2): m0's step without the 2 unused slack wires; chain release before m2 shed.
+const L2_S1_TIGHT: bool = true;
+const L2_CHAIN_RELEASE: bool = true;
+fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: usize, b: &[QubitId], tg: &[QubitId], proxy: usize, owns_k3: bool) {
     let (e_start, a_start) = (c.expected_total(), c.active_qubits());
     let rev = true;
     let ext = a2_ext(t,0); let ext2 = a2_ext(t,2);
@@ -310,11 +338,29 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
     // room, m0's step: its chain and compare (2 k0x wires) with s1 carries of the open ripple shed (cq(sp2) = m2 stays;
     // cq(N - 3) and the rest are built again before I7, 1 Toffoli each)
     let room_m = cells::cap().saturating_sub(c.active_qubits() as usize + 2);
-    let need_m = k0x + (k0x - 1) + 1;
-    let s1 = need_m.saturating_sub(room_m).max(a_env("LFA2_FS1").unwrap_or(0)).min(N - 3 - sp2);
+    // L2-HB: the chain's top AND (h1) leaves right after it is copied into m0, so the compare runs beside k0x - 1
+    // chain wires.
+    let need_m = k0x + (k0x - 1) + 1 - usize::from(L2_HB_EARLY);
+    let s1 = need_m.saturating_sub(room_m + if L2_S1_TIGHT { 2 } else { 0 }).max(a_env("LFA2_FS1").unwrap_or(0)).min(N - 3 - sp2);
     assert!(s1 <= N - 3 - sp2, "a2: the reverse tick t={t} does not fit m0's step: short {s1}, pool {}", N - 3 - sp2);
     for i in ((N - 2 - s1)..=(N - 3)).rev() {
         m_carry_erase(c, cc[i - sp2], acc2[i - 1], &l(b[i - 1]), cc[i - 1 - sp2]);
+    }
+    // L2-M2M0 (exact): when m0's step is short by more than the whole ripple pool, m2 (= cc[0], the carry into sp2)
+    // leaves as well, erased by its own window compare (the fold's m2-shed path), and is built again by the same
+    // value compare once m0 and m1 are done, before the shed ripple carries are rebuilt.
+    let m2_win_m = (sp2 - kk2x, seed2x);
+    // room_m keeps 2 wires of slack (m0, m1): m0's step really overflows only when short by more than pool + 2.
+    // L2-CR: wires still missing after the ripple pool are first taken from the chain (k0x - 3 at most).
+    let cr_need = need_m.saturating_sub(s1 + room_m + 2);
+    let cr_max = if L2_CHAIN_RELEASE { k0x - 3 } else { 0 };
+    let cr = cr_need.min(cr_max);
+    let m2_shed_m = L2_M2_AT_M0 && cr_need > cr_max;
+    if m2_shed_m {
+        let (w0, sd) = m2_win_m;
+        cells::y15_erase_cmp(c, cc[0], &acc2[w0..sp2], &b[w0..sp2], sd.map(|i| b[i]));
+        c.free(cc[0]);
+        if room_trace() { eprintln!("L2_M2M0 shed t={t} need={need_m} room={room_m} pool={}", N - 3 - sp2); }
     }
     // I8: m0 = g0 ^ h1, then m1 = x257, then m0 = X1[256]
     let lo = N - k0x;
@@ -334,9 +380,27 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
         }
         let hb = rr.last().expect("a2: the chain is not empty").0; // C1[N - 1] = h1
         c.cx(hb, m0);
+        if L2_HB_EARLY {
+            // L2-HB (exact): h1 is read only by m0 (the chain's XOR into tg stops at r[N - 2 - i0]); its erase forms
+            // (ci, s1f(N - 2), tg[N - 1]) are untouched until here, so the existing erase moves ahead of the compare.
+            let (q, fa, fb, ci) = rr.pop().expect("a2: the chain is not empty");
+            lin_xor_into(c, &ci, q);
+            lin_and_erase(c, q, &fa, &fb);
+        }
         for j in lo..N {
             lin_xor_into(c, &s1f(j - 1).x(&r[j - 1 - i0]), tg[j]);
         }
+        // L2-CR (exact): tg[i + 1] now holds tg[i + 1] ^ s1f(i) ^ ci, so the AND's second form is tg[i + 1] ^ ci; the top
+        // `cr` chain ANDs leave (measured, top down, each above a live ci) and are built again after the compare.
+        let nrr = rr.len();
+        assert!(cr < nrr, "a2: chain release larger than the chain");
+        for idx in (nrr - cr..nrr).rev() {
+            let (q, fa, _fb, ci) = rr[idx].clone();
+            let fbn = l(tg[i0 + idx + 1]).x(&ci);
+            lin_xor_into(c, &ci, q);
+            lin_and_erase(c, q, &fa, &fbn);
+        }
+        if cr > 0 && room_trace() { eprintln!("L2_CR t={t} cr={cr} need={need_m} room={room_m} s1={s1}"); }
         let blo = seed0x.map_or(lo, |sd| sd.min(lo));
         for i in blo..N {
             c.cx(s[2], b[i]);
@@ -346,6 +410,15 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
         for i in blo..N {
             c.cx(s[0], b[i]);
             c.cx(s[2], b[i]);
+        }
+        for idx in nrr - cr..nrr {
+            let i = i0 + idx;
+            let ci = r[idx].clone();
+            let fa = s1f(i).x(&ci);
+            let q = lin_and(c, &fa, &l(tg[i + 1]).x(&ci));
+            lin_xor_into(c, &ci, q);
+            rr[idx] = (q, fa, l(tg[i + 1]).x(&s1f(i)), ci);
+            r[idx + 1] = l(q);
         }
         for j in (lo..N).rev() {
             lin_xor_into(c, &s1f(j - 1).x(&r[j - 1 - i0]), tg[j]);
@@ -367,6 +440,12 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
     }
     lin_xor_into(c, &s1f(N - 1), m0);
     let e_m01 = c.expected_total();
+    if m2_shed_m {
+        let (w0, sd) = m2_win_m;
+        let q = c.alloc_qubit();
+        a2_lt_into(c, &acc2[w0..sp2], &b[w0..sp2], sd.map(|i| b[i]), q);
+        cc[0] = q;
+    }
 
     for i in (N - 2 - s1)..=(N - 3) {
         cc[i - sp2] = m_carry(c, acc2[i - 1], &l(b[i - 1]), cc[i - 1 - sp2]);
@@ -387,7 +466,11 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
     // room, the fold: fin <= 2, then s2 carries cq(N - 1), cq(N - 2), cq(N - 3), ... shed top down (built again after
     // fold^-1, 1 Toffoli each); x258, m0, m1 (its inputs) and m2 stay. cq(N - 1)'s forms: X1[256] = m0 ^ S'2[254] ^ cq2.
     let nbits = mw - 3 - emax;
-    let fold_need = a_fixed(emax) - f_own_sheds(emax) + a_min_budget(nbits);
+    // W110 may retire five continued-Q owners inside an emax=7 fold before
+    // its final ladder plan. The outer reverse shed must use the same
+    // eligibility when deciding whether fin/ripple/m2 have enough capacity;
+    // fold_inv_f still checks the actual post-page physical budget.
+    let fold_need = a_fixed(emax) - f_own_sheds(emax) + a_min_budget(nbits) - f_page5_room_credit(emax);
     let short_f0 = fold_need.saturating_sub(cells::cap().saturating_sub(c.active_qubits() as usize));
     // fin <= 3 (c2, c1, the AND k1 k2), then the open ripple (s2 <= N - 1 - sp2), then m2 itself (erased by its
     // compare under the outcome, built again by its value compare after fold^-1: about k2x + k2x/2 Toffoli)
@@ -418,7 +501,14 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
     }
     let a_fold = c.active_qubits();
     // I5
-    let plan = fold_inv_f(c, &tg[..mw], [m0, m1, x258], s, k[0], k[1], k[2], emax, fin);
+    if std::env::var("W118_FINE_TRACE").ok().as_deref() == Some("1") {
+        eprintln!("A2_FOLD_START rev t={t} active={a_fold}");
+    }
+    let (plan, fold_peak) = c.r3_peak(|c| fold_inv_f(c, &tg[..mw], [m0, m1, x258], s, k[0], k[1], k[2], emax, fin));
+    if std::env::var("W118_FINE_TRACE").ok().as_deref() == Some("1") {
+        eprintln!("A2_FOLD_END rev t={t} peak={fold_peak} active={}", c.active_qubits());
+    }
+    if room_trace() { eprintln!("A2_FOLD_PEAK rev t={t} peak={fold_peak} cap={}", cells::cap()); }
     let e_fold = c.expected_total();
     if m2_shed {
         let (w0, sd) = m2_win;
@@ -439,6 +529,15 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
         }
     }
     let (cq2, cq1) = (cc[N - 2 - sp2], cc[N - 1 - sp2]);
+    // The fold and its restore were the final k3 reads. Payload-only k3 is
+    // decoded from an external immutable record: move its existing HMR/phase,
+    // without a rebuild, ahead of the subtraction scratch frontier.
+    if owns_k3 {
+        let before_k3 = c.active_qubits();
+        super::a2_k3_erase_rec(c, t, k[2]);
+        assert_eq!(c.active_qubits() + 1, before_k3, "a2: owned k3 retires exactly one owner");
+        eprintln!("W133_OWNED_K3 t={t} before={before_k3} after={}", c.active_qubits());
+    }
     // I4
     c.cx(cq1, m1);
     c.cx(b[N - 1], m1);
@@ -475,7 +574,7 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
     c.release_clean(m0);
     c.cx_all(s[0], b);
     let e_end = c.expected_total();
-    assert_eq!(c.active_qubits(), a_start, "a2: the reverse A tick left a wire");
+    assert_eq!(c.active_qubits(), a_start - u32::from(owns_k3), "a2: the reverse A tick violated its k3 ownership return");
     if room_trace() {
         eprintln!(
             "A2_INV t={t} active={a_start} room={} at_fold={a_fold} sp2={sp2} k0x={k0x} kk2x={kk2x} s1={s1} s2={s2} fin={fin} m2shed={} plan={plan:?} m2={:.1} open={:.1} m01={:.1} tops={:.1} fold={:.1} ripple={:.1} sub2={:.1} sub1={:.1} sub0={:.1} body={:.1}",

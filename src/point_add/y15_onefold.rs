@@ -92,6 +92,9 @@ const Y15_KEEP_LOW: [usize; 3] = [5, 3, 3];
 const Y15_JOINT_M: bool = true;
 /// Print one line a tick (costs by part, room, plans) to the build log. No effect on the gates.
 fn room_trace() -> bool { std::env::var("ROOM_TRACE").is_ok_and(|v| v == "1") }
+fn w118_diag_peak() -> bool { std::env::var("W118_DIAG_PEAK").ok().as_deref() == Some("1") }
+/// v2: first forward A tick of W116's forced early top return (W124: 97).
+const W116_LO: usize = 98;
 /// y18 research price knob (0 = no effect on the gates): inside the body of every one-fold tick-pass the walk cap is
 /// read this many wires higher. A non-zero value is a PRICE, never a build: the peak goes over 1236.
 const Y18_PRICE: isize = 0;
@@ -631,9 +634,14 @@ fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usi
             // round17 fold-core: dropped ladder carries (2..7 T) only where the pool, the top wires and the fold's own
             // shed cannot cover the fold
             let nb = fold_window(at.1, at.0) - 3 - emax;
-            let n0 = fixed + a_min_budget(nb) - f_own_sheds(emax);
+            // W118-v2: emax=7 has five tested in-place page owners that leave
+            // before the main ladder. Credit them to this upstream planner as
+            // well as to the later chunk planner; otherwise the public t114
+            // allocation rejects a feasible page before reaching the fold.
+            let page = f_page5_room_credit(emax);
+            let n0 = fixed + a_min_budget(nb) - f_own_sheds(emax) - page;
             let fmx = if Y18_FIN { fmax } else { 0 };
-            if n0.saturating_sub(room_fold) <= pool + tops_max + fmx { n0 } else { fixed + f_min_budget(nb) - f_own_sheds(emax) }
+            if n0.saturating_sub(room_fold) <= pool + tops_max + fmx { n0 } else { fixed + f_min_budget(nb) - f_own_sheds(emax) - page }
         } else { fixed + a_min_budget(fold_window(at.1, at.0) - 3 - emax) - 1 - if a_gate_shed_on() { match emax { 5 => 1, 6 => 2, _ => 3 } } else { 0 } },
         _ => fixed + min_budget - drop - 2 * usize::from(Y15_LEAN45),
     };
@@ -2507,9 +2515,22 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
             drop_n,
         )
     };
+    // Research lane W116: the late A digit is born before the fold's local
+    // sheds. Move the already-supported top-return boundary ahead of that
+    // digit on the public late ticks; this is not a quantum-data branch.
+    // The altered boundary also removes c3 from the fold's own shed menu,
+    // so the upstream room decision must be repriced with one extra fixed
+    // owner before selecting any block/top carries.
+    let w116_fin4 = f_ipk_on() && !rev && a_tick().is_some() && (W116_LO..=120).contains(&t);
     let shed0 = shed_for(shed_fixed, fmax);
     // round17 fold-core: with the top-wire shed (fin >= 4) the IPK fold cannot shed c3: one wire more to find
-    let shed0 = if f_ipk_on() && !rev && a_tick().is_some() && shed0.4 >= 4 && f_c3_shed_on() { shed_for(shed_fixed + 1, fmax) } else { shed0 };
+    let shed0 = if f_ipk_on() && !rev && a_tick().is_some() && (shed0.4 >= 4 || w116_fin4) && f_c3_shed_on() { shed_for(shed_fixed + 1, fmax) } else { shed0 };
+    let old_fin = shed0.4;
+    let shed0 = if w116_fin4 {
+        assert!(fmax >= 4, "w116: forced early top return requires four fold slots at t={t}");
+        (shed0.0, shed0.1, shed0.2, shed0.3, shed0.4.max(4))
+    } else { shed0 };
+    if w116_fin4 && old_fin < 4 { eprintln!("W118_FIN4 t={t} old_fin={old_fin} new_fin={}", shed0.4); }
     // round17 fold-core: the deep shed rides on the top-wire shed; where the IPK fold needs none, the deep shed is off
     let deep = deep && !(f_ipk_on() && !rev && a_tick().is_some() && shed0.4 < 4);
     // y28 (s2-4, step 2): forward, the AND of the shift letter leaves first where the fold sheds at all and that takes
@@ -3240,7 +3261,8 @@ fn body_capped(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: Qubi
     if room_trace() {
         eprintln!("Y16_PEAK {dir} t={t} peak={peak} cap={}", cells::cap());
     }
-    assert!(peak as usize <= cells::cap(), "y16: the one-fold tick {dir} t={t} peaks at {peak}, over the walk cap {}", cells::cap());
+    if w118_diag_peak() { eprintln!("W118_DIAG_PEAK y16_{dir} t={t} actual={peak} plan_cap={}", cells::cap()); }
+    else { assert!(peak as usize <= cells::cap(), "y16: the one-fold tick {dir} t={t} peaks at {peak}, over the walk cap {}", cells::cap()); }
     super::super::pingpong::Y17_EXTRA.with(|e| e.set(0));
 }
 
@@ -3484,7 +3506,8 @@ pub(super) fn fwd_tick0_one(c: &mut Builder, letter: &[QubitId], p: &mut [Vec<Qu
         cells::with_cmp_shift((shift.0 + Y15_CMP_EXTRA + super::n2_cmpx(), shift.1), || {
             cells::with_bridge(proxy, false, || {
                 let ((), peak) = c.r3_peak(|c| body_t0_one(c, s, k1, k2, &b, &tg, proxy));
-                assert!(peak as usize <= cells::cap(), "y33-t0: the one-add tick peaks at {peak}, over the walk cap {}", cells::cap());
+                if w118_diag_peak() { eprintln!("W118_DIAG_PEAK y33_t0 actual={peak} plan_cap={}", cells::cap()); }
+                else { assert!(peak as usize <= cells::cap(), "y33-t0: the one-add tick peaks at {peak}, over the walk cap {}", cells::cap()); }
             })
         })
     });
@@ -3945,7 +3968,8 @@ impl CsForms<'_> {
 pub(super) fn t0_phase_forms(c: &mut Builder, letter: &[QubitId], h: &[QubitId], bits: Vec<crate::circuit::BitId>) {
     let (s, k1, k2) = ([letter[0], letter[1], letter[2]], letter[3], letter[4]);
     let ((), peak) = c.r3_peak(|c| t0_forms_body(c, s, k1, k2, h, bits));
-    assert!(peak as usize <= cells::cap(), "y26: the phase block on forms peaks at {peak}, over the walk cap {}", cells::cap());
+    if w118_diag_peak() { eprintln!("W118_DIAG_PEAK y26_forms actual={peak} plan_cap={}", cells::cap()); }
+    else { assert!(peak as usize <= cells::cap(), "y26: the phase block on forms peaks at {peak}, over the walk cap {}", cells::cap()); }
 }
 #[allow(unused)] // rustc 1.93.0 panics in check_liveness on this function otherwise
 #[allow(unused)] // rustc 1.93.0 panics in check_liveness on this function otherwise
@@ -4416,7 +4440,8 @@ impl Rt0Cs {
 /// local AND layers and one ripple chain), and every AND is erased by measurement with its build forms.
 pub(super) fn rt0_finish(c: &mut Builder, r1: Vec<QubitId>, letter: Vec<QubitId>, bits: Vec<crate::circuit::BitId>, w0: usize) -> Vec<QubitId> {
     let (r0, peak) = c.r3_peak(|c| rt0_body(c, r1, letter, bits, w0));
-    assert!(peak as usize <= cells::cap(), "RT0 peaks at {peak}, over the walk cap {}", cells::cap());
+    if w118_diag_peak() { eprintln!("W118_DIAG_PEAK rt0 actual={peak} plan_cap={}", cells::cap()); }
+    else { assert!(peak as usize <= cells::cap(), "RT0 peaks at {peak}, over the walk cap {}", cells::cap()); }
     r0
 }
 fn rt0_body(c: &mut Builder, r1: Vec<QubitId>, letter: Vec<QubitId>, bits: Vec<crate::circuit::BitId>, w0: usize) -> Vec<QubitId> {

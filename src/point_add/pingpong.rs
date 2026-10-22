@@ -4002,11 +4002,19 @@ thread_local! { static Y15_CARRY_IN:std::cell::Cell<Option<(usize,QubitId)>>=con
 thread_local! { static NO_COUT:std::cell::Cell<bool>=const{std::cell::Cell::new(false)}; }
 // C2 (rec4-payload): with NO_COUT, the add's resulting top bit is this known constant (its terminal Toffoli measured)
 thread_local! { static NO_COUT_TOP:std::cell::Cell<Option<bool>>=const{std::cell::Cell::new(None)}; }
+// v2 PADTOP (w124-on-a14): acc is one wire longer than the addend (its top position's addend bit is the constant 0):
+// no zero wire is allocated for it; the last (no-carry-out, known-top) chunk takes acc's top position as a zero-addend
+// position (ripple_add_proved, k = width - 1).
+thread_local! { static PAD_TOP:std::cell::Cell<bool>=const{std::cell::Cell::new(false)}; }
 thread_local! {
     /// T0C (round 18): an exact boundary-carry erase installed by the divide's tick-0 one-add (y15 body_t0_one).
     pub(crate) static T0C_HOOK: std::cell::RefCell<Option<Box<dyn Fn(&mut Builder, QubitId, usize)>>> = const { std::cell::RefCell::new(None) };
 }
 fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: usize, multiply: bool) -> QubitId {
+    let pad_top=PAD_TOP.with(|f|f.replace(false));
+    let acc_full=acc;
+    let acc=if pad_top {assert_eq!(acc_full.len(),addend.len()+1);&acc_full[..addend.len()]} else {acc};
+    let mut pad_taken=false;
     let _dirty_trace=super::dirty_boundary_probe::Trace::new(circ,"chunked_add",acc.len());
 
     let ladder = walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
@@ -4029,6 +4037,14 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
         let candidate=super::width_composition::plan(addend.len(),old_ladder.max(2)).unwrap();
         if env_flag("PP_NEW_TRACE") {eprintln!("NEW_REPLAY {} {} {} {} {} {} {}",round,multiply as u8,circ.active_qubits(),ladder,old_fallback as u8,old_extra2,candidate.extra2);}
         if candidate.extra2<old_extra2 {
+            if pad_top {
+                // v2 PADTOP: this route has no padded top: the parent's form (a zero wire for the addend's top bit)
+                let z=circ.alloc_qubit();
+                let mut add=addend.to_vec();add.push(z);
+                let out=chunked_add(circ,&add,acc_full,round,multiply);
+                circ.release_clean(z);
+                return out;
+            }
             let candidate=super::width_composition::plan(addend.len(),ladder.max(2)).unwrap();
             if let Some(out)=super::cross_chunk_probe::try_native(circ,addend,acc,ladder,round,multiply,&candidate,|hi|{
                 let (k,seeded)=boundary_repair_spec(round,multiply,0,hi);
@@ -4040,6 +4056,7 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
         }
     }
     if pinned.is_none() && env_flag("PP_Q1208_HELPERS") && (layout.is_none() || old_ladder < replay_chunk_compare()+2) {
+        assert!(!pad_top,"v2 PADTOP: the small-ladder route has no padded top");
         return small_ladder_add(circ, addend, acc);
     }
     let bounds = layout.unwrap_or_else(|| panic!("layout r={} mul={} live={} cap={} room={}", round, multiply, circ.active_qubits(), walk_max_qubits(), ladder));
@@ -4063,7 +4080,8 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
         let no_cout=hi==addend.len() && lo>0 && hi-lo>=3 && pinned.is_none() && NO_COUT.with(|f|f.get());
         let next=if no_cout {
             if let Some(d)=NO_COUT_TOP.with(|k|k.get()) {super::modular::KNOWN_TOP.with(|k|k.set(Some(d)));}
-            ripple_add(circ,&addend[lo..hi],&acc[lo..hi],carry_in,None);
+            let acc_last: &[QubitId] = if pad_top {pad_taken=true;&acc_full[lo..hi+1]} else {&acc[lo..hi]};
+            ripple_add(circ,&addend[lo..hi],acc_last,carry_in,None);
             assert!(super::modular::KNOWN_TOP.with(|k|k.get()).is_none(),"C2: the known top was not taken");
             crate::circuit::NO_QUBIT
         }else if pinned.is_some() && env_flag("PP_PIN_REPLAY_FIT") && hi-lo>room {
@@ -4113,6 +4131,7 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
         previous = Some((next, lo, hi));
     }
 
+    assert!(!pad_top || pad_taken,"v2 PADTOP: the last chunk did not take the padded top");
     carry_in.expect("bounds is non-empty")
 }
 
@@ -4751,6 +4770,12 @@ pub(crate) mod heo_hooks {
         if out != crate::circuit::NO_QUBIT {
             circ.release_clean(out);
         }
+    }
+    /// v2 PADTOP: [`chunked_add_nocout`] on acc = addend.len() + 1 wires with no zero wire for the top addend bit.
+    pub(crate) fn chunked_add_nocout_padtop(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], proxy: usize, multiply: bool, known_top: Option<bool>) {
+        super::PAD_TOP.with(|f| f.set(true));
+        chunked_add_nocout(circ, addend, acc, proxy, multiply, known_top);
+        assert!(!super::PAD_TOP.with(|f| f.get()), "v2 PADTOP: not taken");
     }
     pub(crate) fn and_clean(circ: &mut Builder, a: QubitId, c: QubitId) -> QubitId { super::and_clean(circ, a, c) }
     pub(crate) fn and_uncompute(circ: &mut Builder, out: QubitId, a: QubitId, c: QubitId) { super::and_uncompute(circ, out, a, c) }

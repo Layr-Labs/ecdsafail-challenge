@@ -492,6 +492,22 @@ impl Builder {
     pub fn cz(&mut self, a: QubitId, b: QubitId) {
         self.cz_if(a, b, NO_BIT);
     }
+    #[track_caller]
+    pub fn ccz_if(&mut self, a: QubitId, b: QubitId, t: QubitId, cond: BitId) {
+        assert!(a != b && a != t && b != t, "invalid CCZ with aliased operands");
+        let mut op = Op::empty();
+        op.kind = OperationType::CCZ;
+        op.q_control1 = a;
+        op.q_control2 = b;
+        op.q_target = t;
+        self.push_condition(cond);
+        if self.ccx_census.watching() {
+            let at = self.at();
+            self.ccx_census.on_gate(at, OperationType::CCZ, std::panic::Location::caller());
+        }
+        self.push_op(op);
+        self.pop_condition();
+    }
     pub fn push_condition(&mut self, cond: BitId) {
         let mut op = Op::empty();
         op.kind = OperationType::PushCondition;

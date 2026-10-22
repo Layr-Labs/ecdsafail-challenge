@@ -4915,6 +4915,9 @@ fn ladder_parity_add_mid(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>],
 /// k steps run after the pause ([`ladder_parity_add_tail`]). The same values on the same wires at the pause, on
 /// every basis state. false: the gate list of eea0346 byte for byte.
 const Y29_LOWKEEP: bool = true;
+/// P1 (w124-on-a14 v2): the Y29 paused add's kept carry cq erased by a compare anchored at position k (see
+/// [`rail_add_mid`]); false = the parent's gate list.
+const P1_ANCHOR: bool = true;
 /// Research knob (false in every build that is kept): k - 1 idle measurements where the old low ladder erased the
 /// carries into positions 1..k-1, so the copy draws the base's random word at every measurement.
 const Y29_LOWKEEP_PAD: bool = false;
@@ -5171,6 +5174,38 @@ fn rail_add_mid(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, res
         let lc = ladder_parity_add_head(c, &lo, &lo_add, cin, k);
         y29_pad(c, if Y29_LOWKEEP_PAD { k - 1 } else { 0 });
         ladder_parity_add_mid(c, &b[delta..], &add[delta..], Some(cq), &mut |c, carry| mid(c, &add, delta, carry));
+        if P1_ANCHOR && k >= 2 && k + 1 < delta {
+            // P1 (OSCAR K24 pool analysis): cq is erased before the tail, where positions >= k hold their sums and the
+            // carries c_1..c_{k-1} are still live. The carry into position j of b_new + ~a + ~c_0 is ~c_j, so the
+            // compare over [k, delta) seeded with ~c_k (c_k rebuilt from c_{k-1} by one AND under the outcome) gives
+            // ~cq: the same phase on every basis state as the full compare from position 0.
+            let q0 = pmark(c);
+            let m = c.alloc_bit();
+            c.hmr(cq, m);
+            c.release_clean(cq);
+            c.push_condition(m);
+            let i = k - 1;
+            let ci = lc[i].expect("y29: live kept carry");
+            c.cx(ci, b[i]);
+            let v = v_on(c, &add[i], false, Some(ci));
+            let ck = and_new(c, b[i], v);
+            v_off(c, &add[i], false, Some(ci));
+            c.cx(ci, ck);
+            c.cx(ci, b[i]);
+            c.x(ck);
+            carry_out_parity_xor(c, &b[k..delta], &add[k..delta], true, ck, None);
+            c.x(ck);
+            c.cx(ci, ck);
+            c.cx(ci, b[i]);
+            let v = v_on(c, &add[i], false, Some(ci));
+            and_erase(c, ck, b[i], v);
+            v_off(c, &add[i], false, Some(ci));
+            c.cx(ci, b[i]);
+            c.pop_condition();
+            c.free_bit(m);
+            pacc(c, "split.yp8_erase_rev", q0);
+            ladder_parity_add_tail(c, &lo, &lo_add, &lc, k);
+        } else {
         ladder_parity_add_tail(c, &lo, &lo_add, &lc, k);
         c.x(cin);
         let q0 = pmark(c);
@@ -5183,6 +5218,7 @@ fn rail_add_mid(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, res
         c.free_bit(m);
         pacc(c, "split.yp8_erase_rev", q0);
         c.x(cin);
+        }
     } else if let Some((k, _)) = low_first {
         ladder_parity_add(c, &lo, &lo_add, Some(cin));
         ladder_parity_add_mid(c, &b[delta..], &add[delta..], Some(cq), &mut |c, carry| {
@@ -6207,8 +6243,7 @@ fn pay_fwd_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<Qubi
 fn pay_rev_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<QubitId>; 2]) {
     if a2_tick(t) {
         let k3 = a2_read(c, t);
-        y15::a2_rev_tick(c, t, [letter[0], letter[1], letter[2]], [letter[3], letter[4], k3], a2_emax(t), p);
-        a2_k3_erase_rec(c, t, k3);
+        y15::a2_rev_tick_owned_k3(c, t, [letter[0], letter[1], letter[2]], [letter[3], letter[4], k3], a2_emax(t), p);
         return;
     }
     if y15::rev_on(t) && n2_rev_y15(t) {
