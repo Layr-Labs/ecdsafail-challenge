@@ -3997,15 +3997,6 @@ fn drop_lead_first_compare(round:usize,multiply:bool,phi:usize)->(usize,bool) {
 /// positions [0, low) (sums written, carries kept) and the first chunk's ripple runs on [low, hi) with this carry-in.
 /// The chunk plan and the boundary compares are those of the plain add. Unset (the default) changes nothing.
 thread_local! { static Y15_CARRY_IN:std::cell::Cell<Option<(usize,QubitId)>>=const{std::cell::Cell::new(None)}; }
-// C1 (rec4-payload): the caller knows the add's carry-out is 0 (an n-bit subtract from an (n+1)-bit register whose
-// result fits in n bits): the last chunk runs without a carry-out (one Toffoli less) and the add returns NO_QUBIT.
-thread_local! { static NO_COUT:std::cell::Cell<bool>=const{std::cell::Cell::new(false)}; }
-// C2 (rec4-payload): with NO_COUT, the add's resulting top bit is this known constant (its terminal Toffoli measured)
-thread_local! { static NO_COUT_TOP:std::cell::Cell<Option<bool>>=const{std::cell::Cell::new(None)}; }
-thread_local! {
-    /// T0C (round 18): an exact boundary-carry erase installed by the divide's tick-0 one-add (y15 body_t0_one).
-    pub(crate) static T0C_HOOK: std::cell::RefCell<Option<Box<dyn Fn(&mut Builder, QubitId, usize)>>> = const { std::cell::RefCell::new(None) };
-}
 fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: usize, multiply: bool) -> QubitId {
     let _dirty_trace=super::dirty_boundary_probe::Trace::new(circ,"chunked_add",acc.len());
 
@@ -4060,13 +4051,7 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
 
     for &(lo, hi) in &bounds {
         let room=walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
-        let no_cout=hi==addend.len() && lo>0 && hi-lo>=3 && pinned.is_none() && NO_COUT.with(|f|f.get());
-        let next=if no_cout {
-            if let Some(d)=NO_COUT_TOP.with(|k|k.get()) {super::modular::KNOWN_TOP.with(|k|k.set(Some(d)));}
-            ripple_add(circ,&addend[lo..hi],&acc[lo..hi],carry_in,None);
-            assert!(super::modular::KNOWN_TOP.with(|k|k.get()).is_none(),"C2: the known top was not taken");
-            crate::circuit::NO_QUBIT
-        }else if pinned.is_some() && env_flag("PP_PIN_REPLAY_FIT") && hi-lo>room {
+        let next=if pinned.is_some() && env_flag("PP_PIN_REPLAY_FIT") && hi-lo>room {
             let plan=super::width_composition::plan(hi-lo,room.max(2)).unwrap();
             if env_flag("PP_CAPTURE_REPLAY_LAYOUT") {eprintln!("REPLAY_PIN_FIT {} {} {} {} {}",round,multiply as u8,hi-lo,room,plan.extra2);}
             super::width_composition::add_with_carry(circ,&addend[lo..hi],&acc[lo..hi],carry_in,&plan)
@@ -4082,7 +4067,6 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
         if let Some((carry, plo, phi)) = previous {
             let tie=tie_borrow();
             let(compare,seeded)=if tie.is_some(){(chunk_compare(round).min(phi-plo),false)}else{boundary_repair_spec(round,multiply,plo,phi)};
-            if super::leapfrog::C35_TRACE{eprintln!("C35_CMP\t{}\t{}\t{}\t{}\t{}\t{}\t{}",round,multiply as u8,plo,phi,compare,seeded as u8,tie.is_some() as u8);}
             let borrow = if tie.is_some() {
                 // B3b fix: a whole leading chunk is compared EXACTLY with its true
                 // carry-in, which is 0 (the cell has none); the sign seed there is
@@ -4094,19 +4078,10 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
             // Freeze the OLD predictor identity before widening the window.
             // The comparator supports that source wire as an interior alias.
             let compare=if seeded{refined_seeded_width(compare,phi-plo,"PP_REFINE_SEEDED_B")}else{compare};
-            // C35_WIDEN: a table compare reads 2 more bits, its predictor wire kept (leapfrog.rs)
-            let (compare,c35_pads)=super::leapfrog::c35_widen(multiply,round,plo,phi,compare,seeded);
-            // narrow (narrow.rs): a seeded compare in a NARROW class reads fewer bits, its seed moving with the window
-            let (compare,borrow)=if c35_pads==0{super::narrow::chunk(multiply,phi,compare,addend,borrow,tie.is_some())}else{(compare,borrow)};
-            let (_compare_id,compare,borrow)=super::narrow::compare_window_compare(multiply,round,phi,compare,addend,borrow);
             circ.record_replay_site('B', round, phi, compare);
             trace_replay_predictor('B',round,multiply,phi,compare,addend,borrow);
-            // y33-c35 diagnostic (inert at C35_FAULT = 0): faults 4 and 5 read 2 bits
-            let compare=if super::leapfrog::C35_CMP_FX.with(|x|x.get()){compare.min(2)}else{compare};
             let window = phi - compare..phi;
-            super::leapfrog::C35_PADS.with(|p|p.set(c35_pads));
-            let hooked = T0C_HOOK.with(|h| h.borrow().as_ref().map(|f| f(circ, carry, phi)).is_some());
-            if !hooked { erase_with_compare(circ, carry, &acc[window.clone()], &addend[window], borrow); }
+            erase_with_compare(circ, carry, &acc[window.clone()], &addend[window], borrow);
             circ.free(carry);
         }
         carry_in = Some(next);
@@ -4739,18 +4714,6 @@ pub(crate) mod heo_hooks {
     /// returns the vented carry-out wire.
     pub(crate) fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], proxy: usize, multiply: bool) -> QubitId {
         super::chunked_add(circ, addend, acc, proxy, multiply)
-    }
-    /// C1: [`chunked_add`] whose carry-out the caller knows is 0: not computed where the last chunk allows it (else it
-    /// is computed and released, as before).
-    pub(crate) fn chunked_add_nocout(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], proxy: usize, multiply: bool, known_top: Option<bool>) {
-        super::NO_COUT.with(|f| f.set(true));
-        super::NO_COUT_TOP.with(|f| f.set(known_top));
-        let out = super::chunked_add(circ, addend, acc, proxy, multiply);
-        super::NO_COUT.with(|f| f.set(false));
-        super::NO_COUT_TOP.with(|f| f.set(None));
-        if out != crate::circuit::NO_QUBIT {
-            circ.release_clean(out);
-        }
     }
     pub(crate) fn and_clean(circ: &mut Builder, a: QubitId, c: QubitId) -> QubitId { super::and_clean(circ, a, c) }
     pub(crate) fn and_uncompute(circ: &mut Builder, out: QubitId, a: QubitId, c: QubitId) { super::and_uncompute(circ, out, a, c) }
