@@ -598,6 +598,7 @@ pub fn build() -> Vec<Op> {
     ops = compose_post::run(ops);
     ops = stream_pipeline::run(ops);
     ops = lane3_sigcut::run(ops);
+    ops = tof_cancel::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -686,3 +687,5 @@ mod value_rewrites;
 mod stream_pipeline;
 
 mod lane3_sigcut;
+
+mod tof_cancel;
