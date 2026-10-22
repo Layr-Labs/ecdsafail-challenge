@@ -183,7 +183,7 @@ fn sum_write(c: &mut Builder, ctx: &Ctx, a: &[QubitId], acc: &[QubitId], j: usiz
             if cond.is_some() { c.pop_condition(); }
             if let (Some(nb), Some((a1, s1, c1))) = (ncond, below) {
                 c.push_condition(nb); c.push_condition(t.beta);
-                maj_phase(c, a1, s1, c1);
+                maj_phase(c,a1,s1,c1);
                 c.pop_condition(); c.pop_condition();
             }
             c.pop_condition();

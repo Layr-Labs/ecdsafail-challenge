@@ -4098,6 +4098,7 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
             let (compare,c35_pads)=super::leapfrog::c35_widen(multiply,round,plo,phi,compare,seeded);
             // narrow (narrow.rs): a seeded compare in a NARROW class reads fewer bits, its seed moving with the window
             let (compare,borrow)=if c35_pads==0{super::narrow::chunk(multiply,phi,compare,addend,borrow,tie.is_some())}else{(compare,borrow)};
+            let (_compare_id,compare,borrow)=super::narrow::compare_window_compare(multiply,round,phi,compare,addend,borrow);
             circ.record_replay_site('B', round, phi, compare);
             trace_replay_predictor('B',round,multiply,phi,compare,addend,borrow);
             // y33-c35 diagnostic (inert at C35_FAULT = 0): faults 4 and 5 read 2 bits

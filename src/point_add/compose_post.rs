@@ -8,7 +8,7 @@ use crate::circuit::{Op, OperationType};
 fn tof(v: &[Op]) -> usize { v.iter().filter(|o| matches!(o.kind, OperationType::CCX | OperationType::CCZ)).count() }
 
 pub(super) fn run(mut v: Vec<Op>) -> Vec<Op> {
-    for s in ["cfx", "cwide", "micro"] {
+    for s in ["cfx", "cwide"] {
         let (before, tb) = (v.len(), tof(&v));
         v = match s {
             "frozen" => super::frozen_stack::run_prefix(v),

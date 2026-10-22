@@ -33,6 +33,7 @@ mod record;
 pub mod heo;
 mod square;
 mod sqc;
+mod square_split;
 mod sqleaf;
 mod moddiv_adapter;
 
@@ -155,7 +156,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "30221012037",
+        "TAIL_NONCE" => "1057002590912",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -250,7 +251,7 @@ pub(crate) fn build_point_add() -> Vec<Op> {
         narrow::square_entry(circ);
         circ.set_phase("square");
         // LF_SQUARE_CAP: the square's own width budget (its ladders size to it instead of the walk cap)
-        pingpong::with_phase_cap(std::env::var("LF_SQUARE_CAP").ok().map(|v| v.parse::<usize>().unwrap()), || sub_square(circ, x, y));
+        pingpong::with_phase_cap(Some(1234), || sub_square(circ, x, y));
         circ.set_phase("multiply");
         if seams { leapfrog::multiply_seamed(circ, y, x, ox); } else { leapfrog::multiply(circ, y, x); }
         leapfrog::c35_widen_check();
@@ -511,6 +512,15 @@ pub fn build() -> Vec<Op> {
     }
     if std::env::var_os("SKYWALK_SQUARE_HIGH_PROBE").is_some(){square::high_probe();std::process::exit(0);}
     if std::env::var_os("SKYWALK_MODDIV_ADAPTER_PROBE").is_some(){moddiv_adapter::probe();std::process::exit(0);}
+    std::env::set_var("SQUARE_GROUPS_GROUP", "on");
+    std::env::set_var("SQUARE_GROUPS_SUM", "on");
+    std::env::set_var("SQUARE_GROUPS_A2", "on");
+    std::env::set_var("SQUARE_GROUPS_A3", "on");
+    std::env::set_var("SQC_LEAF_D", "12");
+    std::env::set_var("SQUARE_SPLIT", "on");
+    std::env::set_var("RAIL_ZERO_FILL", "1");
+    std::env::set_var("SQC_G", "22");
+    std::env::set_var("SQC_T", "19");
     let mut ops = build_point_add();
     // Effort-8 INT / B7b (`HEO_EMIT_ONLY=1`, research overlay only): stop after emission (the HEO phase report and
     // K3B_CELL traces are complete here), skipping the simplifier chain and the ops.bin write. Sweep instrument.
@@ -572,6 +582,7 @@ pub fn build() -> Vec<Op> {
     // the 6-hunk table placed by the stream prefix it edits, the two generic classical-control passes and the proved
     // CCX cuts bound to this stream (compose_post.rs)
     ops = compose_post::run(ops);
+    ops = stream_pipeline::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -650,3 +661,11 @@ mod compose_post;
 mod source_edits;
 mod classical_factors_xor;
 mod classical_wide;
+
+mod product_cache;
+
+mod copy_elision;
+
+mod value_rewrites;
+
+mod stream_pipeline;

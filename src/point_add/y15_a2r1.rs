@@ -61,7 +61,7 @@ fn r8_gf2(rows: Vec<Vec<u64>>, tb: usize, nw: usize) -> Option<Vec<bool>> {
 /// (the final positions of the input wires 1 ..= e, e >= 1). `kinds` = (phi, sym) fill kinds allowed.
 fn r8_solve_sl(w: usize, stages: &[(Vec<(usize, usize)>, u8)], emax: usize, kinds: &[(u8, u8)], no0_after: Option<usize>) -> Option<Vec<(usize, usize, u8, u8)>> {
     let ns = stages.len();
-    let nr = a_env("LFA2_R8NEAR").unwrap_or(if w % 2 == 1 { w } else { 24 });
+    let nr = a_env("LFA2_R8NEAR").unwrap_or(if true { w } else if w % 2 == 1 { w } else { 24 });
     let near: Vec<usize> = (0..w).filter(|&q| q < nr || q + nr >= w || (q + 12 >= w / 2 && q < w / 2 + 12)).collect();
     let vars: Vec<(usize, usize, u8, u8)> = (0..=ns)
         .flat_map(|b| near.iter().flat_map(move |&q| kinds.iter().map(move |&(f, s)| (b, q, f, s))))
@@ -158,7 +158,7 @@ fn r8_fast_g(w: usize, base: &Rail8, emax: usize, sym: u8) -> Option<Vec<(usize,
     let ns = stages.len();
     let sl0: Vec<(usize, usize, u8, u8)> = base.fills.iter().filter(|f| f.2 < 4).map(|&(b, q, f)| (b, q, f, if f > 0 { sym } else { 1 })).collect();
     let no0 = base.drop.map(|d| d.0);
-    let nr = a_env("LFA2_R8NEAR").unwrap_or(if w % 2 == 1 { w } else { 24 });
+    let nr = a_env("LFA2_R8NEAR").unwrap_or(if true { w } else if w % 2 == 1 { w } else { 24 });
     let near: Vec<usize> = (0..w).filter(|&q| q < nr || q + nr >= w || (q + 12 >= w / 2 && q < w / 2 + 12)).collect();
     let vars: Vec<(usize, usize)> = (0..=ns).flat_map(|b| near.iter().map(move |&q| (b, q))).filter(|&(b, q)| !(q == 0 && no0.is_some_and(|s| b > s))).collect();
     let tb = vars.len();

@@ -55,7 +55,7 @@ fn fold_window(t: usize, rev: bool) -> usize {
     // round17 a2-build: the A ticks' fold windows (LFA2_FWIN forward, LFA2_RWIN reverse; default 57 both ways = v3w)
     if super::a2_on() && t >= 1 {
         let k = if rev { "LFA2_RWIN" } else { "LFA2_FWIN" };
-        return a_env(k).unwrap_or(57);
+        let w=compare_window_knob("FOLD",rev,t,0,a_env(k).unwrap_or(57)); assert!((45..=80).contains(&w)); return w;
     }
     if PAYLOAD_FOLD_PREFIX && !rev && t <= 99 { 57 } else { Y15_WIN }
 }

@@ -1218,7 +1218,8 @@ pub(super) fn sub_square_offset() -> U256 {
         // C direct has no product offset; its correction ripple leaves out short by 2^129 in frame 2^128.
         let wa = U256::from(1).add_mod(p - pow(h), p);
         let wb = two_n.add_mod(p - pow(h), p);
-        return na.mul_mod(wa, p).add_mod(nb.mul_mod(wb, p), p).add_mod(pow(h + 1).mul_mod(pow(h), p), p);
+        let old=na.mul_mod(wa,p).add_mod(nb.mul_mod(wb,p),p).add_mod(pow(h+1).mul_mod(pow(h),p),p);
+        return if super::square_split::enabled(){old.add_mod(super::square_split::correction(),p)}else{old};
     }
     // out -= A (1 - 2^h) + B (2^N - 2^h) + C 2^h.
     let wa = U256::from(1).add_mod(p - pow(h), p);
@@ -1261,10 +1262,14 @@ fn sub_square_g1m(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
     let t0 = tt(circ);
     super::sqleaf::scoped(!std::env::var("SQC_LEAF_A").is_ok_and(|v| v == "0"), || with_square(circ, y_lo, "SQ_A_POLICY", |circ, a2| {
         mod_addsub(circ, true, a2, out);
-        fold_shifted(circ, false, a2, out, h);
+        if super::square_split::enabled(){
+            super::square_split::slide(circ,out);
+            let view:Vec<QubitId>=out[h..].iter().chain(out[..h].iter()).copied().collect();
+            mod_addsub(circ,false,a2,&view);
+        }else{fold_shifted(circ, false, a2, out, h);}
     }));
     let t1 = tt(circ);
-    let (p0, k1) = (circ.take_win_peak(), super::sqc::redc(circ, out, false));
+    let (p0, k1) = (circ.take_win_peak(), if super::square_split::enabled(){0}else{super::sqc::redc(circ, out, false)});
     let p1 = circ.take_win_peak(); let t2 = tt(circ);
     let outx: Vec<QubitId> = out[h..].iter().chain(out[..h].iter()).copied().collect();
     let sum_carry=circ.alloc_qubit();
