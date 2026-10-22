@@ -5012,9 +5012,6 @@ fn a_chunk_inv(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo: usize, w: usiz
 fn a_ladder_inv(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: QubitId, plan: &[usize]) {
     let mw = acc.len();
     assert_eq!(plan.iter().sum::<usize>(), mw - lo0, "a-build: inverse ladder plan covers bits [lo, MW)");
-    if A_INV_UP {
-        return a_ladder_inv_up(c, acc, add, lo0, cin0, plan);
-    }
     let n = plan.len();
     let mut bounds: Vec<(usize, usize, QubitId)> = Vec::new();
     let mut kept: Vec<QubitId> = Vec::new();
@@ -5036,56 +5033,6 @@ fn a_ladder_inv(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0:
     }
 }
 
-
-/// [`a_ladder_inv`] with the chunks taken back bottom up. Each non-final chunk's take-back builds
-/// its carries from its carry-in and one step more, the chunk's carry out (the next chunk's carry-in), on the bits it
-/// has just restored; its inner carries are measured away at once and the carry out stays. The kept carries are then
-/// measured away top down, each phase repaired by the exact compare of its chunk (restored bits, addend forms, live
-/// carry-in) on its outcome-1 shots, as the forward ladder erases them. Per non-final chunk of width w: w Toffoli and
-/// (w - 1) / 2 expected, where the value build plus the take-back cost 2 w - 1. Same live counts as the forward.
-const A_INV_UP: bool = true;
-fn a_ladder_inv_up(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: QubitId, plan: &[usize]) {
-    let n = plan.len();
-    let mut kept: Vec<(usize, usize, QubitId, QubitId)> = Vec::new();
-    let (mut lo, mut cin) = (lo0, cin0);
-    for (j, &w) in plan.iter().enumerate() {
-        let hi = lo + w;
-        if j + 1 == n {
-            a_chunk_inv(c, acc, add, lo, w, cin, true, None);
-            break;
-        }
-        let mut cc = vec![cin];
-        for i in lo..hi {
-            if i > lo {
-                let t = m_carry(c, acc[i - 1], &add[i - 1], cc[i - lo - 1]);
-                cc.push(t);
-            }
-            c.cx(cc[i - lo], acc[i]);
-            lin_xor_into(c, &add[i], acc[i]);
-        }
-        // the chunk's carry out, on the restored top bit
-        let out = m_carry(c, acc[hi - 1], &add[hi - 1], cc[w - 1]);
-        assert!(c.active_qubits() as usize <= cells::cap(), "C3: inverse fold chunk over the walk cap: {} > {}", c.active_qubits(), cells::cap());
-        for i in (lo + 1..hi).rev() {
-            m_carry_erase(c, cc[i - lo], acc[i - 1], &add[i - 1], cc[i - lo - 1]);
-        }
-        kept.push((lo, w, cin, out));
-        cin = out;
-        lo = hi;
-    }
-    // kept carries top down: carry out of (restored bits + addend + carry-in) = [NOT restored < addend + carry-in]
-    while let Some((lo, w, cin, out)) = kept.pop() {
-        let m = c.alloc_bit();
-        c.hmr(out, m);
-        c.release_clean(out);
-        c.x_all(&acc[lo..lo + w]);
-        c.push_condition(m);
-        lin_lt_phase(c, &acc[lo..lo + w], &add[lo..lo + w], cin);
-        c.pop_condition();
-        c.x_all(&acc[lo..lo + w]);
-        c.free_bit(m);
-    }
-}
 
 /// round17 a-build: the exact inverse of [`fold_fwd_a`] (fin <= 2, no top-wire shed): acc = bits [0, MW) of the forward
 /// fold's output W', e = X's three top wires; on return acc = low(X) on the window. Each AND the forward fold builds is

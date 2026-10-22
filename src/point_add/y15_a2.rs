@@ -238,23 +238,11 @@ fn a2_sub_top(c: &mut Builder, addend: &[QubitId], acc: &[QubitId], proxy: usize
     let mut add = addend.to_vec();
     add.push(z);
     c.x_all(acc);
-    if A2_SUB_NOCOUT {
-        // the top bit of ~acc + addend is 1 (the result's top bit is 0)
-        cells::chunked_add_nocout(c, &add, acc, proxy, true, A2_SUB_KNOWN_TOP.then_some(true));
-    } else {
-        let cout = cells::chunked_add(c, &add, acc, proxy, true);
-        c.release_clean(cout);
-    }
+    let cout = cells::chunked_add(c, &add, acc, proxy, true);
+    c.release_clean(cout);
     c.release_clean(z);
     c.x_all(acc);
 }
-/// The subtraction's carry-out (0 whenever acc >= addend, which the caller guarantees) is not computed: one Toffoli
-/// less per subtraction, three per reverse tick. false = the parent's gate list.
-const A2_SUB_NOCOUT: bool = true;
-/// The subtraction's top wire (the held carry, cleared by the carry into it) is erased by an X measurement while the
-/// last chunk's carries are live (its value is their terminal carry: Clifford repair) in place of the terminal
-/// Toffoli that wrote that carry onto it (needs A2_SUB_NOCOUT).
-const A2_SUB_KNOWN_TOP: bool = true;
 
 /// The reverse A tick's body (M6): the exact inverse of the forward one-fold body in its A configuration (direct cuts,
 /// add 1 to the top, add 2's top ripple open, no closed ripple, no deep shed) with [`fold_inv_f`] in place of the fold.
