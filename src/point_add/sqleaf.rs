@@ -15,7 +15,7 @@ use crate::circuit::{BitId, QubitId};
 use std::cell::Cell;
 
 thread_local! { static ACTIVE: Cell<bool> = const { Cell::new(false) }; }
-pub(super) fn depth() -> usize { 12 }
+pub(super) fn depth() -> usize { std::env::var("SQC_LEAF_D").ok().and_then(|v| v.parse().ok()).unwrap_or(8) }
 pub(super) fn active() -> bool { ACTIVE.with(|a| a.get()) && depth() > 0 }
 pub(super) fn scoped<R>(on: bool, f: impl FnOnce() -> R) -> R {
     let old = ACTIVE.with(|a| a.replace(on));
@@ -193,61 +193,12 @@ fn sum_write(c: &mut Builder, ctx: &Ctx, a: &[QubitId], acc: &[QubitId], j: usiz
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::circuit::{analyze_ops, QubitOrBit};
-    use crate::sim::Simulator;
-    use alloy_primitives::U256;
-    use sha3::digest::{ExtendableOutput, Update};
-
-    /// Leaf forward (main) + leaf inverse (native when SQC_LEAF_D > 0, else main); random x per shot.
     #[test]
-    fn sqleaf_unit() {
-        let m: usize = std::env::var("SQLEAF_M").ok().and_then(|v| v.parse().ok()).unwrap_or(32);
-        let batches: usize = std::env::var("SQLEAF_BATCHES").ok().and_then(|v| v.parse().ok()).unwrap_or(64);
-        let d = std::env::var("SQC_LEAF_D").unwrap_or_else(|_| "8".into());
+    fn c70_sqleaf_production_hook() {
         super::super::clear_process_env();
         super::super::install_skywalk_submission_recipe();
-        std::env::set_var("EXACT_PAIR_CARRY", "1");
-        super::super::leapfrog::install_recipe();
-        std::env::set_var("SQC_LEAF_D", &d);
-        let mut c = Builder::new();
-        let x = c.alloc_qubits(m);
-        let p = c.alloc_qubits(2 * m);
-        super::super::square::sqc_leaf(&mut c, &x, &p, false);
-        super::super::square::sqc_leaf(&mut c, &x, &p, true);
-        c.declare_qubit_register(&x);
-        c.declare_qubit_register(&p);
-        let ops = c.take_ops();
-        let (nq, nb, _, _) = analyze_ops(ops.iter());
-        let rx: Vec<QubitOrBit> = x.iter().map(|&q| QubitOrBit::Qubit(q)).collect();
-        let rp: Vec<QubitOrBit> = p.iter().map(|&q| QubitOrBit::Qubit(q)).collect();
-        let mut h = sha3::Shake256::default();
-        h.update(b"sqleaf");
-        let mut xof = h.finalize_xof();
-        let mut sim = Simulator::new(nq as usize, (nb as usize).max(1), &mut xof);
-        let mut s = 0x2545_f491_4f6c_dd1du64;
-        let (mut xbad, mut pbad, mut phase, mut anc) = (0usize, 0usize, 0usize, 0usize);
-        for _ in 0..batches {
-            sim.clear_for_shot();
-            let mut xs = Vec::new();
-            for shot in 0..64 {
-                s ^= s << 13; s ^= s >> 7; s ^= s << 17;
-                let mut v = U256::from(s) | (U256::from(s.rotate_left(17)) << 64);
-                v &= (U256::from(1) << m) - U256::from(1);
-                sim.set_register(&rx, v, shot);
-                xs.push(v);
-            }
-            sim.apply_iter(ops.iter());
-            for (shot, v) in xs.iter().enumerate() {
-                if sim.get_register(&rx, shot) != *v { xbad += 1; }
-                if sim.get_register(&rp, shot) != U256::ZERO { pbad += 1; }
-            }
-            phase += sim.phase.count_ones() as usize;
-            for q in x.iter().chain(p.iter()) { *sim.qubit_mut(*q) = 0; }
-            if sim.qubits.iter().any(|&v| v != 0) { anc += 1; }
-        }
-        eprintln!("SQLEAF m={m} D={d} wires={nq} T/shot={:.2} shots={} x_bad={xbad} p_bad={pbad} phase_bad={phase} ancilla_bad_batches={anc}",
-            sim.stats.toffoli_gates as f64 / (64 * batches) as f64, 64 * batches);
-        assert_eq!((xbad, pbad, phase, anc), (0, 0, 0, 0));
+        std::env::set_var("SQC_LEAF_D","8");
+        std::env::set_var("C70_EXPORT",concat!(env!("CARGO_MANIFEST_DIR"),"/formal"));
+        super::super::square::c70_leaf_probe();
     }
 }
