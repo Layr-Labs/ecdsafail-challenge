@@ -5,4 +5,9 @@ std::env::set_var("SL_COND","ur");v=super::cond_pass::run(v);v=super::zero_force
 // and refuse any other input; dropped here (lane 3 regenerates). The generic passes run unchanged.
 
 v=super::classical_factors_xor::simplify_classical(v);v=super::classical_wide::simplify_classical(v);
+// Research-only exact adjacent-pair factoring, after all stream-bound tables.
+// Source-level opt-in only; no environment/HEO overlay changes.
+if super::exact_pair_fusion::ENABLED {
+    v=super::exact_pair_fusion::run(v);
+}
 v}

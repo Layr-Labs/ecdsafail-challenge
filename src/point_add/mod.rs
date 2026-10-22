@@ -683,3 +683,4 @@ mod copy_elision;
 mod value_rewrites;
 
 mod stream_pipeline;
+mod exact_pair_fusion;
