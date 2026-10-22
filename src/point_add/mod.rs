@@ -668,4 +668,6 @@ mod copy_elision;
 
 mod value_rewrites;
 
+mod tof_cancel;
+
 mod stream_pipeline;
