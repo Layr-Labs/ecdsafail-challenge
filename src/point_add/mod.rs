@@ -155,7 +155,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "101034479433",
+        "TAIL_NONCE" => "20081741686",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -569,7 +569,9 @@ pub fn build() -> Vec<Op> {
     // round17 a2-build v5w: main's seven stream-bound passes (and cond_pass ur / zero_force between them) replayed as
     // one edit table bound to this stream after reader_pass (frozen_stack.rs): the harness's re-anchoring of main's
     // edits on lever A's stream (2 census_anchored clusters) plus the generic passes' result, op for op
-    ops = frozen_stack::run(ops);
+    // the 6-hunk table placed by the stream prefix it edits, the two generic classical-control passes and the proved
+    // CCX cuts bound to this stream (compose_post.rs)
+    ops = compose_post::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -644,3 +646,7 @@ mod frozen_cache_product67;
 mod retained_products;
 mod zero_product;
 mod frozen_stack;
+mod compose_post;
+mod source_edits;
+mod classical_factors_xor;
+mod classical_wide;
