@@ -503,6 +503,106 @@ fn clear_process_env() {
 /// Leapfrog branch: the submission build emits the Leapfrog point add (see [`leapfrog::install_recipe`]).
 const LEAPFROG_SUBMISSION: bool = true;
 
+///
+fn cancel_unconditional_pairs(mut ops: Vec<Op>) -> Vec<Op> {
+    use std::collections::HashMap;
+    const NONE: u64 = u64::MAX;
+    for _round in 0..3 {
+        let n = ops.len();
+        let mut maxq = 0usize;
+        let mut maxb = 0usize;
+        for o in &ops {
+            for q in [o.q_target.0, o.q_control1.0, o.q_control2.0] {
+                if q != NONE {
+                    maxq = maxq.max(q as usize + 1);
+                }
+            }
+            for b in [o.c_target.0, o.c_condition.0] {
+                if b != NONE {
+                    maxb = maxb.max(b as usize + 1);
+                }
+            }
+        }
+        let mut stamp = vec![usize::MAX; maxq];
+        let mut bstamp = vec![usize::MAX; maxb];
+        let mut last: HashMap<u64, usize> = HashMap::with_capacity(n / 2);
+        let mut dead = vec![false; n];
+        let mut depth = 0usize;
+        let mut removed = 0usize;
+        for j in 0..n {
+            let o = ops[j];
+            match o.kind {
+                OperationType::PushCondition => {
+                    depth += 1;
+                    continue;
+                }
+                OperationType::PopCondition => {
+                    depth = depth.saturating_sub(1);
+                    continue;
+                }
+                _ => {}
+            }
+            let (w, nw, inv) = match o.kind {
+                OperationType::CCX | OperationType::CCZ => {
+                    let (a, b) = if o.q_control2.0 <= o.q_control1.0 {
+                        (o.q_control2.0, o.q_control1.0)
+                    } else {
+                        (o.q_control1.0, o.q_control2.0)
+                    };
+                    ([a, b, o.q_target.0], 3usize, true)
+                }
+                OperationType::CX | OperationType::CZ | OperationType::Swap => {
+                    ([o.q_control1.0, o.q_target.0, 0], 2, true)
+                }
+                OperationType::X | OperationType::Z => ([o.q_target.0, 0, 0], 1, true),
+                OperationType::R | OperationType::Hmr => ([o.q_target.0, 0, 0], 1, false),
+                _ => ([0, 0, 0], 0, false),
+            };
+            let raw = o.c_condition.0;
+            let (ck, cond_ok) = if raw == NONE {
+                (0x1FFFu64, true)
+            } else if raw < 0x1FFF {
+                (raw, true)
+            } else {
+                (0, false)
+            };
+            if inv && depth == 0 && cond_ok && w[..nw].iter().all(|&q| q < (1 << 11)) {
+                let key = (o.kind as u64) << 46 | w[0] << 35 | w[1] << 24 | w[2] << 13 | ck;
+                let hit = last.get(&key).copied().filter(|&i| {
+                    w[..nw].iter().all(|&q| stamp[q as usize] <= i)
+                        && (ck == 0x1FFF || bstamp[ck as usize] <= i)
+                });
+                if let Some(i) = hit {
+                    dead[i] = true;
+                    dead[j] = true;
+                    let _ = last.remove(&key);
+                    removed += 2;
+                    continue;
+                }
+                let _ = last.insert(key, j);
+            }
+            for &q in &w[..nw] {
+                stamp[q as usize] = j;
+            }
+            if o.c_target.0 != NONE {
+                bstamp[o.c_target.0 as usize] = j;
+            }
+        }
+        if removed == 0 {
+            break;
+        }
+        eprintln!("cancel_unconditional_pairs: {n} -> {} ops ({removed} removed)", n - removed);
+        let mut out = Vec::with_capacity(n - removed);
+        for (j, o) in ops.into_iter().enumerate() {
+            if !dead[j] {
+                out.push(o);
+            }
+        }
+        ops = out;
+    }
+    ops
+}
+
 pub fn build() -> Vec<Op> {
     // W124 (Codex) width composition, ported onto 6602a4e8: the effective selection pinned in source.
     // trace=true reproduces W124's logs only (stderr); it does not change gates.
@@ -606,6 +706,7 @@ pub fn build() -> Vec<Op> {
     ops = stream_pipeline::run(ops);
     ops = post_pipeline::run(ops);
     ops = lane3_sigcut::run(ops);
+    ops = cancel_unconditional_pairs(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
