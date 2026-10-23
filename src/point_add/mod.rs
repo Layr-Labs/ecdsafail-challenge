@@ -503,6 +503,129 @@ fn clear_process_env() {
 /// Leapfrog branch: the submission build emits the Leapfrog point add (see [`leapfrog::install_recipe`]).
 const LEAPFROG_SUBMISSION: bool = true;
 
+///
+fn cancel_unconditional_pairs(mut ops: Vec<Op>) -> Vec<Op> {
+    use std::collections::HashMap;
+    const NONE: u64 = u64::MAX;
+    for _round in 0..3 {
+        let n = ops.len();
+        let mut maxq = 0usize;
+        let mut maxb = 0usize;
+        for o in &ops {
+            for q in [o.q_target.0, o.q_control1.0, o.q_control2.0] {
+                if q != NONE {
+                    maxq = maxq.max(q as usize + 1);
+                }
+            }
+            for b in [o.c_target.0, o.c_condition.0] {
+                if b != NONE {
+                    maxb = maxb.max(b as usize + 1);
+                }
+            }
+        }
+        let mut hard = vec![usize::MAX; maxq];
+        let mut xs = vec![usize::MAX; maxq];
+        let mut zs = vec![usize::MAX; maxq];
+        let mut bstamp = vec![usize::MAX; maxb];
+        let mut last: HashMap<u64, usize> = HashMap::with_capacity(n / 2);
+        let mut dead = vec![false; n];
+        let mut depth = 0usize;
+        let mut removed = 0usize;
+        for j in 0..n {
+            let o = ops[j];
+            match o.kind {
+                OperationType::PushCondition => {
+                    depth += 1;
+                    continue;
+                }
+                OperationType::PopCondition => {
+                    depth = depth.saturating_sub(1);
+                    continue;
+                }
+                _ => {}
+            }
+            let hard_kind = !matches!(o.kind, OperationType::X | OperationType::Z);
+            let mut w: [u64; 3] = [NONE; 3];
+            let nw: usize;
+            let mut pair = false;
+            match o.kind {
+                OperationType::CCX | OperationType::CCZ => {
+                    w = [o.q_control1.0, o.q_control2.0, o.q_target.0];
+                    nw = 3;
+                    pair = true;
+                }
+                OperationType::CX | OperationType::CZ | OperationType::Swap => {
+                    w = [o.q_control1.0, o.q_target.0, NONE];
+                    nw = 2;
+                }
+                OperationType::X | OperationType::Z | OperationType::R | OperationType::Hmr => {
+                    w = [o.q_target.0, NONE, NONE];
+                    nw = 1;
+                }
+                _ => {
+                    nw = 0;
+                }
+            }
+            let raw = o.c_condition.0;
+            let cond_ok = raw == NONE || (raw as usize) < maxb.min(4096);
+            if pair && depth == 0 && cond_ok && w[..nw].iter().all(|&q| (q as usize) < maxq.min(2048)) {
+                let (c1, c2) = if w[0] <= w[1] { (w[0], w[1]) } else { (w[1], w[0]) };
+                let ck = if raw == NONE { 0xFFFu64 } else { raw };
+                let key = (o.kind as u64) << 45 | c1 << 34 | c2 << 23 | w[2] << 12 | ck;
+                let hit = last.get(&key).copied().filter(|&i| {
+                    let (i1, i2, it) = (c1 as usize, c2 as usize, w[2] as usize);
+                    let hard_ok = hard[i1] <= i && hard[i2] <= i && hard[it] <= i;
+                    let x_ok = if o.kind == OperationType::CCX {
+                        xs[i1] <= i && xs[i2] <= i
+                    } else {
+                        xs[i1] <= i && xs[i2] <= i && xs[it] <= i
+                    };
+                    let z_ok = o.kind != OperationType::CCX || zs[it] <= i;
+                    let bit_ok = raw == NONE || bstamp[raw as usize] <= i;
+                    hard_ok && x_ok && z_ok && bit_ok
+                });
+                if let Some(i) = hit {
+                    dead[i] = true;
+                    dead[j] = true;
+                    let _ = last.remove(&key);
+                    removed += 2;
+                    continue;
+                }
+                let _ = last.insert(key, j);
+            }
+            for &q in &w[..nw] {
+                let q = q as usize;
+                if q >= maxq {
+                    continue;
+                }
+                if hard_kind {
+                    hard[q] = j;
+                }
+                match o.kind {
+                    OperationType::X => xs[q] = j,
+                    OperationType::Z => zs[q] = j,
+                    _ => {}
+                }
+            }
+            if o.c_target.0 != NONE && (o.c_target.0 as usize) < maxb {
+                bstamp[o.c_target.0 as usize] = j;
+            }
+        }
+        if removed == 0 {
+            break;
+        }
+        eprintln!("cancel_unconditional_pairs: {n} -> {} ops ({removed} removed)", n - removed);
+        let mut out = Vec::with_capacity(n - removed);
+        for (j, o) in ops.into_iter().enumerate() {
+            if !dead[j] {
+                out.push(o);
+            }
+        }
+        ops = out;
+    }
+    ops
+}
+
 pub fn build() -> Vec<Op> {
     // W124 (Codex) width composition, ported onto 6602a4e8: the effective selection pinned in source.
     // trace=true reproduces W124's logs only (stderr); it does not change gates.
@@ -606,6 +729,7 @@ pub fn build() -> Vec<Op> {
     ops = stream_pipeline::run(ops);
     ops = post_pipeline::run(ops);
     ops = lane3_sigcut::run(ops);
+    ops = cancel_unconditional_pairs(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
