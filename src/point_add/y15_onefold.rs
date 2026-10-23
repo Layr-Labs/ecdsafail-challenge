@@ -94,7 +94,7 @@ const Y15_JOINT_M: bool = true;
 fn room_trace() -> bool { std::env::var("ROOM_TRACE").is_ok_and(|v| v == "1") }
 fn w118_diag_peak() -> bool { std::env::var("W118_DIAG_PEAK").ok().as_deref() == Some("1") }
 /// v2: first forward A tick of W116's forced early top return (W124: 97).
-const W116_LO: usize = 97;
+const W116_LO: usize = 96;
 /// y18 research price knob (0 = no effect on the gates): inside the body of every one-fold tick-pass the walk cap is
 /// read this many wires higher. A non-zero value is a PRICE, never a build: the peak goes over 1236.
 const Y18_PRICE: isize = 0;

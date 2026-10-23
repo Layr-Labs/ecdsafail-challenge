@@ -89,8 +89,6 @@ pub(crate)fn compare_window_compare(multiply:bool,round:usize,phi:usize,w:usize,
  if k!=base{assert!(seed.is_none()||w<phi&&seed==Some(a[phi-w-1]));}
  FRAME_COMPARE_FAULT_SITE.with(|v|v.set((k,k!=base&&menu,multiply==false&&w==16&&k>base)));
 
- // buy-back (31c38da8 sec 2.5) at source: division compare windows 17 -> 18 and 19 -> 20
- if !multiply { let kb=match k {17=>18,19=>20,_=>k}.min(phi); if kb!=k && (seed.is_none()||w<phi&&seed==Some(a[phi-w-1])) { k=kb; } }
  if k==w{return(id,k,seed);}
  (id,k,if seed.is_some()&&k<phi{Some(a[phi-k-1])}else{None})
 }
