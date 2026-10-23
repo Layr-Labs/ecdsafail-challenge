@@ -10,7 +10,7 @@ use std::str::FromStr;
 
 use alloy_primitives::U256;
 
-use crate::circuit::{BitId, Op, OperationType, QubitId};
+use crate::circuit::{BitId, Op, OperationType, QubitId, NO_BIT, NO_QUBIT};
 use builder::Builder;
 use classical::{coord_add3x, coord_rsub, coord_sub};
 use pingpong::{divide, multiply};
@@ -503,6 +503,67 @@ fn clear_process_env() {
 /// Leapfrog branch: the submission build emits the Leapfrog point add (see [`leapfrog::install_recipe`]).
 const LEAPFROG_SUBMISSION: bool = true;
 
+///
+fn cancel_commuting_ccx(ops: Vec<Op>) -> Vec<Op> {
+    use std::collections::HashMap;
+    let mut gen_q: HashMap<u64, usize> = HashMap::new();
+    let mut gen_b: HashMap<u64, usize> = HashMap::new();
+    let mut last: HashMap<(u64, u64, u64, u64), (usize, u64)> = HashMap::new();
+    let mut epoch: u64 = 0;
+    let mut dead = vec![false; ops.len()];
+    let mut removed = 0usize;
+    for (i, o) in ops.iter().enumerate() {
+        if matches!(
+            o.kind,
+            OperationType::PushCondition | OperationType::PopCondition | OperationType::DebugPrint
+        ) {
+            epoch += 1;
+        }
+        if o.kind == OperationType::CCX {
+            let (a, b) = (o.q_control1.0, o.q_control2.0);
+            let key = (a.min(b), a.max(b), o.q_target.0, o.c_condition.0);
+            let mut cancelled = false;
+            if let Some(&(j, e)) = last.get(&key) {
+                let stamp = j + 1;
+                let wires_ok = [a, b, o.q_target.0]
+                    .iter()
+                    .all(|q| gen_q.get(q).copied().unwrap_or(0) == stamp);
+                let cond_ok = o.c_condition == NO_BIT
+                    || gen_b.get(&o.c_condition.0).copied().unwrap_or(0) == stamp;
+                if e == epoch && wires_ok && cond_ok {
+                    dead[j] = true;
+                    dead[i] = true;
+                    last.remove(&key);
+                    removed += 1;
+                    cancelled = true;
+                }
+            }
+            if !cancelled {
+                last.insert(key, (i, epoch));
+            }
+        }
+        for q in [o.q_control1, o.q_control2, o.q_target] {
+            if q != NO_QUBIT {
+                gen_q.insert(q.0, i + 1);
+            }
+        }
+        if o.c_target != NO_BIT {
+            gen_b.insert(o.c_target.0, i + 1);
+        }
+    }
+    if removed == 0 {
+        return ops;
+    }
+    eprintln!("pp_ccx_commute: {removed} commuting CCX pairs cancelled");
+    let mut out = Vec::with_capacity(ops.len() - 2 * removed);
+    for (i, o) in ops.into_iter().enumerate() {
+        if !dead[i] {
+            out.push(o);
+        }
+    }
+    out
+}
+
 pub fn build() -> Vec<Op> {
     // W124 (Codex) width composition, ported onto 6602a4e8: the effective selection pinned in source.
     // trace=true reproduces W124's logs only (stderr); it does not change gates.
@@ -606,6 +667,7 @@ pub fn build() -> Vec<Op> {
     ops = stream_pipeline::run(ops);
     ops = post_pipeline::run(ops);
     ops = lane3_sigcut::run(ops);
+    ops = cancel_commuting_ccx(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
