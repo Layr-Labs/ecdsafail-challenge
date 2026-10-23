@@ -606,6 +606,23 @@ pub fn build() -> Vec<Op> {
     ops = stream_pipeline::run(ops);
     ops = post_pipeline::run(ops);
     ops = lane3_sigcut::run(ops);
+    for _round in 0..2 {
+        let before = ops.len();
+        let tof_before = ops.iter().filter(|o| o.kind == OperationType::CCX).count();
+        std::env::set_var("SL_COND", "ur");
+        ops = cond_pass::run(ops);
+        ops = zero_force::run(ops);
+        ops = mabsorb::absorb(ops);
+        ops = classical_factors_xor::simplify_classical(ops);
+        ops = classical_wide::simplify_classical(ops);
+        ops = affine_simplify::simplify(ops);
+        ops = quadratic_simplify::simplify(ops);
+        ops = truth_simplify::simplify_products(ops);
+        ops = truth_simplify::simplify(ops);
+        let tof_after = ops.iter().filter(|o| o.kind == OperationType::CCX).count();
+        eprintln!("pp_close round {_round}: ops {before} -> {}, ccx {tof_before} -> {tof_after}", ops.len());
+        if ops.len() == before && tof_after == tof_before { break; }
+    }
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
