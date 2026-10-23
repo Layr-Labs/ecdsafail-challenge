@@ -608,6 +608,11 @@ pub fn build() -> Vec<Op> {
     ops = lane3_sigcut::run(ops);
     ops = source_edits::run(ops, include_str!("our_cuts.txt"));
     ops = rail_output_erase::run(ops);
+    // Late, stream-bound tables can expose Boolean support identities that did
+    // not exist when the generic exact simplifiers ran near the start of this
+    // pipeline.  Re-scan the final table output once before adding the nonce.
+    // `simplify_products` only emits universally valid Boolean rewrites.
+    ops = truth_simplify::simplify_products(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
