@@ -156,7 +156,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "1060000145321",
+        "TAIL_NONCE" => "6200033808774",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -605,7 +605,7 @@ pub fn build() -> Vec<Op> {
     ops = compose_post::run(ops);
     ops = stream_pipeline::run(ops);
     ops = post_pipeline::run(ops);
-    ops = phase_restoration::run(ops);
+    ops = lane3_sigcut::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -702,3 +702,5 @@ mod value_cleanup;
 mod post_pipeline;
 
 mod phase_restoration;
+
+mod lane3_sigcut;
