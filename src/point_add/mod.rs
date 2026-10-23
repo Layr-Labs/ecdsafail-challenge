@@ -608,6 +608,7 @@ pub fn build() -> Vec<Op> {
     ops = lane3_sigcut::run(ops);
     ops = source_edits::run(ops, include_str!("our_cuts.txt"));
     ops = rail_output_erase::run(ops);
+    ops = cond_pass::prefix_uncompute(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;

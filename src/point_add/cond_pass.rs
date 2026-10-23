@@ -118,8 +118,33 @@ struct Analysis {
     opctx: Vec<u32>, cx: Ctxs, contribs: Vec<Contrib>,
     zhold: HashMap<(u32, u32), (u32, u32)>, endhold: HashMap<u32, (u32, u32)>, fixcz: HashMap<u32, Vec<(u32, u32, u32)>>,
     misc: Vec<(u32, u8, u32)>, unc: Vec<u32>,
+    pref: Vec<(u32, Option<Vec<u32>>)>,
     /// per bit value: the op that created it and the slot it was written to; derived = another value was computed from it
     bcreator: Vec<u32>, bslot: Vec<u32>, bderived: Vec<bool>, depth_after: Vec<u8>,
+}
+
+fn prefix_held(v: &Vals, val: u32, holders: &HashMap<u32, Vec<u32>>, target: u32) -> Option<Vec<u32>> {
+    if val == ZERO {
+        return Some(Vec::new());
+    }
+    let atoms: Vec<u32> = if v.node[val as usize].0 == T_SET {
+        v.store[v.node[val as usize].1 as usize].clone()
+    } else {
+        vec![val]
+    };
+    let mut used: HashSet<u32> = HashSet::new();
+    let mut out = Vec::with_capacity(atoms.len());
+    for a in atoms {
+        if a == ONE {
+            out.push(NQ);
+            continue;
+        }
+        let hs = holders.get(&a)?;
+        let w = hs.iter().copied().find(|&w| w != target && !used.contains(&w))?;
+        used.insert(w);
+        out.push(w);
+    }
+    Some(out)
 }
 
 fn analyze(ops: &[L]) -> Analysis {
@@ -142,7 +167,7 @@ fn analyze(ops: &[L]) -> Analysis {
     let mut open: Vec<Vec<u32>> = vec![Vec::new(); nq as usize];
     let mut zhold = HashMap::new(); let mut endhold = HashMap::new();
     let mut fixcz: HashMap<u32, Vec<(u32, u32, u32)>> = HashMap::new();
-    let mut misc = Vec::new(); let mut unc = Vec::new();
+    let mut misc = Vec::new(); let mut unc = Vec::new(); let mut pref: Vec<(u32, Option<Vec<u32>>)> = Vec::new();
     let mut bcreator: Vec<u32> = vec![NQ; nbits as usize]; let mut bslot: Vec<u32> = vec![NQ; nbits as usize];
     let mut bderived: Vec<bool> = vec![false; nbits as usize]; let mut depth_after: Vec<u8> = vec![0; n];
     macro_rules! setq { ($q:expr, $val:expr) => {{
@@ -213,6 +238,16 @@ fn analyze(ops: &[L]) -> Analysis {
                         if open[t].len() > 512 { let old = open[t].remove(0); let c = &mut contribs[old as usize]; c.zonly = false; c.reads = Vec::new(); }
                     }
                 }
+                if o.kind == K_CCX && o.cc == NQ && stack.len() > 1 {
+                    if term == ZERO {
+                        pref.push((k32, None));
+                    } else {
+                        let prefix = v.xor(qv[t], term);
+                        if let Some(ws) = prefix_held(&v, prefix, &holders, o.t) {
+                            pref.push((k32, Some(ws)));
+                        }
+                    }
+                }
                 let nv = v.xor(qv[t], term); setq!(t, nv);
             }
             K_SWAP => {
@@ -249,7 +284,7 @@ fn analyze(ops: &[L]) -> Analysis {
         }
         depth_after[k] = (stack.len() - 1).min(255) as u8;
     }
-    Analysis { opctx, cx, contribs, zhold, endhold, fixcz, misc, unc, bcreator, bslot, bderived, depth_after }
+    Analysis { opctx, cx, contribs, zhold, endhold, fixcz, misc, unc, pref, bcreator, bslot, bderived, depth_after }
 }
 
 /// Affine forms of wires `start` (values at op p) over the wires at each op in `at` (sorted, all > p). None if a member
@@ -723,4 +758,46 @@ pub fn run(ops: Vec<Op>) -> Vec<Op> {
     let w1 = weight_of(&l);
     eprintln!("SL_COND static expected Toffoli {w0:.1} -> {w1:.1} ({:.1}){}", w1 - w0, if fault.is_empty() { String::new() } else { format!("; FAULT {fault}") });
     l.iter().map(from_l).collect()
+}
+
+pub(super) fn prefix_uncompute(ops: Vec<Op>) -> Vec<Op> {
+    let l: Vec<L> = ops.iter().map(to_l).collect();
+    drop(ops);
+    let a = analyze(&l);
+    if a.pref.is_empty() {
+        eprintln!("prefix_uncompute: 0 sites");
+        return l.iter().map(from_l).collect();
+    }
+    let bit = max_bit(&l);
+    let mut replace: HashMap<u32, Vec<L>> = HashMap::new();
+    for (k, ws) in &a.pref {
+        let o = l[*k as usize];
+        let seq = match ws {
+            None => Vec::new(),
+            Some(ws) => {
+                let mut seq: Vec<L> = Vec::with_capacity(ws.len() * 2 + 2);
+                for &w in ws {
+                    if w == NQ { seq.push(op(K_X, NQ, o.t, NQ)); } else { seq.push(op(K_CX, w, o.t, NQ)); }
+                }
+                seq.push(L { kind: K_HMR, c2: NQ, c1: NQ, t: o.t, ct: bit, cc: NQ, rt: NQ });
+                seq.push(op(K_CZ, o.c1, o.c2, bit));
+                for &w in ws.iter().rev() {
+                    if w == NQ { seq.push(op(K_X, NQ, o.t, NQ)); } else { seq.push(op(K_CX, w, o.t, NQ)); }
+                }
+                seq
+            }
+        };
+        replace.insert(*k, seq);
+    }
+    let mut out = Vec::with_capacity(l.len() + replace.len() * 4);
+    for (i, o) in l.iter().enumerate() {
+        if let Some(seq) = replace.get(&(i as u32)) {
+            out.extend_from_slice(seq);
+        } else {
+            out.push(*o);
+        }
+    }
+    let n_drop = a.pref.iter().filter(|(_, w)| w.is_none()).count();
+    eprintln!("prefix_uncompute: {} rewrite + {} delete (bit {bit})", a.pref.len() - n_drop, n_drop);
+    out.iter().map(from_l).collect()
 }
