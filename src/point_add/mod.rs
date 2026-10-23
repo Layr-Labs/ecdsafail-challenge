@@ -606,6 +606,7 @@ pub fn build() -> Vec<Op> {
     ops = stream_pipeline::run(ops);
     ops = post_pipeline::run(ops);
     ops = phase_restoration::run(ops);
+    ops = maxid_fold::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -702,3 +703,5 @@ mod value_cleanup;
 mod post_pipeline;
 
 mod phase_restoration;
+
+mod maxid_fold;
