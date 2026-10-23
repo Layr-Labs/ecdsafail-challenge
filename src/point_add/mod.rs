@@ -607,6 +607,7 @@ pub fn build() -> Vec<Op> {
     ops = post_pipeline::run(ops);
     ops = lane3_sigcut::run(ops);
     ops = source_edits::run(ops, include_str!("our_cuts.txt"));
+    ops = late_constant::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -683,6 +684,7 @@ mod zero_product;
 mod frozen_stack;
 mod compose_post;
 mod source_edits;
+mod late_constant;
 mod classical_factors_xor;
 mod classical_wide;
 
