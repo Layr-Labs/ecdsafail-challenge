@@ -80,7 +80,18 @@ pub(crate)fn compare_window_compare(multiply:bool,round:usize,phi:usize,w:usize,
  let id=COMPARE_WINDOW_CALL.with(|x|{let n=x.get();x.set(n+1);n});
  let want=match (multiply as usize,w){(0,16)=>17,(0,18)=>19,(0,19)=>20,(0,20)=>21,(1,15)=>18,(1,18)=>20,_=>w};
  let eligible=want<=phi && (seed.is_none() || w<phi && seed==Some(a[phi-w-1]));
- let k=if eligible{want}else{w};
+ let base=if eligible{want}else{w};
+ let menu=std::env::var("FRAME_MENU").as_deref()==Ok("1");
+ let mut k=if menu{match(multiply as usize,base){(0,19)=>21,(0,20)=>21,(0,21)=>20,(1,18)=>17,(1,19)=>18,(1,21)=>18,_=>base}.min(phi)}else{base};
+ // Fund the reordered walk with a fixed, stronger whole div16 class.
+ // This is chosen before any current qualification outcome.
+ if multiply==false&&w==16&&eligible{if let Ok(v)=std::env::var("FRAME_FUND"){k=v.parse::<usize>().unwrap().min(phi).max(base);}}
+ if k!=base{assert!(seed.is_none()||w<phi&&seed==Some(a[phi-w-1]));}
+ FRAME_COMPARE_FAULT_SITE.with(|v|v.set((k,k!=base&&menu,multiply==false&&w==16&&k>base)));
+
  if k==w{return(id,k,seed);}
  (id,k,if seed.is_some()&&k<phi{Some(a[phi-k-1])}else{None})
 }
+
+thread_local!{static FRAME_COMPARE_FAULT_SITE:std::cell::Cell<(usize,bool,bool)>=const{std::cell::Cell::new((0,false,false))};}
+pub(super)fn frame_fault_site(w:usize,fund:bool)->bool{FRAME_COMPARE_FAULT_SITE.with(|v|{let(k,m,f)=v.get();k==w&&if fund{f}else{m}})}

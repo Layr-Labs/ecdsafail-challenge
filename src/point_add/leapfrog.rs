@@ -3885,6 +3885,14 @@ thread_local! {
 pub fn t6_seedfuse() -> bool {
     std::env::var("LF_T6_SEEDFUSE").is_ok_and(|v| v == "1") && enabled() && lf_seams() && seed_half()
 }
+pub(crate) fn rail_opt_accept_seed(c:&mut Builder,out:&[QubitId],ev:QubitId) {
+    assert!(seed_half() && lf_seams());
+    let w0=envelope()[0].max(N+4);let mut r0=out.to_vec();
+    let loans=super::square::SQ_LOANS.with(|v|v.borrow().clone());c.set_avoid(&loans);
+    let ext=c.alloc_qubits(w0-N);c.set_avoid(&[]);
+    for &q in &ext {c.cx(ev,q);}r0.extend(ext);c.cx(r0[w0-1],ev);c.free(ev);
+    T6_PRESEED.with(|v|{assert!(v.borrow().is_none());*v.borrow_mut()=Some(r0);});
+}
 pub(crate) fn square_seed_r0(c: &mut Builder, b2: &[QubitId], out: &[QubitId]) {
     let w0 = envelope()[0].max(N + 4);
     let fs = seam_fs();
@@ -4343,6 +4351,12 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     if r1_done {
         SB_SP.with(|x| x.set(Some((br[0], s3))));
     }
+    if std::env::var("RAIL_OPT_DROPS").ok().as_deref()==Some("1") && Y42_RAIL_DIV==2 && y15f && Y42_FWD_NEXT.with(|x|x.get()) && tail_forced(t+1)>=1 {
+        let (w1,n01)=(st[t+1][0],st[t+1][1]);let w2=st.get(t+2).map(|r|r[0]).unwrap_or(w1);
+        let kl=if lf_signwire(){n01.min(w1).min(w2)}else{n01}-o;
+        // Include the retained sign position; the parked sign itself has no Fredkin.
+        y15::RAIL_OPT_DROP_KEEP.with(|x|x.set(kl));
+    }
     let dropped = match a2_k3 {
         Some(k3) => match SB_SP.with(|x| x.take()) {
             Some((b1, sl)) => y15::rail8_barrel_g(c, [k1, k2, k3], tr, [b1, sl], false, lr),
@@ -4350,6 +4364,7 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
         },
         None => fast_rail_barrel(c, k1, k2, tr, false, lr),
     };
+    y15::RAIL_OPT_DROP_KEEP.with(|x|x.set(usize::MAX));
     if dropped {
         tr.remove(0); // released inside the barrel
     } else if lr {
@@ -6198,9 +6213,11 @@ mod y15;
 fn pay_fwd_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<QubitId>; 2]) {
     if a2_tick(t) {
         // round17 a2-build: k3 read from the record (1 AND), the A tick, k3 erased against the record
-        let k3 = a2_read(c, t);
+        let frame_late=std::env::var("FRAME_FWD").as_deref()==Ok("1");
+        let k3=if frame_late{crate::circuit::NO_QUBIT}else{a2_read(c,t)};
         y15::a2_fwd_tick(c, t, [letter[0], letter[1], letter[2]], [letter[3], letter[4], k3], a2_emax(t), p);
-        a2_k3_erase_rec(c, t, k3);
+        let k3=if frame_late{y15::frame_fwd_take()}else{k3};
+        a2_k3_erase_rec(c,t,k3);
         return;
     }
     if y15::fwd_on(t) {

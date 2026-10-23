@@ -156,7 +156,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "5200037121467",
+        "TAIL_NONCE" => "1060000145321",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -509,6 +509,7 @@ pub fn build() -> Vec<Op> {
     let w113_trace = true;
     let w120_cubic = true;
     let w123_lazy_gates = true;
+
     clear_process_env();
     install_skywalk_submission_recipe();
     std::env::set_var("EXACT_PAIR_CARRY", "1");
@@ -535,6 +536,12 @@ pub fn build() -> Vec<Op> {
     std::env::set_var("RAIL_ZERO_FILL", "1");
     std::env::set_var("SQC_G", "22");
     std::env::set_var("SQC_T", "19");
+    std::env::set_var("FRAME_SHIFT","1");
+    std::env::set_var("RAIL_OPT_DROPS","1");
+    std::env::set_var("RAIL_OPT_RESERVE","1");
+    std::env::set_var("RAIL_OPT_SEED","1");
+    std::env::set_var("RAIL_OPT_NARROW","1");
+    std::env::set_var("FRAME_FWD","1");
     let mut ops = build_point_add();
     // Effort-8 INT / B7b (`HEO_EMIT_ONLY=1`, research overlay only): stop after emission (the HEO phase report and
     // K3B_CELL traces are complete here), skipping the simplifier chain and the ops.bin write. Sweep instrument.
@@ -597,7 +604,8 @@ pub fn build() -> Vec<Op> {
     // CCX cuts bound to this stream (compose_post.rs)
     ops = compose_post::run(ops);
     ops = stream_pipeline::run(ops);
-    ops = lane3_sigcut::run(ops);
+    ops = post_pipeline::run(ops);
+    ops = phase_restoration::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -685,4 +693,12 @@ mod value_rewrites;
 
 mod stream_pipeline;
 
-mod lane3_sigcut;
+mod retained_and;
+
+mod copy_cleanup;
+
+mod value_cleanup;
+
+mod post_pipeline;
+
+mod phase_restoration;

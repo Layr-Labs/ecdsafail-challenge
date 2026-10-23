@@ -1292,7 +1292,7 @@ fn sub_square_g1m(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
         mod_addsub(circ, false, b2, &outx);
     }));
     let t6 = tt(circ);
-    let k3 = super::sqc::redc(circ, out, true);
+    let k3 = if std::env::var("RAIL_OPT_SEED").ok().as_deref()==Some("1") {super::sqc::rail_opt_redc_seed(circ,out)} else {super::sqc::redc(circ, out, true)};
     let p3 = circ.take_win_peak(); let t7 = tt(circ);
     if trace {
         eprintln!("SQC_G1M A={:.1} slide_in={:.1}({}) peak={} sum={:.1} c_direct={:.1}({}) peak={} restore={:.1} B={:.1} slide_out={:.1}({}) peak={} p0={}",

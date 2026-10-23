@@ -94,7 +94,7 @@ const Y15_JOINT_M: bool = true;
 fn room_trace() -> bool { std::env::var("ROOM_TRACE").is_ok_and(|v| v == "1") }
 fn w118_diag_peak() -> bool { std::env::var("W118_DIAG_PEAK").ok().as_deref() == Some("1") }
 /// v2: first forward A tick of W116's forced early top return (W124: 97).
-const W116_LO: usize = 97;
+const W116_LO: usize = 98;
 /// y18 research price knob (0 = no effect on the gates): inside the body of every one-fold tick-pass the walk cap is
 /// read this many wires higher. A non-zero value is a PRICE, never a build: the peak goes over 1236.
 const Y18_PRICE: isize = 0;
@@ -2279,6 +2279,7 @@ fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
 /// The three unfolded adds, the fold and the erase of every wire they left (see the module text). `rev`: the reverse
 /// tick (the letters already flipped by the caller, the multiply direction's compare rules, the reverse fold).
 fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b: &[QubitId], tg: &[QubitId], proxy: usize, rev: bool) {
+    let frame_delayed=a_tick().is_some_and(|(q,_)|q==crate::circuit::NO_QUBIT);
     PAYLOAD_AT.with(|x|x.set(Some((rev,t))));
     let (e_start, a_start) = (c.expected_total(), c.active_qubits());
     if room_trace() {
@@ -2630,6 +2631,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
                 ph.finish(c);
             }
         }
+        if frame_delayed{let em=a_tick().unwrap().1;let q=super::a2_read(c,t);if false{c.x(q);}a_set(Some((q,em)));}
         match a_tick() {
             Some((k3, emax)) => if f_ipk_on() { fold_fwd_f(c, &tg[..fold_window(t, false)], [x256, x257, x258], s, k1, k2, k3, emax, fin, esh.as_mut()) } else { fold_fwd_a(c, &tg[..fold_window(t, false)], [x256, x257, x258], s, k1, k2, k3, emax, fin, esh.as_mut()) },
             None => fold_fwd_v2(c, &tg[..fold_window(t, false)], [x256, x257, x258], s, k1, k2, fin, esh.as_mut(), ttm, drop_n),
@@ -3208,7 +3210,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     }
     c.cx_all(s[2], b);
     let e_end = c.expected_total();
-    assert_eq!(c.active_qubits(), a_start, "y15: a wire was left behind");
+    assert_eq!(c.active_qubits(),a_start+u32::from(frame_delayed),"y15: a wire was left behind");
     if room_trace() {
         eprintln!(
             "Y15_NEW {} t={t} active={a_start} room={} low={} at_fold={a_fold} sp2={sp2} k0={k0} k1={kk1} k2={kk2} cut={dcut} closed={} top1={} seeds={:?} plan={plan:?} shed={shed} top={tops} c3m={c3m} gsh={gsh} fin={fin} \

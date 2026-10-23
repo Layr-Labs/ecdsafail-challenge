@@ -156,6 +156,7 @@ fn a2_write(c: &mut Builder, t: usize, k3: QubitId) {
 /// MBU erase of a k3 wire against the field (k3 = [f == code(pos t)] once t's write is in): free.
 fn a2_k3_erase_rec(c: &mut Builder, t: usize, k3: QubitId) {
     let (a, b) = a2_code_forms(t);
+    if t==120 && std::env::var("RAIL_OPT_ALIAS").ok().as_deref()==Some("1") {assert!(a.w==vec![k3] && !a.one && b.w.is_empty() && b.one);return;}
     let m = c.alloc_bit();
     c.hmr(k3, m);
     c.release_clean(k3);
@@ -164,6 +165,10 @@ fn a2_k3_erase_rec(c: &mut Builder, t: usize, k3: QubitId) {
 }
 /// Non-consuming read: k3 = [f == code(pos t)] on a fresh wire (1 AND); erase it with [`a2_k3_erase_rec`].
 fn a2_read(c: &mut Builder, t: usize) -> QubitId {
+    if t==120 && std::env::var("RAIL_OPT_ALIAS").ok().as_deref()==Some("1") {
+        let (a,b)=a2_code_forms(t);assert_eq!(a.w.len(),1);assert!(!a.one && b.w.is_empty() && b.one);
+        let q=a.w[0];if false{c.x(q);}return q;
+    }
     let (a, b) = a2_code_forms(t);
     a2_and_forms(c, &a, &b)
 }
@@ -229,13 +234,13 @@ fn a2_recipe() {
         ("LF_YP8_LATE", "1:13,4:17,9:22,81:19,91:17,102:15,107:13,113:11"),
         ("LFF_IPK", "1"),
         ("LF_REORDER_DIV", "37"),
-        ("LF_REORDER_MUL", "44"),
+        ("LF_REORDER_MUL", "49"),
         ("SL_N2_DFROM", "116"),
         ("SL_N2_MFROM", "116"),
         ("LF_CMP_FROM", "106"),
         // the walk cap of A's build (the multiply's N2-batch reverse ticks bind it); rec4: 1240 with F1LAZY and K3INF
         // (the record wires they take off the live count make plans below 1242 fit; without them 1241 does not)
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1235"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1236"),
     ] {
         match std::env::var(format!("LFA2_SET_{k}")) {
             Ok(o) => std::env::set_var(k, o),
@@ -291,6 +296,8 @@ fn zlin_off_a(c: &mut Builder, t: &[QubitId], b: &[QubitId]) {
 /// The A decision at the pause ([`yp8_logic`] with e <= 7 and the record): `spent` = the record's linear form for
 /// this tick. outs = Some((out, k1, k2, k3)) writes the choice and shift letters; None applies (-1)^out.
 fn yp8_logic_a(c: &mut Builder, t2: &[QubitId], b: &[QubitId], s1: QubitId, ct: QubitId, tick: usize, spent: &Lin, outs: Option<(QubitId, QubitId, QubitId, QubitId)>) {
+    let rail_opt_entry=c.active_qubits();
+    let ((),rail_opt_peak)=c.r3_peak(|c| {
     let need0 = w1_anchor(tick) <= w1_kt(tick);
     // full-index views: bit 0 (the constant 1 of an odd rail) is a wire only when the window reads it
     let mut tv: Vec<QubitId> = Vec::with_capacity(t2.len() + 1);
@@ -567,12 +574,17 @@ fn yp8_logic_a(c: &mut Builder, t2: &[QubitId], b: &[QubitId], s1: QubitId, ct: 
             c.free(q);
         }
     }
+    });
+    assert!(rail_opt_peak as usize<=cells::cap(),"rail_opt reserve: tick{tick} peak{rail_opt_peak}");
+    if std::env::var("RAIL_OPT_RESERVE").ok().as_deref()==Some("1") && false {c.z_if(t2[0],NO_BIT);}
+
 }
 
 
 /// [`yp8_reserve`] for the A decision: 5 more AND wires (g, p5..p8) and views padded to 10 positions.
 fn yp8_reserve_a(tl: usize, bl: usize, t: usize, fwd: bool) -> usize {
-    yp8_reserve(tl, bl, t, fwd) + 5 + 10usize.saturating_sub((tl + 1).max(6)) + 10usize.saturating_sub((bl + 1).max(6))
+    let old=yp8_reserve(tl, bl, t, fwd) + 5 + 10usize.saturating_sub((tl + 1).max(6)) + 10usize.saturating_sub((bl + 1).max(6));
+    if std::env::var("RAIL_OPT_RESERVE").ok().as_deref()==Some("1") {old-(2+usize::from(a2_pos(t)==1||t==2))}else{old}
 }
 /// [`yp8_add_halve_forced_choice`] with the A decision (k3 and the record's spent form).
 fn yp8_add_halve_forced_choice_a(c: &mut Builder, sign: QubitId, b: &[QubitId], t: &mut Vec<QubitId>, out: QubitId, k1: QubitId, k2: QubitId, k3: QubitId, tick: usize, spent: &Lin) {
