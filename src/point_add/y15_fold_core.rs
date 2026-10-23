@@ -144,12 +144,12 @@ fn f_rename(d: &mut FDig, old: QubitId, new: QubitId) {
 /// in the clear). Level n writes t_j onto Y_j for the top min(n, K - 4) j < K and erases those t_j (top down); level
 /// K - 3 also writes p onto Y3 and erases r3. Returns (state, kept carry, Q on [4, K) in current forms).
 #[allow(clippy::too_many_arguments)]
-fn f_digit(c: &mut Builder, acc: &[QubitId], nm: [QubitId; 3], k1: QubitId, k2: QubitId, k3: QubitId, emax: usize, c3: QubitId, c4: QubitId, fwd: bool, lev: usize) -> (FDig, Option<QubitId>, Vec<Lin>) {
+fn f_digit(c: &mut Builder, acc: &[QubitId], nm: [QubitId; 3], k1: QubitId, k2: QubitId, k3: QubitId, emax: usize, c3: QubitId, c4: QubitId, fwd: bool, lev: usize, early_g7: bool) -> (FDig, Option<QubitId>, Vec<Lin>) {
     let kx = 3 + emax;
     let fc3 = l(c3);
     let v3 = Lin::of(&[acc[3], c3]);
     let mut pre: Vec<Rec> = Vec::new();
-    let (g, tt) = a_gates(c, &mut pre, k1, k2, k3, emax);
+    let (mut g, tt) = a_gates(c, &mut pre, k1, k2, k3, emax);
     let ngate = pre.len();
     let r1 = r_and(c, &mut pre, l(nm[0]), l(acc[0]));
     let mut k = vec![Lin::of(&[nm[0], acc[0]]), Lin::of(&[nm[1], acc[1]]).x(&r1)];
@@ -179,13 +179,31 @@ fn f_digit(c: &mut Builder, acc: &[QubitId], nm: [QubitId; 3], k1: QubitId, k2: 
         let aj = qb[i].clone();
         let yq = if fwd {
             let sum = l(acc[j]).x(&aj).x(&l(cc[i]));
-            let yq = lin_and(c, &g[j], &sum);
-            let cn = m_carry(c, acc[j], &aj, cc[i]);
-            cc.push(cn);
-            yq
+            lin_and(c, &g[j], &sum)
         } else {
             lin_and(c, &g[j], &l(acc[j]))
         };
+        if early_g7 && j == 7 {
+            assert!(emax == 7 && ngate == 4);
+            let (old, a, b) = match &pre[1] {
+                Rec::And(q, a, b) => (*q, a.clone(), b.clone()),
+                _ => unreachable!("W136 g7 record"),
+            };
+            lin_and_erase(c, old, &a, &b);
+            let ghost = f_ghost();
+            y18_subst(&mut pre, old, ghost);
+            y18_subst(&mut qser, old, ghost);
+            y18_subst(&mut trec, old, ghost);
+            for (a, b) in &mut yer { f_sub(a, old, ghost); f_sub(b, old, ghost); }
+            for f in g.iter_mut().chain(k.iter_mut()).chain(qb.iter_mut()).chain(add_lo.iter_mut()) { f_sub(f, old, ghost); }
+            f_sub(&mut q, old, ghost);
+            f_sub(&mut t, old, ghost);
+            assert!(!g[8].w.contains(&ghost) && !g[9].w.contains(&ghost));
+        }
+        if fwd {
+            let cn = m_carry(c, acc[j], &aj, cc[i]);
+            cc.push(cn);
+        }
         yw.push(yq);
         yer.push((g[j].clone(), l(acc[j])));
         k.push(l(yq).x(&t));
@@ -243,7 +261,7 @@ fn f_digit(c: &mut Builder, acc: &[QubitId], nm: [QubitId; 3], k1: QubitId, k2: 
     } else {
         Some(r3r)
     };
-    (FDig { g, tt, pre, ngate, early_g7: false, r2, yw, yer, tw, trec, r3v, ks, qser, k, qb, q, tops, full }, ckx, add_lo)
+    (FDig { g, tt, pre, ngate, early_g7, r2, yw, yer, tw, trec, r3v, ks, qser, k, qb, q, tops, full }, ckx, add_lo)
 }
 /// After the ladder: r3 (full level) and the erased t_j again, bottom up (one Toffoli each); ks leaves; t_K leaves
 /// unless `keep_tk` (then its record is in `trec`); the wires Y_j hold y_j again. `extra` (forms that read k on the
@@ -1043,13 +1061,11 @@ fn fold_fwd_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
     let pebble = PAYLOAD_AT.with(|x| x.get().is_some_and(|(rev,t)| !rev && (115..=120).contains(&t)));
     if pebble { eprintln!("W118_PEBBLE fwd emax={emax}"); }
     let ((mut d, ckx, _), pk_k) = c.r3_peak(|c| {
+        let early_g7 = emax == 7 && gsh == 3 && lev >= 7 && w136_enabled();
         if pebble {
-            let early_g7 = emax == 7 && gsh == 3 && lev >= 7
-                && PAYLOAD_AT.with(|x| x.get() == Some((false, 115)))
-                && w136_enabled();
             f_digit_pebble(c, acc, nm, k1, k2, k3, emax, c3, c4, true, lev, early_g7)
         }
-        else { f_digit(c, acc, nm, k1, k2, k3, emax, c3, c4, true, lev) }
+        else { f_digit(c, acc, nm, k1, k2, k3, emax, c3, c4, true, lev, early_g7) }
     });
     let ckx = ckx.unwrap();
     let mut prof = vec![("in", a_in as i64), ("kpeak", pk_k as i64), ("kphase_end", c.active_qubits() as i64)];
@@ -1219,7 +1235,8 @@ fn fold_inv_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
     }
     (c1, c2, c3, c4)
     });
-    let (mut d, _, mut add_lo) = f_inv_phase(c, "digit", |c| f_digit(c, acc, nm, k1, k2, k3, emax, c3, c4, false, lev));
+    let early_g7 = emax == 7 && gsh == 3 && lev >= 7 && w136_enabled();
+    let (mut d, _, mut add_lo) = f_inv_phase(c, "digit", |c| f_digit(c, acc, nm, k1, k2, k3, emax, c3, c4, false, lev, early_g7));
     // the serial chunk's kept carry, built exactly from W's bits [4, K) (its addend = Q's forms on [4, K))
     let ckx = f_inv_phase(c, "kept_seed", |c| a_lt_value(c, &acc[4..kx], &d.qb[0..kx - 4], c4));
     if sh_c4 {
