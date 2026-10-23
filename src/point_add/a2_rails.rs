@@ -228,7 +228,8 @@ fn a2_recipe() {
     // tick-indexed boundaries of main's recipe moved to A's 122 ticks: the divide's payload-only/fused split by
     // payload fraction (42 -> 37; flat within +-10 T over 33..45), the multiply's re-picked by builder sweep (49:
     // -1,218 T against 67; 45..49 within 100 T), the N2 batch from 116 (sweep 112..116; 117 does not fit), the
-    // boundary compare widening by fraction (120 -> 106)
+    // Late compare widening: the 122 boundary preserves the sampled classical failure set while avoiding the
+    // earlier phase-only buy-back; see the regenerated lane3 hold table and its paired fresh-packet census.
     for (k, v) in [
         ("LF_YP8", "22"),
         ("LF_YP8_LATE", "1:13,4:17,9:22,81:19,91:17,102:15,107:13,113:11"),
@@ -237,7 +238,7 @@ fn a2_recipe() {
         ("LF_REORDER_MUL", "43"),
         ("SL_N2_DFROM", "116"),
         ("SL_N2_MFROM", "116"),
-        ("LF_CMP_FROM", "106"),
+        ("LF_CMP_FROM", "122"),
         // the walk cap of A's build (the multiply's N2-batch reverse ticks bind it); rec4: 1240 with F1LAZY and K3INF
         // (the record wires they take off the live count make plans below 1242 fit; without them 1241 does not)
         ("HEO_PIN_PP_WALK_MAX_QUBITS", "1234"),
