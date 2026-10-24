@@ -606,6 +606,12 @@ pub fn build() -> Vec<Op> {
     ops = stream_pipeline::run(ops);
     ops = post_pipeline::run(ops);
     ops = lane3_sigcut::run(ops);
+    ops = affine_simplify::simplify(ops);
+    ops = quadratic_simplify::simplify(ops);
+    ops = truth_simplify::simplify(ops);
+    ops = truth_simplify::simplify_products(ops);
+    ops = mabsorb::absorb(ops);
+    ops = zero_force::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
