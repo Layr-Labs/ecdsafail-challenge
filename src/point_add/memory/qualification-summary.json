@@ -1,0 +1,106 @@
+{
+  "interface": "Complete 256-bit secp256k1 point addition",
+  "epsilon": 0.001,
+  "confidence": 0.95,
+  "family_members": 2,
+  "member_alpha": 0.025,
+  "input_pairs_per_candidate": 262144,
+  "measurement_streams": 2,
+  "selected_failed_inputs": 86,
+  "selected_failed_shots": 169,
+  "selected_upper_failure_bound": 0.00040514070968419695,
+  "operation_sha256": "9271a9aa2b368b88989e905a932d5469baece5f3af00c0e928e8dcb7b9ce3c01",
+  "operation_bytes": 39457885,
+  "official_score": 1008123460,
+  "official_qubits": 1270,
+  "official_rounded_mean_toffoli": 793798,
+  "official_shots": 9024,
+  "current_harness_source": "6b0327d60e40068fcbed5fedcb7f66d926f12320",
+  "current_leader_score_at_preparation": 915666254,
+  "current_leader_qubits": 1234,
+  "current_leader_toffoli": 742031,
+  "upstream_dependency": {
+    "submissionId": "54acebaf-8d55-419e-b739-799d23bdbde0",
+    "commit": "377b8a464e221aaeefd9640b6c7ee2f83114c36b"
+  },
+  "local_l2_checkpoint": "48dcefa9f07af349f1561b345558541313cfc825",
+  "optimizer_snapshot": "18996572e82c0e48c409d699b5593c68d786f0fc",
+  "input_packet_sha256": "0b39522ae43b0ec7261246d37d80571d3e7aa8ab8d8d3988171b27c143094bb1",
+  "synthetic_first_failures": [
+    {
+      "dirty_qubits": [],
+      "failures": {
+        "addend": false,
+        "coordinate": true,
+        "phase": true,
+        "workspace": false
+      },
+      "idx": 4160,
+      "input": {
+        "addend": [
+          "0x71c80565020b2a4b62e7c31a6279e58ae74b0f2ed8ab8476e46167d6ebbc23bf",
+          "0x26baa3fa3410f6f32215502ee23c3664a49510c0b5963fffe799238844a60612"
+        ],
+        "expected": [
+          "0x10a498f42a71de37edac73cf4cda6b0a22a9dd2631e0e1c705fe8186d0f0a583",
+          "0x303bb22808d6ec984cbe863917652379992f585c5bde6a91e14c02a2b31dd4f3"
+        ],
+        "idx": 4160,
+        "k_addend": "0xc9cc5743d1104e436724814172212e33a252d51f3728662c45f6fc31cbc9ecd2",
+        "k_target": "0x76bddf97b685f811085e85130efc30c0815ca3ee64674415971b5829c04da267",
+        "target": [
+          "0xeadaad37a51391f6cbd97f96dc335e6f097ebc6db9398bfca08a1086fba7ee47",
+          "0x102bcc86b104ce6128056eae6e210f7740609fa8cad39d9e0bfb46c150de125f"
+        ]
+      },
+      "observed_addend": [
+        "0x71c80565020b2a4b62e7c31a6279e58ae74b0f2ed8ab8476e46167d6ebbc23bf",
+        "0x26baa3fa3410f6f32215502ee23c3664a49510c0b5963fffe799238844a60612"
+      ],
+      "observed_target": [
+        "0x065e9a23708b1ccd48e20ab671e6ddc1e05f092236bf888149e0205f279601fc",
+        "0x7f4fb76ae245099da5388fe8f62b16b9bfa814e490ee4d9543fc1bcee8fe4ab8"
+      ],
+      "passed": false,
+      "stream": 0
+    },
+    {
+      "dirty_qubits": [],
+      "failures": {
+        "addend": false,
+        "coordinate": true,
+        "phase": false,
+        "workspace": false
+      },
+      "idx": 4160,
+      "input": {
+        "addend": [
+          "0x71c80565020b2a4b62e7c31a6279e58ae74b0f2ed8ab8476e46167d6ebbc23bf",
+          "0x26baa3fa3410f6f32215502ee23c3664a49510c0b5963fffe799238844a60612"
+        ],
+        "expected": [
+          "0x10a498f42a71de37edac73cf4cda6b0a22a9dd2631e0e1c705fe8186d0f0a583",
+          "0x303bb22808d6ec984cbe863917652379992f585c5bde6a91e14c02a2b31dd4f3"
+        ],
+        "idx": 4160,
+        "k_addend": "0xc9cc5743d1104e436724814172212e33a252d51f3728662c45f6fc31cbc9ecd2",
+        "k_target": "0x76bddf97b685f811085e85130efc30c0815ca3ee64674415971b5829c04da267",
+        "target": [
+          "0xeadaad37a51391f6cbd97f96dc335e6f097ebc6db9398bfca08a1086fba7ee47",
+          "0x102bcc86b104ce6128056eae6e210f7740609fa8cad39d9e0bfb46c150de125f"
+        ]
+      },
+      "observed_addend": [
+        "0x71c80565020b2a4b62e7c31a6279e58ae74b0f2ed8ab8476e46167d6ebbc23bf",
+        "0x26baa3fa3410f6f32215502ee23c3664a49510c0b5963fffe799238844a60612"
+      ],
+      "observed_target": [
+        "0x065e9a23708b1ccd48e20ab671e6ddc1e05f092236bf888149e0205f279601fc",
+        "0x7f4fb76ae245099da5388fe8f62b16b9bfa814e490ee4d9543fc1bcee8fe4ab8"
+      ],
+      "passed": false,
+      "stream": 1
+    }
+  ],
+  "scope": "Independent input failures are disclosed. The candidate passed the current official fixed packet. The live leader uses fewer qubits and fewer Toffolis."
+}
