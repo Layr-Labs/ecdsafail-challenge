@@ -232,7 +232,8 @@ fn a2_recipe() {
     // earlier phase-only buy-back; see the regenerated lane3 hold table and its paired fresh-packet census.
     for (k, v) in [
         ("LF_YP8", "22"),
-        ("LF_YP8_LATE", "1:13,4:17,9:22,81:19,91:17,102:15,107:13,113:11"),
+        // One-bit narrower late windows, re-qualified with a stream-specific lane3 table.
+        ("LF_YP8_LATE", "1:13,4:17,9:22,81:18,91:16,102:14,107:12,113:10"),
         ("LFF_IPK", "1"),
         ("LF_REORDER_DIV", "37"),
         ("LF_REORDER_MUL", "43"),
