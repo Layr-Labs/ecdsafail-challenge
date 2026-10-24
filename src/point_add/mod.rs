@@ -606,6 +606,7 @@ pub fn build() -> Vec<Op> {
     ops = stream_pipeline::run(ops);
     ops = post_pipeline::run(ops);
     ops = lane3_sigcut::run(ops);
+    ops = dead_ancilla::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -704,3 +705,5 @@ mod post_pipeline;
 mod phase_restoration;
 
 mod lane3_sigcut;
+
+mod dead_ancilla;
