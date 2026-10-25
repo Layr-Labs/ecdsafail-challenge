@@ -211,7 +211,7 @@ fn a2_consume(c: &mut Builder, t: usize) -> QubitId {
 fn a2_table_text() -> String {
     match std::env::var("LFA2_TABLE") {
         Ok(p) => std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("a2: LFA2_TABLE {p}: {e}")),
-        Err(_) => include_str!("leapfrog_data/a2_R122_steps.txt").to_string(),
+        Err(_) => include_str!("leapfrog_data/fwhq_u2_121.txt").to_string(),
     }
 }
 /// The A window anchors: LFA2_ANCH, or LFA2_TABLE + ".anch", or the embedded ones.
