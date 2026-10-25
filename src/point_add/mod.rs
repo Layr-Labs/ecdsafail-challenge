@@ -156,7 +156,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "1151005720223",
+        "TAIL_NONCE" => "1171102834260",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -492,12 +492,15 @@ fn install_skywalk_submission_recipe() {
 /// envelopes and rewrite rows, `TAIL_NONCE` in `env_raw`). Clear the inherited process environment first
 /// so that no variable set on the host (`HEO_PIN_*`, `GO_*`, `R*_*`, `SKY_*`, ...) can change the circuit.
 fn clear_process_env() {
+    let barrel_saved=std::env::var_os("RESEARCH_SET_BARREL_FOLLOWUP");
     let keys: Vec<std::ffi::OsString> = std::env::vars_os().map(|(k, _)| k).collect();
     for k in keys {
         let s = k.to_string_lossy();
         if s.is_empty() || s.contains('=') || s.contains('\0') { continue; }
         std::env::remove_var(&k);
     }
+    std::env::set_var("BARREL_FOLLOWUP",barrel_saved.unwrap_or_else(||"1".into()));
+
 }
 
 /// Leapfrog branch: the submission build emits the Leapfrog point add (see [`leapfrog::install_recipe`]).
@@ -610,6 +613,8 @@ pub fn build() -> Vec<Op> {
     ops = rail_output_erase::run(ops);
     ops = source_edits::run(ops, include_str!("our_cuts2.txt"));
     ops = source_edits::run(ops, include_str!("builder_followup.txt"));
+    ops = source_edits::run(ops, include_str!("value_followup.txt"));
+    if std::env::var("BARREL_FOLLOWUP").as_deref()==Ok("1"){ops=source_edits::run(ops,include_str!("barrel_followup.txt"));}
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
