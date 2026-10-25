@@ -156,7 +156,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "45000039812453",
+        "TAIL_NONCE" => "1211039558485",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -618,6 +618,8 @@ pub fn build() -> Vec<Op> {
     // Lane R: third post-builder table, re-mined on spookyfrog 20 after barrel_followup.
     // All edits are bound to the complete final pre-tail stream. ON by default (the submitted stream).
     ops = source_edits::run(ops, include_str!("lane_r_stack.txt"));
+    ops=source_edits::run(ops,include_str!("score_followup.txt"));
+    ops=source_edits::run(ops,include_str!("guarded_followup.txt"));
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
