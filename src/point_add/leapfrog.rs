@@ -3885,14 +3885,6 @@ thread_local! {
 pub fn t6_seedfuse() -> bool {
     std::env::var("LF_T6_SEEDFUSE").is_ok_and(|v| v == "1") && enabled() && lf_seams() && seed_half()
 }
-pub(crate) fn rail_opt_accept_seed(c:&mut Builder,out:&[QubitId],ev:QubitId) {
-    assert!(seed_half() && lf_seams());
-    let w0=envelope()[0].max(N+4);let mut r0=out.to_vec();
-    let loans=super::square::SQ_LOANS.with(|v|v.borrow().clone());c.set_avoid(&loans);
-    let ext=c.alloc_qubits(w0-N);c.set_avoid(&[]);
-    for &q in &ext {c.cx(ev,q);}r0.extend(ext);c.cx(r0[w0-1],ev);c.free(ev);
-    T6_PRESEED.with(|v|{assert!(v.borrow().is_none());*v.borrow_mut()=Some(r0);});
-}
 pub(crate) fn square_seed_r0(c: &mut Builder, b2: &[QubitId], out: &[QubitId]) {
     let w0 = envelope()[0].max(N + 4);
     let fs = seam_fs();
@@ -4173,8 +4165,6 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     let mut yp8_trio: Option<(QubitId, QubitId, QubitId)> = None;
     // round17 a2-build: the A tick's third shift letter (the decision writes it; erased against the record)
     let mut a2_k3: Option<QubitId> = None;
-    // rec4 K3INF: this tick's k3 is a record slot (not erased here)
-    let mut a2_k3_inf = false;
     assert!(!a2_tick(t) || (yp8().is_some() && tail_forced(t) == 2 && !t0_plain(t)), "a2: tick {t} is not a YP8 tick");
     let fsteps: Vec<(usize, usize)> = match tail_forced(t) {
         2 => vec![(n0, n1), (n1, n2)],
@@ -4225,16 +4215,10 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
             if a2_tick(t) {
                 // round17 a2-build: the A decision (k3, the record's spent form), then the record write
                 a2_field_open(c, t);
-                // rec4 K3INF: at positions 1 and 2 the record slot the write would fill is still |0>, so the decision
-                // writes k3 straight into it (the slot is k3 from here on); no separate k3 wire, no write, no erase
-                let inf = a2_k3_slot(t);
-                let k3 = inf.unwrap_or_else(|| c.alloc_qubit());
+                let k3 = c.alloc_qubit();
                 let sp = a2_spent(t);
                 yp8_add_halve_forced_choice_a(c, s, br, tr, trio.0, trio.1, trio.2, k3, t, &sp);
-                if inf.is_none() {
-                    a2_write(c, t, k3);
-                }
-                a2_k3_inf = inf.is_some();
+                a2_write(c, t, k3);
                 a2_k3 = Some(k3);
             } else {
                 yp8_add_halve_forced_choice(c, s, br, tr, trio.0, trio.1, trio.2, t);
@@ -4351,12 +4335,6 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     if r1_done {
         SB_SP.with(|x| x.set(Some((br[0], s3))));
     }
-    if std::env::var("RAIL_OPT_DROPS").ok().as_deref()==Some("1") && Y42_RAIL_DIV==2 && y15f && Y42_FWD_NEXT.with(|x|x.get()) && tail_forced(t+1)>=1 {
-        let (w1,n01)=(st[t+1][0],st[t+1][1]);let w2=st.get(t+2).map(|r|r[0]).unwrap_or(w1);
-        let kl=if lf_signwire(){n01.min(w1).min(w2)}else{n01}-o;
-        // Include the retained sign position; the parked sign itself has no Fredkin.
-        y15::RAIL_OPT_DROP_KEEP.with(|x|x.set(kl));
-    }
     let dropped = match a2_k3 {
         Some(k3) => match SB_SP.with(|x| x.take()) {
             Some((b1, sl)) => y15::rail8_barrel_g(c, [k1, k2, k3], tr, [b1, sl], false, lr),
@@ -4364,14 +4342,13 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
         },
         None => fast_rail_barrel(c, k1, k2, tr, false, lr),
     };
-    y15::RAIL_OPT_DROP_KEEP.with(|x|x.set(usize::MAX));
     if dropped {
         tr.remove(0); // released inside the barrel
     } else if lr {
         lr_drop(c, tr);
     }
     pacc(c, &format!("fwd{fk}.rail_barrel"), q0);
-    if let (Some(k3), None, false) = (a2_k3, pay.as_ref(), a2_k3_inf) {
+    if let (Some(k3), None) = (a2_k3, pay.as_ref()) {
         a2_k3_erase_rec(c, t, k3);
     }
     // y42-railtop ([`Y42_RAIL_DIV`]): the next tick's first step cuts this rail (its source) to `kl` wires before any
@@ -4468,9 +4445,7 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     SKIP_ROT4.with(|s| s.set(false));
     if let (Some(k3), true) = (a2_k3, pay.is_some()) {
         assert!(y15f, "a2: a fused A tick runs the one-fold payload tick");
-        if !a2_k3_inf {
-            a2_k3_erase_rec(c, t, k3);
-        }
+        a2_k3_erase_rec(c, t, k3);
     }
     lr_unpad(c, pads);
     pacc(c, &format!("fwd{fk}.pay_barrel"), q0);
@@ -4930,9 +4905,6 @@ fn ladder_parity_add_mid(c: &mut Builder, acc: &[QubitId], add: &[Vec<QubitId>],
 /// k steps run after the pause ([`ladder_parity_add_tail`]). The same values on the same wires at the pause, on
 /// every basis state. false: the gate list of eea0346 byte for byte.
 const Y29_LOWKEEP: bool = true;
-/// P1 (w124-on-a14 v2): the Y29 paused add's kept carry cq erased by a compare anchored at position k (see
-/// [`rail_add_mid`]); false = the parent's gate list.
-const P1_ANCHOR: bool = true;
 /// Research knob (false in every build that is kept): k - 1 idle measurements where the old low ladder erased the
 /// carries into positions 1..k-1, so the copy draws the base's random word at every measurement.
 const Y29_LOWKEEP_PAD: bool = false;
@@ -5189,38 +5161,6 @@ fn rail_add_mid(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, res
         let lc = ladder_parity_add_head(c, &lo, &lo_add, cin, k);
         y29_pad(c, if Y29_LOWKEEP_PAD { k - 1 } else { 0 });
         ladder_parity_add_mid(c, &b[delta..], &add[delta..], Some(cq), &mut |c, carry| mid(c, &add, delta, carry));
-        if P1_ANCHOR && k >= 2 && k + 1 < delta {
-            // P1 (OSCAR K24 pool analysis): cq is erased before the tail, where positions >= k hold their sums and the
-            // carries c_1..c_{k-1} are still live. The carry into position j of b_new + ~a + ~c_0 is ~c_j, so the
-            // compare over [k, delta) seeded with ~c_k (c_k rebuilt from c_{k-1} by one AND under the outcome) gives
-            // ~cq: the same phase on every basis state as the full compare from position 0.
-            let q0 = pmark(c);
-            let m = c.alloc_bit();
-            c.hmr(cq, m);
-            c.release_clean(cq);
-            c.push_condition(m);
-            let i = k - 1;
-            let ci = lc[i].expect("y29: live kept carry");
-            c.cx(ci, b[i]);
-            let v = v_on(c, &add[i], false, Some(ci));
-            let ck = and_new(c, b[i], v);
-            v_off(c, &add[i], false, Some(ci));
-            c.cx(ci, ck);
-            c.cx(ci, b[i]);
-            c.x(ck);
-            carry_out_parity_xor(c, &b[k..delta], &add[k..delta], true, ck, None);
-            c.x(ck);
-            c.cx(ci, ck);
-            c.cx(ci, b[i]);
-            let v = v_on(c, &add[i], false, Some(ci));
-            and_erase(c, ck, b[i], v);
-            v_off(c, &add[i], false, Some(ci));
-            c.cx(ci, b[i]);
-            c.pop_condition();
-            c.free_bit(m);
-            pacc(c, "split.yp8_erase_rev", q0);
-            ladder_parity_add_tail(c, &lo, &lo_add, &lc, k);
-        } else {
         ladder_parity_add_tail(c, &lo, &lo_add, &lc, k);
         c.x(cin);
         let q0 = pmark(c);
@@ -5233,7 +5173,6 @@ fn rail_add_mid(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, res
         c.free_bit(m);
         pacc(c, "split.yp8_erase_rev", q0);
         c.x(cin);
-        }
     } else if let Some((k, _)) = low_first {
         ladder_parity_add(c, &lo, &lo_add, Some(cin));
         ladder_parity_add_mid(c, &b[delta..], &add[delta..], Some(cq), &mut |c, carry| {
@@ -6213,11 +6152,9 @@ mod y15;
 fn pay_fwd_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<QubitId>; 2]) {
     if a2_tick(t) {
         // round17 a2-build: k3 read from the record (1 AND), the A tick, k3 erased against the record
-        let frame_late=std::env::var("FRAME_FWD").as_deref()==Ok("1");
-        let k3=if frame_late{crate::circuit::NO_QUBIT}else{a2_read(c,t)};
+        let k3 = a2_read(c, t);
         y15::a2_fwd_tick(c, t, [letter[0], letter[1], letter[2]], [letter[3], letter[4], k3], a2_emax(t), p);
-        let k3=if frame_late{y15::frame_fwd_take()}else{k3};
-        a2_k3_erase_rec(c,t,k3);
+        a2_k3_erase_rec(c, t, k3);
         return;
     }
     if y15::fwd_on(t) {
@@ -6260,7 +6197,8 @@ fn pay_fwd_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<Qubi
 fn pay_rev_tick(c: &mut Builder, t: usize, letter: &[QubitId], p: &mut [Vec<QubitId>; 2]) {
     if a2_tick(t) {
         let k3 = a2_read(c, t);
-        y15::a2_rev_tick_owned_k3(c, t, [letter[0], letter[1], letter[2]], [letter[3], letter[4], k3], a2_emax(t), p);
+        y15::a2_rev_tick(c, t, [letter[0], letter[1], letter[2]], [letter[3], letter[4], k3], a2_emax(t), p);
+        a2_k3_erase_rec(c, t, k3);
         return;
     }
     if y15::rev_on(t) && n2_rev_y15(t) {
@@ -6754,7 +6692,6 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
         Y28_KEEP.with(|d| d.set(true));
         Y42_FWD_NEXT.with(|x| x.set(t + 1 < fused_end));
         fwd_tick(c, &mut wk, t, Some(&mut pay));
-        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_pack(c); }
         Y42_FWD_NEXT.with(|x| x.set(false));
         Y28_KEEP.with(|d| d.set(false));
         SKIP_PAY_ROT_AT.with(|s| s.set(usize::MAX));
@@ -6832,7 +6769,6 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
             pacc(c, "rt0.div", q0);
             continue;
         }
-        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_unpack(c); }
         Y28_USE.with(|d| d.set(true));
         rev_tick(c, &mut wk, t, None);
         Y28_USE.with(|d| d.set(false));
@@ -6889,7 +6825,6 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
     let mut t0_bits = None;
     for t in 0..rounds() {
         fwd_tick(c, &mut wk, t, None);
-        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_pack(c); }
         if t0f && t == 0 {
             t0_bits = Some(t0_out(c, &wk));
         }
@@ -6944,7 +6879,6 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
         rounds()
     };
     for t in (ahead..fused_top).rev() {
-        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_unpack(c); }
         rev_tick(c, &mut wk, t, Some(&mut pay));
     }
     if loan {
