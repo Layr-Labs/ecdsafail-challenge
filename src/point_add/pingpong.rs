@@ -4067,6 +4067,15 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
         eprintln!("REPLAY_LOAN_LAYOUT {} {} {} {} {:?} {:?}",round,multiply as u8,old_ladder,ladder,bounds,adjusted);
     }
     let bounds=adjusted;
+    // rebind scratch: a one-chunk layout has no last chunk to take the padded top; use the parent's form (a zero wire
+    // for the addend's top bit), as the PP_NEW_REPLAY route does (no-op at the cap, where every padded add is chunked)
+    if pad_top && bounds.len()==1 {
+        let z=circ.alloc_qubit();
+        let mut add=addend.to_vec();add.push(z);
+        let out=chunked_add(circ,&add,acc_full,round,multiply);
+        circ.release_clean(z);
+        return out;
+    }
     if env_flag("PP_CAPTURE_REPLAY_LAYOUT") {
         eprintln!("REPLAY_PIN {} {} {} {}",round,multiply as u8,addend.len(),bounds.iter().map(|(a,b)|(b-a).to_string()).collect::<Vec<_>>().join(" "));
     }
