@@ -620,6 +620,8 @@ pub fn build() -> Vec<Op> {
     ops = source_edits::run(ops, include_str!("lane_r_stack.txt"));
     ops=source_edits::run(ops,include_str!("score_followup.txt"));
     ops=source_edits::run(ops,include_str!("guarded_followup.txt"));
+    ops = source_edits::run(ops, include_str!("span_followup.txt"));
+    ops = source_edits::run(ops, include_str!("eighth_followup.txt"));
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
