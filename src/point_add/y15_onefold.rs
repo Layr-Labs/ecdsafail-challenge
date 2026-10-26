@@ -55,7 +55,7 @@ fn fold_window(t: usize, rev: bool) -> usize {
     // round17 a2-build: the A ticks' fold windows (LFA2_FWIN forward, LFA2_RWIN reverse; default 57 both ways = v3w)
     if super::a2_on() && t >= 1 {
         let k = if rev { "LFA2_RWIN" } else { "LFA2_FWIN" };
-        let w=compare_window_knob("FOLD",rev,t,0,a_env(k).unwrap_or(57)); assert!((45..=80).contains(&w)); return w;
+        return a_env(k).unwrap_or(57);
     }
     if PAYLOAD_FOLD_PREFIX && !rev && t <= 99 { 57 } else { Y15_WIN }
 }
@@ -92,9 +92,6 @@ const Y15_KEEP_LOW: [usize; 3] = [5, 3, 3];
 const Y15_JOINT_M: bool = true;
 /// Print one line a tick (costs by part, room, plans) to the build log. No effect on the gates.
 fn room_trace() -> bool { std::env::var("ROOM_TRACE").is_ok_and(|v| v == "1") }
-fn w118_diag_peak() -> bool { std::env::var("W118_DIAG_PEAK").ok().as_deref() == Some("1") }
-/// v2: first forward A tick of W116's forced early top return (W124: 97).
-const W116_LO: usize = 96;
 /// y18 research price knob (0 = no effect on the gates): inside the body of every one-fold tick-pass the walk cap is
 /// read this many wires higher. A non-zero value is a PRICE, never a build: the peak goes over 1236.
 const Y18_PRICE: isize = 0;
@@ -634,14 +631,9 @@ fn y16_shed(on: bool, fixed: usize, room_fold: usize, room_m: usize, need_m: usi
             // round17 fold-core: dropped ladder carries (2..7 T) only where the pool, the top wires and the fold's own
             // shed cannot cover the fold
             let nb = fold_window(at.1, at.0) - 3 - emax;
-            // W118-v2: emax=7 has five tested in-place page owners that leave
-            // before the main ladder. Credit them to this upstream planner as
-            // well as to the later chunk planner; otherwise the public t114
-            // allocation rejects a feasible page before reaching the fold.
-            let page = f_page5_room_credit(emax);
-            let n0 = fixed + a_min_budget(nb) - f_own_sheds(emax) - page;
+            let n0 = fixed + a_min_budget(nb) - f_own_sheds(emax);
             let fmx = if Y18_FIN { fmax } else { 0 };
-            if n0.saturating_sub(room_fold) <= pool + tops_max + fmx { n0 } else { fixed + f_min_budget(nb) - f_own_sheds(emax) - page }
+            if n0.saturating_sub(room_fold) <= pool + tops_max + fmx { n0 } else { fixed + f_min_budget(nb) - f_own_sheds(emax) }
         } else { fixed + a_min_budget(fold_window(at.1, at.0) - 3 - emax) - 1 - if a_gate_shed_on() { match emax { 5 => 1, 6 => 2, _ => 3 } } else { 0 } },
         _ => fixed + min_budget - drop - 2 * usize::from(Y15_LEAN45),
     };
@@ -2279,7 +2271,6 @@ fn fold_rev_v2(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 
 /// The three unfolded adds, the fold and the erase of every wire they left (see the module text). `rev`: the reverse
 /// tick (the letters already flipped by the caller, the multiply direction's compare rules, the reverse fold).
 fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b: &[QubitId], tg: &[QubitId], proxy: usize, rev: bool) {
-    let frame_delayed=a_tick().is_some_and(|(q,_)|q==crate::circuit::NO_QUBIT);
     PAYLOAD_AT.with(|x|x.set(Some((rev,t))));
     let (e_start, a_start) = (c.expected_total(), c.active_qubits());
     if room_trace() {
@@ -2516,22 +2507,9 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
             drop_n,
         )
     };
-    // Research lane W116: the late A digit is born before the fold's local
-    // sheds. Move the already-supported top-return boundary ahead of that
-    // digit on the public late ticks; this is not a quantum-data branch.
-    // The altered boundary also removes c3 from the fold's own shed menu,
-    // so the upstream room decision must be repriced with one extra fixed
-    // owner before selecting any block/top carries.
-    let w116_fin4 = f_ipk_on() && !rev && a_tick().is_some() && (W116_LO..=120).contains(&t);
     let shed0 = shed_for(shed_fixed, fmax);
     // round17 fold-core: with the top-wire shed (fin >= 4) the IPK fold cannot shed c3: one wire more to find
-    let shed0 = if f_ipk_on() && !rev && a_tick().is_some() && (shed0.4 >= 4 || w116_fin4) && f_c3_shed_on() { shed_for(shed_fixed + 1, fmax) } else { shed0 };
-    let old_fin = shed0.4;
-    let shed0 = if w116_fin4 {
-        assert!(fmax >= 4, "w116: forced early top return requires four fold slots at t={t}");
-        (shed0.0, shed0.1, shed0.2, shed0.3, shed0.4.max(4))
-    } else { shed0 };
-    if w116_fin4 && old_fin < 4 { eprintln!("W118_FIN4 t={t} old_fin={old_fin} new_fin={}", shed0.4); }
+    let shed0 = if f_ipk_on() && !rev && a_tick().is_some() && shed0.4 >= 4 && f_c3_shed_on() { shed_for(shed_fixed + 1, fmax) } else { shed0 };
     // round17 fold-core: the deep shed rides on the top-wire shed; where the IPK fold needs none, the deep shed is off
     let deep = deep && !(f_ipk_on() && !rev && a_tick().is_some() && shed0.4 < 4);
     // y28 (s2-4, step 2): forward, the AND of the shift letter leaves first where the fold sheds at all and that takes
@@ -2631,7 +2609,6 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
                 ph.finish(c);
             }
         }
-        if frame_delayed{let em=a_tick().unwrap().1;let q=super::a2_read(c,t);if false{c.x(q);}a_set(Some((q,em)));}
         match a_tick() {
             Some((k3, emax)) => if f_ipk_on() { fold_fwd_f(c, &tg[..fold_window(t, false)], [x256, x257, x258], s, k1, k2, k3, emax, fin, esh.as_mut()) } else { fold_fwd_a(c, &tg[..fold_window(t, false)], [x256, x257, x258], s, k1, k2, k3, emax, fin, esh.as_mut()) },
             None => fold_fwd_v2(c, &tg[..fold_window(t, false)], [x256, x257, x258], s, k1, k2, fin, esh.as_mut(), ttm, drop_n),
@@ -3210,7 +3187,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     }
     c.cx_all(s[2], b);
     let e_end = c.expected_total();
-    assert_eq!(c.active_qubits(),a_start+u32::from(frame_delayed),"y15: a wire was left behind");
+    assert_eq!(c.active_qubits(), a_start, "y15: a wire was left behind");
     if room_trace() {
         eprintln!(
             "Y15_NEW {} t={t} active={a_start} room={} low={} at_fold={a_fold} sp2={sp2} k0={k0} k1={kk1} k2={kk2} cut={dcut} closed={} top1={} seeds={:?} plan={plan:?} shed={shed} top={tops} c3m={c3m} gsh={gsh} fin={fin} \
@@ -3263,8 +3240,7 @@ fn body_capped(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: Qubi
     if room_trace() {
         eprintln!("Y16_PEAK {dir} t={t} peak={peak} cap={}", cells::cap());
     }
-    if w118_diag_peak() { eprintln!("W118_DIAG_PEAK y16_{dir} t={t} actual={peak} plan_cap={}", cells::cap()); }
-    else { assert!(peak as usize <= cells::cap(), "y16: the one-fold tick {dir} t={t} peaks at {peak}, over the walk cap {}", cells::cap()); }
+    assert!(peak as usize <= cells::cap(), "y16: the one-fold tick {dir} t={t} peaks at {peak}, over the walk cap {}", cells::cap());
     super::super::pingpong::Y17_EXTRA.with(|e| e.set(0));
 }
 
@@ -3508,8 +3484,7 @@ pub(super) fn fwd_tick0_one(c: &mut Builder, letter: &[QubitId], p: &mut [Vec<Qu
         cells::with_cmp_shift((shift.0 + Y15_CMP_EXTRA + super::n2_cmpx(), shift.1), || {
             cells::with_bridge(proxy, false, || {
                 let ((), peak) = c.r3_peak(|c| body_t0_one(c, s, k1, k2, &b, &tg, proxy));
-                if w118_diag_peak() { eprintln!("W118_DIAG_PEAK y33_t0 actual={peak} plan_cap={}", cells::cap()); }
-                else { assert!(peak as usize <= cells::cap(), "y33-t0: the one-add tick peaks at {peak}, over the walk cap {}", cells::cap()); }
+                assert!(peak as usize <= cells::cap(), "y33-t0: the one-add tick peaks at {peak}, over the walk cap {}", cells::cap());
             })
         })
     });
@@ -3970,8 +3945,7 @@ impl CsForms<'_> {
 pub(super) fn t0_phase_forms(c: &mut Builder, letter: &[QubitId], h: &[QubitId], bits: Vec<crate::circuit::BitId>) {
     let (s, k1, k2) = ([letter[0], letter[1], letter[2]], letter[3], letter[4]);
     let ((), peak) = c.r3_peak(|c| t0_forms_body(c, s, k1, k2, h, bits));
-    if w118_diag_peak() { eprintln!("W118_DIAG_PEAK y26_forms actual={peak} plan_cap={}", cells::cap()); }
-    else { assert!(peak as usize <= cells::cap(), "y26: the phase block on forms peaks at {peak}, over the walk cap {}", cells::cap()); }
+    assert!(peak as usize <= cells::cap(), "y26: the phase block on forms peaks at {peak}, over the walk cap {}", cells::cap());
 }
 #[allow(unused)] // rustc 1.93.0 panics in check_liveness on this function otherwise
 #[allow(unused)] // rustc 1.93.0 panics in check_liveness on this function otherwise
@@ -4442,8 +4416,7 @@ impl Rt0Cs {
 /// local AND layers and one ripple chain), and every AND is erased by measurement with its build forms.
 pub(super) fn rt0_finish(c: &mut Builder, r1: Vec<QubitId>, letter: Vec<QubitId>, bits: Vec<crate::circuit::BitId>, w0: usize) -> Vec<QubitId> {
     let (r0, peak) = c.r3_peak(|c| rt0_body(c, r1, letter, bits, w0));
-    if w118_diag_peak() { eprintln!("W118_DIAG_PEAK rt0 actual={peak} plan_cap={}", cells::cap()); }
-    else { assert!(peak as usize <= cells::cap(), "RT0 peaks at {peak}, over the walk cap {}", cells::cap()); }
+    assert!(peak as usize <= cells::cap(), "RT0 peaks at {peak}, over the walk cap {}", cells::cap());
     r0
 }
 fn rt0_body(c: &mut Builder, r1: Vec<QubitId>, letter: Vec<QubitId>, bits: Vec<crate::circuit::BitId>, w0: usize) -> Vec<QubitId> {
@@ -5039,9 +5012,6 @@ fn a_chunk_inv(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo: usize, w: usiz
 fn a_ladder_inv(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: QubitId, plan: &[usize]) {
     let mw = acc.len();
     assert_eq!(plan.iter().sum::<usize>(), mw - lo0, "a-build: inverse ladder plan covers bits [lo, MW)");
-    if A_INV_UP {
-        return a_ladder_inv_up(c, acc, add, lo0, cin0, plan);
-    }
     let n = plan.len();
     let mut bounds: Vec<(usize, usize, QubitId)> = Vec::new();
     let mut kept: Vec<QubitId> = Vec::new();
@@ -5063,56 +5033,6 @@ fn a_ladder_inv(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0:
     }
 }
 
-
-/// [`a_ladder_inv`] with the chunks taken back bottom up. Each non-final chunk's take-back builds
-/// its carries from its carry-in and one step more, the chunk's carry out (the next chunk's carry-in), on the bits it
-/// has just restored; its inner carries are measured away at once and the carry out stays. The kept carries are then
-/// measured away top down, each phase repaired by the exact compare of its chunk (restored bits, addend forms, live
-/// carry-in) on its outcome-1 shots, as the forward ladder erases them. Per non-final chunk of width w: w Toffoli and
-/// (w - 1) / 2 expected, where the value build plus the take-back cost 2 w - 1. Same live counts as the forward.
-const A_INV_UP: bool = true;
-fn a_ladder_inv_up(c: &mut Builder, acc: &[QubitId], add: &[Lin], lo0: usize, cin0: QubitId, plan: &[usize]) {
-    let n = plan.len();
-    let mut kept: Vec<(usize, usize, QubitId, QubitId)> = Vec::new();
-    let (mut lo, mut cin) = (lo0, cin0);
-    for (j, &w) in plan.iter().enumerate() {
-        let hi = lo + w;
-        if j + 1 == n {
-            a_chunk_inv(c, acc, add, lo, w, cin, true, None);
-            break;
-        }
-        let mut cc = vec![cin];
-        for i in lo..hi {
-            if i > lo {
-                let t = m_carry(c, acc[i - 1], &add[i - 1], cc[i - lo - 1]);
-                cc.push(t);
-            }
-            c.cx(cc[i - lo], acc[i]);
-            lin_xor_into(c, &add[i], acc[i]);
-        }
-        // the chunk's carry out, on the restored top bit
-        let out = m_carry(c, acc[hi - 1], &add[hi - 1], cc[w - 1]);
-        assert!(c.active_qubits() as usize <= cells::cap(), "C3: inverse fold chunk over the walk cap: {} > {}", c.active_qubits(), cells::cap());
-        for i in (lo + 1..hi).rev() {
-            m_carry_erase(c, cc[i - lo], acc[i - 1], &add[i - 1], cc[i - lo - 1]);
-        }
-        kept.push((lo, w, cin, out));
-        cin = out;
-        lo = hi;
-    }
-    // kept carries top down: carry out of (restored bits + addend + carry-in) = [NOT restored < addend + carry-in]
-    while let Some((lo, w, cin, out)) = kept.pop() {
-        let m = c.alloc_bit();
-        c.hmr(out, m);
-        c.release_clean(out);
-        c.x_all(&acc[lo..lo + w]);
-        c.push_condition(m);
-        lin_lt_phase(c, &acc[lo..lo + w], &add[lo..lo + w], cin);
-        c.pop_condition();
-        c.x_all(&acc[lo..lo + w]);
-        c.free_bit(m);
-    }
-}
 
 /// round17 a-build: the exact inverse of [`fold_fwd_a`] (fin <= 2, no top-wire shed): acc = bits [0, MW) of the forward
 /// fold's output W', e = X's three top wires; on return acc = low(X) on the window. Each AND the forward fold builds is
