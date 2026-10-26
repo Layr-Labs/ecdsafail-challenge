@@ -1,3 +1,4 @@
+mod late_phase;
 mod fd_coordinate;
 mod back_seam;
 pub mod cross_chunk_probe;
@@ -620,6 +621,7 @@ pub fn build() -> Vec<Op> {
     ops = source_edits::run(ops, include_str!("lane_r_stack.txt"));
     ops=source_edits::run(ops,include_str!("score_followup.txt"));
     ops=source_edits::run(ops,include_str!("guarded_followup.txt"));
+    ops = late_phase::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
