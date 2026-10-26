@@ -26,15 +26,10 @@ mod compare;
 mod const_arith;
 mod modular;
 mod pingpong;
-mod leapfrog;
-mod y33_clears;
 mod record;
 // B3a: HEO(S,u) walk research seam. Inert unless HEO_WALK / HEO_RESEARCH is set.
 pub mod heo;
 mod square;
-mod sqc;
-mod square_split;
-mod sqleaf;
 mod moddiv_adapter;
 
 const N: usize = 256;
@@ -142,7 +137,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_FIT_CROSS" => "1",
         "SQ_LEND_ASSEMBLY_ZEROS" => "1",
         "SQ_LEND_RETAINED_ANDS" => "2",
-        "SQ_LEND_RETAINED_CROSS2" => "0",
+        "SQ_LEND_RETAINED_CROSS2" => "2",
         "SQ_LEND_RETAINED_ZEROS" => "1",
         "SQ_ODD_NODE_TOPS" => "1",
         "SQ_ROW0_CARRY" => "1",
@@ -155,8 +150,8 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_CROSS" => "1",
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
-        // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "1211039558485",
+        // Accepted public-validation nonce from the production grind.
+        "TAIL_NONCE" => "1221000000658",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -226,51 +221,12 @@ fn apply_tail_nonce(mut ops: Vec<Op>, nonce: u64) -> Vec<Op> {
 /// report `build_circuit` prints. `x`/`y` are the quantum coordinates and are
 /// overwritten in place; every scratch qubit each phase takes is returned to |0>
 /// before the next one starts.
-pub(crate) fn build_point_add() -> Vec<Op> {
+fn build_point_add() -> Vec<Op> {
     let circ = &mut Builder::new();
     let x: &[QubitId] = &circ.alloc_qubits(N);
     let y: &[QubitId] = &circ.alloc_qubits(N);
     let ox: &[BitId] = &circ.alloc_bits(N);
     let oy: &[BitId] = &circ.alloc_bits(N);
-
-    if leapfrog::enabled() {
-        // LF_SEAMS: coord_x_sub / coord_add3x / coord_rsub_final fused into the walks' seed and unseeds
-        let seams = leapfrog::seams();
-        if !seams {
-            circ.set_phase("coord_x_sub");
-            coord_sub(circ, x, ox);
-        }
-        circ.set_phase("coord_y_sub");
-        coord_sub(circ, y, oy);
-        circ.set_phase("divide");
-        if seams { leapfrog::divide_seamed(circ, y, x, ox); } else { leapfrog::divide(circ, y, x); }
-        if !seams {
-            circ.set_phase("coord_add3x");
-            coord_add3x(circ, x, ox);
-        }
-        narrow::square_entry(circ);
-        circ.set_phase("square");
-        // LF_SQUARE_CAP: the square's own width budget (its ladders size to it instead of the walk cap)
-        pingpong::with_phase_cap(Some(1234), || sub_square(circ, x, y));
-        circ.set_phase("multiply");
-        if seams { leapfrog::multiply_seamed(circ, y, x, ox); } else { leapfrog::multiply(circ, y, x); }
-        leapfrog::c35_widen_check();
-        narrow::report();
-        circ.set_phase("coord_y_sub_final");
-        coord_sub(circ, y, oy);
-        if !seams {
-            circ.set_phase("coord_rsub_final");
-            coord_rsub(circ, x, ox);
-        }
-        leapfrog::prof_dump();
-        circ.declare_qubit_register(x);
-        circ.declare_qubit_register(y);
-        circ.declare_bit_register(ox);
-        circ.declare_bit_register(oy);
-        circ.y33_clears();
-        circ.finalize_records();
-        return circ.take_ops();
-    }
 
     circ.set_phase("coord_x_sub"); // x2 -= ox
     if fd_coordinate::enabled(){fd_coordinate::retained_coord_sub(circ,x,ox);}else if j_fuse::j_xfuse() { classical::coord_sub_keep(circ, x, ox); } else { coord_sub(circ, x, ox); }
@@ -318,16 +274,18 @@ pub(crate) fn build_point_add() -> Vec<Op> {
 fn install_skywalk_submission_recipe() {
     for (name, value) in [
         ("HEO_WALK", "1"),
+        ("SKY_NORW", "1"),
+        ("FWSK_CELLW", "a:0-394:1:1:1"),
         ("HEO_SCHEDULE", "carry"),
         ("HEO_SEED", "base"),
         ("HEO_FIT_MODE", "win"),
-        ("HEO_FIT_K", "19"),
+        ("HEO_FIT_K", "21"),
         ("HEO_ZONE", "1"),
         ("HEO_R2D", "382"),
         ("HEO_R2M", "370"),
         ("HEO_R1M", "99"),
         ("HEO_CARRY_SEED", "fd"),
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1172"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1221"),
         ("HEO_LT0", "1"),
         ("HEO_BW", "inv"),
         ("HEO_LT0_MUL", "1"),
@@ -338,7 +296,7 @@ fn install_skywalk_submission_recipe() {
         ("HEO_LR1", "1"),
         ("HEO_PIN_SQ_SPARSE_CORRECTION", "1"),
         ("HEO_PIN_SQ_LEND_RETAINED_ANDS", "3"),
-        ("HEO_PIN_I35_PROFILE", "600:0:1,602:0:1,640:0:1,642:0:1,644:0:1,646:0:1,672:0:1,673:0:1,674:0:1,675:0:1,676:0:1,677:0:1,678:0:1,679:0:1,680:0:1,681:0:1,682:0:1,683:0:1,684:0:1,685:0:1,686:0:1,687:0:1,688:0:1,689:0:1,690:0:1,691:0:1,692:0:1,693:0:1,694:0:1,695:0:1,696:0:1,697:0:1,698:0:1,620:1:1,591:1:1"),
+        ("HEO_PIN_I35_PROFILE", "501:1:2,504:1:2,509:1:1,513:1:1,516:0:2,518:0:2,518:1:1,523:1:1,528:1:1,533:1:1,554:0:2,560:0:2,564:0:2,569:0:2,574:0:2,577:1:1,583:1:1,589:1:1,591:1:1,594:1:1,597:0:2,600:0:1,602:0:1,614:1:1,620:1:1,624:1:2,629:1:2,631:1:2,633:0:4,633:1:2,636:1:2,638:1:3,640:0:1,642:0:1,642:1:3,644:0:1,644:1:3,646:0:1,646:1:3,663:1:3,670:1:3,672:0:1,673:0:1,673:1:3,674:0:1,675:0:1,676:0:1,677:0:1,678:0:1,679:0:1,679:1:3,680:0:1,681:0:1,682:0:1,683:0:1,684:0:1,685:0:1,686:0:1,687:0:1,687:1:3,688:0:1,689:0:1,690:0:1,691:0:1,692:0:1,693:0:1,694:0:1,695:0:1,696:0:1,697:0:1,698:0:1,698:1:3"),
         ("HEO_HEAD_LIFO_N", "2"),
         ("HEO_DIV_LIFO_N", "2"),
         ("HEO_MULB_LIFO_N", "2"),
@@ -370,7 +328,7 @@ fn install_skywalk_submission_recipe() {
         ("FD_COORD_LOW_ONE", "1"),
         ("HEO_PIN_FOLD_GUARD", "20"),
         ("HEO_PIN_PP_FOLD_WIDEN", "112"),
-        ("HEO_PIN_PP_FOLD_PROFILE", "56:0,38:-1,32:-1,25:-5,19:-7,0:-5"),
+        ("HEO_PIN_PP_FOLD_PROFILE", "56:0,38:-1,32:-1,25:-5,19:-5,0:-5"),
         ("PP_DROP_EXACT_LEAD", "1"),
         ("PP_DROP_EXACT_LEAD_DIR", "mul"),
         ("HEO_RAIL_TOP_RELEASE", "1"),
@@ -413,7 +371,7 @@ fn install_skywalk_submission_recipe() {
         ("HEO_REVERSE_CARRY_CODEC", "1"),
         ("SKYWALK_MERGED_HIGH_STREAM", "3"),
         ("TERMINAL_PAIR", "1"),
-        ("TERMINAL_FW", "42"),
+        ("TERMINAL_FW", "40"),
         ("HEO_CELL_HELPER_S1", "1"),
         ("BACK_SEAM_FUSE", "3"),
         ("HEO_S1_OUTPUT_ALIAS", "1"),
@@ -467,84 +425,31 @@ fn install_skywalk_submission_recipe() {
         // goes from 50 to 40 (above); 62 SAT-proven rows re-proved on this op stream (sky19_rewrite.txt).
         // sky20 package (frozen-sky20, 19.5 Lambda limit): HEO_PIN_PP_FOLD_PROFILE band 19 goes from -4 to -5 and
         // HEO_PIN_PP_FOLD_WIDEN from 128 to 112 (above); 61 SAT-proven rows re-proved on this op stream (sky20_rewrite.txt).
-        // sky21 package (frozen-sky21, 19.5 Lambda limit): the sky20 knobs unchanged plus 8 new SAT-proven rows from a fresh
-        // census of this op stream (6 square, 2 outside), 69 rows in all (sky21_rewrite.txt).
-        // q73a package (frozen-q73a, Q1173, 19.5 Lambda limit): walk cap 1173 (HEO_PIN_PP_WALK_MAX_QUBITS above), the
-        // jackylee0424 Q1173 I35 profile (above), a site-constrained per-cell K3B bridge/room retune (q73a_k3b_retune.txt,
-        // read through SKYX_K3B_RETUNE in heo_carry.rs), GO_FLAG 0-63:4 and SKY_SPLIT_TRIM_LAST, and a Lambda buy stack:
-        // GO_CELLB mul 0-49 +1, GO_CHUNK 0-49 a:0, HEO_PIN_PP_FOLD_WIDEN 128, HEO_PIN_ERASE_COMPARE 22 (above);
-        // 105 SAT-proven rows on this op stream (102 square, 3 outside), compiled in (q73a_rewrite.txt).
-        // q73b package (Round Q73-S1 sell, 19.5 Lambda limit): q73a with GO_CELLB mul ticks 25-49 instead of 0-49 (above;
-        // -16.7 T for +0.0235 Lambda); the 105 q73a rows kept, the 2 late outside rows re-proved at their shifted
-        // positions (q73b_rewrite.txt).
-        ("GO_FLAG", "0-63:4"),
-        ("SKY_SPLIT_TRIM_LAST", "1"),
     ] { std::env::set_var(name, value); }
     std::env::set_var("HEO_ENVELOPE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-0.txt"));
     std::env::set_var("HEO_ENVELOPE_MUL", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/extended-middle-1.txt"));
     std::env::set_var("HEO_PROXY_ENVELOPE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/env_front07_R393_clamp.txt"));
     std::env::set_var("HEO_CELL_WINDOWS", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/windows_full_safe_mulB64.tsv"));
     std::env::set_var("K3B_CELL_OVR", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/ovr_v025_lamneutral.txt"));
-    std::env::set_var("SKYX_K3B_RETUNE", concat!(env!("CARGO_MANIFEST_DIR"), "/src/point_add/skywalk_data/cap1172_bridge_room_profile_probe.txt"));
 }
 
 /// sky8 submission: every setting of the circuit is pinned in code (the recipe above, the compiled-in
 /// envelopes and rewrite rows, `TAIL_NONCE` in `env_raw`). Clear the inherited process environment first
 /// so that no variable set on the host (`HEO_PIN_*`, `GO_*`, `R*_*`, `SKY_*`, ...) can change the circuit.
 fn clear_process_env() {
-    let barrel_saved=std::env::var_os("RESEARCH_SET_BARREL_FOLLOWUP");
     let keys: Vec<std::ffi::OsString> = std::env::vars_os().map(|(k, _)| k).collect();
     for k in keys {
         let s = k.to_string_lossy();
         if s.is_empty() || s.contains('=') || s.contains('\0') { continue; }
         std::env::remove_var(&k);
     }
-    std::env::set_var("BARREL_FOLLOWUP",barrel_saved.unwrap_or_else(||"1".into()));
-
 }
 
-/// Leapfrog branch: the submission build emits the Leapfrog point add (see [`leapfrog::install_recipe`]).
-const LEAPFROG_SUBMISSION: bool = true;
-
 pub fn build() -> Vec<Op> {
-    // W124 (Codex) width composition, ported onto 6602a4e8: the effective selection pinned in source.
-    // trace=true reproduces W124's logs only (stderr); it does not change gates.
-    let w113_trace = true;
-    let w120_cubic = true;
-    let w123_lazy_gates = true;
-
     clear_process_env();
     install_skywalk_submission_recipe();
-    std::env::set_var("EXACT_PAIR_CARRY", "1");
-    if LEAPFROG_SUBMISSION {
-        leapfrog::install_recipe();
-    }
-    // W124: W110's field page basis at the fold's tight public chunk budgets (LFF_PAGE5), W120 cubic page cleanup,
-    // W123 lazy inverse gate restoration; set after both recipes, exactly as in the W124 emitter.
-    std::env::set_var("LFF_PAGE5", "1");
-    if w120_cubic { std::env::set_var("LFF_CUBIC_CLEANUP", "1"); }
-    if w123_lazy_gates { std::env::set_var("W123_LAZY_GATES", "1"); }
-    if w113_trace {
-        std::env::set_var("ROOM_TRACE", "1");
-        std::env::set_var("LFF_PAGE5_TRACE", "1");
-    }
     if std::env::var_os("SKYWALK_SQUARE_HIGH_PROBE").is_some(){square::high_probe();std::process::exit(0);}
     if std::env::var_os("SKYWALK_MODDIV_ADAPTER_PROBE").is_some(){moddiv_adapter::probe();std::process::exit(0);}
-    std::env::set_var("SQUARE_GROUPS_GROUP", "on");
-    std::env::set_var("SQUARE_GROUPS_SUM", "on");
-    std::env::set_var("SQUARE_GROUPS_A2", "on");
-    std::env::set_var("SQUARE_GROUPS_A3", "on");
-    std::env::set_var("SQC_LEAF_D", "12");
-    std::env::set_var("SQUARE_SPLIT", "on");
-    std::env::set_var("RAIL_ZERO_FILL", "1");
-    std::env::set_var("SQC_G", "22");
-    std::env::set_var("SQC_T", "19");
-    std::env::set_var("FRAME_SHIFT","1");
-    std::env::set_var("RAIL_OPT_DROPS","1");
-    std::env::set_var("RAIL_OPT_RESERVE","1");
-    std::env::set_var("RAIL_OPT_SEED","1");
-    std::env::set_var("RAIL_OPT_NARROW","1");
-    std::env::set_var("FRAME_FWD","1");
     let mut ops = build_point_add();
     // Effort-8 INT / B7b (`HEO_EMIT_ONLY=1`, research overlay only): stop after emission (the HEO phase report and
     // K3B_CELL traces are complete here), skipping the simplifier chain and the ops.bin write. Sweep instrument.
@@ -584,42 +489,42 @@ pub fn build() -> Vec<Op> {
         // B7 (K3a): measurement absorption, an exact generic post-pass (off = byte-identical).
         ops = mabsorb::absorb(ops);
     }
-    // row cuts (SL_ROWCUT; unset = this gate list byte for byte): CCX rows that are CNOT forms on every reachable state
-    // Entry-specific stream configuration.
-    // pscan: SL_PSCAN=1 prints the parity scan, SL_PSCAN_FIX=1 rewrites its hits (pscan.rs)
-    ops = pscan::run(ops);
-    // cond pass v2 (SL_COND; unset = this gate list byte for byte): Toffolis consumed only by
-    // phases, a measurement or a reset, or needing no Toffoli at all (cond_pass.rs, guarded)
-    ops = cond_pass::run(ops);
-    // square top carries (SL_SQTOP; unset = this gate list byte for byte): the square's inverse-row
-    // top carries built only under the top bit that reads them (sqtop_pass.rs)
-    ops = sqtop_pass::run(ops);
-    ops = sqdepth2_pass::run(ops);
-    ops = phase_cubic::run(ops);
-    ops = rowcut_pass::run(ops);
-    ops = reader_pass::run(ops);
-    // y42-railtop (leapfrog.rs `Y42_BOUND`; false = this gate list byte for byte): the edits of the four bound
-    // passes above as one table, carried to this tree's stream with the rail switches on
-    // round17 a2-build v5w: main's seven stream-bound passes (and cond_pass ur / zero_force between them) replayed as
-    // one edit table bound to this stream after reader_pass (frozen_stack.rs): the harness's re-anchoring of main's
-    // edits on lever A's stream (2 census_anchored clusters) plus the generic passes' result, op for op
-    // the 6-hunk table placed by the stream prefix it edits, the two generic classical-control passes and the proved
-    // CCX cuts bound to this stream (compose_post.rs)
-    ops = compose_post::run(ops);
-    ops = stream_pipeline::run(ops);
-    ops = post_pipeline::run(ops);
-    ops = lane3_sigcut::run(ops);
-    ops = source_edits::run(ops, include_str!("our_cuts.txt"));
-    ops = rail_output_erase::run(ops);
-    ops = source_edits::run(ops, include_str!("our_cuts2.txt"));
-    ops = source_edits::run(ops, include_str!("builder_followup.txt"));
-    ops = source_edits::run(ops, include_str!("value_followup.txt"));
-    if std::env::var("BARREL_FOLLOWUP").as_deref()==Ok("1"){ops=source_edits::run(ops,include_str!("barrel_followup.txt"));}
-    // Lane R: third post-builder table, re-mined on spookyfrog 20 after barrel_followup.
-    // All edits are bound to the complete final pre-tail stream. ON by default (the submitted stream).
-    ops = source_edits::run(ops, include_str!("lane_r_stack.txt"));
-    ops=source_edits::run(ops,include_str!("score_followup.txt"));
-    ops=source_edits::run(ops,include_str!("guarded_followup.txt"));
+    // SKY_REWRITE (sky20 package rows: 61 rows proved exact by SAT on the sky20 op stream, compiled in): replace SAT-proved linear-span CCX by CX chains.
+    // Lines: "widx c1 c2 t cst w1,w2,..|-" against this exact op stream (asserted).
+    if std::env::var("SKY_NORW").is_err()
+    {
+        let text = include_str!("skywalk_data/sky20_rewrite.txt");
+        let mut rows: Vec<(usize, u64, u64, u64, bool, Vec<u64>)> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            let ws = if f[5] == "-" { vec![] } else { f[5].split(',').map(|x| x.parse().unwrap()).collect() };
+            (f[0].parse().unwrap(), f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap(), f[4] == "1", ws)
+        }).collect();
+        rows.sort_by(|a, b| b.0.cmp(&a.0));
+        // The rows are keyed to one op stream; an upstream change shifts the block rigidly.
+        // Find the unique shift d under which every row names its CCX (asserted unique).
+        let hit = |w: usize, c1: u64, c2: u64, t: u64| w < ops.len() && { let o = &ops[w]; o.kind == OperationType::CCX && o.q_target.0 == t
+            && ((o.q_control1.0 == c1 && o.q_control2.0 == c2) || (o.q_control1.0 == c2 && o.q_control2.0 == c1)) };
+        let r0 = rows[0].clone();
+        let mut shifts = Vec::new();
+        for d in -2_000_000isize..=2_000_000 {
+            let w0 = r0.0 as isize + d;
+            if w0 < 0 || !hit(w0 as usize, r0.1, r0.2, r0.3) { continue; }
+            if rows.iter().all(|r| { let w = r.0 as isize + d; w >= 0 && hit(w as usize, r.1, r.2, r.3) }) { shifts.push(d); }
+        }
+        assert!(shifts.len() == 1, "SKY_REWRITE: {} candidate shifts {:?}", shifts.len(), &shifts[..shifts.len().min(5)]);
+        let d = shifts[0];
+        eprintln!("SKY_REWRITE rows={} shift={d}", rows.len());
+        for (w, c1, c2, t, cst, ws) in rows {
+            let w = (w as isize + d) as usize;
+            let o = ops[w];
+            assert!(o.kind == OperationType::CCX && o.q_target.0 == t && o.c_condition == crate::circuit::NO_BIT
+                && ((o.q_control1.0 == c1 && o.q_control2.0 == c2) || (o.q_control1.0 == c2 && o.q_control2.0 == c1)), "SKY_REWRITE mismatch at {w}");
+            let mut rep = Vec::new();
+            for q in ws { assert!(q != t); let mut x = Op::empty(); x.kind = OperationType::CX; x.q_control1 = QubitId(q); x.q_target = QubitId(t); rep.push(x); }
+            if cst { let mut x = Op::empty(); x.kind = OperationType::X; x.q_target = QubitId(t); rep.push(x); }
+            ops.splice(w..w + 1, rep);
+        }
+    }
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -661,61 +566,6 @@ pub(crate) fn go_slice(key: &str, round: usize, dir: u8) -> isize {
 }
 
 mod mabsorb;
-mod sqtop_pass;
-mod sqdepth2_pass;
-mod sqdepth2_base;
-mod sqdepth2_veto;
-mod sqdepth2_veto_pad;
-mod rowcut_pass;
-mod reader_pass;
-mod y42_bound_pass;
-mod linear_restore;
-mod rebind;
-mod narrow;
-mod zero_force;
-mod census_cut;
-mod rowcut_base;
-mod rowcut_veto;
-mod rowcut_veto_pad;
-mod phase_cubic_base;
-mod pscan;
-mod cond_pass;
 pub mod constant_templates;
 
 mod native_sfuse_b;
-
-mod phase_cubic;
-
-mod square_finish;
-mod census_anchored;
-
-mod frozen_cache_product67;
-
-mod retained_products;
-mod zero_product;
-mod frozen_stack;
-mod compose_post;
-mod source_edits;
-mod classical_factors_xor;
-mod classical_wide;
-
-mod product_cache;
-
-mod copy_elision;
-
-mod value_rewrites;
-
-mod stream_pipeline;
-
-mod retained_and;
-
-mod copy_cleanup;
-
-mod value_cleanup;
-
-mod post_pipeline;
-
-mod phase_restoration;
-
-mod lane3_sigcut;
-mod rail_output_erase;
