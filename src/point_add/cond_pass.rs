@@ -687,6 +687,12 @@ pub fn run(ops: Vec<Op>) -> Vec<Op> {
     let sw = std::env::var("SL_COND").unwrap_or_default();
     if sw.is_empty() || sw == "0" { return ops; }
     let levers = if sw == "1" { "mufsr".to_string() } else { sw };
+    run_with(ops, &levers)
+}
+
+/// The pass with a fixed option set (source-pinned callers; no SL_COND lookup).
+pub fn run_with(ops: Vec<Op>, levers: &str) -> Vec<Op> {
+    let levers = levers.to_string();
     let fault = std::env::var("SL_COND_FAULT").unwrap_or_default();
     let mut l: Vec<L> = ops.iter().map(to_l).collect();
     drop(ops);
