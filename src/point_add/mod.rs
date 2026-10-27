@@ -155,8 +155,8 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_CROSS" => "1",
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
-        // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
-        "TAIL_NONCE" => "1171291252663",
+        // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
+        "TAIL_NONCE" => "1231284963708",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -659,6 +659,8 @@ pub fn build() -> Vec<Op> {
         c = e;
     }
     ops = source_edits::run(ops, &b);
+    ops=source_edits::run(ops,include_str!("affine_followup.txt"));
+    ops=source_edits::run(ops,include_str!("union_followup.txt"));
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
