@@ -328,7 +328,7 @@ fn weight_of(ops: &[L]) -> f64 {
 fn max_bit(ops: &[L]) -> u32 { let mut nb = 0u32; for o in ops { for b in [o.ct, o.cc] { if b != NQ { nb = nb.max(b + 1); } } } nb }
 
 /// m, u, f planned on one analysis of `ops`.
-fn guards_on() -> bool { !std::env::var("SL_COND_NOGUARD").is_ok_and(|x| x == "1") }
+fn guards_on() -> bool { true }
 static GUARD_HITS: std::sync::Mutex<[usize; 4]> = std::sync::Mutex::new([0; 4]);
 fn guard_hit(i: usize) { GUARD_HITS.lock().unwrap()[i] += 1; }
 fn plan_muf(ops: &[L], levers: &str, fault: &str) -> (Edits, [usize; 4], [f64; 4]) {
@@ -357,7 +357,7 @@ fn plan_muf(ops: &[L], levers: &str, fault: &str) -> (Edits, [usize; 4], [f64; 4
             if fault == "u2" { v.pop(); } // every u site's phase fix left out
             ed.replace.insert(k, v);
             cnt[1] += 1; sav[1] += wt(k);
-            if std::env::var("SL_COND_RVDIAG").is_ok_and(|x| x == "1") { eprintln!("RVU op {} ctx {:?} depth_after {} cc {}", k, a.cx.sets[a.opctx[k as usize] as usize], a.depth_after[k as usize], o.cc as i64); }
+            if false { eprintln!("RVU op {} ctx {:?} depth_after {} cc {}", k, a.cx.sets[a.opctx[k as usize] as usize], a.depth_after[k as usize], o.cc as i64); }
         }
     }
     if levers.contains('f') {
@@ -408,6 +408,7 @@ fn plan_muf(ops: &[L], levers: &str, fault: &str) -> (Edits, [usize; 4], [f64; 4
                     }
                 }
                 E_R => {
+                    if taken.contains(&(e as u32)) { continue; }
                     let f = nb; s.bit = f;
                     let mut h = ops[e]; h.kind = K_HMR; h.ct = f;
                     s.replace.push((e as u32, h));
@@ -429,7 +430,7 @@ fn plan_muf(ops: &[L], levers: &str, fault: &str) -> (Edits, [usize; 4], [f64; 4
                     s.after.push((t as u32, phase_ops(&fs[i][0], &fs[i][1], cc)));
                 }
             }
-            if s.bit != NQ { nb += 1; }
+            if s.bit != NQ { nb += 1; taken.insert(s.end); }
             for &x in &s.delete { taken.insert(x); }
             sites.push(s);
         }
@@ -447,7 +448,7 @@ fn plan_muf(ops: &[L], levers: &str, fault: &str) -> (Edits, [usize; 4], [f64; 4
                 ed.after.entry(*k).or_default().extend(v);
             }
             cnt[2] += 1; sav[2] += s.save;
-            if std::env::var("SL_COND_RVDIAG").is_ok_and(|x| x == "1") {
+            if false {
                 let c = &a.contribs[s.ci as usize]; let e = c.end_op as usize;
                 let own = &a.cx.sets[c.ctx as usize]; let ce = &a.cx.sets[a.opctx[e] as usize];
                 let w0 = ops[c.op as usize].t;
@@ -479,8 +480,8 @@ fn plan_muf(ops: &[L], levers: &str, fault: &str) -> (Edits, [usize; 4], [f64; 4
         };
         let mut faulted = false;
         let mut cands: Vec<(u32, u32, u32, bool, Vec<L>, u32, u32)> = Vec::new();
-        let dbg_all = std::env::var("SL_COND_DEBUG").is_ok_and(|x| x == "all");
-        let dbg: Option<u32> = std::env::var("SL_COND_DEBUG").ok().and_then(|x| x.parse().ok());
+        let dbg_all = false;
+        let dbg: Option<u32> = None;
         for c in a.contribs.iter() {
             let p = c.op as usize; let o = ops[p];
             if dbg == Some(c.op) { eprintln!("SL_COND_DEBUG op {} ctx {} inter {:?} first_read {} end {} {} sole {} k {} derived {}", c.op, c.ctx, c.inter, c.first_read as i64, c.end_kind, c.end_op as i64, c.end_sole, c.end_bit as i64, if c.end_bit != NQ { a.bderived[c.end_bit as usize] } else { false });
@@ -558,7 +559,7 @@ fn plan_muf(ops: &[L], levers: &str, fault: &str) -> (Edits, [usize; 4], [f64; 4
             }
             if fault == "s" { faulted = true; }
             cnt[3] += 1; sav[3] += 0.5;
-            if std::env::var("SL_COND_RVDIAG").is_ok_and(|x| x == "1") {
+            if false {
                 let mut kinds: std::collections::BTreeMap<u8, usize> = Default::default();
                 for &j in &fixes { *kinds.entry(ops[j as usize].kind).or_default() += 1; }
                 let writes = fixes.iter().filter(|&&j| matches!(ops[j as usize].kind, K_X | K_CX | K_CCX | K_SWAP | K_R | K_HMR)).count();
@@ -583,7 +584,7 @@ fn plan_r(ops: &[L], fault: &str) -> (Edits, usize, usize, f64) {
     let mut depth_before: Vec<u8> = Vec::with_capacity(ops.len());
     let mut plan: Vec<(Vec<u32>, u32, u32)> = Vec::new();
     let mut depth = 0usize;
-    let dbg = std::env::var("SL_COND_DEBUG").is_ok_and(|x| x == "r");
+    let dbg = false;
     for (k, o) in ops.iter().enumerate() {
         depth_before.push(depth.min(255) as u8);
         let cond = depth > 0 || o.cc != NQ;
@@ -647,7 +648,7 @@ fn plan_r(ops: &[L], fault: &str) -> (Edits, usize, usize, f64) {
     let mut nccx = 0usize;
     let mut faulted = false;
     for (w, e, ip) in &plan {
-        if std::env::var("SL_COND_RVDIAG").is_ok_and(|x| x == "1") {
+        if false {
             let nccx = w.iter().filter(|&&j| ops[j as usize].kind == K_CCX).count();
             let ncond = w.iter().filter(|&&j| ops[j as usize].cc != NQ || depth_before[j as usize] > 0).count();
             let mut nsw = 0; let mut lab = ops[w[0] as usize].t;
@@ -687,11 +688,17 @@ pub fn run(ops: Vec<Op>) -> Vec<Op> {
     let sw = std::env::var("SL_COND").unwrap_or_default();
     if sw.is_empty() || sw == "0" { return ops; }
     let levers = if sw == "1" { "mufsr".to_string() } else { sw };
-    let fault = std::env::var("SL_COND_FAULT").unwrap_or_default();
+    run_with(ops, &levers)
+}
+
+/// The pass with a fixed option set (source-pinned callers; no SL_COND lookup).
+pub fn run_with(ops: Vec<Op>, levers: &str) -> Vec<Op> {
+    let levers = levers.to_string();
+    let fault = String::new();
     let mut l: Vec<L> = ops.iter().map(to_l).collect();
     drop(ops);
     let w0 = weight_of(&l);
-    if std::env::var("SL_COND_ALIGN").is_ok_and(|v| v == "1") {
+    if false {
         let mut nq = 0u32; for o in &l { for q in [o.c1, o.c2, o.t] { if q != NQ { nq = nq.max(q + 1); } } }
         let idle = L { kind: K_R, c2: NQ, c1: NQ, t: nq, ct: NQ, cc: NQ, rt: NQ };
         let mut ed = Edits::new(); let (mut nu, mut nr) = (0, 0);
@@ -723,4 +730,195 @@ pub fn run(ops: Vec<Op>) -> Vec<Op> {
     let w1 = weight_of(&l);
     eprintln!("SL_COND static expected Toffoli {w0:.1} -> {w1:.1} ({:.1}){}", w1 - w0, if fault.is_empty() { String::new() } else { format!("; FAULT {fault}") });
     l.iter().map(from_l).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sim::Simulator;
+    use sha3::digest::XofReader;
+
+    struct Fixed(u8);
+
+    impl XofReader for Fixed {
+        fn read(&mut self, output: &mut [u8]) {
+            output.fill(self.0);
+        }
+    }
+
+    struct Scripted<'a> {
+        words: &'a [u64],
+        next: usize,
+    }
+
+    impl XofReader for Scripted<'_> {
+        fn read(&mut self, output: &mut [u8]) {
+            assert_eq!(output.len(), 8);
+            output.copy_from_slice(&self.words[self.next].to_le_bytes());
+            self.next += 1;
+        }
+    }
+
+    fn gate(kind: K, c1: u64, c2: u64, target: u64) -> Op {
+        Op {
+            kind,
+            q_control1: QubitId(c1),
+            q_control2: QubitId(c2),
+            q_target: QubitId(target),
+            ..Op::empty()
+        }
+    }
+
+    fn register(q: u64) -> Op {
+        Op {
+            kind: K::AppendToRegister,
+            q_target: QubitId(q),
+            r_target: RegisterId(0),
+            ..Op::empty()
+        }
+    }
+
+    fn register_bit(b: u64) -> Op {
+        Op {
+            kind: K::AppendToRegister,
+            c_target: BitId(b),
+            r_target: RegisterId(1),
+            ..Op::empty()
+        }
+    }
+
+    fn execute(ops: &[Op], input: u8, outcome: u8) -> (Vec<u64>, u64) {
+        let mut xof = Fixed(outcome);
+        let mut sim = Simulator::new(6, 16, &mut xof);
+        for (i, q) in [0usize, 1, 2, 3].iter().enumerate() {
+            if (input >> i) & 1 != 0 {
+                sim.qubits[*q] = u64::MAX;
+            }
+        }
+        sim.apply_iter(ops.iter());
+        (sim.qubits.clone(), sim.phase)
+    }
+
+    fn execute_small(ops: &[Op], input: u8, outcomes: &[u64]) -> (Vec<u64>, Vec<u64>, u64) {
+        let mut xof = Scripted { words: outcomes, next: 0 };
+        let mut sim = Simulator::new(4, 2, &mut xof);
+        for (i, q) in [0usize, 1, 3].iter().enumerate() {
+            if (input >> i) & 1 != 0 {
+                sim.qubits[*q] = u64::MAX;
+            }
+        }
+        if (input >> 3) & 1 != 0 {
+            sim.bits[0] = u64::MAX;
+        }
+        sim.apply_iter(ops.iter());
+        let result = (sim.qubits.clone(), sim.bits.clone(), sim.phase);
+        drop(sim);
+        assert_eq!(xof.next, outcomes.len(), "measurement count");
+        result
+    }
+
+    #[test]
+    fn shared_reset_rewrites_preserve_all_inputs_and_phase() {
+        assert!(std::env::var_os("SL_COND_NOGUARD").is_none());
+        assert!(std::env::var_os("SL_COND_FAULT").is_none());
+        assert!(std::env::var_os("SL_COND_ALIGN").is_none());
+        let ops = vec![
+            register(0), register(1), register(2), register(3),
+            gate(K::CCX, 0, 1, 4),
+            gate(K::CCX, 2, 3, 4),
+            gate(K::CCX, 0, 1, 5),
+            gate(K::CCX, 2, 3, 5),
+            gate(K::CX, 4, u64::MAX, 5),
+            gate(K::Z, u64::MAX, u64::MAX, 5),
+            gate(K::R, u64::MAX, u64::MAX, 5),
+            gate(K::CCX, 2, 3, 4),
+            gate(K::X, u64::MAX, u64::MAX, 4),
+            gate(K::CCX, 0, 1, 4),
+        ];
+        let rewritten = run_with(ops.clone(), "mfsur");
+        let ccx = |stream: &[Op]| stream.iter().filter(|o| o.kind == K::CCX).count();
+        assert_eq!(ccx(&ops) - ccx(&rewritten), 1);
+        assert_eq!(rewritten.iter().filter(|o| o.kind == K::Hmr).count(), 1);
+        eprintln!("original={ops:#?}\nrewritten={rewritten:#?}");
+        for outcome in [0x00, 0xff] {
+            for input in 0..16u8 {
+                let reference = execute(&ops, input, outcome);
+                let candidate = execute(&rewritten, input, outcome);
+                assert_eq!(reference.0, candidate.0, "quantum state, input {input:04b}, outcome {outcome:02x}");
+                assert_eq!(reference.1, candidate.1, "relative phase, input {input:04b}, outcome {outcome:02x}");
+            }
+        }
+    }
+
+    #[test]
+    fn u_compute_uncompute_preserves_all_inputs_and_phase() {
+        assert!(std::env::var_os("SL_COND_NOGUARD").is_none());
+        assert!(std::env::var_os("SL_COND_FAULT").is_none());
+        assert!(std::env::var_os("SL_COND_ALIGN").is_none());
+        let mut live_cz = gate(K::CZ, 0, u64::MAX, 3);
+        live_cz.c_condition = BitId(0);
+        let ops = vec![
+            register(0), register(1), register(3), register_bit(0),
+            gate(K::CCX, 0, 1, 2),
+            gate(K::Z, u64::MAX, u64::MAX, 2),
+            gate(K::CCX, 0, 1, 2),
+            live_cz,
+        ];
+        let rewritten = run_with(ops.clone(), "mfsur");
+        let ccx = |stream: &[Op]| stream.iter().filter(|o| o.kind == K::CCX).count();
+        assert_eq!(ccx(&ops), 2);
+        assert_eq!(ccx(&rewritten), 1);
+        let mut measure = gate(K::Hmr, u64::MAX, u64::MAX, 2);
+        measure.c_target = BitId(1);
+        let mut repair = gate(K::CZ, 0, u64::MAX, 1);
+        repair.c_condition = BitId(1);
+        let expected = vec![ops[0], ops[1], ops[2], ops[3], ops[4], ops[5], measure, repair, ops[7]];
+        assert_eq!(rewritten, expected);
+        for outcome in [0, u64::MAX] {
+            for input in 0..16u8 {
+                let reference = execute_small(&ops, input, &[]);
+                let candidate = execute_small(&rewritten, input, &[outcome]);
+                assert_eq!(candidate.1[1], outcome, "u outcome, input {input:04b}");
+                assert_eq!(reference.0, candidate.0, "u state, input {input:04b}, outcome {outcome:016x}");
+                assert_eq!(&reference.1[..1], &candidate.1[..1], "u original live bits, input {input:04b}, outcome {outcome:016x}");
+                assert_eq!(reference.2, candidate.2, "u phase, input {input:04b}, outcome {outcome:016x}");
+            }
+        }
+    }
+
+    #[test]
+    fn r_conditional_reset_window_preserves_all_inputs_and_phase() {
+        assert!(std::env::var_os("SL_COND_NOGUARD").is_none());
+        assert!(std::env::var_os("SL_COND_FAULT").is_none());
+        assert!(std::env::var_os("SL_COND_ALIGN").is_none());
+        let mut ccx = gate(K::CCX, 0, 1, 2);
+        ccx.c_condition = BitId(0);
+        let ops = vec![
+            register(0), register(1), register(3), register_bit(0),
+            ccx,
+            gate(K::R, u64::MAX, u64::MAX, 2),
+        ];
+        let rewritten = run_with(ops.clone(), "mfsur");
+        assert_eq!(rewritten.iter().filter(|o| o.kind == K::CCX).count(), 0);
+        let mut measure = gate(K::Hmr, u64::MAX, u64::MAX, 2);
+        measure.c_target = BitId(1);
+        let push = Op { kind: K::PushCondition, c_condition: BitId(1), ..Op::empty() };
+        let mut repair = gate(K::CZ, 0, u64::MAX, 1);
+        repair.c_condition = BitId(0);
+        let pop = Op { kind: K::PopCondition, ..Op::empty() };
+        let expected = vec![ops[0], ops[1], ops[2], ops[3], measure, push, repair, pop, ops[5]];
+        assert_eq!(rewritten, expected);
+        for original in [0, u64::MAX] {
+            for trailing in [0, u64::MAX] {
+                for input in 0..16u8 {
+                    let reference = execute_small(&ops, input, &[original]);
+                    let candidate = execute_small(&rewritten, input, &[original, trailing]);
+                    assert_eq!(candidate.1[1], original, "r outcome, input {input:04b}, trailing {trailing:016x}");
+                    assert_eq!(reference.0, candidate.0, "r state, input {input:04b}, outcomes {original:016x} {trailing:016x}");
+                    assert_eq!(&reference.1[..1], &candidate.1[..1], "r original live bits, input {input:04b}, outcomes {original:016x} {trailing:016x}");
+                    assert_eq!(reference.2, candidate.2, "r phase, input {input:04b}, outcomes {original:016x} {trailing:016x}");
+                }
+            }
+        }
+    }
 }
