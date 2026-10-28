@@ -1,4 +1,5 @@
 mod fd_coordinate;
+mod cmp_narrow;
 mod back_seam;
 pub mod cross_chunk_probe;
 pub mod dirty_boundary_probe;
@@ -156,7 +157,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "1231284963708",
+        "TAIL_NONCE" => "1232477079803",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -661,6 +662,7 @@ pub fn build() -> Vec<Op> {
     ops = source_edits::run(ops, &b);
     ops=source_edits::run(ops,include_str!("affine_followup.txt"));
     ops=source_edits::run(ops,include_str!("union_followup.txt"));
+    ops = cmp_narrow::run(ops); // inert without ./cmp_narrow.cfg (QCC-scout lambda-for-T probe)
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
