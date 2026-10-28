@@ -41,7 +41,6 @@ pub(super) fn mapped_zero(c:&mut Builder,acc:&[QubitId],map:&[Vec<QubitId>]) {
 /// Add J=(k*f-g)/2 to the upper word, k=s+p*(2o-1), g=s XOR p.
 /// Original p,s,o survive; two selector ANDs replace the old three.
 pub(super) fn half_fold(c:&mut Builder,upper:&[QubitId],p:QubitId,s:QubitId,o:QubitId) {
-    super::y17_fold_true_cap();
     c.cx(s,o);c.x(o);let q=and_clean(c,p,o);c.x(o);c.cx(s,o);
     c.x(s);let minus=and_clean(c,q,s);c.x(s);
     c.cx(minus,q); // q hosts plus_2f
@@ -77,6 +76,7 @@ pub(super) fn joint_prebias_div(c:&mut Builder,sign:QubitId,a:&[QubitId],b:&[Qub
             let full_first=plo==0 && phi==k;
             if full_first {c.cx(b[0],sign);} // parity host temporarily holds g
             let borrow=if full_first {Some(sign)}else{seeded.then(||a[phi-k-1])};
+            trace_replay_predictor('B',round,false,phi,k,a,borrow);
             erase_with_compare(c,carry,&b[w.clone()],&a[w],borrow);c.free(carry);
             if full_first {c.cx(b[0],sign);}
         }
@@ -87,7 +87,7 @@ pub(super) fn joint_prebias_div(c:&mut Builder,sign:QubitId,a:&[QubitId],b:&[Qub
     let mut k=flag_compare(round)+usize::from(policy_width(round)>=flag_widen_div());
     let borrow=if env_flag("CMP_SEED_ALL"){k-=1;Some(a[N-k-1])}else{None};
     if borrow.is_none(){k=refined_unseeded_width(k,N,"PP_REFINE_UNSEEDED_F");}
-    c.record_replay_site('F',round,N,k);erase_with_compare(c,o,&b[N-k..],&a[N-k..],borrow);c.free(o);
+    c.record_replay_site('F',round,N,k);trace_replay_predictor('F',round,false,N,k,a,borrow);erase_with_compare(c,o,&b[N-k..],&a[N-k..],borrow);c.free(o);
     c.cx_all(sign,b);rotate_down(c,b);
 }
 

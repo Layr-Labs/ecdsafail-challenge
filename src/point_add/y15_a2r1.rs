@@ -61,7 +61,7 @@ fn r8_gf2(rows: Vec<Vec<u64>>, tb: usize, nw: usize) -> Option<Vec<bool>> {
 /// (the final positions of the input wires 1 ..= e, e >= 1). `kinds` = (phi, sym) fill kinds allowed.
 fn r8_solve_sl(w: usize, stages: &[(Vec<(usize, usize)>, u8)], emax: usize, kinds: &[(u8, u8)], no0_after: Option<usize>) -> Option<Vec<(usize, usize, u8, u8)>> {
     let ns = stages.len();
-    let nr = a_env("LFA2_R8NEAR").unwrap_or(if true { w } else if w % 2 == 1 { w } else { 24 });
+    let nr = a_env("LFA2_R8NEAR").unwrap_or(if w % 2 == 1 { w } else { 24 });
     let near: Vec<usize> = (0..w).filter(|&q| q < nr || q + nr >= w || (q + 12 >= w / 2 && q < w / 2 + 12)).collect();
     let vars: Vec<(usize, usize, u8, u8)> = (0..=ns)
         .flat_map(|b| near.iter().flat_map(move |&q| kinds.iter().map(move |&(f, s)| (b, q, f, s))))
@@ -158,7 +158,7 @@ fn r8_fast_g(w: usize, base: &Rail8, emax: usize, sym: u8) -> Option<Vec<(usize,
     let ns = stages.len();
     let sl0: Vec<(usize, usize, u8, u8)> = base.fills.iter().filter(|f| f.2 < 4).map(|&(b, q, f)| (b, q, f, if f > 0 { sym } else { 1 })).collect();
     let no0 = base.drop.map(|d| d.0);
-    let nr = a_env("LFA2_R8NEAR").unwrap_or(if true { w } else if w % 2 == 1 { w } else { 24 });
+    let nr = a_env("LFA2_R8NEAR").unwrap_or(if w % 2 == 1 { w } else { 24 });
     let near: Vec<usize> = (0..w).filter(|&q| q < nr || q + nr >= w || (q + 12 >= w / 2 && q < w / 2 + 12)).collect();
     let vars: Vec<(usize, usize)> = (0..=ns).flat_map(|b| near.iter().map(move |&q| (b, q))).filter(|&(b, q)| !(q == 0 && no0.is_some_and(|s| b > s))).collect();
     let tb = vars.len();
@@ -305,21 +305,14 @@ pub(super) fn rail8_barrel_g(c: &mut Builder, k: [QubitId; 3], t: &[QubitId], l:
                 c.x(t[0]);
                 let m = c.alloc_bit();
                 c.hmr(t[0], m);
-                let phase_fault=false&&w>=9&&w%2==0;
-                if !phase_fault{c.x(t[pr]);}
-                if !([6,8].contains(&w)&&std::env::var("RAIL_OPT_NARROW").as_deref()==Ok("1")&&false){c.cz_if(h,t[pr],m);}
-                if !phase_fault{c.x(t[pr]);}
+                c.x(t[pr]);
+                c.cz_if(h, t[pr], m);
+                c.x(t[pr]);
                 c.free_bit(m);
                 c.release_clean(t[0]);
                 dropped = true;
-            } else if !inverse && [a,b].iter().any(|&d| d>=RAIL_OPT_DROP_KEEP.with(|x|x.get()) && d<w-1 && !(si+1..pl.base.stages.len()).any(|j|pl.base.stages[j].0.iter().any(|p|p.0==d||p.1==d))) {
-                let d=if a>=RAIL_OPT_DROP_KEEP.with(|x|x.get()) && a<w-1 {a}else{b};let p=if d==a {b}else{a};
-                let mut known=Lin::of(&[sg]);
-                for &(_,_,f) in consts.iter().filter(|x|x.1==d && x.0>si){known=known.x(&if f==4 {Lin::k(true)}else{Lin::of(&[k[f as usize-5]])});}
-                for &(_,_,f,s) in pl.sl.iter().filter(|x|x.1==d && x.0>si){known=known.x(&if f==0 {let mut z=Lin::k(false);if s&1!=0 {z=z.x(&Lin::of(&[scopy.unwrap()]));}if s&2!=0 {z=z.x(&Lin::of(&[l[0]])).x(&Lin::of(&[l[1]]));}z}else{Lin::of(&[prod.iter().find(|p|p.0==(f,s)).unwrap().1])});}
-                rail_opt_drop_fredkin(c,h,&others,t[d],t[p],&known);
             } else {
-                if !(w>=9&&w%2==0&&std::env::var("FRAME_SHIFT").as_deref()==Ok("1")&&false&&si==0&&pairs.first()==Some(&(a,b))){fredkin(c,h,t[a],t[b]);}
+                fredkin(c, h, t[a], t[b]);
             }
         }
         for &o in others.iter().rev() { c.cx(o, h); }
