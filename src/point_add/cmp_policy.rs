@@ -36,6 +36,8 @@ pub(crate) fn run(ops: Vec<Op>) -> Vec<Op> {
         }).collect()
     };
     let mut occ: std::collections::HashMap<u64, usize> = Default::default();
+    let selected:std::collections::HashSet<(u64,usize)>=include_str!("direct61_override.txt").lines().filter(|l|!l.starts_with('#')&&!l.trim().is_empty()).map(|l|{let a:Vec<_>=l.split_whitespace().collect();(u64::from_str_radix(a[0],16).unwrap(),a[1].parse().unwrap())}).collect();
+    assert_eq!(selected.len(),61);let mut selected_hits=0usize;
     if n0 == 0 && table.is_empty() { return ops; }
     use OperationType::*;
     let mut delete = vec![false; ops.len()];
@@ -57,7 +59,8 @@ pub(crate) fn run(ops: Vec<Op>) -> Vec<Op> {
         let sig = block_sig(k, h.q_target, &u);
         let oc = { let c = occ.entry(sig).or_insert(0); *c += 1; *c - 1 };
         let n = match table.get(&(sig, oc)) { Some(&n) => n, None => if k >= min_w.max(n0 + 4) { n0 } else { 0 } };
-        let n=if i<4_500_000 {usize::from(k>=20)}else{n};
+        let n=if selected.contains(&(sig,oc)){selected_hits+=1;0}else{n};
+
         if n == 0 || k < n + 4 { skip_reason[0] += 1; i = e; continue; }
         let is_cx = |o: &Op, c: QubitId, t: QubitId| o.kind == CX && o.c_condition == NO_BIT && o.q_control1 == c && o.q_target == t;
         let ccx_into = |o: &Op, a: QubitId, b: QubitId| -> Option<QubitId> {
@@ -112,6 +115,7 @@ pub(crate) fn run(ops: Vec<Op>) -> Vec<Op> {
         done += 1; ccx_cut += cut;
         i = e;
     }
+    assert_eq!(selected_hits,61,"original direct policy exclusions");
     let mut ops = ops;
     for (t, from, to) in subst {
         let o = &mut ops[t];

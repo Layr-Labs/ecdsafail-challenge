@@ -90,12 +90,3 @@ pub fn run_with(ops:Vec<Op>,from:usize,width:usize,cut:usize,skip:usize,take:usi
  eprintln!("VALUE_WIDTHS {hist:?}; edited {}",edits.len());let mut out=Vec::new();let mut last=0;
  for(at,end,rep)in edits{out.extend_from_slice(&ops[last..at]);out.extend(rep);last=end;}out.extend_from_slice(&ops[last..]);out
 }
-
-
-/// Six verified terminal multiply value bodies, disjoint from native24.
-pub(super) fn verified_six(ops:Vec<Op>)->Vec<Op>{
- let count=|o:&[Op]|o.iter().filter(|x|x.kind==K::CCX).count();let before=count(&ops);let mut ops=ops;
- for(skip,cut)in[(3,1),(2,3),(1,5),(0,9)]{let before=count(&ops);ops=run_with(ops,5_300_000,17,cut,skip,1,0);assert_eq!(before-count(&ops),cut);}
- let prior=count(&ops);ops=run_with(ops,5_300_000,16,3,0,2,0);assert_eq!(prior-count(&ops),6);
- assert_eq!(before-count(&ops),24);ops
-}

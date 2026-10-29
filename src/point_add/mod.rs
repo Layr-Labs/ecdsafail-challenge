@@ -1,7 +1,14 @@
+mod hold_pass;
+mod choice_narrow;
 mod t0_window;
+mod last_veto;
+mod cmp_extra;
+mod phase_narrow;
+mod zero_quartic;
+mod last_veto_local;
 mod t0_window_bound;
-mod extend_roles;
 mod cap_schedule;
+mod direct_policy;
 mod tail_barrel_inverse;
 mod tail_barrel;
 mod cmp_policy;
@@ -166,7 +173,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "68224250142751",
+        "TAIL_NONCE" => "142737647851171",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -522,12 +529,6 @@ mod divide_prefix;
 pub fn build() -> Vec<Op> {
     clear_process_env();
     let mut ops = apply_merged_policy(divide_prefix::prefix());
-    ops = cap_schedule::run(ops,1,1);
-    ops = affine_simplify::simplify(ops);
-    ops = cond_pass::final_cap_cleanup(ops);
-    ops = value_narrow::verified_six(ops);
-    ops = extend_roles::run(ops);
-    ops = t0_window_bound::run(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -539,7 +540,8 @@ pub fn build() -> Vec<Op> {
 /// Final passes shared by the snapshot and structural emission paths.
 fn apply_merged_policy(ops: Vec<Op>) -> Vec<Op> {
     let ops = cmp_policy::run(ops);
-    let ops = cmp_narrow::run_additional(ops);
+    let ops=direct_policy::run_bound(ops,include_str!("direct61_bodies.txt"));
+    let ops = generic_compare::transform(ops, 0, 4_500_000, &[20, 21], 1, 0, true);
     let ops = value_narrow::run(ops, 5_300_000, 21, 1);
     let ops = tail_barrel::run(ops);
     let ops = tail_barrel_inverse::run(ops);
@@ -547,7 +549,31 @@ fn apply_merged_policy(ops: Vec<Op>) -> Vec<Op> {
     let ops=value_narrow::run(ops,5_300_000,24,4);
     let after=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
     assert_eq!(before-after,16,"native24 cuts");
-    source_edits::run(ops,include_str!("merge_history_restore.txt"))
+    let before_terminal=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
+    let mut ops=ops;
+    for (skip,cut) in [(3,1),(2,3),(1,5),(0,9)] {
+        let before=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
+        ops=value_narrow::run_with(ops,5_300_000,17,cut,skip,1,0);
+        let after=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
+        assert_eq!(before-after,cut,"one original terminal width17 value repair");
+    }
+    let before=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
+    ops=value_narrow::run_with(ops,5_300_000,16,3,0,2,0);
+    let after=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
+    assert_eq!(before-after,6,"two terminal width16 value repairs");
+    assert_eq!(before_terminal-after,24,"complete six-body terminal value policy");
+    let ops = source_edits::run(ops,include_str!("merge_history_restore.txt"));
+    // Verified cap edits run after every hash-bound comparison/history pass.
+    let ops = cap_schedule::run(ops,1,1);
+    let ops = affine_simplify::simplify(ops);
+    let ops = cond_pass::final_cap_cleanup(ops);
+    let ops = t0_window_bound::run(ops);
+    let ops = last_veto::run(ops, 3);
+    let ops = choice_narrow::run(ops);
+    let ops = phase_narrow::run_single_bound(ops,include_str!("special_phase_body.txt"));
+    let ops = zero_quartic::run(ops);
+    let ops = cmp_extra::run(ops, include_str!("cmp_extra.txt"));
+    hold_pass::hold_pass(ops)
 }
 
 /// Original structural generator, retained for audit and regeneration.

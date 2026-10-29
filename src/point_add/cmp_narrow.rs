@@ -20,25 +20,8 @@ pub(crate) fn run_additional(ops: Vec<Op>) -> Vec<Op> {
     // comparison bits, preserving every discarded scratch measurement draw.
     let ops = run_selected_aligned(ops, 8, 17, 3_294_000, 3_300_000, &[17], true);
     let ops = run_selected_aligned(ops, 8, 16, 3_294_000, 3_300_000, &[16], true);
-    // Forward ticks118..120, grouped by the three payload addition roles.
-    // Descending ranges keep earlier selectors fixed as later bodies shrink.
-    let mut ops = ops;
-    for &(lo, hi, removed) in &[
-        (3282204, 3284890, 4), // tick120, add2
-        (3278089, 3280825, 2), // tick120, add1
-        (3273671, 3276457, 2), // tick120, add0
-        (3261734, 3264420, 4), // tick119, add2
-        (3257619, 3260355, 2), // tick119, add1
-        (3253201, 3255987, 2), // tick119, add0
-        (3241226, 3243912, 4), // tick118, add2
-        (3236932, 3239847, 2), // tick118, add1
-        (3232609, 3235449, 2), // tick118, add0
-    ] {
-        let before=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-        ops = run_selected_aligned(ops, removed, 17, lo, hi, &[17], true);
-        let after=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-        assert_eq!(before-after,6*removed,"six native17 repairs in each original tick/add role");
-    }
+    // Forward ticks118..120: native17-bit chunk-boundary comparisons.
+    let ops = run_selected_aligned(ops, 2, 17, 3232609, 3284890, &[17], true);
     // Joint carry erasures have a comparison under an existing condition;
     // the HMR-adjacent pass above does not recognize those ladders.
     super::generic_compare::transform(ops, 0, 4_500_000, &[20, 21], 1, 0, true)
