@@ -724,3 +724,19 @@ pub fn run(ops: Vec<Op>) -> Vec<Op> {
     eprintln!("SL_COND static expected Toffoli {w0:.1} -> {w1:.1} ({:.1}){}", w1 - w0, if fault.is_empty() { String::new() } else { format!("; FAULT {fault}") });
     l.iter().map(from_l).collect()
 }
+
+/// A final exact cleanup of phase-only and unused products exposed by the
+/// fixed terminal-cap edits. The m/f levers preserve every reset/draw slot.
+pub(super) fn final_cap_cleanup(ops: Vec<Op>) -> Vec<Op> {
+    let draws = ops.iter().filter(|o| matches!(o.kind, K::R | K::Hmr)).count();
+    let mut l: Vec<L> = ops.iter().map(to_l).collect();
+    drop(ops);
+    for _ in 0..3 {
+        let (ed, cnt, _) = plan_muf(&l, "mf", "");
+        l = ed.apply(&l);
+        if cnt.iter().all(|&n| n == 0) { break; }
+    }
+    let out: Vec<Op> = l.iter().map(from_l).collect();
+    assert_eq!(draws, out.iter().filter(|o| matches!(o.kind, K::R | K::Hmr)).count());
+    out
+}

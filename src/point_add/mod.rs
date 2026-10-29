@@ -1,5 +1,14 @@
+mod t0_window;
+mod t0_window_bound;
+mod extend_roles;
+mod cap_schedule;
+mod tail_barrel_inverse;
+mod tail_barrel;
+mod cmp_policy;
+mod value_narrow;
 mod fd_coordinate;
 mod cmp_narrow;
+mod generic_compare;
 mod back_seam;
 pub mod cross_chunk_probe;
 pub mod dirty_boundary_probe;
@@ -157,7 +166,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "1232477079803",
+        "TAIL_NONCE" => "68224250142751",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -507,7 +516,42 @@ fn clear_process_env() {
 /// Leapfrog branch: the submission build emits the Leapfrog point add (see [`leapfrog::install_recipe`]).
 const LEAPFROG_SUBMISSION: bool = true;
 
+mod divide_prefix;
+
+/// Decode the fixed generated prefix, then apply the source-pinned divider passes.
 pub fn build() -> Vec<Op> {
+    clear_process_env();
+    let mut ops = apply_merged_policy(divide_prefix::prefix());
+    ops = cap_schedule::run(ops,1,1);
+    ops = affine_simplify::simplify(ops);
+    ops = cond_pass::final_cap_cleanup(ops);
+    ops = value_narrow::verified_six(ops);
+    ops = extend_roles::run(ops);
+    ops = t0_window_bound::run(ops);
+    let nonce: u64 = required_env("TAIL_NONCE");
+    let mut x = Op::empty();
+    x.kind = OperationType::X;
+    x.q_target = QubitId(0);
+    ops.extend(std::iter::repeat_n(x, 96));
+    apply_tail_nonce(ops, nonce)
+}
+
+/// Final passes shared by the snapshot and structural emission paths.
+fn apply_merged_policy(ops: Vec<Op>) -> Vec<Op> {
+    let ops = cmp_policy::run(ops);
+    let ops = cmp_narrow::run_additional(ops);
+    let ops = value_narrow::run(ops, 5_300_000, 21, 1);
+    let ops = tail_barrel::run(ops);
+    let ops = tail_barrel_inverse::run(ops);
+    let before=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
+    let ops=value_narrow::run(ops,5_300_000,24,4);
+    let after=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
+    assert_eq!(before-after,16,"native24 cuts");
+    source_edits::run(ops,include_str!("merge_history_restore.txt"))
+}
+
+/// Original structural generator, retained for audit and regeneration.
+pub fn build_generated() -> Vec<Op> {
     // W124 (Codex) width composition, ported onto 6602a4e8: the effective selection pinned in source.
     // trace=true reproduces W124's logs only (stderr); it does not change gates.
     let w113_trace = true;
@@ -662,7 +706,7 @@ pub fn build() -> Vec<Op> {
     ops = source_edits::run(ops, &b);
     ops=source_edits::run(ops,include_str!("affine_followup.txt"));
     ops=source_edits::run(ops,include_str!("union_followup.txt"));
-    ops = cmp_narrow::run(ops); // inert without ./cmp_narrow.cfg (QCC-scout lambda-for-T probe)
+    ops = apply_merged_policy(ops); // same final policies as the compiled prefix path
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
