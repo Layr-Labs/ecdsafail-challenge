@@ -348,15 +348,15 @@ impl ReplaySites {
             "mul"
         };
         self.rows
-            .push(format!("{kind}\t{direction}\t{round}\t{pos}\t{width}"));
+            .push(format!("{kind}\t{direction}\t{round}\t{pos}\t{width}\t{}", at.op));
     }
 
     pub fn finalize(&self) {
         if !self.enabled {
             return;
         }
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/replay_sites.tsv");
-        let mut body = String::from("kind\tdir\tround\tpos\twidth\n");
+        let path = "replay_sites.tsv";
+        let mut body = String::from("kind\tdir\tround\tpos\twidth\top\n");
         for row in &self.rows {
             body.push_str(row);
             body.push('\n');
