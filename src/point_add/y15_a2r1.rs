@@ -305,21 +305,14 @@ pub(super) fn rail8_barrel_g(c: &mut Builder, k: [QubitId; 3], t: &[QubitId], l:
                 c.x(t[0]);
                 let m = c.alloc_bit();
                 c.hmr(t[0], m);
-                let phase_fault=false&&w>=9&&w%2==0;
-                if !phase_fault{c.x(t[pr]);}
-                if !([6,8].contains(&w)&&std::env::var("RAIL_OPT_NARROW").as_deref()==Ok("1")&&false){c.cz_if(h,t[pr],m);}
-                if !phase_fault{c.x(t[pr]);}
+                c.x(t[pr]);
+                c.cz_if(h, t[pr], m);
+                c.x(t[pr]);
                 c.free_bit(m);
                 c.release_clean(t[0]);
                 dropped = true;
-            } else if !inverse && [a,b].iter().any(|&d| d>=RAIL_OPT_DROP_KEEP.with(|x|x.get()) && d<w-1 && !(si+1..pl.base.stages.len()).any(|j|pl.base.stages[j].0.iter().any(|p|p.0==d||p.1==d))) {
-                let d=if a>=RAIL_OPT_DROP_KEEP.with(|x|x.get()) && a<w-1 {a}else{b};let p=if d==a {b}else{a};
-                let mut known=Lin::of(&[sg]);
-                for &(_,_,f) in consts.iter().filter(|x|x.1==d && x.0>si){known=known.x(&if f==4 {Lin::k(true)}else{Lin::of(&[k[f as usize-5]])});}
-                for &(_,_,f,s) in pl.sl.iter().filter(|x|x.1==d && x.0>si){known=known.x(&if f==0 {let mut z=Lin::k(false);if s&1!=0 {z=z.x(&Lin::of(&[scopy.unwrap()]));}if s&2!=0 {z=z.x(&Lin::of(&[l[0]])).x(&Lin::of(&[l[1]]));}z}else{Lin::of(&[prod.iter().find(|p|p.0==(f,s)).unwrap().1])});}
-                rail_opt_drop_fredkin(c,h,&others,t[d],t[p],&known);
             } else {
-                if !(w>=9&&w%2==0&&std::env::var("FRAME_SHIFT").as_deref()==Ok("1")&&false&&si==0&&pairs.first()==Some(&(a,b))){fredkin(c,h,t[a],t[b]);}
+                fredkin(c, h, t[a], t[b]);
             }
         }
         for &o in others.iter().rev() { c.cx(o, h); }
