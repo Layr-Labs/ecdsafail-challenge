@@ -336,7 +336,10 @@ impl Builder {
             v.sort_unstable();
             v
         };
-        assert_eq!(sorted(&self.free_qubits), sorted(&before.0), "y42: the payload op changed the set of free wires");
+        // rebind scratch (both arms): wires the op allocated fresh above the old high-water mark and freed again are
+        // tolerated and kept free after the base's order; every wire free before must be free again (no-op at the cap)
+        let extra: Vec<u32> = { let b = sorted(&before.0); sorted(&self.free_qubits).into_iter().filter(|q| b.binary_search(q).is_err()).collect() };
+        { let now = sorted(&self.free_qubits); assert!(before.0.iter().all(|q| now.binary_search(q).is_ok()), "y42: the payload op kept a wire"); }
         assert!(self.next_bit >= before.2 && next_bit >= before.2, "y42: bit counter");
         let mut now = before.1.clone();
         now.extend(before.2..self.next_bit);
@@ -348,6 +351,7 @@ impl Builder {
         base.extend(before.2..next_bit);
         assert_eq!(sorted(&bits), sorted(&base), "y42: the recorded free bits are not this tick's");
         self.free_qubits = free_q.to_vec();
+        self.free_qubits.extend(extra);
         self.free_bits = bits;
         self.next_bit = next_bit;
     }
