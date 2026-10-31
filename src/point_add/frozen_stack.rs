@@ -29,7 +29,6 @@ fn kind(k: u32) -> K {
         6 => K::X, 7 => K::Z, 8 => K::CX, 9 => K::CZ, 10 => K::Swap, 11 => K::R, 12 => K::Hmr, 13 => K::CCX, 14 => K::CCZ,
         15 => K::PushCondition, 16 => K::PopCondition, 17 => K::DebugPrint, _ => panic!("frozen stack: op kind {k}") }
 }
-#[allow(dead_code)]
 pub(super) fn run(ops: Vec<Op>) -> Vec<Op> {
     assert_eq!(ops.len(), IN_LEN, "frozen stack input length");
     assert_eq!(hash(&ops), IN_SHA3, "frozen stack input hash");
@@ -62,57 +61,5 @@ pub(super) fn run(ops: Vec<Op>) -> Vec<Op> {
     assert_eq!(out.len(), OUT_LEN, "frozen stack output length");
     assert_eq!(hash(&out), OUT_SHA3, "frozen stack output hash");
     eprintln!("FROZEN_STACK hunks={n} input={} output={}", IN_LEN, out.len());
-    out
-}
-
-/// The table's hunks as (start, deleted length, inserted ops).
-fn hunks() -> Vec<(usize, usize, Vec<Op>)> {
-    let mut d = zstd::stream::read::Decoder::new(DATA).expect("frozen stack zstd");
-    let mut all = Vec::new();
-    d.read_to_end(&mut all).expect("frozen stack data");
-    assert_eq!(&all[..8], b"HNKS1\0\0\0", "frozen stack table header");
-    let u = |o: usize| u64::from_le_bytes(all[o..o + 8].try_into().unwrap());
-    let n = u(16) as usize;
-    let (mut p, mut v) = (24usize, Vec::new());
-    for _ in 0..n {
-        let (s, l, m) = (u(p) as usize, u(p + 8) as usize, u(p + 16) as usize);
-        p += 24;
-        let mut ins = Vec::new();
-        for k in 0..m {
-            let r = &all[p + 56 * k..p + 56 * k + 56];
-            let w = |o: usize| u64::from_le_bytes(r[o..o + 8].try_into().unwrap());
-            let o = Op { kind: kind(u32::from_le_bytes(r[0..4].try_into().unwrap())), q_control2: QubitId(w(8)), q_control1: QubitId(w(16)),
-                q_target: QubitId(w(24)), c_target: BitId(w(32)), c_condition: BitId(w(40)), r_target: RegisterId(w(48)) };
-            o.validate();
-            ins.push(o);
-        }
-        p += 56 * m;
-        v.push((s, l, ins));
-    }
-    v
-}
-
-/// SHA3-256 (as `hash`) of ops [0, 3,236,272) after reader_pass: the prefix that holds all six hunks. It is the
-/// 4cb9cf0 stream's own prefix; this tree changes only the square, which is emitted later.
-const PREFIX_SHA3: &str = "26ce1e25922539733578bea76081cdefcd62c759f7867f4a75a1ff52c01e76a0";
-
-/// The 6 hunks placed by position. All of them lie in the stream prefix up to the last hunk's end, and that prefix must
-/// hash to PREFIX_SHA3, so every edit lands on the op it was made for; the rest of the stream is left as it is (the
-/// table has no hunk there).
-pub(super) fn run_prefix(ops: Vec<Op>) -> Vec<Op> {
-    let h = hunks();
-    let end = h.iter().map(|x| x.0 + x.1).max().unwrap_or(0);
-    assert!(end <= ops.len(), "frozen prefix: stream shorter than the table");
-    let ph = hash(&ops[..end]);
-    assert_eq!(ph, PREFIX_SHA3, "frozen prefix hash");
-    let mut out: Vec<Op> = Vec::with_capacity(ops.len() + 8);
-    let mut at = 0usize;
-    for (s, l, ins) in h {
-        assert!(s >= at && s + l <= ops.len(), "frozen prefix hunk range");
-        out.extend_from_slice(&ops[at..s]);
-        out.extend(ins);
-        at = s + l;
-    }
-    out.extend_from_slice(&ops[at..]);
     out
 }
