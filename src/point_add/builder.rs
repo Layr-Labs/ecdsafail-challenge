@@ -106,8 +106,6 @@ impl Builder {
     /// B3b: (native, expected) Toffoli so far, when the phase report is on.
     pub fn report_totals(&self) -> Option<(usize, f64)> { self.report.as_deref().map(|r| (r.total_native, r.total_expected)) }
     pub(crate) fn i35_cost(&self)->f64{self.model_weighted}
-    /// Running expected (condition-weighted) Toffoli count of the phase report; 0 when the report is off.
-    pub(crate) fn expected_total(&self) -> f64 { self.report.as_deref().map_or(0.0, |r| r.total_expected) }
     pub fn i13_dims(&self)->(usize,usize){(self.next_qubit as usize,self.next_bit as usize)}
     pub fn take_ops(&mut self) -> Vec<Op> {
         if self.model {
@@ -295,81 +293,10 @@ impl Builder {
         let at = self.at();
         self.peak_census.on_free(at, q.0);
     }
-    /// narrow (narrow.rs): the allocator set to a recorded state (free wires in order, free bits in order, next fresh
-    /// bit). Asserted: the same free wires and the same held bits.
-    pub(crate) fn narrow_alloc_set(&mut self, free_q: &[u32], bits: &[u32], next_bit: u32) {
-        let sorted = |v: &[u32]| {
-            let mut v = v.to_vec();
-            v.sort_unstable();
-            v
-        };
-        assert_eq!(sorted(&self.free_qubits), sorted(free_q), "narrow: the recorded free wires are not this build's");
-        let held = |free: &[u32], n: u32| {
-            let f: std::collections::HashSet<u32> = free.iter().copied().collect();
-            (0..n).filter(|b| !f.contains(b)).collect::<Vec<u32>>()
-        };
-        assert_eq!(held(&self.free_bits, self.next_bit), held(bits, next_bit), "narrow: the recorded held bits are not this build's");
-        self.free_qubits = free_q.to_vec();
-        self.free_bits = bits.to_vec();
-        self.next_bit = next_bit;
-    }
-    /// y42-railtop: the allocator's state (free wires and free bits in the order later allocations take them, and the
-    /// next fresh bit).
-    pub(crate) fn y42_alloc_state(&self) -> (Vec<u32>, Vec<u32>, u32) {
-        (self.free_qubits.clone(), self.free_bits.clone(), self.next_bit)
-    }
-    /// y42-railtop: a fingerprint of an allocator state.
-    pub(crate) fn y42_alloc_hash(st: &(Vec<u32>, Vec<u32>, u32)) -> u64 {
-        let mut h = 14695981039346656037u64;
-        for &x in st.0.iter().chain([u32::MAX].iter()).chain(st.1.iter()).chain([u32::MAX, st.2].iter()) {
-            h = (h ^ x as u64).wrapping_mul(1099511628211);
-        }
-        h
-    }
-    /// y42-railtop: after a payload op that ran on another plan than the base's, the allocator set to the state the
-    /// base's op leaves (`free_q`; the free bits `before.1[..bits_keep]` then `bits_tail`; `next_bit`), so that every
-    /// later op gets the base's wires and bits. Asserted: the op gave back every wire and every bit it took, and the
-    /// recorded state holds the same free wires and the same free bits (with the base's fresh ones).
-    pub(crate) fn y42_alloc_set(&mut self, before: &(Vec<u32>, Vec<u32>, u32), free_q: &[u32], bits_keep: usize, bits_tail: &[u32], next_bit: u32) {
-        let sorted = |v: &[u32]| {
-            let mut v = v.to_vec();
-            v.sort_unstable();
-            v
-        };
-        assert_eq!(sorted(&self.free_qubits), sorted(&before.0), "y42: the payload op changed the set of free wires");
-        assert!(self.next_bit >= before.2 && next_bit >= before.2, "y42: bit counter");
-        let mut now = before.1.clone();
-        now.extend(before.2..self.next_bit);
-        assert_eq!(sorted(&self.free_bits), sorted(&now), "y42: the payload op kept a classical bit");
-        assert_eq!(sorted(free_q), sorted(&before.0), "y42: the recorded free wires are not this tick's");
-        let mut bits = before.1[..bits_keep].to_vec();
-        bits.extend_from_slice(bits_tail);
-        let mut base = before.1.clone();
-        base.extend(before.2..next_bit);
-        assert_eq!(sorted(&bits), sorted(&base), "y42: the recorded free bits are not this tick's");
-        self.free_qubits = free_q.to_vec();
-        self.free_bits = bits;
-        self.next_bit = next_bit;
-    }
     pub fn free_vec(&mut self, qs: &[QubitId]) {
         for &q in qs {
             self.free(q);
         }
-    }
-    /// N2 research patch (sim/patch_n2_sf.py, SL_N2_REACQ): take back the free wire `q` itself, keeping the free list's
-    /// order (unlike [`Builder::reacquire`]); false (nothing done) when `q` is not free.
-    pub fn n2_take(&mut self, q: QubitId) -> bool {
-        let Some(pos) = self.free_qubits.iter().rposition(|&f| u64::from(f) == q.0) else {
-            return false;
-        };
-        self.free_qubits.remove(pos);
-        self.active_qubits += 1;
-        self.note_peak();
-        if self.peak_census.enabled() {
-            let at = self.at();
-            self.peak_census.on_alloc(at, q.0, "reacquire", 0);
-        }
-        true
     }
     pub fn reacquire(&mut self, q: QubitId) {
         let pos = self
@@ -492,22 +419,6 @@ impl Builder {
     pub fn cz(&mut self, a: QubitId, b: QubitId) {
         self.cz_if(a, b, NO_BIT);
     }
-    #[track_caller]
-    pub fn ccz_if(&mut self, a: QubitId, b: QubitId, t: QubitId, cond: BitId) {
-        assert!(a != b && a != t && b != t, "invalid CCZ with aliased operands");
-        let mut op = Op::empty();
-        op.kind = OperationType::CCZ;
-        op.q_control1 = a;
-        op.q_control2 = b;
-        op.q_target = t;
-        self.push_condition(cond);
-        if self.ccx_census.watching() {
-            let at = self.at();
-            self.ccx_census.on_gate(at, OperationType::CCZ, std::panic::Location::caller());
-        }
-        self.push_op(op);
-        self.pop_condition();
-    }
     pub fn push_condition(&mut self, cond: BitId) {
         let mut op = Op::empty();
         op.kind = OperationType::PushCondition;
@@ -625,20 +536,6 @@ impl Builder {
         let p = 2.0_f64.powi(-(width as i32));
         if kind == 'B' { if pos != width { self.k3b_sites.0 += 1; self.k3b_sites.1 += p; } } else { self.k3b_sites.2 += 1; self.k3b_sites.3 += p; }
         self.replay_sites.record(at, kind, round, pos, width);
-    }
-
-    /// y33: the end-of-build sweep of [`super::y33_clears`] (Toffoli that only clear a wire before its reset become a
-    /// measurement and phase gates). Called once, by `build_point_add`, just before [`Builder::finalize_records`].
-    pub(crate) fn y33_clears(&mut self) {
-        if !super::y33_clears::Y33_CLEARS || self.model {
-            return;
-        }
-        let (sites, toffoli) = super::y33_clears::sweep(&mut self.ops, &mut self.next_bit);
-        if let Some(r) = self.report.as_deref_mut() {
-            r.total_native -= toffoli;
-            r.total_expected -= toffoli as f64;
-        }
-        eprintln!("Y33_CLEARS sites={sites} toffoli={toffoli}");
     }
 
     /// Emit all three recorders' output. Called once, at the end of
