@@ -8,7 +8,14 @@ pub(crate) fn with_tape(c:&mut Builder,q:Option<QubitId>,body:impl FnOnce(&mut B
 pub(crate) fn try_tail(c:&mut Builder,u:&[QubitId],v:&[QubitId],seed:Option<QubitId>)->bool{
  let mode=std::env::var("DIRTY_BOUNDARY_MODE").unwrap_or_default();if mode.is_empty(){return false;}
  let Some(d)=TAPE.with(|x|x.get())else{return false;};let n=u.len();
- let room=super::pingpong::heo_hooks::cap().saturating_sub(c.active_qubits()as usize);let r=(n-1).saturating_sub(room);
+ let room=super::walk_policy::physical_cap().saturating_sub(c.active_qubits()as usize);let r=(n-1).saturating_sub(room);
+ if room==0 && std::env::var_os("WALK_ZERO").is_some() {
+   let mut used=u.to_vec();used.extend(v);used.extend(seed);
+   let pool:Vec<_>=super::lowroom::pool_snapshot().into_iter().filter(|q|!used.contains(q)).collect();
+   if pool.len()<n+2{return false;}
+   zero_phase(c,u,v,seed,&pool);
+   eprintln!("WALK_ZERO_COMPARE n={n} live={}",c.active_qubits());return true;
+ }
  if r==0||r>=n-1||seed==Some(v[0]){return false;}
  let before=c.report_totals().map_or(0.,|x|x.1);let op=c.op_count();hybrid(c,u,v,seed,d,r,mode=="dirty");
  eprintln!("DIRTY_DEPLOY\t{}\t{}\t{}\t{}\t{}\t{}\t{}",mode,n,r,room,d.0,op,c.report_totals().map_or(0.,|x|x.1)-before);true
@@ -55,3 +62,27 @@ pub fn run(){
 pub(crate) struct Trace{c:*mut Builder,name:&'static str,n:usize,op:usize,live:u32,t:f64}
 impl Trace{pub(crate) fn new(c:&mut Builder,name:&'static str,n:usize)->Self{Self{c:c as *mut Builder,name,n,op:c.op_count(),live:c.active_qubits(),t:c.report_totals().map_or(0.,|x|x.1)}}}
 impl Drop for Trace{fn drop(&mut self){unsafe{let c=&*self.c;eprintln!("DIRTY_FRAGMENT\t{}\t{}\t{}\t{}\t{}\t{}\t{}",self.name,self.n,self.op,c.op_count(),self.live,c.active_qubits(),c.report_totals().map_or(0.,|x|x.1)-self.t);}}}
+
+pub(crate) fn zero_phase(c:&mut Builder,u:&[QubitId],v:&[QubitId],seed:Option<QubitId>,pool:&[QubitId]) {
+   let out=pool[0];let dirty=&pool[1..];
+   let eq=seed.map(|p|vec![vec![(v.iter().position(|&q|q==p).map_or(p,|i|u[i]),true)]]).unwrap_or_default();
+   for _ in 0..2 {super::heo::carry::lag::cmp(c,u,v,out,&eq,dirty);c.z_if(out,NO_BIT);}
+
+}
+pub fn zero_selftest(){
+ let mut total=0;
+ for n in 2..=6 {for sk in 0..4 {
+  let mut c=Builder::new();let u=c.alloc_qubits(n);let v=c.alloc_qubits(n);let seed=c.alloc_qubit();let pool=c.alloc_qubits(n+2);let ext=c.alloc_bit();
+  let si=match sk{0=>None,1=>Some(seed),2=>Some(v[0]),_=>Some(v[n-1])};
+  let start=c.op_count();c.push_condition(ext);zero_phase(&mut c,&u,&v,si,&pool);c.pop_condition();let(nq,nb)=c.i13_dims();let ops=c.take_ops();
+  let mut rows=Vec::new();for a in 0..1u64<<n{for b in 0..1u64<<n{for ss in 0..2{rows.push((a,b,ss));}}}
+  for batch in rows.chunks(64){for on in [false,true]{
+    let mut q=vec![0;nq];for(l,&(a,b,ss))in batch.iter().enumerate(){put(&mut q,&u,a,l);put(&mut q,&v,b,l);put(&mut q,&[seed],ss,l);}
+    for(i,&w)in pool.iter().enumerate(){q[w.0 as usize]=0x9612f7a345678bdeu64.rotate_left(i as u32);}
+    let before=q.clone();let(phi,_)=formal(&ops[start..],&mut q,nb,ext,on);assert_eq!(q,before,"zero comparator altered borrowed data");
+    for(l,&(a,b,ss))in batch.iter().enumerate(){let cin=match sk{0=>0,1=>ss,2=>b&1,_=>b>>(n-1)};assert_eq!((phi>>l)&1,u64::from(on&&a<b+cin),"n={n} sk={sk}");total+=1;}
+  }}
+  eprintln!("WALK_ZERO_COMPARE_TEST n={n} seed={sk} PASS");
+ }}
+ eprintln!("WALK_ZERO_COMPARE_TEST PASS cases={total}");
+}
