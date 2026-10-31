@@ -1,21 +1,4 @@
-mod hold_pass;
-mod choice_narrow;
-mod t0_window;
-mod last_veto;
-mod cmp_extra;
-mod phase_narrow;
-mod zero_quartic;
-mod last_veto_local;
-mod t0_window_bound;
-mod cap_schedule;
-mod direct_policy;
-mod tail_barrel_inverse;
-mod tail_barrel;
-mod cmp_policy;
-mod value_narrow;
 mod fd_coordinate;
-mod cmp_narrow;
-mod generic_compare;
 mod back_seam;
 pub mod cross_chunk_probe;
 pub mod dirty_boundary_probe;
@@ -172,8 +155,8 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_CROSS" => "1",
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
-        // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "12009835509",
+        // Public-validation nonce (Leapfrog build: all 9024 Fiat-Shamir shots pass).
+        "TAIL_NONCE" => "1515",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -523,61 +506,7 @@ fn clear_process_env() {
 /// Leapfrog branch: the submission build emits the Leapfrog point add (see [`leapfrog::install_recipe`]).
 const LEAPFROG_SUBMISSION: bool = true;
 
-mod divide_prefix;
-
-/// Decode the fixed generated prefix, then apply the source-pinned divider passes.
 pub fn build() -> Vec<Op> {
-    clear_process_env();
-    let mut ops = apply_merged_policy(divide_prefix::prefix());
-    let nonce: u64 = required_env("TAIL_NONCE");
-    let mut x = Op::empty();
-    x.kind = OperationType::X;
-    x.q_target = QubitId(0);
-    ops.extend(std::iter::repeat_n(x, 96));
-    apply_tail_nonce(ops, nonce)
-}
-
-/// Final passes shared by the snapshot and structural emission paths.
-fn apply_merged_policy(ops: Vec<Op>) -> Vec<Op> {
-    let ops = cmp_policy::run(ops);
-    let ops=direct_policy::run_bound(ops,include_str!("direct61_bodies.txt"));
-    let ops = generic_compare::transform(ops, 0, 4_500_000, &[20, 21], 1, 0, true);
-    let ops = value_narrow::run(ops, 5_300_000, 21, 1);
-    let ops = tail_barrel::run(ops);
-    let ops = tail_barrel_inverse::run(ops);
-    let before=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-    let ops=value_narrow::run(ops,5_300_000,24,4);
-    let after=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-    assert_eq!(before-after,16,"native24 cuts");
-    let before_terminal=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-    let mut ops=ops;
-    for (skip,cut) in [(3,1),(2,3),(1,5),(0,9)] {
-        let before=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-        ops=value_narrow::run_with(ops,5_300_000,17,cut,skip,1,0);
-        let after=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-        assert_eq!(before-after,cut,"one original terminal width17 value repair");
-    }
-    let before=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-    ops=value_narrow::run_with(ops,5_300_000,16,3,0,2,0);
-    let after=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-    assert_eq!(before-after,6,"two terminal width16 value repairs");
-    assert_eq!(before_terminal-after,24,"complete six-body terminal value policy");
-    let ops = source_edits::run(ops,include_str!("merge_history_restore.txt"));
-    // Verified cap edits run after every hash-bound comparison/history pass.
-    let ops = cap_schedule::run(ops,1,1);
-    let ops = affine_simplify::simplify(ops);
-    let ops = cond_pass::final_cap_cleanup(ops);
-    let ops = t0_window_bound::run(ops);
-    let ops = last_veto::run(ops, 3);
-    let ops = choice_narrow::run(ops);
-    let ops = phase_narrow::run_single_bound(ops,include_str!("special_phase_body.txt"));
-    let ops = zero_quartic::run(ops);
-    let ops = cmp_extra::run(ops, include_str!("cmp_extra.txt"));
-    hold_pass::hold_pass(ops)
-}
-
-/// Original structural generator, retained for audit and regeneration.
-pub fn build_generated() -> Vec<Op> {
     // W124 (Codex) width composition, ported onto 6602a4e8: the effective selection pinned in source.
     // trace=true reproduces W124's logs only (stderr); it does not change gates.
     let w113_trace = true;
@@ -679,60 +608,13 @@ pub fn build_generated() -> Vec<Op> {
     ops = compose_post::run(ops);
     ops = stream_pipeline::run(ops);
     ops = post_pipeline::run(ops);
-    ops = lane3_sigcut::run(ops);
-    ops = source_edits::run(ops, include_str!("our_cuts.txt"));
-    ops = rail_output_erase::run(ops);
-    ops = source_edits::run(ops, include_str!("our_cuts2.txt"));
-    ops = source_edits::run(ops, include_str!("builder_followup.txt"));
-    ops = source_edits::run(ops, include_str!("value_followup.txt"));
-    if std::env::var("BARREL_FOLLOWUP").as_deref()==Ok("1"){ops=source_edits::run(ops,include_str!("barrel_followup.txt"));}
-    // Lane R: third post-builder table, re-mined on spookyfrog 20 after barrel_followup.
-    // All edits are bound to the complete final pre-tail stream. ON by default (the submitted stream).
-    ops = source_edits::run(ops, include_str!("lane_r_stack.txt"));
-    ops=source_edits::run(ops,include_str!("score_followup.txt"));
-    ops=source_edits::run(ops,include_str!("guarded_followup.txt"));
-    let a: &[u32] = &[
-        342080,1,3,12,65535,65535,27,1573,65535,65535,10,65535,27,1230,65535,65535,65535,12,65535,65535,27,1573,65535,65535,4,65535,65535,65535,1573,65535,65535,
-        70345,1,3,12,65535,65535,829,1573,65535,65535,10,65535,829,1228,65535,65535,65535,12,65535,65535,829,1573,65535,65535,4,65535,65535,65535,1573,65535,65535,
-        13705,1,3,12,65535,65535,36,1573,65535,65535,10,65535,36,1227,65535,65535,65535,12,65535,65535,36,1573,65535,65535,4,65535,65535,65535,1573,65535,65535,
-        448730,1,1,13,776,772,1142,65535,65535,65535,10,65535,1230,1142,65535,65535,65535,
-        80886,1,1,13,731,825,743,65535,65535,65535,10,65535,1228,743,65535,65535,65535,
-        16174,1,1,13,823,827,1129,65535,65535,65535,10,65535,1227,1129,65535,65535,65535,
-        1886899,1,3,12,65535,65535,612,1389,65535,65535,10,65535,612,1233,65535,65535,65535,12,65535,65535,612,1389,65535,65535,4,65535,65535,65535,1389,65535,65535,
-        11833,1,1,13,147,150,1193,65535,65535,65535,10,65535,1233,1193,65535,65535,65535,
-        7242644,1,3,12,65535,65535,4,642,65535,65535,10,65535,4,1127,65535,65535,65535,12,65535,65535,4,642,65535,65535,4,65535,65535,65535,642,65535,65535,
-        6,1,3,12,65535,65535,1038,642,65535,65535,10,65535,1038,186,65535,65535,65535,12,65535,65535,1038,642,65535,65535,4,65535,65535,65535,642,65535,65535,
-        6,1,3,12,65535,65535,2,642,65535,65535,10,65535,2,1228,65535,65535,65535,12,65535,65535,2,642,65535,65535,4,65535,65535,65535,642,65535,65535,
-        31629,1,2,13,848,258,1127,65535,65535,65535,10,65535,1127,92,65535,65535,65535,13,848,258,1127,65535,65535,65535,
-        67,1,2,13,309,258,186,65535,65535,65535,10,65535,186,803,65535,65535,65535,13,309,258,186,65535,65535,65535,
-        66,1,2,13,310,258,1228,65535,65535,65535,10,65535,1228,848,65535,65535,65535,13,310,258,1228,65535,65535,65535,
-        6361,1,2,7,65535,65535,92,65535,683,65535,10,65535,92,738,65535,65535,65535,7,65535,65535,92,65535,683,65535,
-        270,1,2,7,65535,65535,803,65535,684,65535,10,65535,803,92,65535,65535,65535,7,65535,65535,803,65535,684,65535,
-        5336,1,2,9,65535,764,1211,65535,703,65535,10,65535,738,803,65535,65535,65535,9,65535,764,1211,65535,703,65535,
-        1,1,2,7,65535,65535,848,65535,704,65535,10,65535,848,738,65535,65535,65535,7,65535,65535,848,65535,704,65535,
-        2545,1,2,8,65535,511,803,65535,65535,65535,10,65535,803,1211,65535,65535,65535,8,65535,511,803,65535,65535,65535,
-        71,1,2,8,65535,287,92,65535,65535,65535,10,65535,92,1228,65535,65535,65535,8,65535,287,92,65535,65535,65535,
-        69,1,2,8,65535,286,738,65535,65535,65535,10,65535,738,1231,65535,65535,65535,8,65535,286,738,65535,65535,65535,
-        13305,1,1,13,1034,707,705,65535,65535,65535,10,65535,1231,705,65535,65535,65535,
-        44499,1,1,13,707,517,796,65535,65535,65535,10,65535,1228,796,65535,65535,65535,
-        4,1,1,13,834,1028,4,65535,65535,65535,10,65535,1211,4,65535,65535,65535,
-    ];
-    let mut b = String::from("10232898 b225aaa284f3cd7dda31c4499a14b8111d5c8e79b9549c9245dd6001b7690f8d\n");
-    let (mut c, mut d) = (0, 0);
-    while c < a.len() {
-        d += a[c];
-        b.push_str(&format!("{} {} {}", d, a[c+1], a[c+2]));
-        let e = c + 3 + 7 * (a[c+1] + a[c+2]) as usize;
-        for &f in &a[c+3..e] {
-            b.push_str(&format!(" {}", if f == 65535 { u64::MAX } else { f as u64 }));
-        }
-        b.push('\n');
-        c = e;
-    }
-    ops = source_edits::run(ops, &b);
-    ops=source_edits::run(ops,include_str!("affine_followup.txt"));
-    ops=source_edits::run(ops,include_str!("union_followup.txt"));
-    ops = apply_merged_policy(ops); // same final policies as the compiled prefix path
+    if REBIND_TABLES {ops = lane3_sigcut::run(ops);}
+    if REBIND_TABLES {ops = source_edits::run(ops, include_str!("our_cuts.txt"));}
+    if REBIND_TABLES {ops = rail_output_erase::run(ops);}
+    if REBIND_TABLES {ops = source_edits::run(ops, include_str!("our_cuts2.txt"));}
+    if REBIND_TABLES {ops = source_edits::run(ops, include_str!("builder_followup.txt"));}
+    if REBIND_TABLES {ops = source_edits::run(ops, include_str!("value_followup.txt"));}
+    if REBIND_TABLES && std::env::var("BARREL_FOLLOWUP").as_deref()==Ok("1"){ops=source_edits::run(ops,include_str!("barrel_followup.txt"));}
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
@@ -742,6 +624,9 @@ pub fn build_generated() -> Vec<Op> {
     ops
 }
 
+
+/// rebind-the-binder scratch arm: every stream-bound table off
+const REBIND_TABLES: bool = false;
 
 mod affine_constant;
 

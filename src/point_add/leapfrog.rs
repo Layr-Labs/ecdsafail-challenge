@@ -377,7 +377,7 @@ pub(crate) fn install_recipe() {
         ("LF_SIGNWIRE", "1"),
         ("LF_SEAMS", "1"),
         // peak cap, tuned together with LF_REORDER
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", if C35_CAP { "1234" } else { "1236" }),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", if C35_CAP { "1464" } else { "1236" }),
         ("HEO_PIN_PP_CHUNK_SHAPE", "64:0,38:0,25:-3,0:-5"),
         // the merged step's shared core has 13 ANDs (the rank bound) where it had 14; every fit, split and plan rule
         // counts the wire it no longer holds

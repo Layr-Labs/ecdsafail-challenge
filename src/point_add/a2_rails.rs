@@ -240,7 +240,7 @@ fn a2_recipe() {
         ("LF_CMP_FROM", "106"),
         // the walk cap of A's build (the multiply's N2-batch reverse ticks bind it); rec4: 1240 with F1LAZY and K3INF
         // (the record wires they take off the live count make plans below 1242 fit; without them 1241 does not)
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1234"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1464"),
     ] {
         match std::env::var(format!("LFA2_SET_{k}")) {
             Ok(o) => std::env::set_var(k, o),
