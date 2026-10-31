@@ -168,7 +168,28 @@ fn parse_cell_windows(text: &str) -> std::collections::HashMap<(bool, usize), (i
 fn cell_shift(mul: bool, t: usize) -> (isize, isize, isize) {
     let (b, f, x) = carry_cfg().cell_windows.as_ref().and_then(|m| m.get(&(mul, t)).copied()).unwrap_or((0, 0, 0));
     // GO r6: per-cell compare re-balance. GO_CELLB / GO_CELLF = "leg:lo-hi:delta,..." (leg div|mul|a) add to dB / dF.
-    (b + go_cell_delta("GO_CELLB", mul, t), f + go_cell_delta("GO_CELLF", mul, t), x)
+    let (wb, wf, wx) = fwsk_cellw(mul, t);
+    (b + go_cell_delta("GO_CELLB", mul, t) + wb, f + go_cell_delta("GO_CELLF", mul, t) + wf, x + wx)
+}
+
+/// fwsk: `FWSK_CELLW=leg:lo-hi:dB:dF:dX,...` (leg div|mul|a) -- uniform extra compare / fold-window bits on cells
+/// (error-REDUCING only: every delta must be >= 0).
+fn fwsk_cellw(mul: bool, t: usize) -> (isize, isize, isize) {
+    let Ok(v) = std::env::var("FWSK_CELLW") else { return (0, 0, 0) };
+    let mut d = (0isize, 0isize, 0isize);
+    for it in v.split(',').filter(|s| !s.is_empty()) {
+        let f: Vec<&str> = it.split(':').collect();
+        assert_eq!(f.len(), 5, "bad FWSK_CELLW {it}");
+        if (f[0] == "div" && mul) || (f[0] == "mul" && !mul) { continue; }
+        let (lo, hi) = f[1].split_once('-').expect("lo-hi");
+        let (lo, hi): (usize, usize) = (lo.parse().unwrap(), hi.parse().unwrap());
+        if t >= lo && t <= hi {
+            let (b, ff, x): (isize, isize, isize) = (f[2].parse().unwrap(), f[3].parse().unwrap(), f[4].parse().unwrap());
+            assert!(b >= 0 && ff >= 0 && x >= 0, "FWSK_CELLW: widen only");
+            d = (d.0 + b, d.1 + ff, d.2 + x);
+        }
+    }
+    d
 }
 
 fn go_cell_delta(key: &str, mul: bool, t: usize) -> isize {
@@ -234,7 +255,7 @@ pub fn carry_cfg() -> &'static CarryCfg {
             loan_both: env_bool("HEO_LOAN_BOTH", false),
             rail_max: env_usize("HEO_RAIL_MAX", usize::MAX),
             proxy_esw: std::env::var("HEO_PROXY_ENVELOPE").ok().filter(|p| !p.trim().is_empty()).map(|p| {
-                let text = include_str!("skywalk_data/env_front07_R393_clamp.txt").to_owned();
+                let text = include_str!("skywalk_data/env_front07_R396_clamp.txt").to_owned(); // cap-1145 proxy envelope (compiled in)
                 super::parse_envelope(&text).0
             }),
             db_skip: env_bool("HEO_DB_SKIP", false),
@@ -298,6 +319,16 @@ pub struct Ledger {
 
 pub static LEDGER: Mutex<Option<Ledger>> = Mutex::new(None);
 
+thread_local! {
+    /// Semantic census at the start of the current step: (rails wires, tape wires, payload wires, walk singles).
+    pub static SEM: std::cell::Cell<(usize, usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0, 0)) };
+}
+fn sem_walk(w: &Walk, pay: usize, loaned: usize) {
+    let rails = w.rails.as_ref().map_or(0, |r| r.r1.len() + r.r2.len()) + loaned;
+    let extra = [w.o0, w.bwire, w.ywire, w.pending_low].iter().filter(|q| q.is_some()).count();
+    SEM.with(|x| x.set((rails, w.tape.wires(), pay, extra)));
+}
+
 /// `(op index at the END of a booked step, label, t)` under `HEO_TICK_TRACE` (probe attribution).
 pub static CHECKPOINTS: Mutex<Vec<(usize, &'static str, usize)>> = Mutex::new(Vec::new());
 fn tracing() -> bool {
@@ -319,6 +350,7 @@ thread_local! {
 /// Run `body`, booking its OWN Toffoli (nested books excluded) under `comp` and its
 /// window peak (nested included) under `(label, t)`.
 fn book<R>(c: &mut Builder, comp: &'static str, label: &'static str, t: usize, body: impl FnOnce(&mut Builder) -> R) -> R {
+    eprintln!("WALK_MCOUNT start {} {} {}",label,t,c.walk_mcount());
     let before = c.report_totals();
     let skywalk_before = (c.op_count(), c.active_qubits(), c.phase_name());
     let p0 = c.take_win_peak();
@@ -330,6 +362,7 @@ fn book<R>(c: &mut Builder, comp: &'static str, label: &'static str, t: usize, b
         s.push((0, 0.0, 0));
     });
     let out = body(c);
+    eprintln!("WALK_MCOUNT end {} {} {}",label,t,c.walk_mcount());
     if tracing() {
         CHECKPOINTS.lock().unwrap().push((c.op_count(), label, t));
     }
@@ -342,11 +375,12 @@ fn book<R>(c: &mut Builder, comp: &'static str, label: &'static str, t: usize, b
         _ => (0, 0.0),
     };
     if env_bool("SKYWALK_SITE_TRACE", false) {
-        eprintln!("SKYWALK_SITE\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.1}\t{}\t{:.1}",
+        let (sr, st, sp, sx) = SEM.with(|x| x.get());
+        eprintln!("SKYWALK_SITE\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.1}\t{}\t{:.1}\t{}\t{}\t{}\t{}",
             skywalk_before.2, comp, label, t, skywalk_before.0, c.op_count(),
             skywalk_before.1, c.active_qubits(), peak,
-            h7::cap().saturating_sub(skywalk_before.1 as usize),
-            h7::cap().saturating_sub(c.active_qubits() as usize), dn, de, dn - cn, de - ce);
+            super::super::walk_policy::physical_cap().saturating_sub(skywalk_before.1 as usize),
+            super::super::walk_policy::physical_cap().saturating_sub(c.active_qubits() as usize), dn, de, dn - cn, de - ce, sr, st, sp, sx);
     }
     ledger(|l| {
         let e = l.comp.entry(comp).or_insert((0, 0.0));
@@ -424,8 +458,8 @@ fn unwind_carry_step(c: &mut Builder, a: QubitId, b: QubitId, prev: Option<Qubit
     if let Some(p) = prev {
         c.cx(p, carry);
     }
-    let m = c.alloc_bit();
-    c.hmr(carry, m);
+    if chain_codec::dense_on() && c.current_phase()=="heo_mul_fused" {c.ccx(a,b,carry);c.release_clean(carry);if let Some(p)=prev{c.cx(p,a);}c.cx(a,b);return;} let m = c.alloc_bit();
+    c.walk_and_marker(carry,a,b,m);c.hmr(carry, m);
     c.cz_if(a, b, m);
     c.free_bit(m);
     c.free(carry);
@@ -470,6 +504,13 @@ fn rail_ripple(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitI
     assert!(w >= 1 && a.len() == w);
     let vented = cout.is_some();
     let owned = if vented { w - 1 } else { w.saturating_sub(2) };
+    let missing=(c.active_qubits() as usize+owned).saturating_sub(super::super::walk_policy::physical_cap()); let captured=SHARED_LOW.with(|v|v.borrow().as_ref().is_some_and(|&(aa,bb,p,_)|(a[0],b[0],cin)==(aa,bb,Some(p)))); if missing>0 && captured && cout.is_some(){a_ripple(c,a,b,cin,cout.unwrap(),ATop::Vent,deferred,false);return;}
+    if super::super::walk_policy::frozen() && missing>0 && w>=3 && missing<=owned && (missing<owned||cin.is_some()) {
+        assert!(deferred.is_empty());super::super::bridge::raw_add(c,a,b,cin,cout,missing);return;
+    }
+    if super::super::walk_policy::frozen() && missing>0 && cout.is_some() && deferred.is_empty() {
+        super::super::width_composition::inplace(c,a,b,cin,cout.unwrap());return;
+    }
     let mut carries = c.alloc_qubits(owned);
     if let Some(o) = cout {
         carries.push(o);
@@ -560,7 +601,7 @@ fn rail_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, mode: S
 fn rail_add_inner(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, mode: SplitMode,
             tick_def: &mut Vec<(usize, BitId)>, label: &'static str) {
     let w = b.len();
-    let room = h7::cap().saturating_sub(c.active_qubits() as usize);
+    let room = super::super::walk_policy::physical_cap().saturating_sub(c.active_qubits() as usize);
     if env_bool("K3B_RAIL_TRACE", false) {
         eprintln!("K3B_RAIL {label} w={w} room={room} mode={mode:?} def={}", tick_def.len());
     }
@@ -582,6 +623,14 @@ fn rail_add_inner(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, m
         }
         Err(()) => {
             ledger(|l| l.infeasible += 1);
+            if sq_railbridge() && w >= 3 {
+                let owned = w - 2;
+                let bridges = owned - room.min(owned);
+                eprintln!("SQ_RAILBRIDGE rail {label} w={w} room={room} bridged={bridges}");
+                ledger(|l| *l.splits.entry("SQ bridged rail stages").or_insert(0) += bridges);
+                super::super::bridge::raw_add(c, a, b, Some(cin), None, bridges);
+                return;
+            }
             rail_ripple(c, a, b, Some(cin), None, &mut Vec::new());
             return;
         }
@@ -1262,7 +1311,7 @@ fn r4_fdp_ladder(c: &mut Builder, del: &[QubitId], t: QubitId, ctl: QubitId, a: 
     }).collect();
     let target = &del[4..w];
     let zero = c.alloc_qubit();
-    let room = h7::cap().saturating_sub(c.active_qubits() as usize);
+    let room = super::super::walk_policy::physical_cap().saturating_sub(c.active_qubits() as usize);
     let plan = (room..=map.len().max(room)).find_map(|r| super::super::width_composition::direct_plan(map.len(), r)).unwrap();
     if negative { c.x_all(target); }
     super::super::width_composition::direct_add(c, &map, target, zero, &plan);
@@ -1389,7 +1438,7 @@ fn r5_yfin2_body(c: &mut Builder, sig: &[QubitId], del: &[QubitId], oy: &[BitId]
     }).collect();
     let target = &sig[..fs];
     let zero = c.alloc_qubit();
-    let room = h7::cap().saturating_sub(c.active_qubits() as usize);
+    let room = super::super::walk_policy::physical_cap().saturating_sub(c.active_qubits() as usize);
     let plan = (room..=map.len().max(room)).find_map(|r| super::super::width_composition::direct_plan(map.len(), r)).unwrap();
     book(c, "g1b", "yfin ladder", 0, |c| super::super::width_composition::direct_add(c, &map, target, zero, &plan));
     c.release_clean(zero);
@@ -1439,7 +1488,7 @@ fn r4_yfin_tail(c: &mut Builder, sig: &[QubitId], del: &[QubitId], xs: QubitId, 
     }).collect();
     let target = &sig[..fs];
     let zero = c.alloc_qubit();
-    let room = h7::cap().saturating_sub(c.active_qubits() as usize);
+    let room = super::super::walk_policy::physical_cap().saturating_sub(c.active_qubits() as usize);
     let plan = (room..=map.len().max(room)).find_map(|r| super::super::width_composition::direct_plan(map.len(), r)).unwrap();
     book(c, "g1b", "yfin ladder", 0, |c| super::super::width_composition::direct_add(c, &map, target, zero, &plan));
     c.release_clean(zero);
@@ -1507,7 +1556,7 @@ fn r4_ysub_tail(c: &mut Builder, sig: &[QubitId], xs: QubitId, ys: QubitId, o0: 
     }).collect();
     let target = &sig[..fs];
     let zero = c.alloc_qubit();
-    let room = h7::cap().saturating_sub(c.active_qubits() as usize);
+    let room = super::super::walk_policy::physical_cap().saturating_sub(c.active_qubits() as usize);
     let plan = (room..=map.len().max(room)).find_map(|r| super::super::width_composition::direct_plan(map.len(), r)).unwrap();
     book(c, "g1b", "ysub ladder", 0, |c| super::super::width_composition::direct_add(c, &map, target, zero, &plan));
     c.release_clean(zero);
@@ -1692,7 +1741,7 @@ fn fold_generic_single(c: &mut Builder, acc: &[QubitId], sel: &[Vec<QubitId>], f
 
 fn fold_generic(c: &mut Builder, acc: &[QubitId], m1f: QubitId, p2f: QubitId, e: QubitId, first_carry: QubitId) {
     let fw = acc.len();
-    if c.active_qubits() as usize + fw - 3 <= h7::cap() {
+    if c.active_qubits() as usize + fw - 3 <= super::super::walk_policy::physical_cap() {
         let sel = block_selectors(f(), fw, m1f, p2f, e);
         fold_generic_single(c, acc, &sel, first_carry);
         return;
@@ -1817,7 +1866,7 @@ fn r3_s1_ticks() -> &'static Vec<usize> {
     static V: OnceLock<Vec<usize>> = OnceLock::new();
     V.get_or_init(|| match std::env::var("R3_S1_TICKS") {
         Ok(s) => s.split(',').filter(|x| !x.trim().is_empty()).map(|x| x.trim().parse().unwrap()).collect(),
-        Err(_) => vec![5, 7, 8, 260, 272],
+        Err(_) => if chain_codec::dense_on(){vec![5,7,8,260,272,372]}else{vec![5, 7, 8, 260, 272]},
     })
 }
 
@@ -1898,33 +1947,6 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
     if let Some(v) = ovr.get(&idx) {
         pins.extend(v.iter().cloned());
     }
-    // SKYX_K3B_RETUNE (sky-x4 research hook): per-cell K3B_BRIDGE / K3B_EXTRA_ROOM retune file, lines
-    // `idx bridge room tick dir` (format of jackylee0424's cap1173_bridge_room_profile_v2.txt, 3161bd20). Unset = no change.
-    static RETUNE: OnceLock<HashMap<usize,(String,isize,usize,String)>> = OnceLock::new();
-    let retune = RETUNE.get_or_init(|| {
-        let mut map = HashMap::new();
-        if std::env::var("SKYX_K3B_RETUNE").is_ok() {
-            let text = include_str!("skywalk_data/cap1172_bridge_room_profile_probe.txt");
-            for line in text.lines().filter(|l| !l.trim().is_empty()) {
-                let f: Vec<&str> = line.split_whitespace().collect();
-                assert_eq!(f.len(),5);
-                let id: usize = f[0].parse().unwrap();
-                let bridge = f[1].to_string();
-                let room: isize = f[2].parse().unwrap();
-                let tick: usize = f[3].parse().unwrap();
-                assert!(["+0","+1","+2","+3","-1","-2","0"].contains(&bridge.as_str()));
-                assert!((-16..=16).contains(&room)); // widened for the extended negative-room grid (cap-probe regridx)
-                assert!(map.insert(id,(bridge,room,tick,f[4].to_string())).is_none());
-            }
-        }
-        map
-    });
-    if let Some((bridge,room,tick,direction)) = retune.get(&idx) {
-        assert_eq!(*tick,t); assert_eq!(direction,dir);
-        pins.insert("K3B_BRIDGE".into(),bridge.clone());
-        let current: isize = pins.get("K3B_EXTRA_ROOM").map_or(0,|v|v.parse().unwrap());
-        pins.insert("K3B_EXTRA_ROOM".into(),(current+room).to_string());
-    }
     // R3 sign loan: per-cell room pin delta from R3_SGN_FILE (`idx delta` lines).
     if let Some(d) = r3_sgn_map().as_ref().and_then(|m| m.get(&idx)).copied() {
         if d != 0 {
@@ -1950,14 +1972,11 @@ fn k3b_cell<R>(c: &mut Builder, dir: &str, t: usize, proxy: usize, body: impl Fn
         super::CELL_PINS.with(|m| *m.borrow_mut() = Some(pins));
     }
     let live = c.active_qubits();
-    let room = h7::cap().saturating_sub(live as usize);
+    let room = super::super::walk_policy::physical_cap().saturating_sub(live as usize);
     let before = c.report_totals();
     let s0 = c.k3b_sites;
-    let op0 = c.op_count();
     let (out, cpeak) = c.r3_peak(body);
     if std::env::var_os("R3_PEAK").is_some() { eprintln!("R3_PEAK {idx} {cpeak}"); }
-    // K3B_OPS=1: builder op range of this cell (pre-simplifier; maps phcen error sites to cells).
-    if std::env::var_os("K3B_OPS").is_some() { eprintln!("K3B_OPS {idx} {dir} {t} {op0} {}", c.op_count()); }
     let after = c.report_totals();
     let s1 = c.k3b_sites;
     if set {
@@ -1979,7 +1998,7 @@ fn cell_div(c: &mut Builder, cfg: &HeoConfig, t: usize, typ: QubitId, sig: &[Qub
 
     if truthy("HEO_CELL_TRACE") {
         eprintln!("HEO_CELL div t={t} esw={} proxy={proxy} fw={fw} live={} room={}", cfg.esw[t], c.active_qubits(),
-            h7::cap().saturating_sub(c.active_qubits() as usize));
+            super::super::walk_policy::physical_cap().saturating_sub(c.active_qubits() as usize));
     }
     k3b_cell(c, "div", t, proxy, |c| {
         if std::env::var_os("TERMINAL_PAIR").is_some() && t+1==cfg.rounds() {
@@ -2003,7 +2022,7 @@ fn cell_mul(c: &mut Builder, cfg: &HeoConfig, t: usize, typ: QubitId, sig: &[Qub
 
     if truthy("HEO_CELL_TRACE") {
         eprintln!("HEO_CELL mul t={t} esw={} proxy={proxy} fw={fw} live={} room={}", cfg.esw[t], c.active_qubits(),
-            h7::cap().saturating_sub(c.active_qubits() as usize));
+            super::super::walk_policy::physical_cap().saturating_sub(c.active_qubits() as usize));
     }
     k3b_cell(c, "mul", t, proxy, |c| {
         if std::env::var_os("TERMINAL_PAIR").is_some() && t+1==cfg.rounds() {
@@ -2028,12 +2047,20 @@ fn cell_mul(c: &mut Builder, cfg: &HeoConfig, t: usize, typ: QubitId, sig: &[Qub
 pub mod codec_probe;
 #[path = "codec_synth.rs"]
 mod codec_synth;
+#[path = "chain_codec.rs"]
+pub mod chain_codec;
+#[path = "heo_lag.rs"]
+pub mod lag;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum GState {
-    Raw,
+    Raw, Prefix3, Prefix5,
     P3,
     P5,
+    /// A2: first group of a chain; its wires hold the chain state (see `chain_codec`).
+    ChainBase,
+    /// A2: pushed into a chain; its 8 wires hold one byte of the chained number.
+    Chained,
 }
 
 #[derive(Clone)]
@@ -2049,18 +2076,35 @@ struct Group {
     b1: QubitId,
     b0: QubitId,
     m_g: Option<BitId>,
-    m_pair: Option<BitId>,
 }
 
 struct Tape {
     /// v025 A-2: per group, the shared product `h2 * typ3` waiting for that group's pack3.
     shared: Vec<Option<QubitId>>,
-    outer_shared: Vec<Option<QubitId>>,
     raw: Vec<Option<(QubitId, QubitId)>>,
     groups: Vec<Option<Group>>,
     /// RB-1 L-T0: the codec starts at letter `off` (group g = letters 5g+off..5g+off+4); letters below `off`
     /// are held outside the tape.
     off: usize,
+    /// A2: chained base-243 blocks of idle P5 groups (`chain_codec`), one slot per chain.
+    chains: Vec<Option<chain_codec::Chain>>, dense_tail: Vec<(usize,u128)>, dense_zip:Option<chain_codec::DenseZip>, prefix_rank:Option<Vec<QubitId>>,prefix_live:bool,prefix_used:bool,
+}
+
+/// One requested batch trit stays raw while three idle trits share the
+/// existing exact 3-to-5 codec.  The other raw trit stays separate, so a full
+/// five-trit group occupies nine wires for the cell instead of ten.
+struct ThinBatch {
+    slots: [usize; 3],
+    packed: [QubitId; 5],
+}
+
+/// Toggle `out` by a three-control predicate using one arbitrary borrowed
+/// wire. The borrowed value and all three controls are restored exactly.
+fn tight_triple(c: &mut Builder, a: QubitId, b: QubitId, d: QubitId, out: QubitId, borrowed: QubitId) {
+    c.ccx(a, b, borrowed);
+    c.ccx(borrowed, d, out);
+    c.ccx(a, b, borrowed);
+    c.ccx(borrowed, d, out);
 }
 
 /// A packed record from a different group is idle for the entire field cell.
@@ -2070,16 +2114,25 @@ fn dirty_cell(c:&mut Builder,tape:&Tape,t:usize,body:impl FnOnce(&mut Builder)){
         let raw = tape.raw.iter().filter(|x| x.is_some()).count();
         let p3 = tape.groups.iter().filter(|g| g.as_ref().is_some_and(|g| g.state == GState::P3)).count();
         let p5 = tape.groups.iter().filter(|g| g.as_ref().is_some_and(|g| g.state == GState::P5)).count();
-        let sh = tape.shared.iter().filter(|x| x.is_some()).count() + tape.outer_shared.iter().filter(|x|x.is_some()).count();
+        let sh = tape.shared.iter().filter(|x| x.is_some()).count();
         let tw = 2 * raw + 5 * p3 + 8 * p5 + sh;
         eprintln!("R3_CENSUS t={t} live={} raw={raw} p3={p3} p5={p5} shared={sh} tape_wires={tw} rest={}", c.active_qubits(), c.active_qubits() as usize - tw - 512);
     }
     let current=t.checked_sub(tape.off).map(|x|x/5);
     let loan=tape.groups.iter().enumerate().find_map(|(g,p)|{
-        if Some(g)==current{return None;}p.as_ref().map(|p|(g,p.a1))
+        if Some(g)==current{return None;}p.as_ref().filter(|p|p.state!=GState::ChainBase).map(|p|(g,p.a1))
     });
     if std::env::var("DIRTY_BOUNDARY_MODE").is_ok(){
         eprintln!("DIRTY_POOL\t{}\t{}\t{}\t{}",t,c.op_count(),loan.map_or(usize::MAX,|x|x.0),loan.map_or(u64::MAX,|x|x.1.0));
+    }
+    if super::super::lowroom::enabled() {
+        // SQ_LOWROOM: every packed P5 group other than the current letter's is idle for the whole cell.
+        let pool:Vec<QubitId>=tape.groups.iter().enumerate().filter(|(g,_)|Some(*g)!=current).filter_map(|(_,p)|p.as_ref())
+            .filter(|p|p.state==GState::P5||p.state==GState::Chained).flat_map(|p|[p.a2,p.a1,p.a0,p.h3,p.l3,p.b2,p.b1,p.b0])
+            .chain(tape.chains.iter().flatten().flat_map(|ch|ch.state.iter().copied())).collect();
+        let mut out=None;let mut body=Some(body);
+        super::super::lowroom::with_pool(pool,||{out=Some(super::super::dirty_boundary_probe::with_tape(c,loan.map(|x|x.1),body.take().unwrap()));});
+        return out.unwrap();
     }
     super::super::dirty_boundary_probe::with_tape(c,loan.map(|x|x.1),body);
 }
@@ -2102,35 +2155,95 @@ fn pair_pack(c: &mut Builder, h1: QubitId, l1: QubitId, h2: QubitId, l2: QubitId
     c.cx(anc, l2);
     c.cx(anc, h1);
     let m = c.alloc_bit();
-    c.hmr(anc, m);
+    c.walk_and_marker(anc,h2,l2,m);c.hmr(anc, m);
     c.cz_if(h2, l2, m);
     c.free_bit(m);
     c.free(anc);
 }
-/// Exact shared pair compressor (bdff8c8 exact-arithmetic-v2). Outputs match ordinary pair_pack on all 9.
-/// The product measurement is repaired on pair_unpack's already computed AND.
-fn pair_pack_shared(c: &mut Builder, a: QubitId, b: QubitId, cc: QubitId, d: QubitId, p: QubitId) -> (QubitId, BitId) {
-    let h=c.alloc_qubit(); c.ccx(a,cc,h);
-    c.cx(p,b); c.cx(a,b); c.cx(h,b);
-    c.cx(a,cc); c.cx(p,d);
-    let m=c.alloc_bit(); c.hmr(a,m); c.z_if(h,m); c.cz_if(cc,d,m); c.free_bit(m); c.free(a);
-    let deferred=c.alloc_bit(); c.hmr(p,deferred); c.free(p);
-    (h,deferred)
+#[cfg(test)]
+thread_local! {
+    static C29_PAIR_TRACE: std::cell::RefCell<Vec<(usize, usize, [QubitId; 4])>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
-
-fn pair_unpack(c: &mut Builder, h1: QubitId, l1: QubitId, h2: QubitId, l2: QubitId, m_pair: Option<BitId>) {
+fn pair_unpack(c: &mut Builder, h1: QubitId, l1: QubitId, h2: QubitId, l2: QubitId) {
+    #[cfg(test)]
+    let trace_start = c.op_count();
     let anc = c.alloc_qubit();
     c.ccx(h2, l2, anc);
-    if let Some(m)=m_pair { c.z_if(anc,m); c.cz_if(anc,l1,m); c.free_bit(m); }
     c.cx(anc, h1);
     c.cx(anc, l2);
     fredkin(c, anc, l1, l2);
     let m = c.alloc_bit();
-    c.hmr(anc, m);
+    c.walk_and_marker(anc,h1,h2,m);c.hmr(anc, m);
     c.cz_if(h1, h2, m);
     c.free_bit(m);
     c.free(anc);
     c.cx(h1, h2);
+    #[cfg(test)]
+    C29_PAIR_TRACE.with(|v| v.borrow_mut().push((trace_start, c.op_count(), [h1, l1, h2, l2])));
+}
+
+/// FWSK2: ancilla-free pair pack. On the nine reachable unpacked words pair_pack is the inverse of the unpack
+/// PERM: 1 -> 12, 5 -> 1, 9 -> 14, the other six fixed. Completed to a permutation of all 16 words by the
+/// 3-cycle (5 1 12) and the transposition (9 14); every adjacent basis swap is a three-control X restored on one
+/// borrowed idle tape wire (`tight_triple`).
+fn pair_pack_ancfree(c: &mut Builder, q: [QubitId; 4], borrowed: QubitId) {
+    const PACK: [u8; 16] = [0, 12, 2, 3, 4, 1, 6, 7, 8, 14, 10, 11, 5, 13, 9, 15];
+    perm4_ancfree(c, q, borrowed, &PACK);
+}
+fn fwsk2_pack_tight() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("FWSK2_PACK_TIGHT").is_some())
+}
+/// A four-wire completion of the donor pair decode on its nine reachable
+/// packed words. It also agrees with the donor's classical map on five of the
+/// seven other words. Each adjacent basis-state swap is a three-control X
+/// whose arbitrary borrowed wire is restored by `tight_triple`.
+fn pair_unpack_ancfree(c: &mut Builder, q: [QubitId; 4], borrowed: QubitId) {
+    const PERM: [u8; 16] = [0, 5, 2, 7, 4, 11, 6, 3, 8, 13, 10, 15, 1, 14, 9, 12];
+    perm4_ancfree(c, q, borrowed, &PERM);
+}
+fn perm4_ancfree(c: &mut Builder, q: [QubitId; 4], borrowed: QubitId, perm: &[u8; 16]) {
+    fn adjacent(c: &mut Builder, q: [QubitId; 4], dirty: QubitId, a: u8, b: u8) {
+        let differing = a ^ b;
+        assert_eq!(differing.count_ones(), 1);
+        let target = differing.trailing_zeros() as usize;
+        let mut controls = Vec::with_capacity(3);
+        for i in 0..4 {
+            if i == target { continue; }
+            if a >> i & 1 == 0 { c.x(q[i]); }
+            controls.push(q[i]);
+        }
+        tight_triple(c, controls[0], controls[1], controls[2], q[target], dirty);
+        for i in (0..4).rev() {
+            if i != target && a >> i & 1 == 0 { c.x(q[i]); }
+        }
+    }
+    fn swap_states(c: &mut Builder, q: [QubitId; 4], dirty: QubitId, a: u8, b: u8) {
+        let mut path = vec![a];
+        let mut cur = a;
+        for bit in 0..4 {
+            if (a ^ b) >> bit & 1 != 0 {
+                cur ^= 1 << bit;
+                path.push(cur);
+            }
+        }
+        assert_eq!(cur, b);
+        for i in 0..path.len() - 1 { adjacent(c, q, dirty, path[i], path[i + 1]); }
+        for i in (0..path.len() - 2).rev() { adjacent(c, q, dirty, path[i], path[i + 1]); }
+    }
+    let mut current = [0u8; 16];
+    for (i, state) in current.iter_mut().enumerate() { *state = i as u8; }
+    for i in 0..16 {
+        let (a, b) = (current[i], perm[i]);
+        if a == b { continue; }
+        swap_states(c, q, borrowed, a, b);
+        for state in &mut current {
+            if *state == a { *state = b; }
+            else if *state == b { *state = a; }
+        }
+    }
+    assert_eq!(&current, perm);
 }
 
 impl Tape {
@@ -2138,7 +2251,8 @@ impl Tape {
         Self::with_offset(r, 0)
     }
     fn with_offset(r: usize, off: usize) -> Self {
-        Tape { outer_shared: vec![None; (r - off).div_ceil(5)], shared: vec![None; (r - off).div_ceil(5)], raw: vec![None; r], groups: vec![None; (r - off).div_ceil(5)], off }
+        let ng = (r - off).div_ceil(5);
+        Tape { shared: vec![None; ng], raw: vec![None; r], groups: vec![None; ng], off, chains: (0..ng).map(|_| None).collect(), dense_tail:Vec::new(), dense_zip:None,prefix_rank:None,prefix_live:false,prefix_used:false }
     }
     /// Group of letter `u` (u >= off).
     fn gid(&self, u: usize) -> usize {
@@ -2147,14 +2261,35 @@ impl Tape {
     fn get(&self, t: usize) -> (QubitId, QubitId) {
         self.raw[t].unwrap_or_else(|| panic!("tape trit {t} not raw"))
     }
-    fn pack3(&mut self, c: &mut Builder, g: usize) {
+    fn thin_begin(&mut self, c: &mut Builder, t: usize) -> Option<ThinBatch> {
+        let g = self.gid(t);
+        if self.state(g) != GState::Raw { return None; }
+        let start = 5 * g + self.off;
+        let slots: Vec<usize> = (start..(start + 5).min(self.raw.len()))
+            .filter(|&u| u != t && self.raw[u].is_some_and(|(q,s)|q!=crate::circuit::NO_QUBIT&&s!=crate::circuit::NO_QUBIT)).take(3).collect();
+        if slots.len() != 3 { return None; }
+        let slots: [usize; 3] = slots.try_into().unwrap();
+        let (h1,l1)=to_hl(c,self.raw[slots[0]].take().unwrap());
+        let (h2,l2)=to_hl(c,self.raw[slots[1]].take().unwrap());
+        let (h3,l3)=to_hl(c,self.raw[slots[2]].take().unwrap());
+        let packed=codec_synth::pack_compatible(c,[h1,l1,h2,l2,h3,l3]);
+        Some(ThinBatch { slots, packed })
+    }
+    fn thin_end(&mut self, c: &mut Builder, thin: ThinBatch) {
+        let [h1,l1,h2,l2,h3,l3]=codec_synth::unpack_compatible(c,thin.packed);
+        for (slot,pair) in thin.slots.into_iter().zip([(h1,l1),(h2,l2),(h3,l3)]) {
+            assert!(self.raw[slot].is_none());
+            self.raw[slot]=Some(from_hl(c,pair.0,pair.1));
+        }
+    }
+    fn pack3(&mut self, c: &mut Builder, g: usize) { if prefix::enabled()&&g==0&&(!self.prefix_used||self.prefix_live){return;}
         let t0 = 5 * g + self.off;
         let (h1, l1) = to_hl(c, self.raw[t0].take().unwrap());
         let (h2, l2) = to_hl(c, self.raw[t0 + 1].take().unwrap());
         let (h3, l3) = to_hl(c, self.raw[t0 + 2].take().unwrap());
         if truthy("HEO_CODEC_SYNTH") {
             let [a2,a1,a0,h3,l3]=codec_synth::pack_compatible_shared(c,[h1,l1,h2,l2,h3,l3],self.shared[g].take());
-            self.groups[g]=Some(Group{state:GState::P3,synth:true,a2,a1,a0,h3,l3,b2:a2,b1:a2,b0:a2,m_g:None,m_pair:None});
+            self.groups[g]=Some(Group{state:GState::P3,synth:true,a2,a1,a0,h3,l3,b2:a2,b1:a2,b0:a2,m_g:None});
             return;
         }
         assert!(self.shared[g].is_none(), "shared product needs the synthesized codec");
@@ -2165,24 +2300,24 @@ impl Tape {
         c.cx(fwire, h3);
         c.cx(fwire, l3);
         let m = c.alloc_bit();
-        c.hmr(fwire, m);
+        c.walk_and_marker(fwire,h3,l3,m);c.hmr(fwire, m);
         c.cz_if(h3, l3, m);
         c.free_bit(m);
         c.free(fwire);
-        self.groups[g] = Some(Group { state: GState::P3, synth: false, a2, a1, a0, h3, l3, b2: a2, b1: a2, b0: a2, m_g: None, m_pair: None });
+        self.groups[g] = Some(Group { state: GState::P3, synth: false, a2, a1, a0, h3, l3, b2: a2, b1: a2, b0: a2, m_g: None });
     }
-    fn pack5(&mut self, c: &mut Builder, g: usize) {
+    fn pack5(&mut self, c: &mut Builder, g: usize) { if g==0&&self.prefix_live{self.prefix_pack5(c);return;}
         let t0 = 5 * g + self.off;
         let (h4, l4) = to_hl(c, self.raw[t0 + 3].take().unwrap());
         let (h5, l5) = to_hl(c, self.raw[t0 + 4].take().unwrap());
         let mut grp = self.groups[g].take().unwrap();
         assert_eq!(grp.state, GState::P3);
-        let h4=if let Some(p)=self.outer_shared[g].take() {
-            assert!(grp.m_pair.is_none());
-            let (h,m)=pair_pack_shared(c,h4,l4,h5,l5,p); grp.m_pair=Some(m);
-            eprintln!("PAIR_CARRY_PACK group={g} t0={t0} op={}",c.op_count());
-            h
-        } else { pair_pack(c,h4,l4,h5,l5); h4 };
+        if fwsk2_pack_tight() && c.active_qubits() as usize >= super::super::walk_policy::physical_cap() {
+            let borrowed = self.groups.iter().enumerate()
+                .find_map(|(j,p)| (j != g).then(|| p.as_ref()).flatten().filter(|p| p.state != GState::Raw).map(|p| p.a1))
+                .expect("FWSK2 tight pack needs an idle tape wire");
+            pair_pack_ancfree(c, [h4, l4, h5, l5], borrowed);
+        } else { pair_pack(c, h4, l4, h5, l5); }
         let (gw, b2, b1, b0) = (h4, l4, h5, l5);
         for (x, y) in [(grp.a2, b2), (grp.h3, b1), (grp.l3, b0)] {
             fredkin(c, gw, x, y);
@@ -2215,18 +2350,31 @@ impl Tape {
         let mut grp = self.groups[g].take().unwrap();
         assert_eq!(grp.state, GState::P5);
         let gw = c.alloc_qubit();
-        let an2 = c.alloc_qubit();
-        c.ccx(grp.a2, grp.h3, an2);
-        c.ccx(an2, grp.l3, gw);
+        // The two late reverse-rail unpack sites start at 1143 live and may
+        // spend only one wire.  Borrow an idle packed-tape wire to compute the
+        // three-control predicate exactly, restoring it before any use.
+        let tight = fwsk_tight(t0) && c.active_qubits() as usize >= super::super::walk_policy::physical_cap();
+        let borrowed = if tight { self.groups.iter().enumerate()
+            .find_map(|(j,p)| (j != g).then(|| p.as_ref()).flatten().map(|p| p.a1))
+        } else { None };
+        if tight { assert!(borrowed.is_some(), "C29 tight unpack needs an idle tape wire"); }
+        if let Some(dirty) = borrowed {
+            tight_triple(c, grp.a2, grp.h3, grp.l3, gw, dirty);
+            eprintln!("C29_TIGHT_UNPACK t0={t0} peak={} live={}",c.peak_total(),c.active_qubits());
+        } else {
+            let an2 = c.alloc_qubit();
+            c.ccx(grp.a2, grp.h3, an2);
+            c.ccx(an2, grp.l3, gw);
+            let m = c.alloc_bit();
+            c.hmr(an2, m);
+            c.cz_if(grp.a2, grp.h3, m);
+            c.free_bit(m);
+            c.free(an2);
+        }
         if let Some(m) = grp.m_g.take() {
             c.z_if(gw, m);
             c.free_bit(m);
         }
-        let m = c.alloc_bit();
-        c.hmr(an2, m);
-        c.cz_if(grp.a2, grp.h3, m);
-        c.free_bit(m);
-        c.free(an2);
         for x in [grp.a2, grp.h3, grp.l3] {
             c.cx(gw, x);
         }
@@ -2234,7 +2382,15 @@ impl Tape {
             fredkin(c, gw, x, y);
         }
         let (h4, l4, h5, l5) = (gw, grp.b2, grp.b1, grp.b0);
-        pair_unpack(c, h4, l4, h5, l5, grp.m_pair.take());
+        if fwsk_tight(t0) && c.active_qubits() as usize >= super::super::walk_policy::physical_cap() {
+            let borrowed = self.groups.iter().enumerate()
+                .find_map(|(j,p)| (j != g).then(|| p.as_ref()).flatten().map(|p| p.a1))
+                .expect("C29 pair decode needs an idle tape wire");
+            let before = c.report_totals().map_or(0.0, |x| x.1);
+            pair_unpack_ancfree(c, [h4, l4, h5, l5], borrowed);
+            eprintln!("C29_PAIR_ANC0 t0={t0} peak={} live={} T={}", c.peak_total(), c.active_qubits(),
+                c.report_totals().map_or(0.0, |x| x.1) - before);
+        } else { pair_unpack(c, h4, l4, h5, l5); }
         self.raw[t0 + 3] = Some(from_hl(c, h4, l4));
         self.raw[t0 + 4] = Some(from_hl(c, h5, l5));
         grp.state = GState::P3;
@@ -2244,7 +2400,6 @@ impl Tape {
         let t0 = 5 * g + self.off;
         let grp = self.groups[g].take().unwrap();
         assert_eq!(grp.state, GState::P3);
-        assert!(grp.m_pair.is_none());
         if grp.synth {
             let ([h1,l1,h2,l2,h3,l3],q)=codec_synth::unpack_compatible_retained(c,[grp.a2,grp.a1,grp.a0,grp.h3,grp.l3],REVERSE_CODEC_CAPTURE.with(|v|v.get()));
             assert!(self.shared[g].is_none());self.shared[g]=q;
@@ -2260,20 +2415,29 @@ impl Tape {
         c.cx(fwire, grp.l3);
         fredkin(c, fwire, grp.a1, grp.h3);
         fredkin(c, fwire, grp.a0, grp.l3);
-        assert!(grp.m_pair.is_none());
-        pair_unpack(c, fwire, grp.a2, grp.a1, grp.a0, None);
+        pair_unpack(c, fwire, grp.a2, grp.a1, grp.a0);
         self.raw[t0] = Some(from_hl(c, fwire, grp.a2));
         self.raw[t0 + 1] = Some(from_hl(c, grp.a1, grp.a0));
         self.raw[t0 + 2] = Some(from_hl(c, grp.h3, grp.l3));
     }
+    /// Live wires held by the tape (raw letters 2 each, P3 groups 5, P5 groups 8, shared products 1).
+    fn wires(&self) -> usize {
+        self.raw.iter().flatten().map(|(t,s)|usize::from(*t!=crate::circuit::NO_QUBIT)+usize::from(*s!=crate::circuit::NO_QUBIT)).sum::<usize>()
+            + self.groups.iter().map(|g| match g.as_ref().map(|g| g.state) { Some(GState::P3) => 5, Some(GState::P5) | Some(GState::Chained) => 8, _ => 0 }).sum::<usize>()
+            + self.shared.iter().filter(|q| q.is_some()).count() + self.prefix_rank.as_ref().map_or(0,Vec::len)
+            + self.chains.iter().flatten().map(|ch| ch.state.len()).sum::<usize>() + self.dense_zip.as_ref().map_or(0,|z|z.state.len())
+    }
     fn state(&self, g: usize) -> GState {
         self.groups[g].as_ref().map_or(GState::Raw, |x| x.state)
     }
-    fn ensure_raw(&mut self, c: &mut Builder, u: usize) {
+    fn ensure_raw(&mut self, c: &mut Builder, u: usize) { if chain_codec::dense_on()&&u>=351 {self.dense_pop(c,u);}
         if u < self.off {
             return;
         }
         let g = self.gid(u);
+        if matches!(self.state(g), GState::ChainBase | GState::Chained) {
+            self.unchain(c, g);
+        }
         if self.state(g) == GState::P5 {
             self.unpack5(c, g);
         }
@@ -2287,7 +2451,7 @@ impl Tape {
         }
     }
     /// Pack after tick t (B1 `pack_due`).
-    fn pack_due(&mut self, c: &mut Builder, t: usize, r: usize, skip_last_group: bool) {
+    fn pack_due(&mut self, c: &mut Builder, t: usize, r: usize, skip_last_group: bool) { if chain_codec::dense_on()&&t>=351 { if t==351{self.pack5(c,69);self.chain_push(c,69);} self.dense_pack_to(c,t-1);return; }
         if t < self.off {
             return;
         }
@@ -2296,8 +2460,9 @@ impl Tape {
         if u % 5 == 3 && !(skip_last_group && t + 2 >= r && 5 * g + self.off + 4 >= r) {
             self.pack3(c, g);
         }
-        if u % 5 == 0 && u > 0 && self.state(g - 1) == GState::P3 {
+        if u % 5 == 0 && u > 0 && matches!(self.state(g - 1),GState::P3|GState::Prefix3) {
             self.pack5(c, g - 1);
+            self.chain_push(c, g - 1);
         }
     }
     /// B1 `repack`.
@@ -2311,7 +2476,7 @@ impl Tape {
         }
     }
     fn all_consumed(&self) -> bool {
-        self.outer_shared.iter().all(Option::is_none) && self.shared.iter().all(Option::is_none) && self.raw.iter().all(Option::is_none) && self.groups.iter().all(|g| g.is_none() || g.as_ref().unwrap().state == GState::Raw)
+        self.prefix_rank.is_none() && self.dense_zip.is_none() && self.dense_tail.is_empty() && self.chains.iter().all(Option::is_none) && self.shared.iter().all(Option::is_none) && self.raw.iter().all(Option::is_none) && self.groups.iter().all(|g| g.is_none() || g.as_ref().unwrap().state == GState::Raw)
     }
 }
 
@@ -2512,7 +2677,7 @@ enum ATop {
 
 fn a_mbu(c: &mut Builder, q: QubitId, x: QubitId, y: QubitId) {
     let m = c.alloc_bit();
-    c.hmr(q, m);
+    c.walk_and_marker(q,x,y,m);c.hmr(q, m);
     c.cz_if(x, y, m);
     c.free_bit(m);
     c.free(q);
@@ -2521,15 +2686,35 @@ fn a_mbu(c: &mut Builder, q: QubitId, x: QubitId, y: QubitId) {
 /// Family A ripple `b += a + cin` over w = b.len() bits, w - 1 owned carries. The top carry is vented into the fresh
 /// wire `cout` (Vent) or is the content of `cout` and is MBU-erased (Erase: S5). `a` may be one bit short: its top
 /// source bit is then the constant 1 (C1-SS, no pad wire).
+thread_local! {
+    /// SQ_RAILBRIDGE: number of TOP carry stages of the next a_ripple done in place (Cuccaro MAJ/UMA,
+    /// carry parked in a[i], +1 CCX each, no wire). Set by fama_add when an exact split is infeasible.
+    static A_BRIDGE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 fn a_ripple(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>, cout: QubitId, top: ATop,
             deferred: &mut Vec<(usize, BitId)>, top_release: bool) {
     let w = b.len();
     let short = a.len() + 1 == w;
     assert!(w >= 1 && (a.len() == w || short));
-    let carries = if REVERSE_LOW.with(|v|v.borrow().is_some()) {reverse_carries(c,w-1,a[0],b[0],cin)}else{c.alloc_qubits(w-1)};
+    let kb = A_BRIDGE.with(|x| x.replace(0)).min(w.saturating_sub(1));
+    let need=(c.active_qubits() as usize+w.saturating_sub(1)).saturating_sub(super::super::walk_policy::physical_cap()).min(w.saturating_sub(1));
+    let kb=if super::super::walk_policy::frozen() {kb.max(need)}else{kb}; let captured=SHARED_LOW.with(|v|v.borrow().as_ref().is_some_and(|&(aa,bb,p,_)|(a[0],b[0],cin)==(aa,bb,Some(p)))) || REVERSE_LOW.with(|v|v.borrow().as_ref().is_some_and(|&(aa,bb,p,_)|(a[0],b[0],cin)==(aa,bb,Some(p)))); let kb=if captured {kb.min(w.saturating_sub(2))}else{kb};
+    assert!(deferred.iter().all(|&(i,_)|i<w.saturating_sub(1)-kb),"cannot bridge a deferred phase carry");
+    let first = w.saturating_sub(1) - kb;
+    // Only the ripple whose low stage is the captured one (a[0], b[0], cin) takes the shared reverse carry;
+    // another ripple that runs while the capture is pending allocates normally (carry_step re-checks the full match).
+    let mut carries = if first > 0 && REVERSE_LOW.with(|v|v.borrow().as_ref().is_some_and(|&(aa,bb,p,_)| (a[0],b[0],cin)==(aa,bb,Some(p)))) {reverse_carries(c,first,a[0],b[0],cin)}else{c.alloc_qubits(first)};
+    carries.extend((first..w.saturating_sub(1)).map(|i| a[i]));
     let prev = |i: usize, cs: &[QubitId]| if i == 0 { cin } else { Some(cs[i - 1]) };
     for i in 0..w - 1 {
-        carry_step(c, a[i], b[i], prev(i, &carries), carries[i]);
+        if i >= first {
+            let p = prev(i, &carries).expect("bridged stage needs a live carry-in");
+            c.cx(a[i], b[i]);
+            c.cx(a[i], p);
+            c.ccx(b[i], p, a[i]);
+        } else {
+            carry_step(c, a[i], b[i], prev(i, &carries), carries[i]);
+        }
     }
     let t = w - 1;
     let p = prev(t, &carries);
@@ -2586,6 +2771,14 @@ fn a_ripple(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>,
         c.x(b[t]);
     }
     for i in (0..w - 1).rev() {
+        if i >= first {
+            assert!(!deferred.iter().any(|&(k, _)| k == i), "deferred phase on a bridged stage");
+            let p = prev(i, &carries).unwrap();
+            c.ccx(b[i], p, a[i]);
+            c.cx(a[i], p);
+            c.cx(p, b[i]);
+            continue;
+        }
         if let Some(pos) = deferred.iter().position(|&(k, _)| k == i) {
             let (_, m) = deferred.remove(pos);
             c.z_if(carries[i], m);
@@ -2593,6 +2786,11 @@ fn a_ripple(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>,
         }
         unwind_carry_step(c, a[i], b[i], prev(i, &carries), carries[i]);
     }
+}
+
+fn sq_railbridge() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("SQ_RAILBRIDGE").is_some())
 }
 
 /// `split_sizes` for family A's add shape (w - 1 owned carries; the last chunk's top carry lives in `cout`, already
@@ -2636,7 +2834,8 @@ fn split_sizes_a(w: usize, room: usize, exact: bool) -> Result<Option<Vec<usize>
 fn fama_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, cout: QubitId, top: ATop, mode: SplitMode,
             tick_def: &mut Vec<(usize, BitId)>, label: &'static str, top_release: bool) {
     let w = b.len();
-    let room = h7::cap().saturating_sub(c.active_qubits() as usize).saturating_sub(usize::from(env_bool("GO_SHARE_ROOMFIX", false) && SHARED_LOW.with(|x| x.borrow().is_some())));
+    let room = super::super::walk_policy::physical_cap().saturating_sub(c.active_qubits() as usize).saturating_sub(usize::from(env_bool("GO_SHARE_ROOMFIX", false) && SHARED_LOW.with(|x| x.borrow().is_some())));
+    let room=super::super::walk_policy::room("rail",&format!("{label}:{w}:{mode:?}:{top:?}"),room);
     if env_bool("K3B_RAIL_TRACE", false) {
         eprintln!("K3B_RAIL {label} w={w} room={room} mode={mode:?} def={} fama={top:?}", tick_def.len());
     }
@@ -2658,12 +2857,31 @@ fn fama_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, cout: Q
         }
         Err(()) => {
             ledger(|l| l.infeasible += 1);
+            if sq_railbridge() && w >= 2 {
+                // Exact bridged ripple: allocate only `room` carries, the top (w-1-room) stages in place.
+                let low_pending = REVERSE_LOW.with(|v| v.borrow().is_some()) || SHARED_LOW.with(|v| v.borrow().is_some());
+                let keep = room.min(w - 1).max(if low_pending { 1 } else { 0 });
+                A_BRIDGE.with(|x| x.set(w - 1 - keep));
+                eprintln!("SQ_RAILBRIDGE fama {label} w={w} room={room} bridged={}", w - 1 - keep);
+                ledger(|l| *l.splits.entry("SQ bridged fama stages").or_insert(0) += w - 1 - keep);
+            }
             a_ripple(c, a, b, Some(cin), cout, top, &mut Vec::new(), top_release);
             return;
         }
         Ok(Some(s)) => s,
     };
     ledger(|l| *l.splits.entry(label).or_insert(0) += sizes.len() - 1);
+    // A split rail add runs its low chunk through rail_ripple, which cannot take the codec's shared reverse
+    // carry. Un-compute that product here (q = (a0^p)(b0^p), exactly what the low stage would have produced) and free it.
+    let pending = REVERSE_LOW.with(|v| *v.borrow());
+    if let Some((aa, bb, p, q)) = pending {
+        if (aa, bb, p) == (a[0], b[0], cin) {
+            REVERSE_LOW.with(|v| v.borrow_mut().take());
+            c.cx(p, aa); c.cx(p, bb); c.ccx(aa, bb, q); c.cx(p, aa); c.cx(p, bb);
+            c.free(q);
+            ledger(|l| *l.splits.entry("SQ reverse share unshared (split)").or_insert(0) += 1);
+        }
+    }
     let mut bounds = Vec::with_capacity(sizes.len());
     let mut lo = 0;
     for &s in &sizes {
@@ -2771,7 +2989,7 @@ pub fn rail_alias_probe() {
 fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<QubitId>, t: usize, o0_erase: bool,
             mode: SplitMode, def: &mut Vec<(usize, BitId)>, label: &'static str,
             mut mid: Option<&mut dyn FnMut(&mut Builder, QubitId)>,
-            keep_low: bool, prior: Option<(QubitId, QubitId)>) -> (Rails, QubitId, QubitId, Option<QubitId>, Option<QubitId>) {
+            keep_low: bool, prior: Option<(QubitId, QubitId)>, late_pack:Option<&mut Tape>) -> (Rails, QubitId, QubitId, Option<QubitId>, Option<QubitId>) {
     // v025 I-3 (HEO_CELL_INSIDE): `mid` runs the payload cell after the parity route and the
     // previous-letter fix (typ = o_t is final) but BEFORE the add widens the rails and allocates
     // the tape sign wire s_t, so the cell sees fewer live wires than it does after the tick.
@@ -2797,7 +3015,7 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
     // crossing an ead shrink would instead keep the original source alive.
     let defer_s1 = mid.is_some() && !o0_erase && (env_usize("HEO_CELL_INSIDE", 0) >= 2
         || (env_bool("HEO_CELL_HELPER_S1", false) && label=="divfwd" && mpost <= mad
-            && r3_s1_ticks().contains(&t)
+            && (r3_s1_ticks().contains(&t) || (chain_codec::dense_on()&&t==372))
             // The mid callback packs old letters at u%5=0 or3. It may change
             // typ_prev's physical wire there, so it must not be reread afterward.
             && t>=usize::from(k.lt0) && ![0usize,3].contains(&((t-usize::from(k.lt0))%5))));
@@ -2913,7 +3131,7 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
         pads += 1;
     }
     let top_alias = env_bool("HEO_RAIL_TOP_ALIAS", false) && mad > wpost(cfg, t) - 1;
-    let cout = if top_alias { x2[mad-1] } else { c.alloc_qubit() };
+    let prepacked=late_pack.is_some() || (chain_codec::dense_on()&&label=="divfwd"&&[369,371].contains(&t));if let Some(tape)=late_pack{lag::prepack(c,tape,t-1,&hs,p1,&x2,cw);}else if prepacked{lag::erase_mid_type(c,&hs,p1,&x2,cw);} let cout = if top_alias { x2[mad-1] } else { c.alloc_qubit() };
     c.x_all(&hs);
     c.x(p1);
     let top_release = env_bool("HEO_RAIL_TOP_RELEASE", false) && mad > wpost(cfg, t) - 1;
@@ -2943,15 +3161,16 @@ fn fama_fwd(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ_prev: Option<Qub
         if !top_alias || q != cout { c.free(q); }
     }
     let rails = a_to_heo(c, AState { c: p1, x1: hs, x2 }, w1a, wp);
-    (rails, cw, cout, retained, shared)
+    (rails, if prepacked{crate::circuit::NO_QUBIT}else{cw}, cout, retained, shared)
 }
 
 /// Family A reverse tick t >= 1: exact mirror of [`fama_fwd`]; consumes the tape pair. Returns parked rails at
 /// wbefore(t) and the rebuilt o_0 wire (div O0 at t = 1).
 #[allow(clippy::too_many_arguments)]
-fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: QubitId, typ_prev: Option<QubitId>, t: usize,
+fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, mut typ: QubitId, s: QubitId, typ_prev: Option<QubitId>, t: usize,
             o0_rebuild: bool, mode: SplitMode, def: &mut Vec<(usize, BitId)>, label: &'static str,
-            mut mid: Option<&mut dyn FnMut(&mut Builder, QubitId)>, incoming:Option<QubitId>, codec:Option<(QubitId,QubitId)>) -> (Rails, Option<QubitId>, Option<QubitId>) {
+            mut mid: Option<&mut dyn FnMut(&mut Builder, QubitId)>, incoming:Option<QubitId>, codec:Option<(QubitId,QubitId)>,
+            late_tp:Option<(&mut Tape,usize)>) -> (Rails, Option<QubitId>, Option<QubitId>) {
     // v025 I-3 (HEO_CELL_INSIDE): `mid` runs the payload cell after the inverse add has consumed the
     // tape sign wire s and the pads are freed, but before the rails regrow and before typ is folded
     // into the parity wire (typ = o_t still holds the letter the cell reads).
@@ -3027,15 +3246,18 @@ fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: Qub
         m(c, typ);
         if loan { p1 = r3_sgn_restore(c, x2[0], typ); }
     }
-    while hs.len() < mpost - 1 {
-        hs.push(c.alloc_qubit());
-    }
-    while x2.len() < mpost {
-        x2.push(c.alloc_qubit());
-    }
-    if let Some(tp) = typ_prev {
-        c.cx(tp, typ);
-    }
+    let typ_prev=if let Some((tape,u))=late_tp {
+        assert!(typ_prev.is_none() && !o0_rebuild);
+        if lag::active(label,t) {
+            typ=lag::late_parity(c,tape,u,&hs,p1,&x2); None
+        } else {
+            tape.ensure_raw(c,u);
+            Some(tape.get(u).0)
+        }
+    } else {typ_prev};
+    while hs.len() < mpost - 1 { hs.push(c.alloc_qubit()); }
+    let reverse_alias=chain_codec::dense_on()&&label=="mulrev"&&t>=370&&x2.len()+1==mpost&&w1<=x2.len(); while x2.len() < mpost-usize::from(reverse_alias) { x2.push(c.alloc_qubit()); }
+    if let Some(tp) = typ_prev { c.cx(tp, typ); }
     let cw = typ;
     let mut x1 = vec![p1];
     x1.extend(hs);
@@ -3049,12 +3271,12 @@ fn fama_rev(c: &mut Builder, cfg: &HeoConfig, rails: Rails, typ: QubitId, s: Qub
     });
     for j in usize::from(retained.is_some())..w1 {fredkin(c,cw,x1[j],x2[j]);}
     for j in (w1..mpost).rev() {
-        c.cx(x1[j], x2[j]);
+        if reverse_alias&&j+1==mpost {x2.push(x1[j]);continue;} c.cx(x1[j], x2[j]);
         a_mbu(c, x1[j], cw, x2[j]); // S1: the half bit is the persistent AND C & X2[j]
     }
     x1.truncate(w1);
     let wb = wbefore(cfg, t);
-    (a_to_heo(c, AState { c: cw, x1, x2 }, wb, wb), rebuilt, retained)
+    (a_to_heo(c, AState { c: cw, x1, x2 }, if chain_codec::dense_on()&&label=="mulrev"&&t>=370{w1+1}else{wb}, wb), rebuilt, retained)
 }
 
 /// HEO_PARK_MBU loan orient: at park the rails are (0, +-1) with o = 1 or (+-1, 0) with o = 0. r2 ^= r1 makes r2 = +-1,
@@ -3090,9 +3312,42 @@ fn park_mbu_unloan(c: &mut Builder, rails: &mut Rails, o: QubitId) {
     }
 }
 
+// Terminal loan directly in the parity-parked representation. The discarded
+// virtual bit R2[0]=!R1[0] would become constant one after R2 ^= R1.
+// Keep the parent's reset/HMR sequence, using already-zero physical wires for
+// the reset of this virtual bit. No added park-state promise is introduced.
+fn loan_parked(c:&mut Builder,rails:Rails,typ:QubitId)->(QubitId,(usize,usize)) {
+    let Rails{r1,r2}=rails; let w=r1.len(); assert_eq!(r2.len()+1,w);
+    for i in 1..w {c.cx(r1[i],r2[i-1]);}
+    c.x(typ);
+    let m=c.alloc_bit();c.hmr(r1[0],m);c.z_if(typ,m);c.free_bit(m);c.free(r1[0]);
+    for i in 1..w {a_mbu(c,r1[i],typ,r2[i-1]);}
+    c.x(typ);
+    let sgn=r2[w-2];
+    for &q in &r2[..w-2] {c.cx(sgn,q);}
+    // Original loan_signed resets w re-issued zero R1 wires and virtual R2[0].
+    for &q in &r1 {c.r(q);}
+    c.r(r1[0]);
+    c.free_vec(&r2[..w-2]);
+    (sgn,(w,w))
+}
+fn unloan_parked(c:&mut Builder,sgn:QubitId,widths:(usize,usize),typ:QubitId)->Rails {
+    let (w,w2)=widths;assert_eq!(w,w2);assert!(w>=2);
+    let r1=c.alloc_qubits(w);let mut r2=c.alloc_qubits(w-2);r2.push(sgn);
+    c.x(typ);c.cx(typ,r1[0]);c.ccx(typ,sgn,r1[1]);
+    for i in 2..w {c.cx(r1[1],r1[i]);}c.x(typ);
+    for i in 0..w-2 {c.cx(sgn,r2[i]);}
+    for i in 1..w {c.cx(r1[i],r2[i-1]);}
+    // The original park_par has one clean reset. Reproduce it without the
+    // transient virtual bit, using the exactly known low R1 wire.
+    c.cx(typ,r1[0]);c.x(r1[0]);c.r(r1[0]);c.x(r1[0]);c.cx(typ,r1[0]);
+    Rails{r1,r2}
+}
+fn compact_terminal()->bool {std::env::var_os("WALK_ZERO").is_some()}
+
 struct Walk {
     /// v025 A-2: the previous tick's retained first carry (multiply forward pass only).
-    pending_low: Option<QubitId>,
+    pending_low: Option<QubitId>, prefix_frame:Option<prefix::Frame>,
     rails: Option<Rails>,
     tape: Tape,
     deferred: Vec<Vec<(usize, BitId)>>,
@@ -3147,7 +3402,9 @@ fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x:
             park_par(c, k, &mut rails);
             w.rails = Some(rails);
         }
-        let prev = if t > 0 { Some(w.typ_of(t - 1)) } else { None };
+        let lagged=lag::active(label,t);
+        if lagged { assert!(mid.is_none()); lag::begin_fwd(c,w,t); }
+        if chain_codec::dense_on() && t>351 && !lagged && w.tape.raw[t-1].is_some_and(|(q,_)|q==crate::circuit::NO_QUBIT){lag::restore(c,w,t-1);} let prev = if t > 0 && !lagged { Some(w.typ_of(t - 1)) } else { None };
         let o0e = t == 1 && w.lt0 && w.o0_erase;
         if fama_on() && t > 0 {
             assert!(k.park_parity, "HEO_FAMA needs L-PAR (HEO_PARK_PARITY on)");
@@ -3157,38 +3414,37 @@ fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x:
             // room ~287: the retained carry wire crosses no field cell). Retain at letter u%5==1,
             // consume at u%5==2, erase at that group's pack3.
             let mul_leg = label == "mulfwd" || (label == "divfwd" && env_bool("GO_DIVFWD_SHARE", false) && std::env::var("GO_DIVFWD_SHARE_T").map_or(true, |v| v.split(',').any(|x| x.trim().parse::<usize>().ok() == Some(t))));
-            let shared_on = mul_leg && env_bool("HEO_CARRY_CODEC", false) && truthy("HEO_CODEC_SYNTH");
+            let shared_on = !(prefix::enabled()&&t<=5) && !(chain_codec::dense_on()&&t>=351) && mul_leg && env_bool("HEO_CARRY_CODEC", false) && truthy("HEO_CODEC_SYNTH");
             let u = t.checked_sub(w.tape.off);
-            let pair_share = env_bool("EXACT_PAIR_CARRY",false) && label=="mulfwd";
-            let keep_low = shared_on && u.is_some_and(|u| u % 5 == 1 || (pair_share && u % 5 == 3)) && t + 2 < cfg.rounds();
+            let keep_low = shared_on && u.is_some_and(|u| u % 5 == 1) && t + 2 < cfg.rounds();
             let pl = w.pending_low.take();
             let prior = pl.map(|q| (q, w.tape.get(t - 1).1));
             let (nr, typ, s, retained, shared) = {
-                let tape = &mut w.tape;
+                let tape = &mut w.tape; if lagged && chain_codec::dense_on(){assert!(mid.is_none());fama_fwd(c,cfg,taken,prev,t,o0e,k.fwd_split,&mut def,label,None,keep_low,prior,Some(tape))}else{
                 let mut adapter = mid.map(|m| move |c: &mut Builder, typ: QubitId| m(c, tape, typ));
                 let hook: Option<&mut dyn FnMut(&mut Builder, QubitId)> = match adapter.as_mut() {
                     Some(f) => Some(f),
                     None => None,
                 };
-                fama_fwd(c, cfg, taken, prev, t, o0e, k.fwd_split, &mut def, label, hook, keep_low, prior)
+                fama_fwd(c, cfg, taken, prev, t, o0e, k.fwd_split, &mut def, label, hook, keep_low, prior,None)}
             };
             w.pending_low = retained;
             if let Some(q) = shared {
                 let g = w.tape.gid(t);
-                if pair_share && u.is_some_and(|u|u%5==4) {
-                    assert!(w.tape.outer_shared[g].is_none(),"outer shared product already pending {g}");
-                    w.tape.outer_shared[g]=Some(q);
-                } else {
-                    assert!(w.tape.shared[g].is_none(), "shared product already pending for group {g}");
-                    w.tape.shared[g] = Some(q);
-                }
+                assert!(w.tape.shared[g].is_none(), "shared product already pending for group {g}");
+                w.tape.shared[g] = Some(q);
             }
             w.rails = Some(nr);
             if o0e {
                 w.o0 = None;
             }
             w.deferred[t] = def;
-            w.tape.raw[t] = Some((typ, s));
+            let typ=if lagged {lag::finish_fwd(c,w,t,typ,s,cfg.rounds()-1)}else{w.tape.raw[t]=Some((typ,s));typ};
+            if prefix::enabled()&&t==5{prefix::compress(c,w);} if typ!=crate::circuit::NO_QUBIT && std::env::var_os("WALK_RAW").is_some() && t>=360 {
+                let r=w.rails.as_ref().unwrap();
+                let ids=|qs:&[QubitId]|qs.iter().map(|q|q.0.to_string()).collect::<Vec<_>>().join(",");
+                eprintln!("WALK_CUT {}_{} {} {};{};{}",label,t,c.op_count(),ids(&r.r1),ids(&r.r2),ids(&[typ,s]));
+            }
             return (typ, s);
         }
         let rails = w.rails.as_mut().unwrap();
@@ -3220,11 +3476,14 @@ fn forward_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, x:
 fn reverse_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, t: usize, mode: SplitMode,
                 label: &'static str, mid: Option<&mut dyn FnMut(&mut Builder, &Tape, QubitId)>) -> Option<Vec<QubitId>> {
     assert!(mid.is_none() || t > 0, "HEO_CELL_INSIDE: no mid-tick cell at the unseed tick");
-    let share=(label=="divrev" || (label=="mulrev2" && env_bool("GO_MULREV2_SHARE",false)) || (label=="mulrev" && env_bool("GO_MULREV_SHARE",false))) && env_bool("HEO_REVERSE_CARRY_CODEC",false) && truthy("HEO_CODEC_SYNTH");
+    if prefix::enabled()&&t==5{prefix::before_reverse(c,w);} let share=!(prefix::enabled()&&t<=5) && (label=="divrev" || (label=="mulrev2" && env_bool("GO_MULREV2_SHARE",false)) || (label=="mulrev" && env_bool("GO_MULREV_SHARE",false))) && env_bool("HEO_REVERSE_CARRY_CODEC",false) && truthy("HEO_CODEC_SYNTH");
+    let lagged=lag::active(label,t);
+    if lagged { assert!(mid.is_none() && !share); lag::begin_rev(c,w,t,cfg.rounds()-1); }
+    let late_prev=lagged || super::super::fwsk_lean::late_prev(label,t); // C29 S03: preserve original decode order (fwsk: FWSK_LATE_PREV sites)
     REVERSE_CODEC_CAPTURE.with(|v|v.set(share));
     book(c, "codec", "rev codec", t, |c| {
         w.tape.ensure_raw(c, t);
-        if t > 0 {
+        if t > 0 && !late_prev {
             w.tape.ensure_raw(c, t - 1);
         }
     });
@@ -3244,7 +3503,9 @@ fn reverse_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, t:
         let leg = if label.starts_with("mul") { super::super::back_seam::Leg::Mul } else { super::super::back_seam::Leg::Div };
         return Some(book(c, "seeds", "fd unseed", 0, |c| fd_unseed(c, rails, typ, None, leg)));
     }
+    let lag_parity:Option<QubitId>=None;
     let (typ, s) = w.tape.raw[t].take().unwrap();
+    let typ=lag_parity.unwrap_or(typ);
     if t == 0 && k.h0 {
         let mut rails = w.rails.take().unwrap();
         unpark_par(c, k, &mut rails);
@@ -3266,7 +3527,7 @@ fn reverse_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, t:
         return Some(book(c, "seeds", "g3 unseed", 0, |c| g3_unseed(c, rails, typ, s)));
     }
     let o0r = t == 1 && w.lt0 && w.o0_rebuild && w.o0.is_none();
-    let tp = if t > 0 && !o0r { Some(w.typ_of(t - 1)) } else { None };
+    let tp = if t > 0 && !o0r && !late_prev && !lagged { Some(w.typ_of(t - 1)) } else { None };
     if fama_on() && t > 0 {
         assert!(k.park_parity, "HEO_FAMA needs L-PAR (HEO_PARK_PARITY on)");
         let taken = w.rails.take().unwrap();
@@ -3275,18 +3536,22 @@ fn reverse_tick(c: &mut Builder, cfg: &HeoConfig, k: &CarryCfg, w: &mut Walk, t:
         let codec=if share && t>=w.tape.off && (t-w.tape.off)%5==2 {
             let g=w.tape.gid(t);w.tape.shared[g].take().map(|q|(q,w.tape.get(t-1).1))
         }else{None};
-        let (nr, rebuilt, retained) = {
+        let (nr, rebuilt, retained) = if late_prev {
+            assert!(mid.is_none() && !share && t>0);
+            fama_rev(c,cfg,taken,typ,s,None,t,o0r,mode,&mut def,label,None,incoming,codec,Some((&mut w.tape,t-1)))
+        } else {
             let tape = &w.tape;
             let mut adapter = mid.map(|m| move |c: &mut Builder, typ: QubitId| m(c, tape, typ));
             let hook: Option<&mut dyn FnMut(&mut Builder, QubitId)> = match adapter.as_mut() {
                 Some(f) => Some(f),
                 None => None,
             };
-            fama_rev(c, cfg, taken, typ, s, tp, t, o0r, mode, &mut def, label, hook, incoming, codec)
+            fama_rev(c, cfg, taken, typ, s, tp, t, o0r, mode, &mut def, label, hook, incoming, codec,None)
         };
         assert!(def.is_empty(), "fama_rev: deferred phases left over");
         assert!(w.pending_low.is_none());w.pending_low=retained;
         w.rails = Some(nr);
+        if lagged {lag::finish_rev(c,w,t);}
         if o0r {
             w.o0 = rebuilt;
         }
@@ -3325,10 +3590,11 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
     let sig = numerator;
     let mut del: Option<Vec<QubitId>> = None;
     let off = usize::from(k.lt0);
-    let mut w = Walk { pending_low: None, rails: None, tape: Tape::with_offset(r, off), deferred: vec![Vec::new(); r], bwire: None,
+    let mut w = Walk { pending_low: None, prefix_frame:None, rails: None, tape: Tape::with_offset(r, off), deferred: vec![Vec::new(); r], bwire: None,
                        o0: None, lt0: k.lt0, ywire: None, o0_erase: k.o0_dec && k.lt0, o0_rebuild: k.o0_dec && k.lt0 };
     c.set_phase("heo_div_fwd");
     for t in 0..r {
+        sem_walk(&w, N + del.as_ref().map_or(0, |d| d.len()), 0);
         if env_bool("SKYWALK_CUT_MAP", false) && [200, 254].contains(&t) {
             let rails = w.rails.as_ref().unwrap();
             let r1: Vec<u64> = rails.r1.iter().map(|q| q.0).collect();
@@ -3355,6 +3621,7 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
         };
         if !inside_cell {
             book(c, "codec", "div codec", t, |c| w.tape.pack_due(c, t, r, false));
+            lag::end_pack(c,&mut w,t,r-1);
         }
         if t < k.r2d {
             if t == 0 && k.fd {
@@ -3382,6 +3649,12 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
         }
     }
     c.set_phase("heo_div_batch");
+    let (o,wid)=if compact_terminal() {
+        assert!(k.park_parity && k.loan_both && park_mbu_on());
+        book(c,"codec","div batch codec",r-1,|c|w.tape.ensure_raw(c,r-1));
+        let ol=w.tape.get(r-1).0;
+        loan_parked(c,w.rails.take().unwrap(),ol)
+    } else {
     let mut rails = w.rails.take().unwrap();
     unpark_par(c, k, &mut rails);
     if k.loan_both {
@@ -3390,12 +3663,15 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
         book(c, "seeds", "loan orient", r - 1, |c| if park_mbu_on() { park_mbu_loan(c, &mut rails, ol) } else { park_orient(c, &rails, ol) });
     }
     let (o, wid) = loan(c, rails);
-    let last_g = w.tape.gid(r - 1);
+        (o,wid)
+    };
+    if chain_codec::dense_on(){w.tape.dense_batch_begin(c,k.r2d,true);} let last_g = w.tape.gid(r - 1);
     let d = del.take().unwrap();
     let mut early_g: Option<usize> = None;
     for t in k.r2d..r {
+        sem_walk(&w, 2 * N, 1);
         let g = w.tape.gid(t);
-        if k.div_partial || early_g == Some(g) {
+        if chain_codec::dense_on(){w.tape.dense_batch_get(c,t,true);} else if k.div_partial || early_g == Some(g) {
             // B7 V-P9: unpack only what letter t needs (the first batch group keeps its P3 part packed); also every
             // letter of a group the LAZY_BATCH rule already packed early (a group unpack would undo the pack3)
             book(c, "codec", "div batch codec", t, |c| w.tape.ensure_raw(c, t));
@@ -3403,11 +3679,16 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
             book(c, "codec", "div batch codec", t, |c| w.tape.ensure_group_raw(c, g, r));
         }
         let (typ, s) = w.tape.get(t);
+        let thin = if !chain_codec::dense_on() && c.active_qubits() as usize + 3 >= super::super::walk_policy::physical_cap() {
+            book(c, "codec", "div batch thin", t, |c| w.tape.thin_begin(c,t))
+        } else { None };
+        if thin.is_some() { eprintln!("C29_BATCH_THIN div t={t} cell_live={}",c.active_qubits()); }
         book(c, "cells", "div batch cell", t, |c| dirty_cell(c, &w.tape, t, |c| cell_div(c, cfg, t, typ, sig, &d)));
+        if let Some(thin)=thin {book(c,"codec","div batch unthin",t,|c|w.tape.thin_end(c,thin));}
         if !(k.db_skip && t + 1 == r) && !(k.db_skip2 && t + 2 == r) {
             book(c, "routing", "div batch route", t, |c| route(c, s, sig, &d));
         }
-        // B7 V-P6: HEO_DIV_LIFO_N = n leaves the last n+1 groups raw (base n = 0: the last group)
+        if chain_codec::dense_on(){w.tape.dense_batch_put(c,t,true);continue;} // B7 V-P6: HEO_DIV_LIFO_N = n leaves the last n+1 groups raw (base n = 0: the last group)
         let lifo_keep = k.lifo && g + k.div_lifo_n >= last_g;
         if k.div_early_p3 && (t - off) % 5 == 2 && !lifo_keep {
             // B7 LAZY_BATCH (div): letters 0..2 of the group are consumed; pack them now (repack then does pack5 only)
@@ -3421,9 +3702,14 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
             book(c, "codec", "div batch codec", t, |c| w.tape.repack(c, g, r));
         }
     }
-    c.set_phase("heo_div_endpoint");
+    if chain_codec::dense_on(){w.tape.dense_batch_end(c,r-1);} c.set_phase("heo_div_endpoint");
     c.cx_pairs(sig, &d);
     c.free_vec(&d);
+    if compact_terminal() {
+        book(c,"codec","div batch codec",r-1,|c|w.tape.ensure_raw(c,r-1));
+        let ol=w.tape.get(r-1).0;
+        w.rails=Some(unloan_parked(c,o,wid,ol));
+    } else {
     let mut rails = unloan(c, o, wid);
     if k.loan_both {
         book(c, "codec", "div batch codec", r - 1, |c| w.tape.ensure_raw(c, r - 1));
@@ -3432,9 +3718,11 @@ pub fn divide(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId]) {
     }
     park_par(c, k, &mut rails);
     w.rails = Some(rails);
+    }
     c.set_phase("heo_div_walkback");
     let mut x_out = None;
     for t in (0..r).rev() {
+        sem_walk(&w, N, 0);
         let out = book(c, "rails", "div rev rail", t, |c| reverse_tick(c, cfg, k, &mut w, t, SplitMode::Apply, "divrev", None));
         if out.is_some() {
             x_out = out;
@@ -3453,10 +3741,11 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
     let sig = numerator;
     let lt0m = k.lt0_mul;
     let off = usize::from(lt0m);
-    let mut w = Walk { pending_low: None, rails: None, tape: Tape::with_offset(r, off), deferred: vec![Vec::new(); r], bwire: None, o0: None,
+    let mut w = Walk { pending_low: None, prefix_frame:None, rails: None, tape: Tape::with_offset(r, off), deferred: vec![Vec::new(); r], bwire: None, o0: None,
                        lt0: lt0m, ywire: None, o0_erase: k.o0m && lt0m, o0_rebuild: false };
     c.set_phase("heo_mul_fwd");
     for t in 0..r {
+        sem_walk(&w, N, 0);
         book(c, "rails", "mul fwd rail", t, |c| forward_tick(c, cfg, k, &mut w, denominator, t, "mulfwd", None));
         if t == 0 && k.fd && !k.bw_inv {
             let bw = c.alloc_qubit();
@@ -3466,6 +3755,12 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
         book(c, "codec", "mul codec", t, |c| w.tape.pack_due(c, t, r, k.lifo));
     }
     c.set_phase("heo_mul_batch");
+    let (o,wid)=if compact_terminal() {
+        assert!(k.park_parity && k.loan_both && park_mbu_on());
+        book(c,"codec","mul batch codec",r-1,|c|w.tape.ensure_raw(c,r-1));
+        let ol=w.tape.get(r-1).0;
+        loan_parked(c,w.rails.take().unwrap(),ol)
+    } else {
     let mut rails = w.rails.take().unwrap();
     unpark_par(c, k, &mut rails);
     if k.loan_both {
@@ -3474,11 +3769,14 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
         book(c, "seeds", "loan orient", r - 1, |c| if park_mbu_on() { park_mbu_loan(c, &mut rails, ol) } else { park_orient(c, &rails, ol) });
     }
     let (o, wid) = loan(c, rails);
-    let del = c.alloc_qubits(N);
+        (o,wid)
+    };
+    if chain_codec::dense_on(){w.tape.dense_batch_begin(c,k.r2m,false);} let del = c.alloc_qubits(N);
     c.cx_pairs(sig, &del);
     for t in (k.r2m..r).rev() {
+        sem_walk(&w, 2 * N, 1);
         let g = w.tape.gid(t);
-        if k.mulb_partial {
+        if chain_codec::dense_on(){w.tape.dense_batch_get(c,t,false);} else if k.mulb_partial {
             book(c, "codec", "mul batch codec", t, |c| w.tape.ensure_raw(c, t)); // B7 V-P9
         } else {
             book(c, "codec", "mul batch codec", t, |c| w.tape.ensure_group_raw(c, g, r));
@@ -3487,12 +3785,28 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
         if !(k.mb_skip2 && t + 2 == r) {
             book(c, "routing", "mul batch route", t, |c| route(c, s, sig, &del));
         }
+        let thin = if !chain_codec::dense_on() && c.active_qubits() as usize + 3 >= super::super::walk_policy::physical_cap() {
+            book(c, "codec", "mul batch thin", t, |c| w.tape.thin_begin(c,t))
+        } else { None };
+        if thin.is_some() { eprintln!("C29_BATCH_THIN mul t={t} cell_live={}",c.active_qubits()); }
         book(c, "cells", "mul batch cell", t, |c| dirty_cell(c, &w.tape, t, |c| cell_mul(c, cfg, t, typ, sig, &del)));
-        // B7 V-P7: railsrev reads the batch's last groups soon after; HEO_MULB_LIFO_N = n leaves n of them raw
+        if let Some(thin)=thin {book(c,"codec","mul batch unthin",t,|c|w.tape.thin_end(c,thin));}
+        if chain_codec::dense_on(){w.tape.dense_batch_put(c,t,false);continue;} // B7 V-P7: railsrev reads the batch's last groups soon after; HEO_MULB_LIFO_N = n leaves n of them raw
         if (t - off) % 5 == 0 && g >= w.tape.gid(k.r2m) + k.mulb_lifo_n {
             book(c, "codec", "mul batch codec", t, |c| w.tape.repack(c, g, r));
         }
     }
+    if chain_codec::dense_on(){w.tape.dense_batch_end(c,r-1);} if !chain_codec::dense_on() && env_bool("FWSK2_MULB_REPACK", false) {
+        // FWSK2: the batch stops inside group gid(r2m) and leaves it unpacked (P3 + 2 raw letters = 9 wires) for the
+        // whole rails-only reverse stretch, which reads it only at its last tick. Repack it to P5 (8 wires) now.
+        let g = w.tape.gid(k.r2m);
+        book(c, "codec", "mul batch codec", k.r2m, |c| w.tape.repack(c, g, r));
+    }
+    if compact_terminal() {
+        book(c,"codec","mul batch codec",r-1,|c|w.tape.ensure_raw(c,r-1));
+        let ol=w.tape.get(r-1).0;
+        w.rails=Some(unloan_parked(c,o,wid,ol));
+    } else {
     let mut rails = unloan(c, o, wid);
     if k.loan_both {
         book(c, "codec", "mul batch codec", r - 1, |c| w.tape.ensure_raw(c, r - 1));
@@ -3501,12 +3815,15 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
     }
     park_par(c, k, &mut rails);
     w.rails = Some(rails);
+    }
     c.set_phase("heo_mul_railsrev");
     for t in (k.r2m..r).rev() {
+        sem_walk(&w, 2 * N, 0);
         book(c, "rails", "mul rev rail", t, |c| reverse_tick(c, cfg, k, &mut w, t, SplitMode::Exact, "mulrev", None));
     }
     c.set_phase("heo_mul_fused");
     for t in (k.r1m..k.r2m).rev() {
+        sem_walk(&w, 2 * N, 0);
         if k.lr1 && t > 0 {
             // B6 L-R1: the rails hold the post-tick-t state; the reverse tick's resize to ead[t] re-extends R1.
             let rails = w.rails.as_mut().unwrap();
@@ -3537,6 +3854,7 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
         };
         let mut yw: Option<QubitId> = None;
         for t in (1..k.r1m).rev() {
+            sem_walk(&w, 2 * N, 0);
             let g = w.tape.gid(t);
             book(c, "codec", "mul head codec", t, |c| {
                 if truthy("HEO_HEAD_PARTIAL") { w.tape.ensure_raw(c, t); }
@@ -3554,7 +3872,7 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
                 });
                 yw = Some(b);
             }
-            c.cx(s, yw.unwrap()); // b_{t-1} = b_t ^ f_t
+            if prefix::enabled(){prefix::head_step(c,&mut w,t,k.r1m-1,typ,s);} c.cx(s, yw.unwrap()); // b_{t-1} = b_t ^ f_t
             book(c, "routing", "mul head route", t, |c| route(c, s, sig, &del));
             book(c, "cells", "mul head cell", t, |c| dirty_cell(c, &w.tape, t, |c| cell_mul(c, cfg, t, typ, sig, &del)));
             // B7 V-P5 / V-P8: groups 0..n-1 are the last ones railsrev2 reads; leave them raw
@@ -3607,6 +3925,7 @@ pub fn multiply(c: &mut Builder, numerator: &[QubitId], denominator: &[QubitId])
         c.set_phase("heo_mul_railsrev2");
         let mut x_out = None;
         for t in (0..k.r1m).rev() {
+            sem_walk(&w, N, 0);
             let out = book(c, "rails", "mul rev2 rail", t, |c| reverse_tick(c, cfg, k, &mut w, t, SplitMode::Exact, "mulrev2", None));
             if out.is_some() {
                 x_out = out;
@@ -3702,3 +4021,12 @@ fn reverse_carries(c:&mut Builder,n:usize,a:QubitId,b:QubitId,prev:Option<QubitI
 }
 
 
+
+/// fwsk: the tight-unpack sites (jackylee's 376/381 at cap 1144); `FWSK_TIGHT_ALL=1` allows any group.
+fn fwsk_tight(t0: usize) -> bool {
+    t0 == 376 || t0 == 381 || std::env::var_os("FWSK_TIGHT_ALL").is_some()
+}
+
+
+#[path = "walk_prefix.rs"]
+pub mod prefix;

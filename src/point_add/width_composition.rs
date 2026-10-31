@@ -46,7 +46,7 @@ pub(crate) fn plan(n:usize, room:usize)->Option<Plan> {
     cache.lock().unwrap().insert((n,room),best.clone());best
 }
 
-fn erase_release(c:&mut Builder,q:QubitId,a:&[QubitId],b:&[QubitId],incoming:Option<QubitId>){
+fn erase_release(c:&mut Builder,q:QubitId,a:&[QubitId],b:&[QubitId],incoming:Option<QubitId>){ if false{xor_lt_seed(c,b,a,incoming,q);c.release_clean(q);return;}
     let m=c.alloc_bit();c.hmr(q,m);c.release_clean(q);
     c.push_condition(m);
     if b.len()>1 {compare::cmp_lt_phase(c,b,a,incoming);} else {
@@ -57,7 +57,8 @@ fn erase_release(c:&mut Builder,q:QubitId,a:&[QubitId],b:&[QubitId],incoming:Opt
     c.pop_condition();c.free_bit(m);
 }
 
-fn inplace(c:&mut Builder,a:&[QubitId],b:&[QubitId],incoming:Option<QubitId>,out:QubitId){
+pub(crate) fn inplace(c:&mut Builder,a:&[QubitId],b:&[QubitId],incoming:Option<QubitId>,out:QubitId){
+    if incoming.is_none() && std::env::var_os("WALK_ZERO").is_some() {super::lowroom::ttk_add_cout(c,a,b,out);return;}
     let seed=incoming.unwrap_or_else(||c.alloc_qubit());
     for i in 0..a.len(){let p=if i==0{seed}else{a[i-1]};c.cx(a[i],b[i]);c.cx(a[i],p);c.ccx(p,b[i],a[i]);}
     c.cx(a[a.len()-1],out);
@@ -75,6 +76,9 @@ pub(crate) fn add_with_carry(c:&mut Builder,a:&[QubitId],b:&[QubitId],initial:Op
     let _dirty_trace=super::dirty_boundary_probe::Trace::new(c,"wc_add",b.len());
     eprintln!("DIRTY_PLAN\t{}\t{}\t{}\t{}\t{}\t{}\t{:?}",c.op_count(),b.len(),c.active_qubits(),p.slow as u8,p.extra2,p.peak,p.sizes);
     assert_eq!(a.len(),b.len());assert_eq!(p.sizes.iter().sum::<usize>(),a.len());
+    let room=super::walk_policy::physical_cap().saturating_sub(c.active_qubits() as usize);
+    let fitted=if super::walk_policy::frozen() && p.peak>room {if room<=1 {Some(Plan{sizes:vec![a.len()],slow:true,extra2:2*a.len(),peak:1})}else{plan(a.len(),room.max(2))}}else{None};
+    let p=fitted.as_ref().unwrap_or(p);
     let base=c.active_qubits();let mut at=0;let mut incoming=initial;let mut flags=Vec::new();
     for (j,&w) in p.sizes.iter().enumerate(){
         let out=c.alloc_qubit();let end=at+w;
@@ -122,7 +126,20 @@ pub(crate) fn mapped_add(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incomin
     for q in buffer{c.release_clean(q);}assert_eq!(c.active_qubits(),base);
 }
 
+/// SQ_SOFT: when no plan fits `room`, log the shortfall and return the plan at the smallest room that fits
+/// (the build then overflows the cap at this site instead of panicking). Off = identical behaviour.
+#[track_caller]
 pub(crate) fn direct_plan(n:usize,room:usize)->Option<Plan>{
+    let p=direct_plan_inner(n,room);
+    if p.is_none() && std::env::var_os("SQ_SOFT").is_some() {
+        let loc=std::panic::Location::caller();
+        let (r,q)=(room+1..room+4*n+8).find_map(|r|direct_plan_inner(n,r).map(|q|(r,q))).expect("SQ_SOFT: no plan at any room");
+        eprintln!("SQ_SOFT site={}:{} kind=direct_plan n={n} room={room} need={r} short={}",loc.file(),loc.line(),r-room);
+        return Some(q);
+    }
+    p
+}
+pub(crate) fn direct_plan_inner(n:usize,room:usize)->Option<Plan>{
     let mut best:Option<Plan>=None;
     for k in 1..=n.min(room+1){
         let mut caps:Vec<_>=(0..k-1).map(|j|room-j).collect();caps.push(room-(k-1)+2);
@@ -137,7 +154,7 @@ pub(crate) fn direct_plan(n:usize,room:usize)->Option<Plan>{
     }best
 }
 
-fn mapped_compare(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId){
+pub(crate) fn mapped_compare(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId){
     let _dirty_trace=super::dirty_boundary_probe::Trace::new(c,"mapped_compare",b.len());
 
     use super::pingpong::{fold_step,with_selector_xor};
@@ -166,10 +183,17 @@ pub(crate) fn direct_add(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incomin
 /// repair boundary phases. A matching inverse recreates the SAME carries and
 /// applies these deferred Z corrections before normal exact cleanup.
 pub(crate) fn direct_add_phase_transport(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId,p:&Plan,defer:bool,recover:&[(usize,BitId)])->Vec<(usize,BitId)>{
-    if std::env::var_os("FOLD_MAP_TRACE").is_some(){let mut syms=map.iter().flatten().copied().collect::<Vec<_>>();syms.push(incoming);syms.sort_by_key(|q|q.0);syms.dedup();let rows=map.iter().map(|r|r.iter().map(|q|syms.iter().position(|x|x==q).unwrap()).collect::<Vec<_>>()).collect::<Vec<_>>();eprintln!("FOLD_MAP\t{}\t{}\t{}\t{}\t{:?}",c.op_count(),super::pingpong::heo_hooks::cap().saturating_sub(c.active_qubits()as usize),syms.len(),syms.iter().position(|q|*q==incoming).unwrap(),rows);}
+    if std::env::var_os("FOLD_MAP_TRACE").is_some(){let mut syms=map.iter().flatten().copied().collect::<Vec<_>>();syms.push(incoming);syms.sort_by_key(|q|q.0);syms.dedup();let rows=map.iter().map(|r|r.iter().map(|q|syms.iter().position(|x|x==q).unwrap()).collect::<Vec<_>>()).collect::<Vec<_>>();eprintln!("FOLD_MAP\t{}\t{}\t{}\t{}\t{:?}",c.op_count(),super::walk_policy::physical_cap().saturating_sub(c.active_qubits()as usize),syms.len(),syms.iter().position(|q|*q==incoming).unwrap(),rows);}
     eprintln!("DIRTY_DIRECT_PLAN\t{}\t{}\t{}\t{}\t{}\t{}\t{:?}",c.op_count(),b.len(),c.active_qubits(),p.slow as u8,p.extra2,p.peak,p.sizes);
     let _dirty_trace=super::dirty_boundary_probe::Trace::new(c,"direct_add_phase_transport",b.len());
-    let room=super::pingpong::heo_hooks::cap().saturating_sub(c.active_qubits()as usize);
+    let room=super::walk_policy::physical_cap().saturating_sub(c.active_qubits()as usize);
+    let fitted=if super::walk_policy::frozen() && !defer && recover.is_empty() && p.peak>room {direct_plan_inner(b.len(),room)}else{None};
+    let p=fitted.as_ref().unwrap_or(p);
+    if super::walk_policy::frozen() && !defer && recover.is_empty() && p.peak>room {
+        let mut used=b.to_vec();used.extend(map.iter().flatten());used.push(incoming);
+        let pool:Vec<_>=c.walk_live().into_iter().filter(|q|!used.contains(q)).collect();
+        if super::lowroom::try_windowed_add(c,map,b,Some(incoming),room,&pool).is_some(){return Vec::new();}
+    }
     if !defer && recover.is_empty() && p.peak>room && std::env::var_os("FOLD_PACKED_BOUNDARIES").is_some() {
         if super::fold_template::try_fold(c,map,b,incoming,room){return Vec::new();}
     }
@@ -198,7 +222,7 @@ pub(crate) fn direct_add_phase_transport(c:&mut Builder,map:&[Vec<QubitId>],b:&[
     assert!(recover.iter().all(|(hi,_)|stages.iter().any(|(_,end,_,_)|hi==end)));
     let mut pending=Vec::new();
     for(lo,hi,cin,q)in stages.into_iter().rev(){let m=c.alloc_bit();c.hmr(q,m);c.release_clean(q);
-        if defer{pending.push((hi,m));}else{c.push_condition(m);if !super::leapfrog::C35_SQ_FX.with(|x|x.get()){mapped_compare(c,&map[lo..hi],&b[lo..hi],cin);}c.pop_condition();c.free_bit(m);}
+        if defer{pending.push((hi,m));}else{c.push_condition(m);mapped_compare(c,&map[lo..hi],&b[lo..hi],cin);c.pop_condition();c.free_bit(m);}
     }
     assert_eq!(c.active_qubits(),base);
     pending
@@ -207,7 +231,7 @@ pub(crate) fn direct_add_phase_transport(c:&mut Builder,map:&[Vec<QubitId>],b:&[
 /// One chunk of the direct ripple, as in [`direct_add_phase_transport`]:
 /// carries chained from `prev`; a non-final chunk XORs its carry-out into
 /// `out`; the sum bits are finished in `b` and the ladder is unwound.
-fn direct_chunk(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],at:usize,w:usize,prev:QubitId,out:Option<QubitId>){
+pub(crate) fn direct_chunk(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],at:usize,w:usize,prev:QubitId,out:Option<QubitId>){
     use super::pingpong::{fold_step,unwind_fold_step};
     let end=at+w;
     let work=c.alloc_qubits(if out.is_none(){w.saturating_sub(2)}else{w-1});
@@ -298,4 +322,15 @@ pub(crate) fn direct_add_unhold_keep(c:&mut Builder,map:&[Vec<QubitId>],b:&[Qubi
     for i in(0..w-1).rev(){let carry=if i==0{incoming}else{work[i-1]};unwind_fold_step(c,b[i],carry,work[i],&map[i]);}
     c.free_vec(&work);c.release_clean(out);
     assert_eq!(c.active_qubits()+(held.len()+keep) as u32,base);
+}
+
+fn wrapped(c:&mut Builder,a:&[QubitId],b:&[QubitId],incoming:Option<QubitId>){
+ if a.is_empty(){return;}if incoming.is_none(){super::lowroom::ttk_add(c,a,b);return;}
+ let seed=incoming.unwrap();for i in 0..a.len(){let p=if i==0{seed}else{a[i-1]};c.cx(a[i],b[i]);c.cx(a[i],p);c.ccx(p,b[i],a[i]);}
+ for i in (0..a.len()).rev(){let p=if i==0{seed}else{a[i-1]};c.ccx(p,b[i],a[i]);c.cx(a[i],p);c.cx(p,b[i]);}
+}
+/// out ^= [a < b + seed], preserving both words and seed. Output may be dirty.
+pub(crate) fn xor_lt_seed(c:&mut Builder,a:&[QubitId],b:&[QubitId],seed:Option<QubitId>,out:QubitId){
+ assert_eq!(a.len(),b.len());if a.is_empty(){if let Some(s)=seed{c.cx(s,out);}return;}
+ c.x_all(a);if seed.is_none(){super::lowroom::ttk_add_cout(c,b,a,out);}else{inplace(c,b,a,seed,out);}c.x_all(a);wrapped(c,b,a,seed);
 }
