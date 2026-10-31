@@ -1218,8 +1218,7 @@ pub(super) fn sub_square_offset() -> U256 {
         // C direct has no product offset; its correction ripple leaves out short by 2^129 in frame 2^128.
         let wa = U256::from(1).add_mod(p - pow(h), p);
         let wb = two_n.add_mod(p - pow(h), p);
-        let old=na.mul_mod(wa,p).add_mod(nb.mul_mod(wb,p),p).add_mod(pow(h+1).mul_mod(pow(h),p),p);
-        return if super::square_split::enabled(){old.add_mod(super::square_split::correction(),p)}else{old};
+        return na.mul_mod(wa, p).add_mod(nb.mul_mod(wb, p), p).add_mod(pow(h + 1).mul_mod(pow(h), p), p);
     }
     // out -= A (1 - 2^h) + B (2^N - 2^h) + C 2^h.
     let wa = U256::from(1).add_mod(p - pow(h), p);
@@ -1262,14 +1261,10 @@ fn sub_square_g1m(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
     let t0 = tt(circ);
     super::sqleaf::scoped(!std::env::var("SQC_LEAF_A").is_ok_and(|v| v == "0"), || with_square(circ, y_lo, "SQ_A_POLICY", |circ, a2| {
         mod_addsub(circ, true, a2, out);
-        if super::square_split::enabled(){
-            super::square_split::slide(circ,out);
-            let view:Vec<QubitId>=out[h..].iter().chain(out[..h].iter()).copied().collect();
-            mod_addsub(circ,false,a2,&view);
-        }else{fold_shifted(circ, false, a2, out, h);}
+        fold_shifted(circ, false, a2, out, h);
     }));
     let t1 = tt(circ);
-    let (p0, k1) = (circ.take_win_peak(), if super::square_split::enabled(){0}else{super::sqc::redc(circ, out, false)});
+    let (p0, k1) = (circ.take_win_peak(), super::sqc::redc(circ, out, false));
     let p1 = circ.take_win_peak(); let t2 = tt(circ);
     let outx: Vec<QubitId> = out[h..].iter().chain(out[..h].iter()).copied().collect();
     let sum_carry=circ.alloc_qubit();
@@ -1292,7 +1287,7 @@ fn sub_square_g1m(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
         mod_addsub(circ, false, b2, &outx);
     }));
     let t6 = tt(circ);
-    let k3 = if std::env::var("RAIL_OPT_SEED").ok().as_deref()==Some("1") {super::sqc::rail_opt_redc_seed(circ,out)} else {super::sqc::redc(circ, out, true)};
+    let k3 = super::sqc::redc(circ, out, true);
     let p3 = circ.take_win_peak(); let t7 = tt(circ);
     if trace {
         eprintln!("SQC_G1M A={:.1} slide_in={:.1}({}) peak={} sum={:.1} c_direct={:.1}({}) peak={} restore={:.1} B={:.1} slide_out={:.1}({}) peak={} p0={}",
