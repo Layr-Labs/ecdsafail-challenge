@@ -285,6 +285,29 @@ pub fn run(ops: Vec<Op>) -> Vec<Op> {
     out
 }
 
+/// Constant-valued measurements and their fix-region Toffoli weight, for zero_force.rs.
+pub(crate) fn const_measurements(ops: &[Op]) -> Vec<(usize, bool, f64)> {
+    let l: Vec<L> = ops.iter().map(to_l).collect();
+    let mut out: Vec<(usize, bool, f64)> = Vec::new();
+    let mut by_bit: HashMap<u32, usize> = HashMap::new();
+    let mut pend: Option<(usize, bool)> = None;
+    walk(&l, |k, ctxset, qv, _vals, _cx, _ctx, bv| {
+        if let Some((hk, one)) = pend.take() {
+            by_bit.insert(bv[l[hk].ct as usize], out.len());
+            out.push((hk, one, 0.0));
+        }
+        let o = &l[k];
+        if o.kind == K_CCX || o.kind == K_CCZ {
+            for &b in ctxset { if let Some(&i) = by_bit.get(&b) { out[i].2 += 0.5f64.powi(ctxset.len() as i32); } }
+        }
+        if o.kind == K_HMR {
+            let x = qv[o.t as usize];
+            if x == ZERO || x == ONE { pend = Some((k, x == ONE)); }
+        }
+    });
+    out
+}
+
 pub fn scan(ops: &[Op]) { if std::env::var("SL_PSCAN").is_ok_and(|v| v == "1") { scan_all(ops); } }
 
 fn scan_all(ops: &[Op]) -> Vec<Hit> {
@@ -350,30 +373,5 @@ fn scan_all(ops: &[Op]) -> Vec<Hit> {
     }
     eprintln!("PSCAN_SUM measurements {} with_toffoli_regions {} region_weight {:.3} span_hits {} hit_weight {:.3} capped {} cap {} levels {}",
         ms.len(), cand.len(), tot_w, hits, hit_w, caps, cap, maxlev);
-    out
-}
-
-/// The X measurements whose measured value is a constant (the value numbering's ZERO or ONE: the same Boolean
-/// function of the inputs and outcomes on every shot), with the Toffoli weight of their fix region (as in the scan:
-/// the sum over the CCX / CCZ whose context holds the outcome of 2^-(context size)). Read by zero_force.rs.
-pub(crate) fn const_measurements(ops: &[Op]) -> Vec<(usize, bool, f64)> {
-    let l: Vec<L> = ops.iter().map(to_l).collect();
-    let mut out: Vec<(usize, bool, f64)> = Vec::new();
-    let mut by_bit: HashMap<u32, usize> = HashMap::new();
-    let mut pend: Option<(usize, bool)> = None;
-    walk(&l, |k, ctxset, qv, _vals, _cx, _ctx, bv| {
-        if let Some((hk, one)) = pend.take() {
-            by_bit.insert(bv[l[hk].ct as usize], out.len());
-            out.push((hk, one, 0.0));
-        }
-        let o = &l[k];
-        if o.kind == K_CCX || o.kind == K_CCZ {
-            for &b in ctxset { if let Some(&i) = by_bit.get(&b) { out[i].2 += 0.5f64.powi(ctxset.len() as i32); } }
-        }
-        if o.kind == K_HMR {
-            let x = qv[o.t as usize];
-            if x == ZERO || x == ONE { pend = Some((k, x == ONE)); }
-        }
-    });
     out
 }
