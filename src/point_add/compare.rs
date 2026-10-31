@@ -154,7 +154,6 @@ pub fn erase_with_compare(
     circ.hmr(target, bit);
     circ.push_condition(bit);
     cmp_lt_phase(circ, a, b, borrow_in);
-    if (false&&super::narrow::frame_fault_site(a.len(),false))||(false&&super::narrow::frame_fault_site(a.len(),true)){circ.z_if(a[0],bit);}
     circ.pop_condition();
     circ.free_bit(bit);
     super::leapfrog::y16_leave(circ, 1, y16);
