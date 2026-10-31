@@ -295,6 +295,9 @@ impl Builder {
         let at = self.at();
         self.peak_census.on_free(at, q.0);
     }
+    pub(crate) fn q_is_free(&self, q: QubitId) -> bool {
+        self.free_qubits.iter().any(|&f| u64::from(f) == q.0)
+    }
     /// narrow (narrow.rs): the allocator set to a recorded state (free wires in order, free bits in order, next fresh
     /// bit). Asserted: the same free wires and the same held bits.
     pub(crate) fn narrow_alloc_set(&mut self, free_q: &[u32], bits: &[u32], next_bit: u32) {
@@ -491,22 +494,6 @@ impl Builder {
     }
     pub fn cz(&mut self, a: QubitId, b: QubitId) {
         self.cz_if(a, b, NO_BIT);
-    }
-    #[track_caller]
-    pub fn ccz_if(&mut self, a: QubitId, b: QubitId, t: QubitId, cond: BitId) {
-        assert!(a != b && a != t && b != t, "invalid CCZ with aliased operands");
-        let mut op = Op::empty();
-        op.kind = OperationType::CCZ;
-        op.q_control1 = a;
-        op.q_control2 = b;
-        op.q_target = t;
-        self.push_condition(cond);
-        if self.ccx_census.watching() {
-            let at = self.at();
-            self.ccx_census.on_gate(at, OperationType::CCZ, std::panic::Location::caller());
-        }
-        self.push_op(op);
-        self.pop_condition();
     }
     pub fn push_condition(&mut self, cond: BitId) {
         let mut op = Op::empty();
