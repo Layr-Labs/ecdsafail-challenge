@@ -156,7 +156,6 @@ fn a2_write(c: &mut Builder, t: usize, k3: QubitId) {
 /// MBU erase of a k3 wire against the field (k3 = [f == code(pos t)] once t's write is in): free.
 fn a2_k3_erase_rec(c: &mut Builder, t: usize, k3: QubitId) {
     let (a, b) = a2_code_forms(t);
-    if t==120 && std::env::var("RAIL_OPT_ALIAS").ok().as_deref()==Some("1") {assert!(a.w==vec![k3] && !a.one && b.w.is_empty() && b.one);return;}
     let m = c.alloc_bit();
     c.hmr(k3, m);
     c.release_clean(k3);
@@ -165,10 +164,6 @@ fn a2_k3_erase_rec(c: &mut Builder, t: usize, k3: QubitId) {
 }
 /// Non-consuming read: k3 = [f == code(pos t)] on a fresh wire (1 AND); erase it with [`a2_k3_erase_rec`].
 fn a2_read(c: &mut Builder, t: usize) -> QubitId {
-    if t==120 && std::env::var("RAIL_OPT_ALIAS").ok().as_deref()==Some("1") {
-        let (a,b)=a2_code_forms(t);assert_eq!(a.w.len(),1);assert!(!a.one && b.w.is_empty() && b.one);
-        let q=a.w[0];if false{c.x(q);}return q;
-    }
     let (a, b) = a2_code_forms(t);
     a2_and_forms(c, &a, &b)
 }
@@ -234,13 +229,13 @@ fn a2_recipe() {
         ("LF_YP8_LATE", "1:13,4:17,9:22,81:19,91:17,102:15,107:13,113:11"),
         ("LFF_IPK", "1"),
         ("LF_REORDER_DIV", "37"),
-        ("LF_REORDER_MUL", "43"),
+        ("LF_REORDER_MUL", "49"),
         ("SL_N2_DFROM", "116"),
         ("SL_N2_MFROM", "116"),
         ("LF_CMP_FROM", "106"),
         // the walk cap of A's build (the multiply's N2-batch reverse ticks bind it); rec4: 1240 with F1LAZY and K3INF
         // (the record wires they take off the live count make plans below 1242 fit; without them 1241 does not)
-        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1234"),
+        ("HEO_PIN_PP_WALK_MAX_QUBITS", "1240"),
     ] {
         match std::env::var(format!("LFA2_SET_{k}")) {
             Ok(o) => std::env::set_var(k, o),
@@ -249,134 +244,6 @@ fn a2_recipe() {
     }
 }
 /// At a walk's end every field is gone.
-
-// ---------------------------------------------------------------------------------------------------------------------
-// T3P-1 MAJ: majority pack of the A record. After forward tick 95 the fields of triples 0..31 are closed and dormant
-// until the reverse reaches tick 95. N = 63 of their 64 wires (all but triple 31's f1) are packed: x* (triple 31's
-// f0) is fanned out into the other 62 (z) and X-measured. On every block of weight <= 31 (half of all values; measured
-// 3e-6 of walks fall outside) x* = [wt(z) >= 32], so its phase is a function of z, fixed at the unpack where x* is
-// recomputed as bit 5 of popcount(z) (57 Toffoli, every AND measured away). An excluded block restores a wrong field:
-// a classical failure of that input. One record wire is off the live count from forward tick 96 to reverse tick 96.
-// ---------------------------------------------------------------------------------------------------------------------
-const T3P1_MAJ_BAKED: bool = true;
-/// Pack after this forward tick, unpack before this reverse tick (every packed triple is closed by then).
-const T3P1_MAJ_TICK: usize = 95;
-/// Triples 0 .. T3P1_MAJ_TIDS are packed (x* = f0 of the last one; its f1 stays outside the pack).
-const T3P1_MAJ_TIDS: usize = 32;
-pub(super) fn t3p1_maj_on() -> bool {
-    static V: OnceLock<bool> = OnceLock::new();
-    *V.get_or_init(|| T3P1_MAJ_BAKED || std::env::var("T3P1_MAJ").is_ok_and(|v| v == "1"))
-}
-thread_local! {
-    /// The pack's measurement bit while the pack is out.
-    static T3P1_PACK: std::cell::RefCell<Option<crate::circuit::BitId>> = const { std::cell::RefCell::new(None) };
-}
-/// z: both field wires of triples 0 .. T3P1_MAJ_TIDS - 1.
-fn t3p1_maj_z() -> Vec<QubitId> {
-    A2_REC.with(|r| {
-        let r = r.borrow();
-        let mut z = Vec::with_capacity(2 * T3P1_MAJ_TIDS);
-        for id in 0..T3P1_MAJ_TIDS - 1 {
-            let f = r.get(&id).unwrap_or_else(|| panic!("t3p1: triple {id} has no field at the pack"));
-            for (s, q) in f.iter().enumerate() {
-                z.push(q.unwrap_or_else(|| panic!("t3p1: triple {id} slot {s} is empty at the pack")));
-            }
-        }
-        z
-    })
-}
-pub(super) fn t3p1_pack(c: &mut Builder) {
-    let z = t3p1_maj_z();
-    let last = T3P1_MAJ_TIDS - 1;
-    let xs = A2_REC.with(|r| r.borrow().get(&last).and_then(|f| f[0])).expect("t3p1: x* (f0 of the last packed triple)");
-    for &q in &z {
-        c.cx(xs, q);
-    }
-    let m = c.alloc_bit();
-    c.hmr(xs, m);
-    c.release_clean(xs);
-    A2_REC.with(|r| r.borrow_mut().get_mut(&last).unwrap()[0] = None);
-    T3P1_PACK.with(|p| {
-        assert!(p.borrow().is_none(), "t3p1: pack while a pack is out");
-        *p.borrow_mut() = Some(m);
-    });
-    if std::env::var("ROOM_TRACE").is_ok_and(|v| v == "1") {
-        eprintln!("T3P1_PACK out n={} active={}", z.len() + 1, c.active_qubits());
-    }
-}
-pub(super) fn t3p1_unpack(c: &mut Builder) {
-    let m = T3P1_PACK.with(|p| p.borrow_mut().take()).expect("t3p1: unpack without a pack");
-    let z = t3p1_maj_z();
-    let a0 = c.active_qubits();
-    let e0 = c.expected_total();
-    let xs = c.alloc_qubit();
-    let peak = t3p1_threshold_top(c, &z, xs);
-    c.z_if(xs, m);
-    c.free_bit(m);
-    for &q in &z {
-        c.cx(xs, q);
-    }
-    let last = T3P1_MAJ_TIDS - 1;
-    A2_REC.with(|r| r.borrow_mut().get_mut(&last).unwrap()[0] = Some(xs));
-    if std::env::var("ROOM_TRACE").is_ok_and(|v| v == "1") {
-        eprintln!("T3P1_PACK in n={} active={a0} peak={peak} cost={:.1}", z.len() + 1, c.expected_total() - e0);
-    }
-}
-/// out ^= [wt(z) >= 2^k] with 2^k <= len(z) < 2^(k+1): carry-save reduction of the columns below k (full adders,
-/// a half adder's carry when two bits are left; residual column bits are never needed), the column-k bit copied
-/// out, every AND measured away. Returns the peak live count.
-fn t3p1_threshold_top(c: &mut Builder, z: &[QubitId], out: QubitId) -> u32 {
-    let n = z.len();
-    let k = (usize::BITS - 1 - n.leading_zeros()) as usize;
-    assert!(n >= 2 && (1usize << k) <= n && n < (1usize << (k + 1)));
-    enum St { Fa(QubitId, QubitId, QubitId, QubitId), Ha(QubitId, QubitId, QubitId) }
-    let mut steps: Vec<St> = Vec::new();
-    let mut col: Vec<QubitId> = z.to_vec();
-    for _w in 0..k {
-        let mut next = Vec::new();
-        while col.len() >= 3 {
-            let a = col.pop().unwrap();
-            let b = col.pop().unwrap();
-            let cc = col.pop().unwrap();
-            c.cx(a, b);
-            c.cx(a, cc);
-            let carry = and_new(c, b, cc);
-            c.cx(a, carry);
-            c.cx(b, cc);
-            c.cx(a, cc);
-            steps.push(St::Fa(a, b, cc, carry));
-            col.insert(0, cc);
-            next.push(carry);
-        }
-        if col.len() == 2 {
-            let a = col.pop().unwrap();
-            let b = col.pop().unwrap();
-            let carry = and_new(c, a, b);
-            steps.push(St::Ha(a, b, carry));
-            next.push(carry);
-        }
-        col = next;
-    }
-    assert!(col.len() <= 1, "t3p1: column k holds {} bits", col.len());
-    if let Some(&b) = col.first() {
-        c.cx(b, out);
-    }
-    let peak = c.active_qubits();
-    for s in steps.into_iter().rev() {
-        match s {
-            St::Fa(a, b, cc, carry) => {
-                c.cx(a, cc);
-                c.cx(b, cc);
-                c.cx(a, carry);
-                and_erase(c, carry, b, cc);
-                c.cx(a, cc);
-                c.cx(a, b);
-            }
-            St::Ha(a, b, carry) => and_erase(c, carry, a, b),
-        }
-    }
-    peak
-}
 pub(super) fn a2_rec_empty() -> bool { A2_REC.with(|r| r.borrow().is_empty()) }
 /// round17 v4: R1 on A ticks (LFA2_R1, default on): the 8-way barrel has an R1 plan at width w no dearer than its plain one.
 fn a2_r1_ok(w: usize) -> bool {
@@ -424,8 +291,6 @@ fn zlin_off_a(c: &mut Builder, t: &[QubitId], b: &[QubitId]) {
 /// The A decision at the pause ([`yp8_logic`] with e <= 7 and the record): `spent` = the record's linear form for
 /// this tick. outs = Some((out, k1, k2, k3)) writes the choice and shift letters; None applies (-1)^out.
 fn yp8_logic_a(c: &mut Builder, t2: &[QubitId], b: &[QubitId], s1: QubitId, ct: QubitId, tick: usize, spent: &Lin, outs: Option<(QubitId, QubitId, QubitId, QubitId)>) {
-    let rail_opt_entry=c.active_qubits();
-    let ((),rail_opt_peak)=c.r3_peak(|c| {
     let need0 = w1_anchor(tick) <= w1_kt(tick);
     // full-index views: bit 0 (the constant 1 of an odd rail) is a wire only when the window reads it
     let mut tv: Vec<QubitId> = Vec::with_capacity(t2.len() + 1);
@@ -702,17 +567,12 @@ fn yp8_logic_a(c: &mut Builder, t2: &[QubitId], b: &[QubitId], s1: QubitId, ct: 
             c.free(q);
         }
     }
-    });
-    assert!(rail_opt_peak as usize<=cells::cap(),"rail_opt reserve: tick{tick} peak{rail_opt_peak}");
-    if std::env::var("RAIL_OPT_RESERVE").ok().as_deref()==Some("1") && false {c.z_if(t2[0],NO_BIT);}
-
 }
 
 
 /// [`yp8_reserve`] for the A decision: 5 more AND wires (g, p5..p8) and views padded to 10 positions.
 fn yp8_reserve_a(tl: usize, bl: usize, t: usize, fwd: bool) -> usize {
-    let old=yp8_reserve(tl, bl, t, fwd) + 5 + 10usize.saturating_sub((tl + 1).max(6)) + 10usize.saturating_sub((bl + 1).max(6));
-    if std::env::var("RAIL_OPT_RESERVE").ok().as_deref()==Some("1") {old-(2+usize::from(a2_pos(t)==1||t==2))}else{old}
+    yp8_reserve(tl, bl, t, fwd) + 5 + 10usize.saturating_sub((tl + 1).max(6)) + 10usize.saturating_sub((bl + 1).max(6))
 }
 /// [`yp8_add_halve_forced_choice`] with the A decision (k3 and the record's spent form).
 fn yp8_add_halve_forced_choice_a(c: &mut Builder, sign: QubitId, b: &[QubitId], t: &mut Vec<QubitId>, out: QubitId, k1: QubitId, k2: QubitId, k3: QubitId, tick: usize, spent: &Lin) {
