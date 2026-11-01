@@ -6,8 +6,6 @@
 use super::Builder;
 use crate::circuit::{BitId, QubitId};
 
-/// [`c_direct`]'s w read off the live top-bit sum E while E is alive; no W register (false = the parent's gates).
-const W_FUSE: bool = true;
 pub(super) fn on() -> bool { !std::env::var("SQC_G1M").is_ok_and(|v| v == "0") }
 pub(super) fn g() -> usize { std::env::var("SQC_G").ok().and_then(|v| v.parse().ok()).unwrap_or(24) }
 pub(super) fn t_top() -> usize { std::env::var("SQC_T").ok().and_then(|v| v.parse().ok()).unwrap_or(21) }
@@ -17,23 +15,6 @@ pub(super) enum W { Q(QubitId), T(usize) }
 pub(super) struct Rec { pub col: usize, pub x: QubitId, pub o: Option<W>, pub ci: Option<W>, pub neg: bool,
                         pub carry: bool, pub flips: Vec<QubitId>, pub ocomp: bool, pub frame: Option<QubitId> }
 
-
-thread_local! {static RAIL_OPT_COMPLEMENT:std::cell::Cell<Option<(QubitId,QubitId)>>=const {std::cell::Cell::new(None)};}
-fn rail_opt_complement(o:Option<QubitId>,ci:Option<QubitId>)->bool {
-    RAIL_OPT_COMPLEMENT.with(|v|v.get().is_some_and(|(a,b)| (o==Some(a)&&ci==Some(b))||(o==Some(b)&&ci==Some(a))))
-}
-pub(super) fn rail_opt_redc_seed(c:&mut Builder,out:&[QubitId])->usize {
-    let ev=c.alloc_qubit();c.cx(out[0],ev);c.x(ev);
-    let mut recs=plan_redc(out,g());
-    let mut n=0;
-    for r in &mut recs {if [4,6,10,32].contains(&r.col) && r.ci.is_none(){assert!(matches!(r.o,Some(W::Q(q)) if q==out[0]));r.ci=Some(W::Q(ev));n+=1;}}
-    assert_eq!(n,4);
-    RAIL_OPT_COMPLEMENT.with(|v|{assert!(v.get().is_none());v.set(Some((out[0],ev)));});
-    let k=emit(c,&recs,true);
-    RAIL_OPT_COMPLEMENT.with(|v|v.set(None));
-    if std::env::var("FRAME_SEED_FAULT").ok().as_deref()!=Some("1"){c.cx(ev,out[0]);}
-    super::leapfrog::rail_opt_accept_seed(c,out,ev);k
-}
 fn erase_and(c: &mut Builder, t: QubitId, u: QubitId, v: QubitId) {
     let m = c.alloc_bit(); c.hmr(t, m); c.cz_if(u, v, m); c.free_bit(m); c.release_clean(t);
 }
@@ -43,11 +24,6 @@ fn rw(w: Option<W>, tw: &[Option<QubitId>]) -> Option<QubitId> {
 /// AND of the FA inputs: compute into a fresh wire (compute=true) or erase the held carry (compute=false).
 /// On entry x holds (value right after this FA) ^ neg.
 fn and_io(c: &mut Builder, x: QubitId, o: Option<QubitId>, ci: Option<QubitId>, slot: &mut Option<QubitId>, compute: bool) {
-    if rail_opt_complement(o,ci) {
-        if compute {let q=c.alloc_qubit();c.x(q);c.cx(x,q);*slot=Some(q);}
-        else {let q=slot.take().unwrap();c.cx(x,q);c.x(q);c.release_clean(q);}
-        return;
-    }
     let mut and = |c: &mut Builder, u: QubitId, v: QubitId, fix: Option<QubitId>| {
         if compute { let q = c.alloc_qubit(); c.ccx(u, v, q); if let Some(f) = fix { c.cx(f, q); } *slot = Some(q); }
         else { let q = slot.take().unwrap(); if let Some(f) = fix { c.cx(f, q); } erase_and(c, q, u, v); }
@@ -78,11 +54,7 @@ pub(super) fn emit(c: &mut Builder, recs: &[Rec], inverse: bool) -> usize {
         let (o, ci) = (rw(r.o, tw), rw(r.ci, tw));
         if r.neg { c.x(r.x); } if let Some(k)=r.frame {c.cx(k,r.x);}
         if r.ocomp { if let Some(o) = o { c.x(o); } }
-        if rail_opt_complement(o,ci) {
-            assert!(r.flips.is_empty() && !r.ocomp && r.carry);
-            if fwd {let q=c.alloc_qubit();c.cx(r.x,q);tw[i]=Some(q);c.x(r.x);}
-            else {let q=tw[i].take().unwrap();c.cx(r.x,q);c.x(q);c.release_clean(q);c.x(r.x);}
-        } else if fwd {
+        if fwd {
             if let Some(q) = ci { for &f in &r.flips { c.cx(f, q); } }
             if r.carry {   // x currently holds x_in: make it x_in ^ o ^ ci after computing the carry
                 let mut s = None;
@@ -227,8 +199,7 @@ pub(super) fn c_direct(c: &mut Builder, outx: &[QubitId], s: &[QubitId]) -> usiz
     super::square::sqc_leaf(c, &s[m - t..], &ct, false);
     let sh = 220 - 2 * (m - t);
     let a: Vec<QubitId> = ct[sh..].to_vec();
-    let wfuse = W_FUSE;
-    let w = if wfuse { Vec::new() } else { c.alloc_qubits(3) };
+    let w = c.alloc_qubits(3);
     // top bits w of E = A + B'; the sum is erased for free (erase_sum). erase = Some(r): instead of copying w into
     // W, apply the phase (-1)^(r.w) that X-measuring W left (the caller runs this only under r != 0).
     let topbits = |c: &mut Builder, a: &[QubitId], b: &[QubitId], comp: bool, w: &[QubitId], erase: Option<&[BitId]>| -> usize {
@@ -244,32 +215,9 @@ pub(super) fn c_direct(c: &mut Builder, outx: &[QubitId], s: &[QubitId]) -> usiz
         for &q in &e { c.release_clean(q); }
         k
     };
-    if wfuse {
-        // W_FUSE: w is read by exactly two ops, the ext add and the witness product, both before the rows and both
-        // off the top bits B (they write ext and S's bits below 59). So they read w straight off E = A + ~B while E is
-        // alive, and E is then erased for free while its summands live (erase_sum). No W register is ever written: no
-        // X-measurement of W, and no 39-AND recomputation of the top bits on its outcome-nonzero shots (7/8 of them).
-        // The wrap leaf is uncomputed right away (nothing reads it later), so ct is not held through the rows.
-        let b = &reg[220..256];
-        let e = c.alloc_qubits(a.len() + 2);
-        for i in 0..a.len() { c.cx(a[i], e[i]); }
-        let ops: Vec<Option<QubitId>> = (0..e.len()).map(|i| (i < b.len()).then(|| b[i])).collect();
-        let aops: Vec<Option<QubitId>> = (0..e.len()).map(|i| (i < a.len()).then(|| a[i])).collect();
-        c.x_all(b);
-        ands += line(c, &e, &ops, None);                               // E = A + ~B; w = E >> 36 (3 bits)
-        let wv = [e[36], e[37], e[38]];
-        ands += line(c, &ext, &[Some(wv[0]), Some(wv[1]), Some(wv[2])], None);   // [S|ext] += w 2^256
-        ands += witness_product(c, &reg, &wv);
-        erase_sum(c, &e, &aops, &ops);
-        c.x_all(b);
-        for &q in &e { c.release_clean(q); }
-        super::square::sqc_leaf(c, &s[m - t..], &ct, true);
-        for &q in &ct { c.release_clean(q); }
-    } else {
     ands += topbits(c, &a, &reg[220..256], true, &w, None);            // w = floor((A + ~B)/2^36) = ceil((A-B)/2^36)
     ands += line(c, &ext, &[Some(w[0]), Some(w[1]), Some(w[2])], None);   // [S|ext] += w 2^256
     ands+=witness_product(c,&reg,&w);
-    }
     c.x_all(&reg);                                               // complement frame: rows ADD s^2
     let chains = chain_plan(m);
     
@@ -287,10 +235,6 @@ pub(super) fn c_direct(c: &mut Builder, outx: &[QubitId], s: &[QubitId]) -> usiz
     c.x_all(&reg);
     // erase W by X-measurement: w == floor((A + S_new>>220)/2^36), so the kicked phase (-1)^(r.w) is repaired by
     // recomputing those top bits ONLY when the outcome r != 0 (exact; executed with probability 7/8).
-    if wfuse {
-        for &q in ext.iter() { c.release_clean(q); }
-        return ands;
-    }
     let r: Vec<BitId> = (0..3).map(|_| c.alloc_bit()).collect();
     for i in 0..3 { c.hmr(w[i], r[i]); }
     let flag = c.alloc_bit(); c.bit_store0(flag);
