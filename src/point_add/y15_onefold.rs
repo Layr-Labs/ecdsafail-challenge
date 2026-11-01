@@ -2533,7 +2533,7 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     } else { shed0 };
     if w116_fin4 && old_fin < 4 { eprintln!("W118_FIN4 t={t} old_fin={old_fin} new_fin={}", shed0.4); }
     // round17 fold-core: the deep shed rides on the top-wire shed; where the IPK fold needs none, the deep shed is off
-    let deep = deep && !(f_ipk_on() && !rev && a_tick().is_some() && shed0.4 < 4);
+    let deep = deep && !(f_ipk_on() && !rev && a_tick().is_some() && shed0.4 < 4) && shed0.0 >= 1; // rebind scratch: no block to shed -> no deep shed (no-op at the cap)
     // y28 (s2-4, step 2): forward, the AND of the shift letter leaves first where the fold sheds at all and that takes
     // one wire off the shed (`fin` then counts c2, c1 and the top wires: the head's numbering skips its third)
     let (ttm, (shed, tops, c3m, gsh, fin)) = if Y28_TT_FWD && !rev && !swap01 && Y15_CORE_V2 && Y18_FIN && !(a_tick().is_some() && !rev) {
