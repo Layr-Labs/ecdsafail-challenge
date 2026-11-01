@@ -359,6 +359,53 @@ pub fn hold_pass(ops: Vec<Op>) -> Vec<Op> {
     match s1 { Some(s) => holds(s, nq), None => holds(ops, nq) }
 }
 
+/// Replace an unconditional CCX whose product is already present on another
+/// live wire by one CX (plus X for complementary polarity).
+pub fn live_product_pass(ops: Vec<Op>) -> Vec<Op> {
+    let (nq, nb) = dims(&ops);
+    let regs = registers(&ops);
+    let mut sym = Sym::new(nq, nb, &regs);
+    let mut ch = vec![];
+    let mut out = Vec::with_capacity(ops.len());
+    let mut sites = 0usize;
+    for o in ops {
+        let mut replacement = None;
+        if o.kind == K::CCX && o.c_condition == NO_BIT && sym.stack.is_empty() {
+            let t = o.q_target.0 as usize;
+            if sym.q[t] == ZV {
+                let (c1, c2) = (o.q_control1.0 as usize, o.q_control2.0 as usize);
+                let mut f = sym.gate(&o);
+                f.push(sym.q[c1]);
+                f.push(sym.q[c2]);
+                let p = sym.prod(&mut f);
+                if p.l != 0 {
+                    if let Some(u) = sym.members.get(&p.l).and_then(|v| {
+                        v.iter().copied().find(|&u| u as usize != t)
+                    }) {
+                        let comp = sym.q[u as usize].c != p.c;
+                        let mut cx = mk(K::CX, u as usize, t);
+                        cx.c_condition = o.c_condition;
+                        replacement = Some((cx, comp));
+                        sites += 1;
+                    }
+                }
+            }
+        }
+        match replacement {
+            Some((cx, false)) => out.push(cx),
+            Some((cx, true)) => {
+                out.push(cx);
+                out.push(mk(K::X, NONE, o.q_target.0 as usize));
+            }
+            None => out.push(o),
+        }
+        sym.step(&o, &mut ch);
+        ch.clear();
+    }
+    eprintln!("live_product_pass: {sites} CCX -> CX sites");
+    out
+}
+
 fn holds(ops: Vec<Op>, cap: usize) -> Vec<Op> {
     let ops_in = ops.clone();
     let (nq, nb) = dims(&ops);
