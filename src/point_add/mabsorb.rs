@@ -58,7 +58,7 @@ pub fn absorb(ops: Vec<Op>) -> Vec<Op> {
             K::Hmr | K::R => {
                 let ti = t.0 as usize;
                 let has_ccx = window[ti].iter().any(|&j| ops[j].kind == K::CCX);
-                if op.kind == K::Hmr && has_ccx && ok[ti] && depth == 0 && op.c_condition == NO_BIT {
+                if op.kind == K::Hmr && has_ccx && ok[ti] && depth == 0 && op.c_condition == NO_BIT && !(i>0&&super::walk_align::is_and_marker(&ops[i-1])) {
                     plan.push((std::mem::take(&mut window[ti]), i));
                 }
                 window[ti].clear();
@@ -72,7 +72,7 @@ pub fn absorb(ops: Vec<Op>) -> Vec<Op> {
         return ops;
     }
     // index rewrites
-    let mut before: std::collections::HashMap<usize, Op> = std::collections::HashMap::new(); // insert op before index
+    let mut before: std::collections::HashMap<usize, Vec<Op>> = std::collections::HashMap::new(); // insert op before index
     let mut replace: std::collections::HashMap<usize, Vec<Op>> = std::collections::HashMap::new();
     let mut saved = 0usize;
     for (k, (writes, h)) in plan.iter().enumerate() {
@@ -82,7 +82,9 @@ pub fn absorb(ops: Vec<Op>) -> Vec<Op> {
         let mut hm = Op::empty();
         hm.kind = K::Hmr; hm.q_target = t; hm.c_target = fresh;
         hm.validate();
-        before.insert(writes[0], hm);
+        let mut front=Vec::new();
+        if *h>0 && super::walk_align::is_marker(&ops[*h-1]) {front.push(ops[*h-1]);replace.insert(*h-1,vec![]);}
+        front.push(hm);before.insert(writes[0],front);
         for &j in writes {
             let w = ops[j];
             let mut p = Op::empty();
@@ -103,7 +105,7 @@ pub fn absorb(ops: Vec<Op>) -> Vec<Op> {
     }
     let mut out = Vec::with_capacity(n + 2 * plan.len());
     for (i, op) in ops.into_iter().enumerate() {
-        if let Some(h) = before.remove(&i) { out.push(h); }
+        if let Some(h) = before.remove(&i) { out.extend(h); }
         match replace.remove(&i) {
             Some(v) => out.extend(v),
             None => out.push(op),
