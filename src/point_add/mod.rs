@@ -173,7 +173,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "12009835509",
+        "TAIL_NONCE" => "1453896738487",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -573,7 +573,8 @@ fn apply_merged_policy(ops: Vec<Op>) -> Vec<Op> {
     let ops = phase_narrow::run_single_bound(ops,include_str!("special_phase_body.txt"));
     let ops = zero_quartic::run(ops);
     let ops = cmp_extra::run(ops, include_str!("cmp_extra.txt"));
-    hold_pass::hold_pass(ops)
+    let ops = hold_pass::hold_pass(ops);
+    source_edits::run(ops,include_str!("disc50_followup.txt"))
 }
 
 /// Original structural generator, retained for audit and regeneration.
