@@ -193,8 +193,8 @@ pub fn config() -> &'static HeoConfig {
     static CFG: OnceLock<HeoConfig> = OnceLock::new();
     CFG.get_or_init(|| {
         let path = std::env::var("HEO_ENVELOPE").expect("HEO_WALK needs HEO_ENVELOPE=<path to `esw ead` lines>");
-        // sky8 submission: the division envelope is the package's iA.d.100 (compiled in).
-        let text = include_str!("skywalk_data/sky8_env_div_iA.d.100.txt").to_owned();
+        // cap-1145: the division envelope is hyb_div_R395_m10_t0 (395 ticks, compiled in).
+        let text = include_str!("skywalk_data/hyb_div_R395_m10_t0.txt").to_owned();
         let (mut esw, mut ead) = parse_envelope(&text);
         if let Some(r) = std::env::var("HEO_R").ok().and_then(|s| s.parse::<usize>().ok()) {
             assert!(r <= esw.len(), "HEO_R {r} exceeds the envelope's {} ticks", esw.len());
@@ -228,8 +228,8 @@ pub fn config_mul() -> &'static HeoConfig {
         let base = config();
         let (mut esw, mut ead) = match std::env::var("HEO_ENVELOPE_MUL") {
             Ok(path) => {
-                // sky8 submission: the multiply envelope is the package's iA.m.100 (compiled in).
-                let text = include_str!("skywalk_data/sky8_env_mul_iA.m.100.txt").to_owned();
+                // cap-1145: the multiply envelope is hyb_mul_R395_m10_t0 (395 ticks, compiled in).
+                let text = include_str!("skywalk_data/hyb_mul_R395_m10_t0.txt").to_owned();
                 parse_envelope(&text)
             }
             Err(_) => (base.esw.clone(), base.ead.clone()),
