@@ -359,6 +359,44 @@ pub fn hold_pass(ops: Vec<Op>) -> Vec<Op> {
     match s1 { Some(s) => holds(s, nq), None => holds(ops, nq) }
 }
 
+/// Build the exact duplicate loans and map every upper wire into the first `cap` wires.
+/// Unlike `hold_pass`, this does not add product-hold nomads: it is the width-only path.
+pub fn dup_relocate(ops: Vec<Op>, cap: usize) -> Option<Vec<Op>> {
+    let (nq, nb) = dims(&ops);
+    if cap >= nq || cap == 0 {
+        eprintln!("dup_relocate: no compaction requested ({nq} wires, target {cap})");
+        return None;
+    }
+    let regs = registers(&ops);
+    let mut dcs = dup_candidates(&ops, nq, nb, &regs);
+    dcs.sort_by_key(|l| std::cmp::Reverse(l.r - l.e));
+    let mut per: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+    let mut chosen = vec![];
+    for l in dcs {
+        let v = per.entry(l.w).or_default();
+        if v.iter().all(|&(a, b)| l.r <= a || l.e >= b) {
+            v.push((l.e, l.r));
+            chosen.push(l);
+        }
+    }
+    let mut banned: std::collections::HashSet<Loan> = std::collections::HashSet::new();
+    for _ in 0..8 {
+        let ls: Vec<Loan> = chosen.iter().filter(|l| !banned.contains(l)).copied().collect();
+        match insert_loans(&ops, &ls) {
+            Ok(mapped) => {
+                eprintln!("dup_relocate: {} dup loans before relocation", ls.len());
+                return relocate(&mapped, cap);
+            }
+            Err(failed) => {
+                for l in failed {
+                    banned.insert(l);
+                }
+            }
+        }
+    }
+    relocate(&ops, cap)
+}
+
 fn holds(ops: Vec<Op>, cap: usize) -> Vec<Op> {
     let ops_in = ops.clone();
     let (nq, nb) = dims(&ops);
