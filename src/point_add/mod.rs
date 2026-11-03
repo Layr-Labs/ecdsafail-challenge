@@ -574,7 +574,10 @@ fn apply_merged_policy(ops: Vec<Op>) -> Vec<Op> {
     let ops = zero_quartic::run(ops);
     let ops = cmp_extra::run(ops, include_str!("cmp_extra.txt"));
     let ops = hold_pass::hold_pass(ops);
-    source_edits::run(ops,include_str!("disc50_followup.txt"))
+    let ops = source_edits::run(ops,include_str!("disc50_followup.txt"));
+    let ops = affine_simplify::simplify(ops);
+    let ops = cond_pass::final_cap_cleanup(ops);
+    affine_simplify::simplify(ops)
 }
 
 /// Original structural generator, retained for audit and regeneration.
