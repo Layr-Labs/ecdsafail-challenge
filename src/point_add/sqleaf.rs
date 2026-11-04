@@ -15,7 +15,7 @@ use crate::circuit::{BitId, QubitId};
 use std::cell::Cell;
 
 thread_local! { static ACTIVE: Cell<bool> = const { Cell::new(false) }; }
-pub(super) fn depth() -> usize { 12 }
+pub(super) fn depth() -> usize { std::env::var("SQC_LEAF_D").ok().and_then(|v| v.parse().ok()).unwrap_or(8) }
 pub(super) fn active() -> bool { ACTIVE.with(|a| a.get()) && depth() > 0 }
 pub(super) fn scoped<R>(on: bool, f: impl FnOnce() -> R) -> R {
     let old = ACTIVE.with(|a| a.replace(on));
@@ -183,7 +183,7 @@ fn sum_write(c: &mut Builder, ctx: &Ctx, a: &[QubitId], acc: &[QubitId], j: usiz
             if cond.is_some() { c.pop_condition(); }
             if let (Some(nb), Some((a1, s1, c1))) = (ncond, below) {
                 c.push_condition(nb); c.push_condition(t.beta);
-                maj_phase(c,a1,s1,c1);
+                maj_phase(c, a1, s1, c1);
                 c.pop_condition(); c.pop_condition();
             }
             c.pop_condition();
