@@ -331,7 +331,7 @@ fn simplify_with_products(ops: Vec<Op>, use_products: bool) -> Vec<Op> {
     let mut truth = Support::new(&ops);
     let mut products = use_products.then(|| product::Index::new(&truth, &ops));
     let mut result = Vec::with_capacity(ops.len());
-    for op in ops {
+    for op in into_chunks(ops).into_iter().rev().flatten() {
         // Query the pre-op state; remove old keys before truth mutates it.
         let product_hit = products
             .as_mut()
@@ -355,3 +355,18 @@ fn simplify_with_products(ops: Vec<Op>, use_products: bool) -> Vec<Op> {
     result
 }
 
+
+/// Split `ops` into chunks from the end, shrinking the source as it goes (a shrinking realloc frees the tail in place), so the
+/// caller frees each chunk once consumed: the pass holds about one copy of the stream instead of two. Memory only; the op
+/// sequence the pass sees is unchanged (chunks are consumed in reverse push order = stream order).
+fn into_chunks(mut ops: Vec<Op>) -> Vec<Vec<Op>> {
+    const CHUNK: usize = 1 << 24;
+    let mut chunks = Vec::new();
+    while ops.len() > CHUNK {
+        let tail = ops.split_off(ops.len() - CHUNK);
+        ops.shrink_to_fit();
+        chunks.push(tail);
+    }
+    chunks.push(ops);
+    chunks
+}
