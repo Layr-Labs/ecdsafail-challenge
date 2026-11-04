@@ -21,7 +21,7 @@ fn plan(circ:&Builder,round:usize,multiply:bool,fw:usize,drop:bool)->Option<Plan
     let low=if env_flag("PP_SPRINT_MIXED") && multiply && (364..=402).contains(&round) {29}else{(low_bits(guard) as isize+super::super::go_slice("GO_JLB",round,if multiply{b'm'}else{b'd'})) as usize};assert!((12..=fw).contains(&low) && !split_fold());
 
     assert!(env_flag("PP_REUSE_DIV_PARITY") && env_flag("PP_REUSE_MUL_SELECTORS"));
-    let room=walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
+    let plan_live=super::super::walk_policy::room("joint_live",&format!("{round}:{}:{fw}:{}:{}:{}",multiply as u8,drop as u8,dshadow(),C0SHIFT.with(|v|v.get()) as u8),circ.active_qubits()as usize); let room=walk_max_qubits().saturating_sub(plan_live);
     let loans=REPLAY_SIGN_LOANS.with(|s|s.get());
     let Some(old_bounds)=composition_bounds(circ,round,multiply) else {if !drop{drop_trace(round,multiply,"nocomp",String::new());}return None;};
     let (bounds,db)=if drop {drop_exact_lead(circ,&old_bounds,round,multiply,fw)?}
@@ -36,7 +36,7 @@ fn plan(circ:&Builder,round:usize,multiply:bool,fw:usize,drop:bool)->Option<Plan
     let (k,seeded)=boundary_repair_spec(round,multiply,plo,phi);
     if lo<fw || phi-k-usize::from(seeded)<fw {drop_trace(round,multiply,"lofw",format!("drop={} fw={} {:?}",drop,fw,bounds));return None;}
     let need=(low-3).max(fw-34);
-    let existing=walk_max_qubits()as isize-circ.active_qubits()as isize-(hi-lo)as isize-if multiply&&env_flag("PP_JOINT_MUL_FOLD"){3}else{4}-(multiply&&DPARK.with(|p|p.get())) as isize;
+    let existing=walk_max_qubits()as isize-plan_live as isize-(hi-lo)as isize-if multiply&&env_flag("PP_JOINT_MUL_FOLD"){3}else{4}-(multiply&&DPARK.with(|p|p.get())) as isize;
     let missing=(need as isize-existing).max(0)as usize;
     let prefix=if missing==0 {0} else {missing+1};
     if prefix+1>=hi-lo {drop_trace(round,multiply,"prefix",format!("drop={} fw={} missing={} {:?}",drop,fw,missing,bounds));return None;}
@@ -87,7 +87,6 @@ pub(super) fn try_replay(circ:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId
         circ.active_qubits(),p.bounds.last().unwrap().1-p.bounds.last().unwrap().0,p.prefix,p.guard,p.saving);
     if env_flag("PP_COMPOSE_TRACE"){eprintln!("COMPOSE_MUL {} {} {} {} {} {:?}",round,circ.active_qubits(),fw,p.bits,REPLAY_SIGN_LOANS.with(|s|s.get()),p.bounds);}
     if p.exact {eprintln!("EXACT_RETAINED_FOLD mul {} {}",round,fw);}
-    super::super::leapfrog::y17_log(circ,||format!("joint(r={round},room={},fw={fw},bits={},prefix={},exact={},dropped={},loans={},bridge={},bounds={:?})",walk_max_qubits().saturating_sub(circ.active_qubits()as usize),p.bits,p.prefix,p.exact,p.dropped,REPLAY_SIGN_LOANS.with(|s|s.get()),super::super::bridge::budget(),p.bounds.iter().map(|&(a,b)|b-a).collect::<Vec<_>>()));
     let mut incoming=None;
     let mut previous=None;
     // EXP PP_PREBIAS_DOUBLE: bit 0 leaves the main add. z0 = s^a0 by CX, and the
@@ -122,7 +121,6 @@ pub(super) fn try_replay(circ:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId
         }else{let at=if pre&&lo==0{1}else{lo};ripple_add(circ,&a[at..hi],&b[at..hi],incoming,Some(next));}
         if let Some((q,plo,phi))=previous {
             let(k,seeded)=if p.dropped&&plo==0 {drop_lead_first_compare(round,multiply,phi)}else{boundary_repair_spec(round,multiply,plo,phi)};let k=if seeded&&plo>0{e_badj(round,multiply,k,phi,if hi==N{fw}else{1})}else{k};
-            let k=if super::super::leapfrog::C35_CMP_FX.with(|x|x.get()){k.min(2)}else{k};
             circ.record_replay_site('B',round,phi,k);
             // A full first-chunk compare must skip bit 0, which the add no longer covers.
             let from=if pre&&plo==0&&phi==k{1}else{phi-k};
