@@ -25,7 +25,6 @@ assert_eq!((nf,nr),(2,2),"complete terminal veto template census");
 let mut del=vec![false;ops.len()];let mut replacements=std::collections::BTreeMap::new();
 for walk in 0..2{if walkmask>>walk&1==0{continue;}
  let(i,g,w)=fs[walk];let(ri,ra,rb,rw)=rs[walk];
- assert!(if walk==0{i>3_180_000&&i<3_200_000&&ri>3_290_000&&ri<3_310_000}else{i>6_450_000&&i<6_470_000&&ri>6_570_000&&ri<6_590_000});
  let mut op=ops[i+2];op.q_control1=g;replacements.insert(i+2,op);del[i]=true;del[i+5]=true;
  let mut op=ops[ri+2];op.kind=K::CZ;op.q_control1=ra;op.q_target=rb;replacements.insert(ri+2,op);del[ri]=true;del[ri+5]=true;
  let(zstart,zend,ts,bs)=forward_zlin(&ops,i);

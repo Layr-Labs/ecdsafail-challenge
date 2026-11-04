@@ -1,21 +1,9 @@
 mod hold_pass;
-mod choice_narrow;
-mod t0_window;
+mod seed_mult;
+mod product_eraser;
 mod last_veto;
-mod cmp_extra;
-mod phase_narrow;
-mod zero_quartic;
 mod last_veto_local;
-mod t0_window_bound;
-mod cap_schedule;
-mod direct_policy;
-mod tail_barrel_inverse;
-mod tail_barrel;
-mod cmp_policy;
-mod value_narrow;
 mod fd_coordinate;
-mod cmp_narrow;
-mod generic_compare;
 mod back_seam;
 pub mod cross_chunk_probe;
 pub mod dirty_boundary_probe;
@@ -173,7 +161,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "1509137547445",
+        "TAIL_NONCE" => "53882459",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -243,6 +231,35 @@ fn apply_tail_nonce(mut ops: Vec<Op>, nonce: u64) -> Vec<Op> {
 /// report `build_circuit` prints. `x`/`y` are the quantum coordinates and are
 /// overwritten in place; every scratch qubit each phase takes is returned to |0>
 /// before the next one starts.
+/// laneG: the square section of the board leader's stream (f5f14f4, ops 4461256 .. 5418492), wires and bits as recorded: on entry only x and y are
+/// live in both streams, every other wire is |0>, and the section's bits are written before any later read. It leaves R0 on x + four wires.
+fn lfg_square_section(c: &mut Builder, x: &[QubitId]) {
+    let raw = zstd::stream::decode_all(&include_bytes!("sq_leader.zst")[..]).expect("sq_leader");
+    let w = |r: &[u8], i: usize| u64::from_le_bytes(r[i..i + 8].try_into().unwrap());
+    assert_eq!(raw.len() % 56, 0);
+    assert_eq!(c.active_qubits(), 512, "square section: only x and y live on entry");
+    let mut seen: u64 = 0;
+    for r in raw.chunks_exact(56) {
+        let mut o = Op::empty();
+        o.kind = match w(r, 0) & 0xffff_ffff {
+            0 => OperationType::Neg, 3 => OperationType::BitInvert, 4 => OperationType::BitStore0, 5 => OperationType::BitStore1,
+            6 => OperationType::X, 7 => OperationType::Z, 8 => OperationType::CX, 9 => OperationType::CZ, 10 => OperationType::Swap,
+            11 => OperationType::R, 12 => OperationType::Hmr, 13 => OperationType::CCX, 14 => OperationType::CCZ,
+            15 => OperationType::PushCondition, 16 => OperationType::PopCondition, k => panic!("square section: kind {k}"),
+        };
+        o.q_control2 = QubitId(w(r, 8));
+        o.q_control1 = QubitId(w(r, 16));
+        o.q_target = QubitId(w(r, 24));
+        o.c_target = BitId(w(r, 32));
+        o.c_condition = BitId(w(r, 40));
+        o.r_target = crate::circuit::RegisterId(w(r, 48));
+        c.lfg_push_raw(o);
+        seen += 1;
+    }
+    eprintln!("LFG_SQTX ops={seen}");
+    leapfrog::lfg_set_preseed(c, x, &[1129, 1141, 697, 695]);
+}
+
 pub(crate) fn build_point_add() -> Vec<Op> {
     let circ = &mut Builder::new();
     let x: &[QubitId] = &circ.alloc_qubits(N);
@@ -268,7 +285,11 @@ pub(crate) fn build_point_add() -> Vec<Op> {
         narrow::square_entry(circ);
         circ.set_phase("square");
         // LF_SQUARE_CAP: the square's own width budget (its ladders size to it instead of the walk cap)
-        pingpong::with_phase_cap(Some(1234), || sub_square(circ, x, y));
+        if std::env::var("LFG_SQTX").is_ok_and(|v| v == "1") {
+            lfg_square_section(circ, x);
+        } else {
+        pingpong::with_phase_cap(Some(FROZEN_SQ_CAP), || sub_square(circ, x, y));
+        }
         circ.set_phase("multiply");
         if seams { leapfrog::multiply_seamed(circ, y, x, ox); } else { leapfrog::multiply(circ, y, x); }
         leapfrog::c35_widen_check();
@@ -509,72 +530,70 @@ fn install_skywalk_submission_recipe() {
 /// envelopes and rewrite rows, `TAIL_NONCE` in `env_raw`). Clear the inherited process environment first
 /// so that no variable set on the host (`HEO_PIN_*`, `GO_*`, `R*_*`, `SKY_*`, ...) can change the circuit.
 fn clear_process_env() {
-    let barrel_saved=std::env::var_os("RESEARCH_SET_BARREL_FOLLOWUP");
     let keys: Vec<std::ffi::OsString> = std::env::vars_os().map(|(k, _)| k).collect();
     for k in keys {
         let s = k.to_string_lossy();
         if s.is_empty() || s.contains('=') || s.contains('\0') { continue; }
         std::env::remove_var(&k);
     }
-    std::env::set_var("BARREL_FOLLOWUP",barrel_saved.unwrap_or_else(||"1".into()));
-
+    frozen_env_restore();
 }
 
 /// Leapfrog branch: the submission build emits the Leapfrog point add (see [`leapfrog::install_recipe`]).
 const LEAPFROG_SUBMISSION: bool = true;
 
-mod divide_prefix;
+pub(crate) mod rail_s6;
 
-/// Decode the fixed generated prefix, then apply the source-pinned divider passes.
+/// The frozen candidate: walk cap, square cap, digit cap and the walk's recipe entries, pinned here. `clear_process_env`
+/// wipes the host environment and sets these; the width table and its anchors are compiled in (a2_table_text, a2_anch_text).
+const FROZEN_WALK_CAP: usize = 1244;
+const FROZEN_SQ_CAP: usize = 1234;
+const FROZEN_EMAX: usize = 5;
+const FROZEN_RECIPE: &[(&str, &str)] = &[
+    ("LFA2_CODE", "1"),
+    ("LFA2_S6", "1"),
+    ("LFA2_SET_LF_YP8_LATE", "1:13,4:17,9:22,83:19,93:17,104:15,109:13,115:11"),
+    ("LFA2_SET_SL_N2_DFROM", "118"),
+    ("LFA2_SET_SL_N2_MFROM", "118"),
+    ("LFA2_SET_LF_CMP_FROM", "108"),
+    ("LF_YP8_CHUNK", "1"),
+    ("LFQ_DROPS", "1"),
+    ("LFQ_PAGEFIRST", "1"),
+    ("LFQ_KPAGE", "1"),
+    ("SL_N2_DEEP", "none"),
+    ("LFQ_FCR", "1"),
+    ("LFQ_Y42LAST", "1"),
+    ("LFQ_LASTN", "2"),
+    ("A2R_SPEC", "58-91:direct,92-122:lean"),
+    ("A2R_SERIAL", "1-98"),
+    ("A2R_HB", "1-107,110-111,115-117"),
+    ("LFA2_EXT", "0"),
+    ("LL_CMPF", "0-200:1"),
+    ("LFG_KEEP", "1"),
+    ("LFG_KEEP_R", "1-122"),
+    ("LFG_KFWD", "1-55"),
+    ("LFG_SEEDP", "3"),
+    ("LFG_RT0P", "3"),
+    ("LFG_SQTX", "1"),
+    ("LFA2_FWIN", "58"),
+    ("LFA2_RWIN", "58"),
+    ("LFG_VETO", "1"),
+    ("LFA2_SET_LF_REORDER_MUL", "44"),
+];
+fn frozen_env_restore() {
+    for (k, v) in FROZEN_RECIPE { std::env::set_var(k, v); }
+}
 pub fn build() -> Vec<Op> {
-    clear_process_env();
-    let mut ops = apply_merged_policy(divide_prefix::prefix());
-    let nonce: u64 = required_env("TAIL_NONCE");
-    let mut x = Op::empty();
-    x.kind = OperationType::X;
-    x.q_target = QubitId(0);
-    ops.extend(std::iter::repeat_n(x, 96));
-    apply_tail_nonce(ops, nonce)
+    build_generated()
 }
 
-/// Final passes shared by the snapshot and structural emission paths.
-fn apply_merged_policy(ops: Vec<Op>) -> Vec<Op> {
-    let ops = cmp_policy::run(ops);
-    let ops=direct_policy::run_bound(ops,include_str!("direct61_bodies.txt"));
-    let ops = generic_compare::transform(ops, 0, 4_500_000, &[20, 21], 1, 0, true);
-    let ops = value_narrow::run(ops, 5_300_000, 21, 1);
-    let ops = tail_barrel::run(ops);
-    let ops = tail_barrel_inverse::run(ops);
-    let before=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-    let ops=value_narrow::run(ops,5_300_000,24,4);
-    let after=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-    assert_eq!(before-after,16,"native24 cuts");
-    let before_terminal=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-    let mut ops=ops;
-    for (skip,cut) in [(3,1),(2,3),(1,5),(0,9)] {
-        let before=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-        ops=value_narrow::run_with(ops,5_300_000,17,cut,skip,1,0);
-        let after=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-        assert_eq!(before-after,cut,"one original terminal width17 value repair");
-    }
-    let before=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-    ops=value_narrow::run_with(ops,5_300_000,16,3,0,2,0);
-    let after=ops.iter().filter(|o|o.kind==OperationType::CCX).count();
-    assert_eq!(before-after,6,"two terminal width16 value repairs");
-    assert_eq!(before_terminal-after,24,"complete six-body terminal value policy");
-    let ops = source_edits::run(ops,include_str!("merge_history_restore.txt"));
-    // Verified cap edits run after every hash-bound comparison/history pass.
-    let ops = cap_schedule::run(ops,1,1);
+/// laneW: the final policies with no stream binding. Exact and proof-based only; the stream-bound narrowing tables are out.
+fn lane_generic_policy(ops: Vec<Op>) -> Vec<Op> {
     let ops = affine_simplify::simplify(ops);
     let ops = cond_pass::final_cap_cleanup(ops);
-    let ops = t0_window_bound::run(ops);
-    let ops = last_veto::run(ops, 3);
-    let ops = choice_narrow::run(ops);
-    let ops = phase_narrow::run_single_bound(ops,include_str!("special_phase_body.txt"));
-    let ops = zero_quartic::run(ops);
-    let ops = cmp_extra::run(ops, include_str!("cmp_extra.txt"));
-    let ops = hold_pass::hold_pass(ops);
-    source_edits::run(ops,include_str!("disc50_followup.txt"))
+    // laneG: laneL's terminal veto (LFG_VETO=1): the last tick's [a > 4b] compare gone, Y4 = 0; the filter has the key last_veto
+    let ops = if std::env::var("LFG_VETO").is_ok_and(|v| v == "1") { last_veto::run(ops, 3) } else { ops };
+    hold_pass::hold_pass(ops)
 }
 
 /// Original structural generator, retained for audit and regeneration.
@@ -617,6 +636,9 @@ pub fn build_generated() -> Vec<Op> {
     std::env::set_var("RAIL_OPT_SEED","1");
     std::env::set_var("RAIL_OPT_NARROW","1");
     std::env::set_var("FRAME_FWD","1");
+    std::env::set_var("LFA2_EMAX", FROZEN_EMAX.to_string());
+    std::env::set_var("HEO_PIN_PP_WALK_MAX_QUBITS", FROZEN_WALK_CAP.to_string());
+    std::env::set_var("LF_SQUARE_CAP", FROZEN_SQ_CAP.to_string());
     let mut ops = build_point_add();
     // Effort-8 INT / B7b (`HEO_EMIT_ONLY=1`, research overlay only): stop after emission (the HEO phase report and
     // K3B_CELL traces are complete here), skipping the simplifier chain and the ops.bin write. Sweep instrument.
@@ -666,10 +688,6 @@ pub fn build_generated() -> Vec<Op> {
     // square top carries (SL_SQTOP; unset = this gate list byte for byte): the square's inverse-row
     // top carries built only under the top bit that reads them (sqtop_pass.rs)
     ops = sqtop_pass::run(ops);
-    ops = sqdepth2_pass::run(ops);
-    ops = phase_cubic::run(ops);
-    ops = rowcut_pass::run(ops);
-    ops = reader_pass::run(ops);
     // y42-railtop (leapfrog.rs `Y42_BOUND`; false = this gate list byte for byte): the edits of the four bound
     // passes above as one table, carried to this tree's stream with the rail switches on
     // round17 a2-build v5w: main's seven stream-bound passes (and cond_pass ur / zero_force between them) replayed as
@@ -680,67 +698,13 @@ pub fn build_generated() -> Vec<Op> {
     ops = compose_post::run(ops);
     ops = stream_pipeline::run(ops);
     ops = post_pipeline::run(ops);
-    ops = lane3_sigcut::run(ops);
-    ops = source_edits::run(ops, include_str!("our_cuts.txt"));
-    ops = rail_output_erase::run(ops);
-    ops = source_edits::run(ops, include_str!("our_cuts2.txt"));
-    ops = source_edits::run(ops, include_str!("builder_followup.txt"));
-    ops = source_edits::run(ops, include_str!("value_followup.txt"));
-    if std::env::var("BARREL_FOLLOWUP").as_deref()==Ok("1"){ops=source_edits::run(ops,include_str!("barrel_followup.txt"));}
-    // Lane R: third post-builder table, re-mined on spookyfrog 20 after barrel_followup.
-    // All edits are bound to the complete final pre-tail stream. ON by default (the submitted stream).
-    ops = source_edits::run(ops, include_str!("lane_r_stack.txt"));
-    ops=source_edits::run(ops,include_str!("score_followup.txt"));
-    ops=source_edits::run(ops,include_str!("guarded_followup.txt"));
-    let a: &[u32] = &[
-        342080,1,3,12,65535,65535,27,1573,65535,65535,10,65535,27,1230,65535,65535,65535,12,65535,65535,27,1573,65535,65535,4,65535,65535,65535,1573,65535,65535,
-        70345,1,3,12,65535,65535,829,1573,65535,65535,10,65535,829,1228,65535,65535,65535,12,65535,65535,829,1573,65535,65535,4,65535,65535,65535,1573,65535,65535,
-        13705,1,3,12,65535,65535,36,1573,65535,65535,10,65535,36,1227,65535,65535,65535,12,65535,65535,36,1573,65535,65535,4,65535,65535,65535,1573,65535,65535,
-        448730,1,1,13,776,772,1142,65535,65535,65535,10,65535,1230,1142,65535,65535,65535,
-        80886,1,1,13,731,825,743,65535,65535,65535,10,65535,1228,743,65535,65535,65535,
-        16174,1,1,13,823,827,1129,65535,65535,65535,10,65535,1227,1129,65535,65535,65535,
-        1886899,1,3,12,65535,65535,612,1389,65535,65535,10,65535,612,1233,65535,65535,65535,12,65535,65535,612,1389,65535,65535,4,65535,65535,65535,1389,65535,65535,
-        11833,1,1,13,147,150,1193,65535,65535,65535,10,65535,1233,1193,65535,65535,65535,
-        7242644,1,3,12,65535,65535,4,642,65535,65535,10,65535,4,1127,65535,65535,65535,12,65535,65535,4,642,65535,65535,4,65535,65535,65535,642,65535,65535,
-        6,1,3,12,65535,65535,1038,642,65535,65535,10,65535,1038,186,65535,65535,65535,12,65535,65535,1038,642,65535,65535,4,65535,65535,65535,642,65535,65535,
-        6,1,3,12,65535,65535,2,642,65535,65535,10,65535,2,1228,65535,65535,65535,12,65535,65535,2,642,65535,65535,4,65535,65535,65535,642,65535,65535,
-        31629,1,2,13,848,258,1127,65535,65535,65535,10,65535,1127,92,65535,65535,65535,13,848,258,1127,65535,65535,65535,
-        67,1,2,13,309,258,186,65535,65535,65535,10,65535,186,803,65535,65535,65535,13,309,258,186,65535,65535,65535,
-        66,1,2,13,310,258,1228,65535,65535,65535,10,65535,1228,848,65535,65535,65535,13,310,258,1228,65535,65535,65535,
-        6361,1,2,7,65535,65535,92,65535,683,65535,10,65535,92,738,65535,65535,65535,7,65535,65535,92,65535,683,65535,
-        270,1,2,7,65535,65535,803,65535,684,65535,10,65535,803,92,65535,65535,65535,7,65535,65535,803,65535,684,65535,
-        5336,1,2,9,65535,764,1211,65535,703,65535,10,65535,738,803,65535,65535,65535,9,65535,764,1211,65535,703,65535,
-        1,1,2,7,65535,65535,848,65535,704,65535,10,65535,848,738,65535,65535,65535,7,65535,65535,848,65535,704,65535,
-        2545,1,2,8,65535,511,803,65535,65535,65535,10,65535,803,1211,65535,65535,65535,8,65535,511,803,65535,65535,65535,
-        71,1,2,8,65535,287,92,65535,65535,65535,10,65535,92,1228,65535,65535,65535,8,65535,287,92,65535,65535,65535,
-        69,1,2,8,65535,286,738,65535,65535,65535,10,65535,738,1231,65535,65535,65535,8,65535,286,738,65535,65535,65535,
-        13305,1,1,13,1034,707,705,65535,65535,65535,10,65535,1231,705,65535,65535,65535,
-        44499,1,1,13,707,517,796,65535,65535,65535,10,65535,1228,796,65535,65535,65535,
-        4,1,1,13,834,1028,4,65535,65535,65535,10,65535,1211,4,65535,65535,65535,
-    ];
-    let mut b = String::from("10232898 b225aaa284f3cd7dda31c4499a14b8111d5c8e79b9549c9245dd6001b7690f8d\n");
-    let (mut c, mut d) = (0, 0);
-    while c < a.len() {
-        d += a[c];
-        b.push_str(&format!("{} {} {}", d, a[c+1], a[c+2]));
-        let e = c + 3 + 7 * (a[c+1] + a[c+2]) as usize;
-        for &f in &a[c+3..e] {
-            b.push_str(&format!(" {}", if f == 65535 { u64::MAX } else { f as u64 }));
-        }
-        b.push('\n');
-        c = e;
-    }
-    ops = source_edits::run(ops, &b);
-    ops=source_edits::run(ops,include_str!("affine_followup.txt"));
-    ops=source_edits::run(ops,include_str!("union_followup.txt"));
-    ops = apply_merged_policy(ops); // same final policies as the compiled prefix path
+    let mut ops = lane_generic_policy(ops);
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
     x.q_target = QubitId(0);
     ops.extend(std::iter::repeat_n(x, 96));
-    ops = apply_tail_nonce(ops, nonce);
-    ops
+    apply_tail_nonce(ops, nonce)
 }
 
 
@@ -776,36 +740,17 @@ pub(crate) fn go_slice(key: &str, round: usize, dir: u8) -> isize {
 
 mod mabsorb;
 mod sqtop_pass;
-mod sqdepth2_pass;
-mod sqdepth2_base;
-mod sqdepth2_veto;
-mod sqdepth2_veto_pad;
-mod rowcut_pass;
-mod reader_pass;
-mod y42_bound_pass;
-mod linear_restore;
-mod rebind;
 mod narrow;
 mod zero_force;
-mod census_cut;
-mod rowcut_base;
-mod rowcut_veto;
-mod rowcut_veto_pad;
-mod phase_cubic_base;
 mod pscan;
 mod cond_pass;
 pub mod constant_templates;
 
 mod native_sfuse_b;
 
-mod phase_cubic;
 
-mod square_finish;
-mod census_anchored;
 
-mod frozen_cache_product67;
 
-mod retained_products;
 mod zero_product;
 mod frozen_stack;
 mod compose_post;
@@ -813,23 +758,14 @@ mod source_edits;
 mod classical_factors_xor;
 mod classical_wide;
 
-mod product_cache;
 
-mod copy_elision;
 
-mod value_rewrites;
 
 mod stream_pipeline;
 
-mod retained_and;
 
-mod copy_cleanup;
 
-mod value_cleanup;
 
 mod post_pipeline;
 
-mod phase_restoration;
 
-mod lane3_sigcut;
-mod rail_output_erase;

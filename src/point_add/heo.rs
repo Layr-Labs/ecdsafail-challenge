@@ -85,7 +85,7 @@ pub fn fit_window() -> usize {
 
 /// Builder phase report switch (see `Builder::report_phase`).
 pub fn phase_report_enabled() -> bool {
-    research_on() && truthy("HEO_PHASE_REPORT")
+    true // scratch probe
 }
 
 fn log_once(kind: &str, name: &str, value: &str) {

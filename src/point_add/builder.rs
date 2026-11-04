@@ -117,6 +117,8 @@ impl Builder {
         }
         std::mem::take(&mut self.ops)
     }
+    /// laneG: one op from a recorded section, as it stands.
+    pub(crate) fn lfg_push_raw(&mut self, op: Op) { self.push_op(op); }
     fn push_op(&mut self, op: Op) {
         // Tripwire, live only while tracing: every gate the score counts must
         // have been attributed by `ccx_census` first. CCX is the only scored

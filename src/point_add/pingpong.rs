@@ -120,9 +120,30 @@ thread_local! { pub(super) static Y17_EXTRA: std::cell::Cell<isize> = const { st
 pub(super) fn y17_fold_true_cap() {
     Y17_EXTRA.with(|e| if e.get() < 0 { e.set(0) });
 }
+thread_local! {
+    /// laneQ instrument: LFQ_TAILCAP offset of the current tick.
+    pub(crate) static QCAP_EXTRA: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+}
+/// laneQ instrument, LFQ_TAILCAP="from:delta": ticks t >= from run at cap + delta (prices the room of the other ticks).
+pub(crate) fn qcap_tick(c: &mut Builder, t: usize) {
+    let d = std::env::var("LFQ_TAILCAP").ok().map(|v| {
+        let (a, b) = v.split_once(':').expect("LFQ_TAILCAP=from:delta");
+        (a.parse::<usize>().unwrap(), b.parse::<isize>().unwrap())
+    });
+    if let Some((from, delta)) = d {
+        // the wires of the higher cap exist from the walk's start, so a tail tick does not change the free set rail code tracks
+        thread_local! { static RAISED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+        if !RAISED.with(|r| r.replace(true)) {
+            let n = (walk_max_qubits_base() as isize + delta) as usize - c.active_qubits() as usize;
+            let v: Vec<QubitId> = (0..n).map(|_| c.alloc_qubit()).collect();
+            for q in v.into_iter().rev() { c.release_clean(q); }
+        }
+        QCAP_EXTRA.with(|e| e.set(if t >= from { delta } else { 0 }));
+    }
+}
 pub(super) fn walk_max_qubits() -> usize {
     if let Some(cap) = PHASE_CAP.with(|c| c.get()) { return cap; }
-    (walk_max_qubits_base() as isize + super::heo::cell_pin("K3B_EXTRA_ROOM").map_or(0, |v| v.parse::<isize>().unwrap()) + Y17_EXTRA.with(|e| e.get())) as usize
+    (walk_max_qubits_base() as isize + super::heo::cell_pin("K3B_EXTRA_ROOM").map_or(0, |v| v.parse::<isize>().unwrap()) + Y17_EXTRA.with(|e| e.get()) + QCAP_EXTRA.with(|e| e.get())) as usize
 }
 
 /// Wires a footprint *model* counts that the allocator has already taken back:
