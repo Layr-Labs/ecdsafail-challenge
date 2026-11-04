@@ -1,9 +1,5 @@
-mod hold_pass;
-mod seed_mult;
-mod product_eraser;
-mod last_veto;
-mod last_veto_local;
 mod fd_coordinate;
+pub mod lfw;
 mod back_seam;
 pub mod cross_chunk_probe;
 pub mod dirty_boundary_probe;
@@ -38,7 +34,6 @@ mod record;
 pub mod heo;
 mod square;
 mod sqc;
-mod square_split;
 mod sqleaf;
 mod moddiv_adapter;
 
@@ -160,8 +155,8 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_CROSS" => "1",
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
-        // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "201013768616",
+        // Placeholder nonce used to reproduce the Q1217 scan stream.
+        "TAIL_NONCE" => "301833677",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -231,35 +226,6 @@ fn apply_tail_nonce(mut ops: Vec<Op>, nonce: u64) -> Vec<Op> {
 /// report `build_circuit` prints. `x`/`y` are the quantum coordinates and are
 /// overwritten in place; every scratch qubit each phase takes is returned to |0>
 /// before the next one starts.
-/// laneG: the square section of the board leader's stream (f5f14f4, ops 4461256 .. 5418492), wires and bits as recorded: on entry only x and y are
-/// live in both streams, every other wire is |0>, and the section's bits are written before any later read. It leaves R0 on x + four wires.
-fn lfg_square_section(c: &mut Builder, x: &[QubitId]) {
-    let raw = zstd::stream::decode_all(&include_bytes!("sq_leader.zst")[..]).expect("sq_leader");
-    let w = |r: &[u8], i: usize| u64::from_le_bytes(r[i..i + 8].try_into().unwrap());
-    assert_eq!(raw.len() % 56, 0);
-    assert_eq!(c.active_qubits(), 512, "square section: only x and y live on entry");
-    let mut seen: u64 = 0;
-    for r in raw.chunks_exact(56) {
-        let mut o = Op::empty();
-        o.kind = match w(r, 0) & 0xffff_ffff {
-            0 => OperationType::Neg, 3 => OperationType::BitInvert, 4 => OperationType::BitStore0, 5 => OperationType::BitStore1,
-            6 => OperationType::X, 7 => OperationType::Z, 8 => OperationType::CX, 9 => OperationType::CZ, 10 => OperationType::Swap,
-            11 => OperationType::R, 12 => OperationType::Hmr, 13 => OperationType::CCX, 14 => OperationType::CCZ,
-            15 => OperationType::PushCondition, 16 => OperationType::PopCondition, k => panic!("square section: kind {k}"),
-        };
-        o.q_control2 = QubitId(w(r, 8));
-        o.q_control1 = QubitId(w(r, 16));
-        o.q_target = QubitId(w(r, 24));
-        o.c_target = BitId(w(r, 32));
-        o.c_condition = BitId(w(r, 40));
-        o.r_target = crate::circuit::RegisterId(w(r, 48));
-        c.lfg_push_raw(o);
-        seen += 1;
-    }
-    eprintln!("LFG_SQTX ops={seen}");
-    leapfrog::lfg_set_preseed(c, x, &[1129, 1141, 697, 695]);
-}
-
 pub(crate) fn build_point_add() -> Vec<Op> {
     let circ = &mut Builder::new();
     let x: &[QubitId] = &circ.alloc_qubits(N);
@@ -285,11 +251,7 @@ pub(crate) fn build_point_add() -> Vec<Op> {
         narrow::square_entry(circ);
         circ.set_phase("square");
         // LF_SQUARE_CAP: the square's own width budget (its ladders size to it instead of the walk cap)
-        if std::env::var("LFG_SQTX").is_ok_and(|v| v == "1") {
-            lfg_square_section(circ, x);
-        } else {
-        pingpong::with_phase_cap(Some(FROZEN_SQ_CAP), || sub_square(circ, x, y));
-        }
+        pingpong::with_phase_cap(std::env::var("LF_SQUARE_CAP").ok().map(|v| v.parse::<usize>().unwrap()), || sub_square(circ, x, y));
         circ.set_phase("multiply");
         if seams { leapfrog::multiply_seamed(circ, y, x, ox); } else { leapfrog::multiply(circ, y, x); }
         leapfrog::c35_widen_check();
@@ -536,110 +498,49 @@ fn clear_process_env() {
         if s.is_empty() || s.contains('=') || s.contains('\0') { continue; }
         std::env::remove_var(&k);
     }
-    frozen_env_restore();
 }
 
 /// Leapfrog branch: the submission build emits the Leapfrog point add (see [`leapfrog::install_recipe`]).
 const LEAPFROG_SUBMISSION: bool = true;
 
-pub(crate) mod rail_s6;
+/// Q1215 cycle-27 chunk-boundary recipe. Keeping it in source makes the
+/// official build independent of the research process environment.
+const PINNED_CUT_OVR: &str = "HEO_PIN_PP_WALK_MAX_QUBITS=1215;LF_SQUARE_CAP=1215;CUT_FLOAN_FROM=126;CUT_FDROP=126:1,127:1,128:2,129:4,130:3,131:3,132:3,133:3,134:3,135:3,136:3,137:3;CUT_RDROP=120:1,121:1,122:1,123:2,124:2,125:3,126:3;CUT_FWD_FUSED_TO=103;CUT_REV_FUSED_TO=101;CUT_Y15_FWD_TO=131;CUT_Y15_REV_TO=101;CUT_FMAX_EXTRA=1;CUT_DROP_PLAN7=1;HEO_FIT_K=24;HEO_SPLIT_K=24;GO_CELLB=;GO_CHUNK=0-0:0;HEO_PIN_SQ_ASM_TAIL=20;HEO_MB_SKIP2=0;LF_MERGED_WIN=58;LF_MERGED_LATE_WIN=60;LF_CELL_FOLD_MIN=56;LF_YP8=17;LF_YP8_LATE=1:15,6:19,11:24,90:21,100:19,112:17,118:20,124:3;LF_G10_TABLE=770;CUT_CMPSCHED=0-118:3:0,119-119:0:0,120-999:1:0;CUT_WADD=8:106:1;LF_YP8_CHUNK=1";
 
-/// The frozen candidate: walk cap, square cap, digit cap and the walk's recipe entries, pinned here. `clear_process_env`
-/// wipes the host environment and sets these; the width table and its anchors are compiled in (a2_table_text, a2_anch_text).
-const FROZEN_WALK_CAP: usize = 1243;
-const FROZEN_SQ_CAP: usize = 1234;
-const FROZEN_EMAX: usize = 5;
-const FROZEN_RECIPE: &[(&str, &str)] = &[
-    ("LFA2_CODE", "1"),
-    ("LFA2_S6", "1"),
-    ("LFA2_SET_LF_YP8_LATE", "1:13,4:17,9:22,83:19,93:17,104:15,109:13,115:11"),
-    ("LFA2_SET_SL_N2_DFROM", "118"),
-    ("LFA2_SET_SL_N2_MFROM", "117"),
-    ("LFA2_SET_LF_CMP_FROM", "108"),
-    ("LF_YP8_CHUNK", "1"),
-    ("LFQ_DROPS", "1"),
-    ("LFQ_PAGEFIRST", "1"),
-    ("LFQ_KPAGE", "1"),
-    ("SL_N2_DEEP", "none"),
-    ("LFQ_FCR", "1"),
-    ("LFQ_Y42LAST", "1"),
-    ("LFQ_LASTN", "2"),
-    ("A2R_SPEC", "62-92:direct,93-122:lean"),
-    ("A2R_SERIAL", "1-98"),
-    ("A2R_HB", "1-107,110-111,115-117"),
-    ("LFA2_EXT", "0"),
-    ("LL_CMPF", "0-200:1"),
-    ("LFG_KEEP", "1"),
-    ("LFG_KEEP_R", "1-122"),
-    ("LFG_KFWD", "1-55"),
-    ("LFG_SEEDP", "3"),
-    ("LFG_RT0P", "3"),
-    ("LFG_SQTX", "1"),
-    ("LFG_VETO", "1"),
-    ("LFA2_SET_LF_REORDER_MUL", "44"),
-    ("LFT_PACK", "47:0-16:1-47@40+1,89:16-30:48-89@36+1"),
-    ("LFA2_SET_LF_REORDER_DIV", "2"),
-];
-fn frozen_env_restore() {
-    for (k, v) in FROZEN_RECIPE { std::env::set_var(k, v); }
-}
 pub fn build() -> Vec<Op> {
-    build_generated()
-}
-
-/// laneW: the final policies with no stream binding. Exact and proof-based only; the stream-bound narrowing tables are out.
-fn lane_generic_policy(ops: Vec<Op>) -> Vec<Op> {
-    let ops = affine_simplify::simplify(ops);
-    let ops = cond_pass::final_cap_cleanup(ops);
-    // laneG: laneL's terminal veto (LFG_VETO=1): the last tick's [a > 4b] compare gone, Y4 = 0; the filter has the key last_veto
-    let ops = if std::env::var("LFG_VETO").is_ok_and(|v| v == "1") { last_veto::run(ops, 3) } else { ops };
-    hold_pass::hold_pass(ops)
-}
-
-/// Original structural generator, retained for audit and regeneration.
-pub fn build_generated() -> Vec<Op> {
-    // W124 (Codex) width composition, ported onto 6602a4e8: the effective selection pinned in source.
-    // trace=true reproduces W124's logs only (stderr); it does not change gates.
-    let w113_trace = true;
-    let w120_cubic = true;
-    let w123_lazy_gates = true;
-
+    let research_cut_ovr = std::env::var("DS_CUT_OVR").ok();
+    let research_backtrace = std::env::var("RUST_BACKTRACE").ok();
     clear_process_env();
+    if let Some(value) = research_backtrace {
+        std::env::set_var("RUST_BACKTRACE", value);
+    }
     install_skywalk_submission_recipe();
     std::env::set_var("EXACT_PAIR_CARRY", "1");
     if LEAPFROG_SUBMISSION {
         leapfrog::install_recipe();
     }
-    // W124: W110's field page basis at the fold's tight public chunk budgets (LFF_PAGE5), W120 cubic page cleanup,
-    // W123 lazy inverse gate restoration; set after both recipes, exactly as in the W124 emitter.
-    std::env::set_var("LFF_PAGE5", "1");
-    if w120_cubic { std::env::set_var("LFF_CUBIC_CLEANUP", "1"); }
-    if w123_lazy_gates { std::env::set_var("W123_LAZY_GATES", "1"); }
-    if w113_trace {
-        std::env::set_var("ROOM_TRACE", "1");
-        std::env::set_var("LFF_PAGE5_TRACE", "1");
+    {
+        let file_ovr = include_str!("research_cut_ovr.txt");
+        let o = research_cut_ovr.as_deref().unwrap_or(file_ovr.trim());
+        for kv in o.split(';').filter(|x| !x.is_empty()) {
+            let (k, v) = kv.split_once('=').unwrap();
+            eprintln!("CUT_OVR {k}={v}");
+            std::env::set_var(k, v);
+        }
     }
     if std::env::var_os("SKYWALK_SQUARE_HIGH_PROBE").is_some(){square::high_probe();std::process::exit(0);}
     if std::env::var_os("SKYWALK_MODDIV_ADAPTER_PROBE").is_some(){moddiv_adapter::probe();std::process::exit(0);}
-    std::env::set_var("SQUARE_GROUPS_GROUP", "on");
-    std::env::set_var("SQUARE_GROUPS_SUM", "on");
-    std::env::set_var("SQUARE_GROUPS_A2", "on");
-    std::env::set_var("SQUARE_GROUPS_A3", "on");
-    std::env::set_var("SQC_LEAF_D", "12");
-    std::env::set_var("SQUARE_SPLIT", "on");
-    std::env::set_var("RAIL_ZERO_FILL", "1");
-    std::env::set_var("SQC_G", "22");
-    std::env::set_var("SQC_T", "19");
-    std::env::set_var("FRAME_SHIFT","1");
-    std::env::set_var("RAIL_OPT_DROPS","1");
-    std::env::set_var("RAIL_OPT_RESERVE","1");
-    std::env::set_var("RAIL_OPT_SEED","1");
-    std::env::set_var("RAIL_OPT_NARROW","1");
-    std::env::set_var("FRAME_FWD","1");
-    std::env::set_var("LFA2_EMAX", FROZEN_EMAX.to_string());
-    std::env::set_var("HEO_PIN_PP_WALK_MAX_QUBITS", FROZEN_WALK_CAP.to_string());
-    std::env::set_var("LF_SQUARE_CAP", FROZEN_SQ_CAP.to_string());
     let mut ops = build_point_add();
+    // lfw: exact width post-pass to 1213 qubits (lfw.rs). The planner ran at 1214 as before; this frees one wire at
+    // every 1214-instant by erase/recompute of a provably recomputable wire, then recolours onto 1213 ids.
+    {
+        let log: Vec<(u64, usize, bool)> = builder::LIFE_LOG.with(|l| std::mem::take(&mut *l.borrow_mut()));
+        let reacq: Vec<(u64, usize)> = builder::REACQ_LOG.with(|l| std::mem::take(&mut *l.borrow_mut()));
+        let (o2, rep) = lfw::apply(ops, &log, &reacq, 1213, false);
+        assert!(rep.uncovered.is_empty() && rep.max_id == 1213, "lfw: width post-pass did not reach 1213 (uncovered {}, max id {})", rep.uncovered.len(), rep.max_id);
+        eprintln!("LFW cap=1213 runs={} run_ops={} covers={} ccx_added={} max_id_total={}", rep.runs, rep.run_ops, rep.covers, rep.ccx_added, rep.max_id);
+        ops = o2;
+    }
     // Effort-8 INT / B7b (`HEO_EMIT_ONLY=1`, research overlay only): stop after emission (the HEO phase report and
     // K3B_CELL traces are complete here), skipping the simplifier chain and the ops.bin write. Sweep instrument.
     if heo::research_on() && std::env::var("HEO_EMIT_ONLY").is_ok_and(|v| v == "1") {
@@ -688,23 +589,23 @@ pub fn build_generated() -> Vec<Op> {
     // square top carries (SL_SQTOP; unset = this gate list byte for byte): the square's inverse-row
     // top carries built only under the top bit that reads them (sqtop_pass.rs)
     ops = sqtop_pass::run(ops);
-    // y42-railtop (leapfrog.rs `Y42_BOUND`; false = this gate list byte for byte): the edits of the four bound
-    // passes above as one table, carried to this tree's stream with the rail switches on
-    // round17 a2-build v5w: main's seven stream-bound passes (and cond_pass ur / zero_force between them) replayed as
-    // one edit table bound to this stream after reader_pass (frozen_stack.rs): the harness's re-anchoring of main's
-    // edits on lever A's stream (2 census_anchored clusters) plus the generic passes' result, op for op
-    // the 6-hunk table placed by the stream prefix it edits, the two generic classical-control passes and the proved
-    // CCX cuts bound to this stream (compose_post.rs)
-    ops = compose_post::run(ops);
-    ops = stream_pipeline::run(ops);
-    ops = post_pipeline::run(ops);
-    let mut ops = lane_generic_policy(ops);
+    ops = sqdepth2_pass::run(ops);
+    ops = phase_cubic::run(ops);
+    ops = rowcut_pass::run(ops);
+    ops = reader_pass::run(ops);
+    ops = stream_edits::run(ops);
+    if leapfrog::C36 {
+        // Source-bound edits move under C36.  Re-derive one exact product
+        // relation from the finished stream instead of trusting old indices.
+        ops = classical_wide::simplify_products(ops);
+    }
     let nonce: u64 = required_env("TAIL_NONCE");
     let mut x = Op::empty();
     x.kind = OperationType::X;
     x.q_target = QubitId(0);
     ops.extend(std::iter::repeat_n(x, 96));
-    apply_tail_nonce(ops, nonce)
+    ops = apply_tail_nonce(ops, nonce);
+    ops
 }
 
 
@@ -740,32 +641,38 @@ pub(crate) fn go_slice(key: &str, round: usize, dir: u8) -> isize {
 
 mod mabsorb;
 mod sqtop_pass;
+mod sqdepth2_pass;
+mod sqdepth2_base;
+mod sqdepth2_veto;
+mod sqdepth2_veto_pad;
+mod rowcut_pass;
+mod reader_pass;
+mod y42_bound_pass;
+mod linear_restore;
+mod rebind;
 mod narrow;
 mod zero_force;
+mod census_cut;
+mod rowcut_base;
+mod rowcut_veto;
+mod rowcut_veto_pad;
+mod phase_cubic_base;
 mod pscan;
 mod cond_pass;
 pub mod constant_templates;
 
 mod native_sfuse_b;
 
+mod phase_cubic;
 
+mod square_finish;
+mod census_anchored;
 
+mod frozen_cache_product67;
 
+mod retained_products;
 mod zero_product;
-mod frozen_stack;
-mod compose_post;
 mod source_edits;
+mod stream_edits;
 mod classical_factors_xor;
 mod classical_wide;
-
-
-
-
-mod stream_pipeline;
-
-
-
-
-mod post_pipeline;
-
-

@@ -71,10 +71,6 @@ pub fn ripple_add(
     ripple_add_y16(circ, addend, acc, carry_in, carry_out);
     super::leapfrog::y16_leave(circ, 0, y16);
 }
-/// C2 (rec4-payload): the next plain wrapped ripple's resulting top bit is this known constant (one-shot; taken by
-/// [`ripple_add_y16`] on any path): its terminal Toffoli becomes an X measurement with Clifford repairs
-/// ([`terminal_step_known`]).
-thread_local! { pub(crate) static KNOWN_TOP: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) }; }
 fn ripple_add_y16(
     circ: &mut Builder,
     addend: &[QubitId],
@@ -82,7 +78,6 @@ fn ripple_add_y16(
     carry_in: Option<QubitId>,
     carry_out: Option<QubitId>,
 ) {
-    let known_top = KNOWN_TOP.with(|k| k.take());
     if carry_out.is_none() && result_top_loan_enabled(acc) {ripple_add_result_top_loan(circ,addend,acc,carry_in,None,false);return;}
     let owned=if carry_out.is_some(){acc.len().saturating_sub(1)}else{acc.len().saturating_sub(2)};
     let missing=(circ.active_qubits()as usize+owned).saturating_sub(walk_max_qubits());
@@ -91,8 +86,7 @@ fn ripple_add_y16(
         if super::env_flag("I35_TRACE"){eprintln!("I35_BRIDGE plain {} {}",acc.len(),missing);}
         super::bridge::add(circ,addend,acc,carry_in,carry_out,missing);return;
     }
-    let known_top = if carry_out.is_none() && acc.len() >= 2 { known_top } else { None };
-    ripple_add_proved(circ, addend, acc, carry_in, carry_out, Carry0::Full, Carry1::Full, None, None, known_top, None);
+    ripple_add_proved(circ, addend, acc, carry_in, carry_out, Carry0::Full, Carry1::Full, None, None, None, None);
 }
 
 /// Finish a vented sum, consume its overflow while the top arithmetic carry

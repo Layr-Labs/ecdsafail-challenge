@@ -13,6 +13,12 @@ use super::record::{At, CcxCensus, PeakCensus, ReplaySites};
 /// `op.kind as usize` indexes it directly. `DebugPrint` is the last variant.
 const OP_KINDS: usize = OperationType::DebugPrint as usize + 1;
 
+// lfw: allocation log for the exact width post-pass (lfw.rs). Each entry is (qubit, op index, alloc?);
+// a release is the builder's own |0> claim. Reacquired ids are logged separately.
+thread_local! { pub static LIFE_LOG: std::cell::RefCell<Vec<(u64, usize, bool)>> = const { std::cell::RefCell::new(Vec::new()) }; }
+thread_local! { pub static REACQ_LOG: std::cell::RefCell<Vec<(u64, usize)>> = const { std::cell::RefCell::new(Vec::new()) }; }
+fn life(q: u64, op: usize, alloc: bool) { LIFE_LOG.with(|l| l.borrow_mut().push((q, op, alloc))); }
+
 pub struct Builder {
     ops: Vec<Op>,
     model: bool,
@@ -117,8 +123,6 @@ impl Builder {
         }
         std::mem::take(&mut self.ops)
     }
-    /// laneG: one op from a recorded section, as it stands.
-    pub(crate) fn lfg_push_raw(&mut self, op: Op) { self.push_op(op); }
     fn push_op(&mut self, op: Op) {
         // Tripwire, live only while tracing: every gate the score counts must
         // have been attributed by `ccx_census` first. CCX is the only scored
@@ -191,6 +195,17 @@ impl Builder {
         self.peak_qubits = self.peak_qubits.max(self.active_qubits);
         self.model_max = self.model_max.max(self.active_qubits);
         self.win_peak = self.win_peak.max(self.active_qubits);
+        if std::env::var("PEAK_BACKTRACE").is_ok_and(|v| v == "1")
+            && self.active_qubits as usize > super::pingpong::heo_hooks::cap()
+        {
+            eprintln!(
+                "PEAK_BACKTRACE active={} op={} phase={}\n{}",
+                self.active_qubits,
+                self.ops.len(),
+                self.phase,
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
         if let Some(r) = self.report.as_deref_mut() {
             if self.active_qubits > r.peak {
                 r.peak = self.active_qubits;
@@ -227,6 +242,7 @@ impl Builder {
             self.next_qubit += 1;
             QubitId(q.into())
         };
+        life(qid.0, self.ops.len(), true);
         if self.peak_census.enabled() {
             let (at, caller) = (self.at(), std::panic::Location::caller());
             self.peak_census
@@ -294,8 +310,12 @@ impl Builder {
         if self.active_qubits > 0 {
             self.active_qubits -= 1;
         }
+        life(q.0, self.ops.len(), false);
         let at = self.at();
         self.peak_census.on_free(at, q.0);
+    }
+    pub(crate) fn q_is_free(&self, q: QubitId) -> bool {
+        self.free_qubits.iter().any(|&f| u64::from(f) == q.0)
     }
     /// narrow (narrow.rs): the allocator set to a recorded state (free wires in order, free bits in order, next fresh
     /// bit). Asserted: the same free wires and the same held bits.
@@ -366,6 +386,7 @@ impl Builder {
         };
         self.free_qubits.remove(pos);
         self.active_qubits += 1;
+        life(q.0, self.ops.len(), true); REACQ_LOG.with(|l| l.borrow_mut().push((q.0, self.ops.len())));
         self.note_peak();
         if self.peak_census.enabled() {
             let at = self.at();
@@ -388,6 +409,7 @@ impl Builder {
             });
         self.free_qubits.swap_remove(pos);
         self.active_qubits += 1;
+        life(q.0, self.ops.len(), true); REACQ_LOG.with(|l| l.borrow_mut().push((q.0, self.ops.len())));
         self.note_peak();
 
         if self.peak_census.enabled() {
@@ -493,22 +515,6 @@ impl Builder {
     }
     pub fn cz(&mut self, a: QubitId, b: QubitId) {
         self.cz_if(a, b, NO_BIT);
-    }
-    #[track_caller]
-    pub fn ccz_if(&mut self, a: QubitId, b: QubitId, t: QubitId, cond: BitId) {
-        assert!(a != b && a != t && b != t, "invalid CCZ with aliased operands");
-        let mut op = Op::empty();
-        op.kind = OperationType::CCZ;
-        op.q_control1 = a;
-        op.q_control2 = b;
-        op.q_target = t;
-        self.push_condition(cond);
-        if self.ccx_census.watching() {
-            let at = self.at();
-            self.ccx_census.on_gate(at, OperationType::CCZ, std::panic::Location::caller());
-        }
-        self.push_op(op);
-        self.pop_condition();
     }
     pub fn push_condition(&mut self, cond: BitId) {
         let mut op = Op::empty();
