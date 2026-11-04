@@ -174,6 +174,7 @@ impl Support {
                 let product = self.and(&a, &b);
                 let toggle = self.and(&condition, &product);
                 // Equality is of whole immutable Boolean functions. Failed
+                // support unions become distinct fresh atoms, losing proofs.
                 // Compare the actual conditional toggle, retaining the exact
                 // original classical condition and stack in every replacement.
                 let rewrite = if toggle.is_zero() {
@@ -255,11 +256,14 @@ impl Support {
     }
 }
 
+/// All three states consume each ORIGINAL operation before selecting a proof.
+/// Existing affine/quadratic proofs take precedence, including facts which the
 /// seven-atom abstraction forgets. No interpreter sees the emitted replacements.
 pub(crate) fn simplify(ops: Vec<Op>) -> Vec<Op> {
     simplify_with_products(ops, false)
 }
 
+/// Adds the original-op physical-slot product query after all existing proofs.
 pub(crate) fn simplify_products(ops: Vec<Op>) -> Vec<Op> {
     simplify_with_products(ops, true)
 }
@@ -351,6 +355,6 @@ pub(crate) fn simplify_classical(ops:Vec<Op>)->Vec<Op>{
  eprintln!("CLASSICAL_XOR_FACTORS native_hits={hits} complement_hits={complement_hits} condition_depth_proxy_saving={proxy} measurements_added=0 quantum_scratch_added=0");
  out
 }
+#[cfg(test)] #[path="tests_classical_factors.rs"] mod tests;
 
-
-
+#[cfg(test)] #[path="tests_table.rs"] mod wide_table_tests;
