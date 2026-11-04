@@ -6919,7 +6919,7 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
         Y28_KEEP.with(|d| d.set(true));
         Y42_FWD_NEXT.with(|x| x.set(t + 1 < fused_end || (n2d && std::env::var("LFQ_Y42LAST").is_ok_and(|v| v == "1"))));
         fwd_tick(c, &mut wk, t, Some(&mut pay));
-        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_pack(c); }
+        t3p1_pack_tick(c, t);
         Y42_FWD_NEXT.with(|x| x.set(false));
         Y28_KEEP.with(|d| d.set(false));
         SKIP_PAY_ROT_AT.with(|s| s.set(usize::MAX));
@@ -6997,7 +6997,7 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
             pacc(c, "rt0.div", q0);
             continue;
         }
-        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_unpack(c); }
+        t3p1_unpack_tick(c, t);
         Y28_USE.with(|d| d.set(true));
         rev_tick(c, &mut wk, t, None);
         Y28_USE.with(|d| d.set(false));
@@ -7056,7 +7056,7 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
     let mut t0_bits = None;
     for t in 0..rounds() {
         fwd_tick(c, &mut wk, t, None);
-        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_pack(c); }
+        t3p1_pack_tick(c, t);
         if t0f && t == 0 {
             t0_bits = Some(t0_out(c, &wk));
         }
@@ -7111,7 +7111,7 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
         rounds()
     };
     for t in (ahead..fused_top).rev() {
-        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_unpack(c); }
+        t3p1_unpack_tick(c, t);
         rev_tick(c, &mut wk, t, Some(&mut pay));
     }
     if loan {
