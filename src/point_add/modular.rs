@@ -66,23 +66,6 @@ pub fn ripple_add(
     carry_in: Option<QubitId>,
     carry_out: Option<QubitId>,
 ) {
-    // y16 trace (no effect on the gates)
-    let y16 = super::leapfrog::y16_enter(circ);
-    ripple_add_y16(circ, addend, acc, carry_in, carry_out);
-    super::leapfrog::y16_leave(circ, 0, y16);
-}
-/// C2 (rec4-payload): the next plain wrapped ripple's resulting top bit is this known constant (one-shot; taken by
-/// [`ripple_add_y16`] on any path): its terminal Toffoli becomes an X measurement with Clifford repairs
-/// ([`terminal_step_known`]).
-thread_local! { pub(crate) static KNOWN_TOP: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) }; }
-fn ripple_add_y16(
-    circ: &mut Builder,
-    addend: &[QubitId],
-    acc: &[QubitId],
-    carry_in: Option<QubitId>,
-    carry_out: Option<QubitId>,
-) {
-    let known_top = KNOWN_TOP.with(|k| k.take());
     if carry_out.is_none() && result_top_loan_enabled(acc) {ripple_add_result_top_loan(circ,addend,acc,carry_in,None,false);return;}
     let owned=if carry_out.is_some(){acc.len().saturating_sub(1)}else{acc.len().saturating_sub(2)};
     let missing=(circ.active_qubits()as usize+owned).saturating_sub(walk_max_qubits());
@@ -91,8 +74,7 @@ fn ripple_add_y16(
         if super::env_flag("I35_TRACE"){eprintln!("I35_BRIDGE plain {} {}",acc.len(),missing);}
         super::bridge::add(circ,addend,acc,carry_in,carry_out,missing);return;
     }
-    let known_top = if carry_out.is_none() && acc.len() >= 2 { known_top } else { None };
-    ripple_add_proved(circ, addend, acc, carry_in, carry_out, Carry0::Full, Carry1::Full, None, None, known_top, None);
+    ripple_add_proved(circ, addend, acc, carry_in, carry_out, Carry0::Full, Carry1::Full, None, None, None, None);
 }
 
 /// Finish a vented sum, consume its overflow while the top arithmetic carry
@@ -103,21 +85,6 @@ fn ripple_add_y16(
 /// disjoint operands. The lower positions in this slice remain folded until
 /// the unwind, so they are not yet readable as source or sum bits.
 pub(crate) fn ripple_add_consume(
-    circ: &mut Builder, addend: &[QubitId], acc: &[QubitId],
-    carry_in: Option<QubitId>, carry_out: QubitId,
-    consumer: impl FnOnce(&mut Builder, QubitId, QubitId, QubitId, Option<QubitId>),
-) {
-    // y16 trace (no effect on the gates): the consumer is counted apart from the ripple
-    let y16 = super::leapfrog::y16_enter(circ);
-    ripple_add_consume_y16(circ, addend, acc, carry_in, carry_out, |c, o, a, s, p| {
-        let y16c = super::leapfrog::y16_enter(c);
-        super::pingpong::y17_fold_true_cap();
-        consumer(c, o, a, s, p);
-        super::leapfrog::y16_leave(c, 2, y16c);
-    });
-    super::leapfrog::y16_leave(circ, 0, y16);
-}
-fn ripple_add_consume_y16(
     circ: &mut Builder, addend: &[QubitId], acc: &[QubitId],
     carry_in: Option<QubitId>, carry_out: QubitId,
     consumer: impl FnOnce(&mut Builder, QubitId, QubitId, QubitId, Option<QubitId>),
@@ -275,18 +242,6 @@ pub(crate) fn ripple_add_proved(
             circ.cx(prev, addend[i]);
             circ.cx(prev, acc[i]);
             circ.cx(prev, carries[i]);
-        } else if (i == 1 || i == 2) && c1 == Carry1::SquareLeaf && carry_in.is_none() && c0 == Carry0::IsAddend0 && i < k && i + 1 < width {
-            // carry_step with its Toffoli product written as CX gates (see `Carry1::SquareLeaf`)
-            let prev = previous(i).unwrap();
-            circ.cx(prev, addend[i]);
-            circ.cx(prev, acc[i]);
-            if i == 2 {
-                circ.cx(addend[2], carries[2]);
-                circ.cx(addend[1], carries[2]);
-            }
-            circ.cx(acc[i + 1], carries[i]);
-            circ.x(carries[i]);
-            circ.cx(prev, carries[i]);
         } else if i < k {
             carry_step(circ, addend[i], acc[i], previous(i), carries[i]);
         } else {
@@ -319,9 +274,6 @@ pub(crate) fn ripple_add_proved(
     }
 
     for i in (0..owned).rev() {
-        if i < k {
-            dsq_apply(circ, acc[i], addend[i], carries[i]);
-        }
         if deferred.as_ref().is_some_and(|(at, _)| *at == i) {
             let (_, phase) = deferred.take().unwrap();
             // At this point `carries[i]` is still the arithmetic carry. The
@@ -340,67 +292,6 @@ pub(crate) fn ripple_add_proved(
 }
 
 thread_local! { static HEO_SPLIT_GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
-
-// ---- defer (spooky-leapfrog-v1, SL_DEFER_SQ): the square's split cross-subtract boundaries, phase deferred ----
-pub(crate) fn sl_defer_sq() -> u8 {
-    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("SL_DEFER_SQ").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
-}
-thread_local! {
-    /// a forward subtract whose split boundaries keep their bits (set by the square around its cross subtracts)
-    static DSQ_KEEP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// kept bits: (acc wire, addend wire) of the position below the boundary -> bit
-    static DSQ_BITS: std::cell::RefCell<Vec<(u64, u64, BitId)>> = const { std::cell::RefCell::new(Vec::new()) };
-    static DSQ_COUNT: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
-}
-pub(crate) fn dsq_keep_scope<R>(on: bool, body: impl FnOnce() -> R) -> R {
-    let old = DSQ_KEEP.with(|k| k.replace(on && sl_defer_sq() != 0));
-    let r = body();
-    DSQ_KEEP.with(|k| k.set(old));
-    r
-}
-/// Forward: measure the boundary carry `b` (the carry out of position (a, v)) and keep its bit. true = kept.
-fn dsq_keep(circ: &mut Builder, b: QubitId, a: QubitId, v: QubitId) -> bool {
-    if !DSQ_KEEP.with(|k| k.get()) {
-        return false;
-    }
-    let m = circ.alloc_bit();
-    circ.hmr(b, m);
-    DSQ_BITS.with(|s| {
-        let mut s = s.borrow_mut();
-        assert!(!s.iter().any(|e| e.0 == a.0 && e.1 == v.0), "defer DSQ: two bits for one position");
-        s.push((a.0, v.0, m));
-    });
-    DSQ_COUNT.with(|c| c.set((c.get().0 + 1, c.get().1)));
-    true
-}
-/// Inverse: `t` holds the arithmetic carry out of position (a, v); a kept bit for that position goes on as a Z.
-fn dsq_apply(circ: &mut Builder, a: QubitId, v: QubitId, t: QubitId) {
-    if sl_defer_sq() == 0 || DSQ_KEEP.with(|k| k.get()) {
-        return;
-    }
-    let hit = DSQ_BITS.with(|s| {
-        let mut s = s.borrow_mut();
-        s.iter().position(|e| e.0 == a.0 && e.1 == v.0).map(|i| s.remove(i).2)
-    });
-    if let Some(m) = hit {
-        if sl_defer_sq() != 9 {
-            circ.z_if(t, m);
-        }
-        circ.free_bit(m);
-        DSQ_COUNT.with(|c| c.set((c.get().0, c.get().1 + 1)));
-    }
-}
-/// End of the square: every kept bit was applied once.
-pub(crate) fn dsq_check() {
-    if sl_defer_sq() == 0 {
-        return;
-    }
-    assert!(DSQ_BITS.with(|s| s.borrow().is_empty()), "defer DSQ: kept bits never applied");
-    let (k, a) = DSQ_COUNT.with(|c| c.get());
-    assert_eq!(k, a, "defer DSQ: kept and applied differ");
-    eprintln!("DEFER_SQ kept={k} applied={a}");
-}
 
 /// B3b: the chunked form of [`ripple_add_proved`] (see its HEO block). Returns false
 /// (nothing emitted) when no layout with every chunk inside the addend exists.
@@ -481,9 +372,7 @@ fn heo_split_ripple(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], car
         if win > 0 {
             // erase the boundary this chunk just consumed (the previous chunk's carry-out)
             if let Some((b, plo, phi, pcin)) = kept.pop() {
-                if dsq_keep(circ, b, acc[phi - 1], addend[phi - 1]) {
-                    // defer DSQ: the inverse's ripple forms this carry again
-                } else if plo == 0 && phi - plo <= win {
+                if plo == 0 && phi - plo <= win {
                     erase_with_compare(circ, b, &acc[plo..phi], &addend[plo..phi], pcin);
                 } else {
                     let kw = win.min(phi - plo);
@@ -494,7 +383,6 @@ fn heo_split_ripple(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], car
         }
         if !last {
             let b = out.unwrap();
-            dsq_apply(circ, acc[hi - 1], addend[hi - 1], b);
             if let Some((i, m)) = deferred {
                 if i == hi - 1 {
                     circ.z_if(b, m);
@@ -509,9 +397,7 @@ fn heo_split_ripple(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], car
     assert!(deferred.is_none(), "split ripple: deferred phase not placed");
     assert!(win == 0 || kept.is_empty());
     for (b, lo, hi, cin_j) in kept.into_iter().rev() {
-        if !dsq_keep(circ, b, acc[hi - 1], addend[hi - 1]) {
-            erase_with_compare(circ, b, &acc[lo..hi], &addend[lo..hi], cin_j);
-        }
+        erase_with_compare(circ, b, &acc[lo..hi], &addend[lo..hi], cin_j);
         circ.free(b);
     }
     HEO_SPLIT_GUARD.with(|g| g.set(false));
@@ -726,7 +612,6 @@ pub fn ripple_add_lent_with_deferred_phase(
     }
     unwind_carry_step_lent(circ, addend[owned], acc[owned], previous(owned), lent);
     for i in (0..owned).rev() {
-        dsq_apply(circ, acc[i], addend[i], carries[i]);
         if deferred.as_ref().is_some_and(|(at, _)| *at == i) {
             let (_, phase) = deferred.take().unwrap();
             circ.z_if(carries[i], phase);
@@ -930,6 +815,14 @@ pub(crate) fn heo_fitted_vented_add(circ: &mut Builder, value: &[QubitId], acc: 
     // head path fits: plain (width <= room), or two chunks each within the room left after `mid`
     if room >= width || width + 1 <= 2 * room.saturating_sub(1) {
         return None;
+    }
+    if super::lowroom::enabled() && room == 1 && super::width_composition::plan(width, room).is_none() {
+        // SQ_LOWROOM: ancilla-free TTK add with the carry-out wire as its top (2w - 1 CCX, room 1),
+        // the same cost class as the slow in-place plan, which needs room 2.
+        let out = circ.alloc_qubit();
+        super::lowroom::ttk_add_cout(circ, value, acc, out);
+        eprintln!("SQ_LOWROOM_TTK w={width} room={room}");
+        return Some(out);
     }
     let plan = (room..=width.max(room)).find_map(|r| super::width_composition::plan(width, r))?;
     Some(super::width_composition::add(circ, value, acc, &plan))
@@ -1168,11 +1061,7 @@ pub fn mod_sub_vented(circ: &mut Builder, x: &[QubitId], y: &[QubitId]) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Carry0 { Full, IsAddend0, Zero, Known(QubitId) }
 #[derive(Clone, Copy, PartialEq, Eq)]
-/// `SquareLeaf` (y9-span): the add is the correction a square leaf's inverse starts with, `acc` holds x^2 - 2 and
-/// the addend's low bits are x (with `Carry0::IsAddend0`). Then the Toffoli products of positions 1 and 2 are affine
-/// in live wires: p1 = NOT acc[2] and p2 = NOT (addend[2] ^ addend[1] ^ acc[3]) on the folded operands (integer model
-/// `sq_leaf_model.py`: every x up to 10 bits; both read bits 0..3 only). Two CX chains replace two Toffoli.
-pub enum Carry1 { Full, CopiesCarry0, SquareLeaf }
+pub enum Carry1 { Full, CopiesCarry0 }
 /// Wrapped wide add on a subspace with a proved affine output word. This is
 /// NOT an unrestricted adder: incorrect output expressions violate its ABI.
 pub(crate) fn add_wide_known_output(circ:&mut Builder, value:&[QubitId], acc:&[QubitId], output:&[(bool,Vec<QubitId>)],borrowed:Option<&[QubitId]>) {
