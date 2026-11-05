@@ -490,53 +490,26 @@ pub(super) fn t3p1_maj_on() -> bool {
     *V.get_or_init(|| !a2_dense() && !a2_code() && (T3P1_MAJ_BAKED || std::env::var("T3P1_MAJ").is_ok_and(|v| v == "1")))
 }
 thread_local! {
-    /// The pack's measurement bit while the pack is out (laneT: a stack of (tick, lo, hi, bit)).
-    static T3P1_PACK: std::cell::RefCell<Vec<(T3Pack, crate::circuit::BitId)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The pack's measurement bit while the pack is out.
+    static T3P1_PACK: std::cell::RefCell<Option<crate::circuit::BitId>> = const { std::cell::RefCell::new(None) };
 }
-/// laneT: LFT_PACK = "tick:lo-hi,..." majority packs of closed record triples lo..hi (x* = f0 of triple hi - 1). Without it, the baked T3P1 entry where that is on.
-#[derive(Clone, Copy)]
-struct T3Pack { t: usize, lo: usize, hi: usize, c1: usize, c2: usize, thr: usize, xf1: bool }
-fn t3p1_list() -> Vec<T3Pack> {
-    if let Ok(v) = std::env::var("LFT_PACK") {
-        return v.split(',').filter(|x| !x.is_empty()).map(|r| {
-            let (r, xf1) = match r.strip_suffix("+1") { Some(x) => (x, true), None => (r, false) };
-            let (r, thr) = match r.split_once('@') { Some((x, y)) => (x, y.parse().unwrap()), None => (r, 0) };
-            let mut it = r.split(':');
-            let t: usize = it.next().unwrap().parse().unwrap();
-            let (a, b) = it.next().unwrap().split_once('-').unwrap();
-            let (c1, c2) = match it.next() { Some(cr) => { let (x, y) = cr.split_once('-').unwrap(); (x.parse().unwrap(), y.parse::<usize>().unwrap() + 1) } None => (0, 0) };
-            T3Pack { t, lo: a.parse().unwrap(), hi: b.parse().unwrap(), c1, c2, thr, xf1 }
-        }).collect();
-    }
-    if t3p1_maj_on() { vec![T3Pack { t: T3P1_MAJ_TICK, lo: 0, hi: T3P1_MAJ_TIDS, c1: 0, c2: 0, thr: 0, xf1: false }] } else { Vec::new() }
-}
-/// z: both field wires of triples lo .. hi - 1, the k2 cells of ticks c1 .. c2 - 1, and (xf1) f1 of triple hi - 1.
-fn t3p1_maj_z(p: T3Pack) -> Vec<QubitId> {
-    let mut z = A2_REC.with(|r| {
+/// z: both field wires of triples 0 .. T3P1_MAJ_TIDS - 1.
+fn t3p1_maj_z() -> Vec<QubitId> {
+    A2_REC.with(|r| {
         let r = r.borrow();
-        let mut z = Vec::with_capacity(2 * (p.hi - p.lo));
-        for id in p.lo..p.hi - 1 {
+        let mut z = Vec::with_capacity(2 * T3P1_MAJ_TIDS);
+        for id in 0..T3P1_MAJ_TIDS - 1 {
             let f = r.get(&id).unwrap_or_else(|| panic!("t3p1: triple {id} has no field at the pack"));
             for (s, q) in f.iter().enumerate() {
                 z.push(q.unwrap_or_else(|| panic!("t3p1: triple {id} slot {s} is empty at the pack")));
             }
         }
-        if p.xf1 { z.push(r.get(&(p.hi - 1)).and_then(|f| f[1]).expect("t3p1: f1 of the last triple")); }
         z
-    });
-    for t in p.c1..p.c2 { z.push(a2_cell(t).unwrap_or_else(|| panic!("t3p1: tick {t} has no k2 cell"))); }
-    z
+    })
 }
-pub(super) fn t3p1_pack_tick(c: &mut Builder, t: usize) {
-    for p in t3p1_list() { if p.t == t { t3p1_pack(c, p); } }
-}
-pub(super) fn t3p1_unpack_tick(c: &mut Builder, t: usize) {
-    let top = T3P1_PACK.with(|s| s.borrow().iter().rev().take_while(|e| e.0.t == t).count());
-    for _ in 0..top { t3p1_unpack(c); }
-}
-fn t3p1_pack(c: &mut Builder, p: T3Pack) {
-    let z = t3p1_maj_z(p);
-    let last = p.hi - 1;
+pub(super) fn t3p1_pack(c: &mut Builder) {
+    let z = t3p1_maj_z();
+    let last = T3P1_MAJ_TIDS - 1;
     let xs = A2_REC.with(|r| r.borrow().get(&last).and_then(|f| f[0])).expect("t3p1: x* (f0 of the last packed triple)");
     for &q in &z {
         c.cx(xs, q);
@@ -545,24 +518,27 @@ fn t3p1_pack(c: &mut Builder, p: T3Pack) {
     c.hmr(xs, m);
     c.release_clean(xs);
     A2_REC.with(|r| r.borrow_mut().get_mut(&last).unwrap()[0] = None);
-    T3P1_PACK.with(|s| s.borrow_mut().push((p, m)));
+    T3P1_PACK.with(|p| {
+        assert!(p.borrow().is_none(), "t3p1: pack while a pack is out");
+        *p.borrow_mut() = Some(m);
+    });
     if std::env::var("ROOM_TRACE").is_ok_and(|v| v == "1") {
         eprintln!("T3P1_PACK out n={} active={}", z.len() + 1, c.active_qubits());
     }
 }
-fn t3p1_unpack(c: &mut Builder) {
-    let (p, m) = T3P1_PACK.with(|s| s.borrow_mut().pop()).expect("t3p1: unpack without a pack");
-    let z = t3p1_maj_z(p);
+pub(super) fn t3p1_unpack(c: &mut Builder) {
+    let m = T3P1_PACK.with(|p| p.borrow_mut().take()).expect("t3p1: unpack without a pack");
+    let z = t3p1_maj_z();
     let a0 = c.active_qubits();
     let e0 = c.expected_total();
     let xs = c.alloc_qubit();
-    let peak = t3p1_threshold_top(c, &z, xs, p.thr);
+    let peak = t3p1_threshold_top(c, &z, xs);
     c.z_if(xs, m);
     c.free_bit(m);
     for &q in &z {
         c.cx(xs, q);
     }
-    let last = p.hi - 1;
+    let last = T3P1_MAJ_TIDS - 1;
     A2_REC.with(|r| r.borrow_mut().get_mut(&last).unwrap()[0] = Some(xs));
     if std::env::var("ROOM_TRACE").is_ok_and(|v| v == "1") {
         eprintln!("T3P1_PACK in n={} active={a0} peak={peak} cost={:.1}", z.len() + 1, c.expected_total() - e0);
@@ -571,15 +547,13 @@ fn t3p1_unpack(c: &mut Builder) {
 /// out ^= [wt(z) >= 2^k] with 2^k <= len(z) < 2^(k+1): carry-save reduction of the columns below k (full adders,
 /// a half adder's carry when two bits are left; residual column bits are never needed), the column-k bit copied
 /// out, every AND measured away. Returns the peak live count.
-fn t3p1_threshold_top(c: &mut Builder, z: &[QubitId], out: QubitId, thr: usize) -> u32 {
+fn t3p1_threshold_top(c: &mut Builder, z: &[QubitId], out: QubitId) -> u32 {
     let n = z.len();
     let k = (usize::BITS - 1 - n.leading_zeros()) as usize;
     assert!(n >= 2 && (1usize << k) <= n && n < (1usize << (k + 1)));
     enum St { Fa(QubitId, QubitId, QubitId, QubitId), Ha(QubitId, QubitId, QubitId) }
     let mut steps: Vec<St> = Vec::new();
     let mut col: Vec<QubitId> = z.to_vec();
-    // laneT: thr != 0: residual column bits, as forms, for the comparison [wt >= thr]
-    let mut res: Vec<Lin> = Vec::new();
     for _w in 0..k {
         let mut next = Vec::new();
         while col.len() >= 3 {
@@ -602,11 +576,6 @@ fn t3p1_threshold_top(c: &mut Builder, z: &[QubitId], out: QubitId, thr: usize) 
             let carry = and_new(c, a, b);
             steps.push(St::Ha(a, b, carry));
             next.push(carry);
-            res.push(Lin::of(&[a, b]));
-        } else if col.len() == 1 {
-            res.push(Lin::of(&[col[0]]));
-        } else {
-            res.push(Lin::k(false));
         }
         col = next;
     }
@@ -614,24 +583,7 @@ fn t3p1_threshold_top(c: &mut Builder, z: &[QubitId], out: QubitId, thr: usize) 
     if let Some(&b) = col.first() {
         c.cx(b, out);
     }
-    // laneT: out ^= [wt mod 2^k >= thr] for thr in (2^(k-1), 2^k), which excludes wt >= 2^k when n < 2^k + 2^(k-1)
-    let mut recs: Vec<(QubitId, Lin, Lin)> = Vec::new();
-    if thr != 0 && thr != (1 << k) {
-        assert!(thr > (1 << (k - 1)) && thr < (1 << k) && n < (1 << k) + (1 << (k - 1)), "t3p1: threshold {thr} for n = {n}");
-        let j = thr.trailing_zeros() as usize;
-        let mut ge = res[j].clone(); // [wt mod 2^(j + 1) >= thr mod 2^(j + 1)]
-        for i in j + 1..k {
-            let (a, b) = if thr >> i & 1 == 1 { (res[i].clone(), ge.clone()) } else { (res[i].x(&Lin::k(true)), ge.x(&Lin::k(true))) };
-            let q = lin_and(c, &a, &b);
-            ge = if thr >> i & 1 == 1 { l_of(q) } else { l_of(q).x(&Lin::k(true)) };
-            recs.push((q, a, b));
-        }
-        lin_xor_into(c, &ge, out);
-    }
     let peak = c.active_qubits();
-    while let Some((q, a, b)) = recs.pop() {
-        lin_and_erase(c, q, &a, &b);
-    }
     for s in steps.into_iter().rev() {
         match s {
             St::Fa(a, b, cc, carry) => {
@@ -647,7 +599,6 @@ fn t3p1_threshold_top(c: &mut Builder, z: &[QubitId], out: QubitId, thr: usize) 
     }
     peak
 }
-fn l_of(q: QubitId) -> Lin { Lin::of(&[q]) }
 pub(super) fn a2_rec_empty() -> bool { A2_REC.with(|r| r.borrow().is_empty()) }
 /// round17 v4: R1 on A ticks (LFA2_R1, default on): the 8-way barrel has an R1 plan at width w no dearer than its plain one.
 fn a2_r1_ok(w: usize) -> bool {

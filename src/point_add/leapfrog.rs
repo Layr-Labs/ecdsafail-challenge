@@ -570,6 +570,7 @@ thread_local! {
 include!("strip_barrel.rs");
 include!("strip_small.rs");
 include!("a2_rails.rs");
+include!("wl_codec.rs");
 
 fn r1_on() -> bool {
     !std::env::var("LF_R1").is_ok_and(|v| v == "0")
@@ -4106,6 +4107,7 @@ fn tail_forced(t: usize) -> usize {
 
 /// Forward tick t; when `pay` is given, the division payload is updated alongside.
 fn fwd_tick(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut [Vec<QubitId>; 2]>) {
+    wl_codec_fwd(c, t, pay.is_some());
     super::pingpong::qcap_tick(c, t);
     if lf_fast() {
         return fwd_tick_fast(c, wk, t, pay);
@@ -4839,6 +4841,7 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
 
 /// Exact inverse of [`fwd_tick`]; with `pay`, applies the multiply-direction payload cells first.
 fn rev_tick(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut [Vec<QubitId>; 2]>) {
+    wl_codec_rev(c, t, pay.is_some());
     super::pingpong::qcap_tick(c, t);
     if lf_fast() {
         return rev_tick_fast(c, wk, t, pay);
@@ -6911,6 +6914,7 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
     // N2 (SL_N2): the fused ticks end at the batch, which runs the rest (needs LF_DIV_PHROT's endpoint)
     let n2d = dphrot && n2_div();
     let fused_end = if n2d { n2_from(false) } else { rounds() };
+    wl_codec_pack_upto(c, ahead);
     for t in ahead..fused_end {
         if dphrot && t + 1 == rounds() {
             SKIP_PAY_ROT_AT.with(|s| s.set(t));
@@ -6919,7 +6923,7 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
         Y28_KEEP.with(|d| d.set(true));
         Y42_FWD_NEXT.with(|x| x.set(t + 1 < fused_end || (n2d && std::env::var("LFQ_Y42LAST").is_ok_and(|v| v == "1"))));
         fwd_tick(c, &mut wk, t, Some(&mut pay));
-        t3p1_pack_tick(c, t);
+        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_pack(c); }
         Y42_FWD_NEXT.with(|x| x.set(false));
         Y28_KEEP.with(|d| d.set(false));
         SKIP_PAY_ROT_AT.with(|s| s.set(usize::MAX));
@@ -6997,7 +7001,7 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
             pacc(c, "rt0.div", q0);
             continue;
         }
-        t3p1_unpack_tick(c, t);
+        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_unpack(c); }
         Y28_USE.with(|d| d.set(true));
         rev_tick(c, &mut wk, t, None);
         Y28_USE.with(|d| d.set(false));
@@ -7056,7 +7060,7 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
     let mut t0_bits = None;
     for t in 0..rounds() {
         fwd_tick(c, &mut wk, t, None);
-        t3p1_pack_tick(c, t);
+        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_pack(c); }
         if t0f && t == 0 {
             t0_bits = Some(t0_out(c, &wk));
         }
@@ -7111,9 +7115,11 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
         rounds()
     };
     for t in (ahead..fused_top).rev() {
-        t3p1_unpack_tick(c, t);
+        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_unpack(c); }
         rev_tick(c, &mut wk, t, Some(&mut pay));
     }
+    wl_codec_unpack_rest(c);
+    wl_codec_assert_empty("multiply after revF");
     if loan {
         parity_tape_in(c, &mut wk, ahead, loan_pad.take());
         loan_pad = parity_rail_out(c, &wk, ahead);

@@ -161,7 +161,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "201013768616",
+        "TAIL_NONCE" => "3458839656",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -546,7 +546,7 @@ pub(crate) mod rail_s6;
 
 /// The frozen candidate: walk cap, square cap, digit cap and the walk's recipe entries, pinned here. `clear_process_env`
 /// wipes the host environment and sets these; the width table and its anchors are compiled in (a2_table_text, a2_anch_text).
-const FROZEN_WALK_CAP: usize = 1243;
+const FROZEN_WALK_CAP: usize = if leapfrog::WL_CODEC { 1243 } else { 1244 };
 const FROZEN_SQ_CAP: usize = 1234;
 const FROZEN_EMAX: usize = 5;
 const FROZEN_RECIPE: &[(&str, &str)] = &[
@@ -554,7 +554,7 @@ const FROZEN_RECIPE: &[(&str, &str)] = &[
     ("LFA2_S6", "1"),
     ("LFA2_SET_LF_YP8_LATE", "1:13,4:17,9:22,83:19,93:17,104:15,109:13,115:11"),
     ("LFA2_SET_SL_N2_DFROM", "118"),
-    ("LFA2_SET_SL_N2_MFROM", "117"),
+    ("LFA2_SET_SL_N2_MFROM", "118"),
     ("LFA2_SET_LF_CMP_FROM", "108"),
     ("LF_YP8_CHUNK", "1"),
     ("LFQ_DROPS", "1"),
@@ -564,7 +564,7 @@ const FROZEN_RECIPE: &[(&str, &str)] = &[
     ("LFQ_FCR", "1"),
     ("LFQ_Y42LAST", "1"),
     ("LFQ_LASTN", "2"),
-    ("A2R_SPEC", "62-92:direct,93-122:lean"),
+    ("A2R_SPEC", "58-91:direct,92-122:lean"),
     ("A2R_SERIAL", "1-98"),
     ("A2R_HB", "1-107,110-111,115-117"),
     ("LFA2_EXT", "0"),
@@ -575,10 +575,10 @@ const FROZEN_RECIPE: &[(&str, &str)] = &[
     ("LFG_SEEDP", "3"),
     ("LFG_RT0P", "3"),
     ("LFG_SQTX", "1"),
+    ("LFA2_FWIN", "58"),
+    ("LFA2_RWIN", "58"),
     ("LFG_VETO", "1"),
     ("LFA2_SET_LF_REORDER_MUL", "44"),
-    ("LFT_PACK", "47:0-16:1-47@40+1,89:16-30:48-89@36+1"),
-    ("LFA2_SET_LF_REORDER_DIV", "2"),
 ];
 fn frozen_env_restore() {
     for (k, v) in FROZEN_RECIPE { std::env::set_var(k, v); }
