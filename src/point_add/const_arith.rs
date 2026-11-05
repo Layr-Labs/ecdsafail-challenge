@@ -145,6 +145,75 @@ fn carry_ladder(
         for i in 0..n {match kctrl(i){Addend::Zero=>bits.push(false),Addend::One=>{valid=false;bits.push(true);},Addend::Wire(q)=>{if source.is_some_and(|s|s!=q){valid=false;}source=Some(q);bits.push(true);}}}
         if valid && source.is_some() && super::constant_templates::try_ladder(circ,acc,source.unwrap(),&bits,dead,host,room){return;}
     }
+    if super::lowroom::enabled() && last + 1 - dead - usize::from(host.is_some()) > room {
+        // SQ_LOWROOM: the same add (positions dead..=last+1 wrapped, addend bits XORed elsewhere) as an
+        // exact chunked window at the current room. Only for addends that are wires or zero.
+        let hi = (last + 2).min(n);
+        let rows: Option<Vec<Vec<QubitId>>> = (dead..hi).map(|i| match kctrl(i) {
+            Addend::Zero => Some(Vec::new()),
+            Addend::Wire(q) => Some(vec![q]),
+            Addend::One => None,
+        }).collect();
+        if let Some(rows) = rows {
+            if !rows.iter().flatten().any(|q| acc.contains(q)) {
+                let xor_only = |circ: &mut Builder, i: usize| match kctrl(i) {
+                    Addend::Zero => {}
+                    Addend::One => circ.x(acc[i]),
+                    Addend::Wire(kq) => circ.cx(kq, acc[i]),
+                };
+                let base = circ.active_qubits();
+                // A host wire is clean (|0>) for the whole ladder: hand it to the pool as room, take it back after.
+                if let Some(h) = host {
+                    circ.release_clean(h);
+                }
+                let done = super::lowroom::try_ladder(circ, &acc[dead..hi], &rows);
+                if let Some(h) = host {
+                    circ.reacquire(h);
+                }
+                if done {
+                    for i in (0..dead).chain(hi..n) {
+                        xor_only(circ, i);
+                    }
+                    assert_eq!(circ.active_qubits(), base);
+                    return;
+                }
+            }
+        }
+    }
+    // FWSK2_CONST_DIRTY: a ladder that does not fit the room, outside any other low-room path, as a sum of
+    // dirty-ancilla increments (Gidney's x - g - ~g with TTK subtractions) on borrowed idle wires from the lowroom
+    // pool: acc += k (or k * e for one control wire e), mod 2^n, exact, zero clean wires. Uses the complement form
+    // acc + k = ~(~acc - k) when -k has fewer set bits.
+    if std::env::var_os("FWSK2_CONST_DIRTY").is_some() && last + 1 - dead - usize::from(host.is_some()) > room && last + 2 == n && n <= 64 {
+        let mut ctrl: Option<QubitId> = None;
+        let mut ok = true;
+        let mut k: u64 = 0;
+        for i in 0..n {
+            match kctrl(i) {
+                Addend::Zero => {}
+                Addend::One => { if ctrl.is_some() { ok = false; } k |= 1u64 << i; }
+                Addend::Wire(q) => { if ctrl.is_some_and(|c0| c0 != q) || (k != 0 && ctrl.is_none()) { ok = false; } ctrl = Some(q); k |= 1u64 << i; }
+            }
+        }
+        let mask = if n == 64 { u64::MAX } else { (1u64 << n) - 1 };
+        let pool: Vec<QubitId> = super::lowroom::pool_snapshot().into_iter()
+            .filter(|q| !acc.contains(q) && Some(*q) != ctrl && Some(*q) != host).collect();
+        if ok && pool.len() >= n + 1 {
+            let neg = k.wrapping_neg() & mask;
+            let comp = neg.count_ones() < k.count_ones();
+            let kk = if comp { neg } else { k };
+            if comp { circ.x_all(acc); }
+            for i in 0..n {
+                if kk >> i & 1 == 0 { continue; }
+                match ctrl {
+                    Some(e) => super::lowroom::cinc_dirty(circ, e, &acc[i..], &pool[..n - i + 1]),
+                    None => super::lowroom::inc_dirty(circ, &acc[i..], &pool[..n - i]),
+                }
+            }
+            if comp { circ.x_all(acc); }
+            return;
+        }
+    }
     let owned = circ.alloc_qubits(last + 1 - dead - usize::from(host.is_some()));
     let mut carries = owned.clone();
     carries.extend(host);
