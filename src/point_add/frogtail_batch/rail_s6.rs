@@ -24,7 +24,7 @@
 // so Clifford), inverse writes it with one AND k1 (k2 + k3).
 // Toffoli: forward 7M-3, 7M-2, 7M, 7M+2; inverse 7M-2, 7M-1, 7M+1, 7M+3 for r = 0, 1, 2, 3 (w >= 7).
 // ======================================================================================================================
-use super::builder::Builder;
+use super::builder::{B as Builder};
 use crate::circuit::QubitId;
 
 /// Recorded op, flushed to the Builder after CNOT cancellation (slots name classical bits).
@@ -82,10 +82,10 @@ impl Buf {
                 AOp::Cx(a, b) => c.cx(a, b),
                 AOp::Ccx(a, b, t) => c.ccx(a, b, t),
                 AOp::X(q) => c.x(q),
-                AOp::Hmr(q, m) => { let b = c.alloc_bit(); bits[m] = Some(b); c.hmr(q, b); }
-                AOp::CzIf(a, b, m) => c.cz_if(a, b, bits[m].unwrap()),
+                AOp::Hmr(q, m) => { let b = c.fresh_bits(1)[0]; bits[m] = Some(b); c.hmr_to(q, b); }
+                AOp::CzIf(a, b, m) => c.cz_if_lowq(a, b, bits[m].unwrap()),
                 AOp::ZIf(a, m) => c.z_if(a, bits[m].unwrap()),
-                AOp::Free(m) => c.free_bit(bits[m].unwrap()),
+                AOp::Free(_) => {},
             }
         }
     }
@@ -462,32 +462,7 @@ pub fn rail_s6_barrel_g(b0: &mut Builder, k: [QubitId; 3], t: &[QubitId], l: Opt
         emit_block(c, k, &lq, FORMS[b], gs, rr);
     };
     for &(a, b) in &pl.conv { c.cx(q[a], q[b]); }
-    let kl_keep = RS6_KEEP_KL.with(|x| x.get());
-    let tau = if !inverse && kl_keep != usize::MAX { (w - 1).saturating_sub(kl_keep) } else { 0 };
-    if tau > 0 {
-        let kp = keep_plan_cached(w, tau, l.is_some());
-        for b in 0..7 {
-            fill(c, b);
-            if b == B_F { f0(c); }
-            block(c, b, &kp.kept[b]);
-            for f in kp.frees.iter().filter(|f| f.block == b) { emit_keep_free(c, k, &lq, s, l, FORMS[b], f); }
-        }
-        fill(c, B_END);
-        if let Some(lane) = pl.w0 {
-            let a = lq[lane].unwrap();
-            c.x(a);
-            let m = c.alloc_bit();
-            c.hmr(a, m);
-            c.z_if(k[0], m);
-            c.z_if(k[1], m);
-            c.z_if(k[2], m);
-            c.cx(k[2], k[1]);
-            c.cz_if(k[0], k[1], m);
-            c.cx(k[2], k[1]);
-            c.free_bit(m);
-            c.x(a);
-        }
-    } else if !inverse {
+    if !inverse {
         for b in 0..7 {
             fill(c, b);
             if b == B_F { f0(c); }
@@ -550,258 +525,11 @@ pub fn rail_s6_barrel_g(b0: &mut Builder, k: [QubitId; 3], t: &[QubitId], l: Opt
     if drop0 && !inverse { c.x(t[0]); }
     buf.flush(b0);
     if drop0 && !inverse {
-        b0.release_clean(t[0]);
+        panic!("drop0 unused");
         return true;
     }
     false
 }
 pub fn rail_s6_barrel(c: &mut Builder, k: [QubitId; 3], t: &[QubitId], inverse: bool, drop0: bool) -> bool {
     rail_s6_barrel_g(c, k, t, None, inverse, drop0)
-}
-
-// ======================================================================================================================
-// laneG: DROP_KEEP on the S6 word. The caller cuts the output's top wires at the next tick, so t[w-1-tau ..= w-2] = S on
-// every shot that fits; as covectors on the lanes these are known output functionals, and together with whatever else
-// the promise fixes, each block's forward gates that a known functional separates are MBU-free. Everything is derived
-// from the plan by linear algebra at the first call: run the word symbolically for each letter, solve for the covectors
-// whose value carries no data and is affine in (1, k1, k2, k3, S, L), then rank them against the block's targets.
-// ======================================================================================================================
-thread_local! {
-    /// The caller's retained length after the barrel (index into the rail once wire 0 is gone), usize::MAX = off.
-    pub static RS6_KEEP_KL: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
-}
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-struct Vb([u64; 5]);
-impl Vb {
-    fn x(&mut self, o: &Vb) { for i in 0..5 { self.0[i] ^= o.0[i]; } }
-    fn flip(&mut self, i: usize) { self.0[i / 64] ^= 1 << (i % 64); }
-    fn get(&self, i: usize) -> bool { self.0[i / 64] >> (i % 64) & 1 == 1 }
-}
-#[derive(Clone, Debug)]
-struct KeepFree { block: usize, gate: RsGate, psi: Vec<usize>, c0: bool, ck: [bool; 3], cs: bool, cl: bool }
-#[derive(Clone, Debug)]
-struct KeepPlan { kept: Vec<Vec<RsGate>>, frees: Vec<KeepFree> }
-impl RailS6Plan {
-    fn fill_vb(&self, st: &mut [Vb], b: usize, e: usize, vs: usize, vl: usize, vo: usize, r1: bool) {
-        for &(_, f, lane) in self.fills.iter().filter(|x| x.0 == b) {
-            let j = self.lane_wire[lane].unwrap();
-            match f {
-                F_S => st[j].flip(vs),
-                F_ONE => st[j].flip(vo),
-                F_K1 => if e & 1 == 1 { st[j].flip(vo) },
-                F_K2 => if e >> 1 & 1 == 1 { st[j].flip(vo) },
-                _ => if e >> 2 & 1 == 1 { st[j].flip(vo) },
-            }
-        }
-        if r1 { for &(_, _, lane) in self.l_fills.iter().filter(|x| x.0 == b) { st[self.lane_wire[lane].unwrap()].flip(vl); } }
-    }
-    fn gates_vb(&self, st: &mut [Vb], gs: &[RsGate], b: usize, e: usize, vs: usize, vl: usize, r1: bool) {
-        if (FORMS[b] as usize & e).count_ones() % 2 == 0 { return; }
-        let mut add: Vec<(usize, Vb)> = Vec::new();
-        for g in gs {
-            let mut p = Vb::default();
-            for &a in &g.phi { p.x(&st[self.lane_wire[a].unwrap()]); }
-            if b == B_F {
-                if let Some(f) = self.f_reads.iter().find(|f| g.u.contains(&f.0)) {
-                    if f.1 { p.flip(vs); }
-                    if f.2 && r1 { p.flip(vl); }
-                }
-            }
-            for &a in &g.u { add.push((self.lane_wire[a].unwrap(), p)); }
-        }
-        for (j, p) in add { st[j].x(&p); }
-    }
-    /// The plan for `tau` known top output wires; `r1` = the word also runs the L fills.
-    fn keep_plan(&self, tau: usize, r1: bool) -> KeepPlan {
-        let nj = self.w - 1;
-        let (vs, vl, vo) = (nj, nj + 1, nj + 2);
-        // the state for each letter, after the conversion
-        let mut st: Vec<Vec<Vb>> = Vec::new();
-        for e in 0..6usize {
-            let mut q = vec![Vb::default(); nj];
-            for j in 0..nj {
-                let i = nj - 1 - j; // t wire
-                if e >= nj { continue; }
-                if i > e { if j + e < tau { q[j].flip(vs); } else { q[j].flip(j); } }
-                if i == e { q[j].flip(vo); }
-                if r1 && i >= 1 && i <= e { q[j].flip(vl); }
-            }
-            for &(a, b) in &self.conv { let qa = q[a]; q[b].x(&qa); }
-            st.push(q);
-        }
-        let mut kept: Vec<Vec<RsGate>> = self.blocks.clone();
-        for f in &self.free_fwd { kept[f.block].push(f.gate.clone()); }
-        // the F layer's slot 0 read
-        let f0 = self.f_reads.iter().find(|f| f.0 == ln(0, 3)).copied();
-        let mut frees = Vec::new();
-        for b in 0..7 {
-            let all = kept[b].clone();
-            for e in 0..6 {
-                self.fill_vb(&mut st[e], b, e, vs, vl, vo, r1);
-                if b == B_F && e & 1 == 1 {
-                    if let Some(f) = f0 {
-                        let j = self.lane_wire[f.0].unwrap();
-                        if f.1 { st[e][j].flip(vs); }
-                        if f.2 && r1 { st[e][j].flip(vl); }
-                    }
-                }
-                self.gates_vb(&mut st[e], &all, b, e, vs, vl, r1);
-            }
-            if b == B_F { continue; }
-            // covectors psi (columns = wires) with no data, S and L independent of the letter, constant affine in (k1, k2, k3)
-            let mut rows: Vec<Vec<u64>> = Vec::new();
-            let word = |r: &[Vb], f: &dyn Fn(&Vb) -> bool| -> Vec<u64> {
-                let mut v = vec![0u64; nj / 64 + 1];
-                for (j, x) in r.iter().enumerate() { if f(x) { v[j / 64] |= 1 << (j % 64); } }
-                v
-            };
-            for e in 0..6 {
-                for d in 0..nj { rows.push(word(&st[e], &|x: &Vb| x.get(d))); }
-                if e > 0 {
-                    rows.push(word(&st[e], &|x: &Vb| x.get(vs)).iter().zip(word(&st[0], &|x: &Vb| x.get(vs))).map(|(a, b)| a ^ b).collect());
-                    rows.push(word(&st[e], &|x: &Vb| x.get(vl)).iter().zip(word(&st[0], &|x: &Vb| x.get(vl))).map(|(a, b)| a ^ b).collect());
-                }
-            }
-            for set in [[0usize, 1, 2, 3], [0, 1, 4, 5]] {
-                let mut v = vec![0u64; nj / 64 + 1];
-                for &e in &set { let w = word(&st[e], &|x: &Vb| x.get(vo)); for i in 0..v.len() { v[i] ^= w[i]; } }
-                rows.push(v);
-            }
-            let basis = nullspace(&rows, nj);
-            // rank against the block's targets; each pivot gate gets a covector that vanishes on the other pivots' targets
-            let u_of: Vec<Vec<usize>> = all.iter().map(|g| g.u.iter().map(|&a| self.lane_wire[a].unwrap()).collect()).collect();
-            let dot = |psi: &[u64], u: &[usize]| -> bool { u.iter().filter(|&&j| psi[j / 64] >> (j % 64) & 1 == 1).count() % 2 == 1 };
-            let mut piv: Vec<(usize, Vec<u64>)> = Vec::new();
-            let mut pool = basis;
-            for (gi, u) in u_of.iter().enumerate() {
-                let Some(p) = pool.iter().position(|v| dot(v, u)) else { continue };
-                let v = pool.swap_remove(p);
-                for o in pool.iter_mut() { if dot(o, u) { for i in 0..o.len() { o[i] ^= v[i]; } } }
-                for (_, o) in piv.iter_mut() { if dot(o, u) { for i in 0..o.len() { o[i] ^= v[i]; } } }
-                piv.push((gi, v));
-            }
-            let mut is_free = vec![false; all.len()];
-            for (gi, v) in &piv {
-                is_free[*gi] = true;
-                let psi_w: Vec<usize> = (0..nj).filter(|j| v[j / 64] >> (j % 64) & 1 == 1).collect();
-                let val = |e: usize, var: usize| -> bool { psi_w.iter().filter(|&&j| st[e][j].get(var)).count() % 2 == 1 };
-                let c0 = val(0, vo);
-                let ck = [val(1, vo) ^ c0, val(2, vo) ^ c0, val(4, vo) ^ c0];
-                for e in 0..6 {
-                    debug_assert!(val(e, vo) == c0 ^ (e & 1 == 1 && ck[0]) ^ (e >> 1 & 1 == 1 && ck[1]) ^ (e >> 2 & 1 == 1 && ck[2]));
-                }
-                let lane_of = |j: usize| self.lane_wire.iter().position(|x| *x == Some(j)).unwrap();
-                frees.push(KeepFree { block: b, gate: all[*gi].clone(), psi: psi_w.iter().map(|&j| lane_of(j)).collect(), c0, ck, cs: val(0, vs), cl: val(0, vl) });
-            }
-            kept[b] = all.iter().zip(&is_free).filter(|(_, &f)| !f).map(|(g, _)| g.clone()).collect();
-        }
-        KeepPlan { kept, frees }
-    }
-}
-/// A basis of the covectors (n columns) annihilating every row.
-fn nullspace(rows: &[Vec<u64>], n: usize) -> Vec<Vec<u64>> {
-    let nw = n / 64 + 1;
-    let mut m: Vec<Vec<u64>> = Vec::new();
-    let mut pivc: Vec<usize> = Vec::new();
-    for r in rows {
-        let mut v = r.clone();
-        for (b, &c) in m.iter().zip(&pivc) { if v[c / 64] >> (c % 64) & 1 == 1 { for i in 0..nw { v[i] ^= b[i]; } } }
-        if let Some(c) = (0..n).find(|c| v[c / 64] >> (c % 64) & 1 == 1) {
-            for b in m.iter_mut() { if b[c / 64] >> (c % 64) & 1 == 1 { for i in 0..nw { b[i] ^= v[i]; } } }
-            m.push(v);
-            pivc.push(c);
-        }
-    }
-    let mut out = Vec::new();
-    for f in 0..n {
-        if pivc.contains(&f) { continue; }
-        let mut x = vec![0u64; nw];
-        x[f / 64] |= 1 << (f % 64);
-        for (b, &c) in m.iter().zip(&pivc) { if b[f / 64] >> (f % 64) & 1 == 1 { x[c / 64] |= 1 << (c % 64); } }
-        out.push(x);
-    }
-    out
-}
-fn keep_plan_cached(w: usize, tau: usize, r1: bool) -> std::rc::Rc<KeepPlan> {
-    thread_local! { static C: std::cell::RefCell<std::collections::HashMap<(usize, usize, bool), std::rc::Rc<KeepPlan>>> = std::cell::RefCell::new(std::collections::HashMap::new()); }
-    if let Some(p) = C.with(|c| c.borrow().get(&(w, tau, r1)).cloned()) { return p; }
-    let p = std::rc::Rc::new(rail_s6_plan(w).unwrap().keep_plan(tau, r1));
-    C.with(|c| c.borrow_mut().insert((w, tau, r1), p.clone()));
-    p
-}
-/// Forward Toffoli count with `tau` known top wires (harness and pricing).
-pub fn rail_s6_keep_cost(w: usize, tau: usize, r1: bool) -> usize {
-    let pl = rail_s6_plan(w).unwrap();
-    let kp = keep_plan_cached(w, tau, r1);
-    let g: usize = kp.kept.iter().map(|b| b.len()).sum();
-    let f0 = usize::from(pl.f_reads.iter().any(|f| f.0 == ln(0, 3) && (f.1 || f.2)));
-    g + f0
-}
-fn emit_keep_free(c: &mut Buf, k: [QubitId; 3], lq: &[Option<QubitId>], s: QubitId, l: Option<[QubitId; 2]>, mask: u8, f: &KeepFree) {
-    let mut known: Vec<QubitId> = Vec::new();
-    for i in 0..3 { if f.ck[i] { known.push(k[i]); } }
-    if f.cs { known.push(s); }
-    if f.cl { if let Some(ll) = l { known.extend(ll); } }
-    let fr = RsFree { block: f.block, gate: f.gate.clone(), psi: f.psi.clone(), value: f.c0 };
-    emit_free(c, k, lq, mask, &fr, &known);
-}
-
-// ======================================================================================================================
-// laneW: the true rotation on 4M wires. Rotation by e on 2^m wires is multiplication by (1+z)^e in F2[z]/z^(2^m), the
-// ring of the rail above with n = 2^m, so the same conversions and lanes apply with no promise: every gate, no fills, no
-// S. M = 64: G, E, D, C, B, A 64 each and F 63 = 447 Toffoli, about 5.6k CNOTs. Exact on e = 0 ..= 5, all data.
-// ======================================================================================================================
-struct RotS6 { conv: Vec<(usize, usize)>, lane_wire: Vec<Option<usize>>, blocks: Vec<Vec<RsGate>> }
-fn rot_s6_plan(n: usize) -> std::rc::Rc<RotS6> {
-    thread_local! { static C: std::cell::RefCell<std::collections::HashMap<usize, std::rc::Rc<RotS6>>> = std::cell::RefCell::new(std::collections::HashMap::new()); }
-    if let Some(p) = C.with(|c| c.borrow().get(&n).cloned()) { return p; }
-    assert!(n % 4 == 0 && n >= 8, "rot_s6: n = {n}");
-    let big_m = n / 4;
-    let mut conv = Vec::new();
-    let mut a = 1;
-    while a < n {
-        for j in 0..n { if j & a != 0 { conv.push((j, j - a)); } }
-        a *= 2;
-    }
-    let mut low = Vec::new();
-    radix_split(0, big_m, &mut low);
-    for k in 0..big_m {
-        let q = |i: usize| 4 * k + i;
-        low.extend([(q(3), q(0)), (q(1), q(3)), (q(2), q(3)), (q(0), q(1)), (q(0), q(2))]);
-    }
-    conv.extend(low.iter().copied());
-    let mut lane_wire = vec![None; 4 * (big_m + 1)];
-    for k in 0..big_m {
-        lane_wire[ln(k, 0)] = Some(4 * k + 3);
-        lane_wire[ln(k, 1)] = Some(4 * k + 1);
-        lane_wire[ln(k, 2)] = Some(4 * k + 2);
-        lane_wire[ln(k, 3)] = Some(4 * k);
-    }
-    let mut blocks: Vec<Vec<RsGate>> = vec![Vec::new(); 7];
-    for name in 0..7 {
-        for k in 0..big_m {
-            if name == B_F && k == 0 { continue; }
-            blocks[name].push(base_gate(name, k, big_m - 1));
-        }
-    }
-    let p = std::rc::Rc::new(RotS6 { conv, lane_wire, blocks });
-    C.with(|c| c.borrow_mut().insert(n, p.clone()));
-    p
-}
-/// t rotated down by e = k1 + 2 k2 + 4 k3 <= 5 (wire i -> wire i - e mod n), inverse back; no ancilla, 447 Toffoli at n = 256.
-pub fn rot_s6(b0: &mut Builder, k: [QubitId; 3], t: &[QubitId], inverse: bool) {
-    let n = t.len();
-    let pl = rot_s6_plan(n);
-    let mut buf = Buf::default();
-    let c = &mut buf;
-    let q: Vec<QubitId> = (0..n).map(|j| t[n - 1 - j]).collect();
-    let lq: Vec<Option<QubitId>> = pl.lane_wire.iter().map(|x| x.map(|j| q[j])).collect();
-    for &(a, b) in &pl.conv { c.cx(q[a], q[b]); }
-    if !inverse {
-        for b in 0..7 { emit_block(c, k, &lq, FORMS[b], &pl.blocks[b], &[]); }
-    } else {
-        for b in (0..7).rev() { emit_block(c, k, &lq, FORMS[b], &pl.blocks[b], &[]); }
-    }
-    for &(a, b) in pl.conv.iter().rev() { c.cx(q[a], q[b]); }
-    buf.flush(b0);
 }
