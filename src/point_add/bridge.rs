@@ -21,9 +21,7 @@ pub(crate) fn run(c:&mut Builder,a:&[QubitId],b:&[QubitId],cin:Option<QubitId>,c
         raw_run(c,&a[k..],&b[k..],Some(boundary),cout,0,consume);
         // Carry = borrow(completed low sum - original source - carry-in).
         // Exact full-k-bit phase repair; no approximate comparator is used.
-        // y33-c35b diagnostic (inert at C35B_FAULT = 0): fault 1 leaves this phase repair out on round 651 of the multiply
-        if C35B_FX.with(|x|x.get()){let m=c.alloc_bit();c.hmr(boundary,m);c.free_bit(m);}
-        else{super::compare::erase_with_compare(c,boundary,&b[..k],&a[..k],cin);}
+        super::compare::erase_with_compare(c,boundary,&b[..k],&a[..k],cin);
         c.free(boundary);
     } else {raw_run(c,a,b,cin,cout,bridges,consume);}
 }
@@ -37,7 +35,7 @@ fn raw_run(c:&mut Builder,a:&[QubitId],b:&[QubitId],cin:Option<QubitId>,cout:Opt
     let n=b.len();assert_eq!(a.len(),n);assert!(n>=3);
     assert!(a.iter().all(|q|!b.contains(q)));assert!(cin.is_none_or(|q|!a.contains(&q)&&!b.contains(&q)));
     assert!(cout.is_none_or(|q|!a.contains(&q)&&!b.contains(&q)&&Some(q)!=cin));
-    let owned=if cout.is_some(){n-1}else{n-2};assert!(bridges<owned);
+    let owned=if cout.is_some(){n-1}else{n-2};assert!(bridges<owned||(bridges==owned&&cin.is_some()&&owned>0),"bridges {bridges} owned {owned}");
     let first=owned-bridges;
     let is_bridge=|i:usize|i>=first&&i<owned;
     let mut carries:Vec<_>=(0..owned).map(|i|if is_bridge(i){a[i]}else{c.alloc_qubit()}).collect();carries.extend(cout);
@@ -66,13 +64,9 @@ fn raw_run(c:&mut Builder,a:&[QubitId],b:&[QubitId],cin:Option<QubitId>,cout:Opt
 }
 
 thread_local!{static CURRENT:std::cell::Cell<Option<usize>>=const{std::cell::Cell::new(None)};}
-// y33-c35b diagnostic: set inside the bridge scope of round 651 of the multiply with leapfrog::C35B_FAULT = 1
-thread_local!{static C35B_FX:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
-// y17: a bridge budget for the payload op being built (set by the leapfrog tick around one op; None = the profile)
-thread_local!{pub(crate) static Y17_FORCE:std::cell::Cell<Option<usize>>=const{std::cell::Cell::new(None)};}
 pub(crate) fn budget()->usize{CURRENT.with(|v|v.get()).unwrap_or_else(||super::optional_env::<usize>("I35_BUDGET").unwrap_or(0))}
 pub(crate) struct Scope(Option<usize>);
-impl Drop for Scope{fn drop(&mut self){CURRENT.with(|v|v.set(self.0));C35B_FX.with(|x|x.set(false));}}
+impl Drop for Scope{fn drop(&mut self){CURRENT.with(|v|v.set(self.0));}}
 pub(crate) fn enter(round:usize,multiply:bool)->Scope{
     static PROFILE:std::sync::OnceLock<std::collections::BTreeMap<(usize,bool),usize>>=std::sync::OnceLock::new();
     let profile=PROFILE.get_or_init(||{
@@ -87,7 +81,5 @@ pub(crate) fn enter(round:usize,multiply:bool)->Scope{
     if let Some(v)=super::heo::cell_pin("K3B_BRIDGE"){
         b=if let Some(r)=v.strip_prefix('+'){b+r.parse::<usize>().unwrap()}else if let Some(r)=v.strip_prefix('-'){b.saturating_sub(r.parse::<usize>().unwrap())}else{v.parse().unwrap()};
     }
-    if let Some(f)=Y17_FORCE.with(|v|v.get()){b=f;}
-    C35B_FX.with(|x|x.set(super::leapfrog::C35B_FAULT==1&&round==651&&multiply));
     Scope(CURRENT.with(|v|v.replace(Some(b))))
 }
