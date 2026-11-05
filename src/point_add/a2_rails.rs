@@ -34,6 +34,7 @@ pub(super) fn a2_emax(_t: usize) -> usize {
 }
 /// laneW: no record limit, one k3 cell per tick (research pricing of the uncoded dense walk).
 pub(super) fn a2_dense() -> bool {
+    if a2_pair() { return true; }
     static V: OnceLock<bool> = OnceLock::new();
     *V.get_or_init(|| std::env::var("LFA2_DENSE").is_ok_and(|v| v == "1"))
 }
@@ -46,7 +47,9 @@ pub(super) fn a2_s6() -> bool {
     *V.get_or_init(|| std::env::var("LFA2_S6").is_ok_and(|v| v == "1") && a2_emax(0) <= 5)
 }
 fn a2_rail_s6(w: usize) -> bool { a2_s6() && super::rail_s6::rail_s6_plan(w).is_some() }
+include!("pair_record.rs");
 pub(super) fn a2_code() -> bool {
+    if a2_pair() { return true; }
     static V: OnceLock<bool> = OnceLock::new();
     *V.get_or_init(|| std::env::var("LFA2_CODE").is_ok_and(|v| v == "1"))
 }
@@ -67,6 +70,7 @@ fn a2_sp_pair(t: usize) -> Option<(QubitId, QubitId)> {
 }
 /// End of a forward tick: the letter's k3 goes into the block's cells (positions 2 and 3), its wire leaves.
 fn a2_code_commit(c: &mut Builder, t: usize, k3: QubitId) {
+    if a2_pair() { return a2_pair_commit(c,t,k3); }
     let f = a2_field(t);
     match a2_pos(t) {
         1 => {}
@@ -148,6 +152,7 @@ fn a2_block_forms(c: &mut Builder, t: usize) -> (Lin, Lin, Lin, Lin) {
 }
 /// Random-access read of the block: fresh wires (k3, k2). 3 Toffoli; erase with [`a2_code_read_erase`] (one conditional AND).
 pub(super) fn a2_code_read(c: &mut Builder, t: usize) -> (QubitId, QubitId) {
+    if a2_pair() { return a2_pair_read(c,t); }
     let (a, b, a0, b0) = a2_block_forms(c, t);
     let u = lin_and(c, &a0, &b0);
     let k3 = lin_and(c, &a, &b.x(&Lin::of(&[u])));
@@ -160,6 +165,7 @@ pub(super) fn a2_code_read(c: &mut Builder, t: usize) -> (QubitId, QubitId) {
     (k3, k2)
 }
 pub(super) fn a2_code_read_erase(c: &mut Builder, t: usize, k3: QubitId, k2: QubitId) {
+    if a2_pair() { return a2_pair_read_erase(c,t,k3,k2); }
     let cp = a2_cell(t).expect("a2 code: own cell");
     c.x(k3);
     and_erase(c, k2, cp, k3);
@@ -261,6 +267,7 @@ fn a2_field(t: usize) -> [Option<QubitId>; 2] {
 /// spent(t): an e >= 4 event at an earlier position of t's triple, as a linear form of the field (written at
 /// positions < pos(t) only): pos 1: 0; pos 2: f0; pos 3: f0 ^ f1.
 fn a2_spent(t: usize) -> Lin {
+    if a2_pair() { return a2_pair_spent(t); }
     if a2_code() { return Lin::k(false); }
     // position 1, or rail 0's first triple at position 2 (its position-1 tick is tick 0: never an event)
     if a2_pos(t) == 1 || t == 2 {
@@ -374,6 +381,7 @@ fn a2_read(c: &mut Builder, t: usize) -> QubitId {
 /// field un-written (f ^= 3 k3); pos 2: k3 is f1 itself; pos 1: k3 is f0 itself (the field leaves with it). The
 /// returned wire is erased by the k-letter erase against the rail.
 fn a2_consume(c: &mut Builder, t: usize) -> QubitId {
+    if a2_pair() { return a2_pair_consume(c,t); }
     let id = a2_tid(t);
     if a2_code() {
         let f = a2_field(t);
@@ -599,7 +607,7 @@ fn t3p1_threshold_top(c: &mut Builder, z: &[QubitId], out: QubitId) -> u32 {
     }
     peak
 }
-pub(super) fn a2_rec_empty() -> bool { A2_REC.with(|r| r.borrow().is_empty()) }
+pub(super) fn a2_rec_empty() -> bool { A2_REC.with(|r| r.borrow().is_empty()) && A2_PAIR_PACKED.with(|r| r.borrow().is_empty()) }
 /// round17 v4: R1 on A ticks (LFA2_R1, default on): the 8-way barrel has an R1 plan at width w no dearer than its plain one.
 fn a2_r1_ok(w: usize) -> bool {
     if a2_rail_s6(w) { return !std::env::var("LFA2_R1").is_ok_and(|v| v == "0"); }
@@ -621,7 +629,7 @@ fn fast_k_erase_a_g(c: &mut Builder, t: &[QubitId], k1: QubitId, k2: QubitId, k3
 
 /// Forget every field (tests that build several circuits in one process).
 #[cfg(test)]
-pub(super) fn a2_rec_clear() { A2_REC.with(|r| r.borrow_mut().clear()) }
+pub(super) fn a2_rec_clear() { A2_REC.with(|r| r.borrow_mut().clear()); A2_PAIR_PACKED.with(|r| r.borrow_mut().clear()); }
 
 /// [`zlin_on`] over bits 2..8 (A's deep candidate up to v = 8): t_i <- z_i = t_i ^ b_i ^ dq (i = 2..8).
 fn zlin_on_a(c: &mut Builder, t: &[QubitId], b: &[QubitId], vtop: usize) {
@@ -958,7 +966,8 @@ fn yp8_reserve_a(tl: usize, bl: usize, t: usize, fwd: bool) -> usize {
     let pad = a2_emax(t) + 3;
     let old=yp8_reserve(tl, bl, t, fwd) + (a2_emax(t) - 2) + pad.saturating_sub((tl + 1).max(6)) + pad.saturating_sub((bl + 1).max(6));
     if std::env::var("RAIL_OPT_RESERVE").ok().as_deref()==Some("1") {
-        if a2_code() { if a2_pos(t) <= 2 || t == 4 { old - 3 } else { old - 1 } } else { old-(2+usize::from(a2_pos(t)==1||t==2)) }
+        if a2_pair() { old - 3 + usize::from(a2_pair_second(t)) }
+        else if a2_code() { if a2_pos(t) <= 2 || t == 4 { old - 3 } else { old - 1 } } else { old-(2+usize::from(a2_pos(t)==1||t==2)) }
     } else { old }
 }
 /// [`yp8_add_halve_forced_choice`] with the A decision (k3 and the record's spent form).
@@ -1189,6 +1198,7 @@ pub(super) mod a2_ref {
         let mut rr = [r0, x.sar(1)];
         let fam = |m: u32| -> bool { let r0 = m & 0x15; let r1 = m & 0x2a; super::a2_dense() || if super::a2_code() { r0.count_ones() <= 2 && r1.count_ones() <= 2 } else { r0.count_ones() <= 1 && r1.count_ones() <= 1 } };
         let mut pfx: u32 = 0;
+        let mut pair_big = [false;6];
         let mut out = Vec::new();
         for t in 0..r {
             let a = t & 1;
@@ -1216,8 +1226,9 @@ pub(super) mod a2_ref {
             let v = if z { 99 } else { xd.ctz() };
             let e_eq = !z && (tk.neg_p() == (bn ^ !sd));
             if t % 6 == 0 { pfx = 0; }
-            let mut cap = if t == 0 || last || main { 3 } else { super::a2_emax(t) };
+            let mut cap = if t == 0 || last || main || !super::a2_tick(t) { 3 } else { super::a2_emax(t) };
             if cap > 3 && !fam(pfx | 1 << (t % 6)) { cap = 3; }
+            if super::a2_pair() && super::a2_pair_second(t) && pair_big[super::a2_pair_partner(t)%6] { cap=3; }
             let l = lwin(t);
             let h = anch[t.min(anch.len() - 1)].saturating_sub(l - 2);
             let (wa, wb) = (tk.winv(h, l), b.winv(h, l));
@@ -1237,6 +1248,7 @@ pub(super) mod a2_ref {
                 deep = g != sd;
             }
             if deep && v - 1 >= 4 { pfx |= 1 << (t % 6); }
+            pair_big[t%6]=deep && v-1>=4;
             if t < 1 && std::env::var("LFA2_DBG").is_ok() {
                 eprintln!("A2_REFDBG t={t} T2={:x?} B={:x?} sd={sd} v={v} E={e_eq} deep={deep} added={added} flipped={flipped}", tk.0[0], b.0[0]);
             }

@@ -161,7 +161,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "1425140432",
+        "TAIL_NONCE" => "1293570722",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -546,18 +546,20 @@ pub(crate) mod rail_s6;
 
 /// The frozen candidate: walk cap, square cap, digit cap and the walk's recipe entries, pinned here. `clear_process_env`
 /// wipes the host environment and sets these; the width table and its anchors are compiled in (a2_table_text, a2_anch_text).
-const FROZEN_WALK_CAP: usize = if leapfrog::WL_CODEC { 1237 } else { 1244 };
+const FROZEN_WALK_CAP: usize = if leapfrog::WL_CODEC { 1234 } else { 1244 };
 const FROZEN_SQ_CAP: usize = 1234;
 const FROZEN_EMAX: usize = 5;
 const FROZEN_RECIPE: &[(&str, &str)] = &[
     ("LFA2_SET_LF_REORDER_DIV", "2"),
     ("LFQ_RW", "20"),
+    ("LFA2_PAIR", "1"),
+    ("LFA2_PAIR_MATCH", "104523"),
     ("LFA2_CODE", "1"),
     ("LFA2_S6", "1"),
-    ("LFA2_SET_LF_YP8_LATE", "1:13,4:17,9:22,83:19,93:17,104:15,109:13,115:11"),
-    ("LFA2_SET_SL_N2_DFROM", "118"),
-    ("LFA2_SET_SL_N2_MFROM", "118"),
-    ("LFA2_SET_LF_CMP_FROM", "108"),
+    ("LFA2_SET_LF_YP8_LATE", "1:13,4:17,9:22,84:19,94:17,105:15,110:13,116:11"),
+    ("LFA2_SET_SL_N2_DFROM", "119"),
+    ("LFA2_SET_SL_N2_MFROM", "119"),
+    ("LFA2_SET_LF_CMP_FROM", "109"),
     ("LF_YP8_CHUNK", "1"),
     ("LFQ_DROPS", "1"),
     ("LFQ_PAGEFIRST", "1"),
@@ -566,13 +568,13 @@ const FROZEN_RECIPE: &[(&str, &str)] = &[
     ("LFQ_FCR", "1"),
     ("LFQ_Y42LAST", "1"),
     ("LFQ_LASTN", "2"),
-    ("A2R_SPEC", "58-91:direct,92-122:lean"),
+    ("A2R_SPEC", "58-91:direct,92-123:lean"),
     ("A2R_SERIAL", "1-98"),
     ("A2R_HB", "1-107,110-111,115-117"),
     ("LFA2_EXT", "0"),
     ("LL_CMPF", "0-200:1"),
     ("LFG_KEEP", "1"),
-    ("LFG_KEEP_R", "1-122"),
+    ("LFG_KEEP_R", "1-123"),
     ("LFG_KFWD", "1-55"),
     ("LFG_SEEDP", "3"),
     ("LFG_RT0P", "3"),
