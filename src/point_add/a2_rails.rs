@@ -1083,31 +1083,6 @@ fn fast_k_erase_a(c: &mut Builder, t: &[QubitId], k1: QubitId, k2: QubitId, k3: 
         c.pop_condition();
     }
     c.free_bit(m1);
-    if emax <= 5 {
-        // Q3: k2 ^ k3 = z0 z1 on x3 = 2^e odd with e <= 5, so that wire goes last with a Clifford fix; k3 = (k2 ^ k3) z2 z3 goes
-        // first, one AND under its measurement instead of the two of z0 z1 z2 z3.
-        if w >= 6 { c.cx(k3, k2); }
-        let m3 = c.alloc_bit();
-        c.hmr(k3, m3);
-        c.release_clean(k3);
-        if w >= 6 {
-            c.push_condition(m3);
-            let b2 = and_new(c, t[2], t[3]);
-            c.cz(k2, b2);
-            and_erase(c, b2, t[2], t[3]);
-            c.pop_condition();
-        }
-        c.free_bit(m3);
-        let m2 = c.alloc_bit();
-        c.hmr(k2, m2);
-        c.release_clean(k2);
-        c.cz_if(t[0], t[1], m2);
-        c.free_bit(m2);
-        for i in (0..nz).rev() {
-            c.x(t[i]);
-        }
-        return;
-    }
     let m2 = c.alloc_bit();
     c.hmr(k2, m2);
     c.release_clean(k2);
