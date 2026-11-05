@@ -137,7 +137,7 @@ pub(super) fn wl_codec_fwd(c: &mut Builder, t: usize, fused: bool) {
     let ph = c.phase_name();
     if (ph == "divide" && fused) || (ph == "multiply" && !fused) {
         for (b, &r) in WL_RELEASES.iter().enumerate() {
-            let due = if ph == "divide" { r == t && r > 37 } else { r == t };
+            let due = if ph == "divide" { r == t && r > 2 } else { r == t };
             if due { wl_pack(c, b); }
         }
     }
