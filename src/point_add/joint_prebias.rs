@@ -16,11 +16,11 @@ pub(super) fn erase_initial(c:&mut Builder,q:QubitId,a:QubitId,p:QubitId,s:Qubit
 pub(super) fn mapped_zero(c:&mut Builder,acc:&[QubitId],map:&[Vec<QubitId>]) {
     let n=acc.len();assert!(n>=3);assert_eq!(map.len(),n);
     assert!(!map[0].is_empty());
-    let room=walk_max_qubits().saturating_sub(c.active_qubits()as usize);
+    let room=super::super::walk_policy::physical_cap().saturating_sub(c.active_qubits()as usize);
     if n-2>room {
         let first=c.alloc_qubit();
         with_selector_xor(c,&map[0],acc[0],|c,src|{c.ccx(src,acc[0],first);c.cx(src,acc[0]);});
-        let room=walk_max_qubits().saturating_sub(c.active_qubits()as usize);
+        let room=super::super::walk_policy::physical_cap().saturating_sub(c.active_qubits()as usize);
         let plan=super::super::width_composition::direct_plan(n-1,room).expect("prebias bounded fold");
         super::super::width_composition::direct_add(c,&map[1..],&acc[1..],first,&plan);
         with_selector_xor(c,&map[0],acc[0],|c,src|{let m=c.alloc_bit();c.hmr(first,m);c.z_if(src,m);c.cz_if(src,acc[0],m);c.free_bit(m);});
@@ -41,7 +41,6 @@ pub(super) fn mapped_zero(c:&mut Builder,acc:&[QubitId],map:&[Vec<QubitId>]) {
 /// Add J=(k*f-g)/2 to the upper word, k=s+p*(2o-1), g=s XOR p.
 /// Original p,s,o survive; two selector ANDs replace the old three.
 pub(super) fn half_fold(c:&mut Builder,upper:&[QubitId],p:QubitId,s:QubitId,o:QubitId) {
-    super::y17_fold_true_cap();
     c.cx(s,o);c.x(o);let q=and_clean(c,p,o);c.x(o);c.cx(s,o);
     c.x(s);let minus=and_clean(c,q,s);c.x(s);
     c.cx(minus,q); // q hosts plus_2f

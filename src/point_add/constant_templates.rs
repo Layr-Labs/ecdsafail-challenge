@@ -2,7 +2,7 @@
 use super::*;
 pub(crate) fn square_compare(c:&mut Builder,u:&[QubitId],v:&[QubitId],seed:Option<QubitId>)->bool {
     if std::env::var_os("CONST_SQUARE_TRANSPORT").is_none() || c.current_phase()!="square" || u.len()!=14 || v.len()!=14 || seed==Some(v[0]) {return false;}
-    let room=super::pingpong::heo_hooks::cap().saturating_sub(c.active_qubits()as usize);if room!=12{return false;}
+    let room=super::walk_policy::physical_cap().saturating_sub(c.active_qubits()as usize);if room!=12{return false;}
     assert!(!seed.is_some_and(|q|u.contains(&q)));let at=c.op_count();
     // The operand variant never reads or writes its legacy dirty argument.
     super::dirty_boundary_probe::hybrid(c,u,v,seed,u[0],1,false);

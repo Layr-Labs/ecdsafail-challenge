@@ -14,7 +14,7 @@ pub(crate) fn phase(c:&mut Builder,u:&[QubitId],v:&[QubitId],seed:Option<QubitId
  for i in cut..n-1{c.cx(u[i],v[i]);c.cx(u[i],u[i-1]);c.ccx(u[i-1],v[i],u[i]);}
  c.cz(u[n-1],v[n-1]);c.cz(u[n-1],u[n-2]);c.cz(v[n-1],u[n-2]);
  for i in(cut..n-1).rev(){c.ccx(u[i-1],v[i],u[i]);c.cx(u[i],u[i-1]);c.cx(u[i],v[i]);}
- for i in(0..cut).rev(){c.cx(cs[i],u[i]);let m=c.alloc_bit();c.hmr(cs[i],m);if i==0{if alias{c.cx(u[i],seed.unwrap());}c.cz_if(seed.unwrap_or(u[i]),v[i],m);if let Some(p)=seed{c.cx(u[i],p);}}else{c.cz_if(u[i-1],v[i],m);c.cx(u[i],u[i-1]);}c.cx(u[i],v[i]);c.free_bit(m);}
+ for i in(0..cut).rev(){c.cx(cs[i],u[i]);let m=c.alloc_bit();if i==0&&alias{c.cx(u[i],seed.unwrap());}c.walk_and_marker(cs[i],if i==0{seed.unwrap_or(u[i])}else{u[i-1]},v[i],m);c.hmr(cs[i],m);if i==0{c.cz_if(seed.unwrap_or(u[i]),v[i],m);if let Some(p)=seed{c.cx(u[i],p);}}else{c.cz_if(u[i-1],v[i],m);c.cx(u[i],u[i-1]);}c.cx(u[i],v[i]);c.free_bit(m);}
  c.free_vec(&cs);c.x_all(u);
 }
 
