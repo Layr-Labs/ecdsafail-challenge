@@ -25,7 +25,8 @@ use super::modular::{add_f_window, f, f_slice, ripple_add};
 use super::{env_flag, Builder, N};
 use crate::circuit::QubitId;
 
-pinned_env!(erase_compare, "ERASE_COMPARE");
+pinned_env!(erase_compare_base, "ERASE_COMPARE");
+fn erase_compare() -> usize { if super::SQ_SCOPE.with(|s| s.get()) { if let Some(g) = std::env::var("SQ_ERASE_COMPARE").ok().and_then(|v| v.parse().ok()) { return g; } } erase_compare_base() }
 
 pub fn j_yfuse() -> bool {
     static SLOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
