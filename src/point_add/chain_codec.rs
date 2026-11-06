@@ -1,0 +1,752 @@
+//! A2: exact chained base-243 codec for idle P5 tape groups.
+//!
+//! A P5 group holds 5 trits (243 valid codes) in 8 wires; 13 codes per group are unused. The chain pools that
+//! slack: state x (w wires) and the next group's digit d = pi(code) in [0,243) form Y = 243*x + d; the group keeps
+//! 8 wires holding b = Y mod 256 and the state becomes x' = Y >> 8, whose bound shrinks by ~243/256 per group. When
+//! the bound falls to a power of two the top state wire is provably zero and is freed. Pop (unmerge) is in-place
+//! restoring division of Y by 243; push is its exact inverse.
+use super::*;
+use super::super::super::const_arith::csub_const_trunc;
+use crate::circuit::{Op, OperationType as K, NO_BIT};
+
+/// Letter value of trit v in the walk's (typ, s) encoding (codec_probe convention).
+fn letter(v: usize) -> (bool, bool) {
+    let h = v == 2;
+    let l = v == 1;
+    (true ^ h ^ l, h)
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Configuration
+
+fn env_usize(name: &str, default: usize) -> usize {
+    std::env::var(name).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(default)
+}
+/// `SQ_A2_CHAINS` chains of `SQ_A2_LEN` consecutive groups starting at group `SQ_A2_FIRST`. Off by default.
+fn chain_of(g: usize) -> Option<(usize, usize)> {
+    if wide_state(){return (g<79).then_some((0,0));}
+    let (n, len, first) = (env_usize("SQ_A2_CHAINS", 0), env_usize("SQ_A2_LEN", 14), env_usize("SQ_A2_FIRST", 0));
+    if n == 0 || g < first || g - first >= n * len {
+        return None;
+    }
+    let cid = (g - first) / len;
+    Some((cid, first + cid * len))
+}
+
+/// Number of wires holding values in [0, x).
+pub fn nbits(x: u64) -> usize {
+    assert!(x >= 2);
+    (64 - (x - 1).leading_zeros()) as usize
+}
+fn wide_state()->bool{std::env::var_os("WALK_CHAIN16").is_some()}
+/// State bound after one push: x' = (243 x + d) >> 8 over x < X, d < 243.
+pub fn next_bound(x: u64) -> u64 {
+    ((243 * (x - 1) + 242) >> 8) + 1
+}
+
+pub(super) struct Chain {
+    pub base: usize,
+    pub top: usize,
+    /// State wires, LSB first (`nbits(bound)` of them).
+    pub state: Vec<QubitId>,
+    /// Bound history: `bounds.last()` is the current state bound.
+    pub bounds: Vec<u64>,
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The digit map: P5 code (wire i = code bit i, order a2 a1 a0 h3 l3 b2 b1 b0) -> binary digit < 243, with the 13
+// unused codes onto 243..255. The code set depends on the P3 codec:
+// - synthesized P3 (HEO_CODEC_SYNTH, the production recipe): unused {15,47,79,111,127,143,175,207,239,249,251,253,
+//   255}. Controlled by code bit 4 swap wire pairs (1,5), (2,6); digit = [w6, w5, w7, ~w4, w0, w1, w2, w3]. 2 CCX.
+// - pair-pack P3: unused {30,62,94,126,158,190,222,223,249,251,253,254,255}. Controlled by code bit 0 swap (1,5),
+//   (2,6), (1,7); digit = [w6, w5, w7, ~w0, w1, w2, w3, w4]. 3 CCX.
+// No scratch either way.
+
+fn synth_codes() -> bool {
+    truthy("HEO_CODEC_SYNTH")
+}
+pub(super) fn digit_wires(code: [QubitId; 8]) -> [QubitId; 8] {
+    if synth_codes() {
+        [code[6], code[5], code[7], code[4], code[0], code[1], code[2], code[3]]
+    } else {
+        [code[6], code[5], code[7], code[0], code[1], code[2], code[3], code[4]]
+    }
+}
+pub(super) fn code_wires(d: [QubitId; 8]) -> [QubitId; 8] {
+    if synth_codes() {
+        [d[4], d[5], d[6], d[7], d[3], d[1], d[0], d[2]]
+    } else {
+        [d[3], d[4], d[5], d[6], d[7], d[1], d[0], d[2]]
+    }
+}
+pub(super) fn pi_fwd(c: &mut Builder, w: [QubitId; 8]) -> [QubitId; 8] {
+    if synth_codes() {
+        fredkin(c, w[4], w[1], w[5]);
+        fredkin(c, w[4], w[2], w[6]);
+        c.x(w[4]);
+    } else {
+        fredkin(c, w[0], w[1], w[5]);
+        fredkin(c, w[0], w[2], w[6]);
+        fredkin(c, w[0], w[1], w[7]);
+        c.x(w[0]);
+    }
+    digit_wires(w)
+}
+pub(super) fn pi_inv(c: &mut Builder, d: [QubitId; 8]) -> [QubitId; 8] {
+    let w = code_wires(d);
+    if synth_codes() {
+        c.x(w[4]);
+        fredkin(c, w[4], w[2], w[6]);
+        fredkin(c, w[4], w[1], w[5]);
+    } else {
+        c.x(w[0]);
+        fredkin(c, w[0], w[1], w[7]);
+        fredkin(c, w[0], w[2], w[6]);
+        fredkin(c, w[0], w[1], w[5]);
+    }
+    w
+}
+
+// Initial two groups are combined into one full 16-bit state. No byte is
+// flushed here, so later normalization has much smaller relative rounding loss.
+fn merge_seed(c:&mut Builder,d:[QubitId;8],state:&mut Vec<QubitId>){
+ let _unitary=super::super::super::const_arith::UnitaryGuard::new(wide_state());
+ let w=state.len();assert!([6,7,8].contains(&w));let mut r=d.to_vec();r.extend(state.iter().copied());
+ let k=U256::from(13u64);
+ for j in 0..w{let top=r[j+8];c.x(top);cadd_const_trunc(c,&r[j..j+8],k,top,false);c.x(top);sub_const(c,&r[j..j+9],k);}
+ *state=r;
+}
+fn split_seed(c:&mut Builder,state:&mut Vec<QubitId>)->[QubitId;8]{
+ let _unitary=super::super::super::const_arith::UnitaryGuard::new(wide_state());
+ let w=state.len()-8;assert!([6,7,8].contains(&w));let r=state.clone();let k=U256::from(13u64);
+ for j in (0..w).rev(){add_const(c,&r[j..j+9],k);let top=r[j+8];c.x(top);csub_const_trunc(c,&r[j..j+8],k,top);c.x(top);}
+ *state=r[8..].to_vec();r[..8].try_into().unwrap()
+}
+// ---------------------------------------------------------------------------------------------------------------
+// One chain step. Register R = d (8 wires, low) ++ state (w wires, high). Pop is restoring division by 243 in place:
+// for j = w-1 .. 0 the 9-bit window Z = R[j..j+9] (< 486 by the invariant R < 243 * 2^(j+1)) becomes
+// Z + 13 [Z >= 243], i.e. Z - 243 with the quotient bit in window bit 8. That is: add 13 to the window, then subtract
+// 13 from its low 8 bits unless window bit 8 is set. Push runs the inverse steps j = 0 .. w-1.
+
+/// Push: (x < bound, d < 243) -> state x' = (243 x + d) >> 8, d's wires hold (243 x + d) & 255. Returns the new bound.
+pub(super) fn push_step(c: &mut Builder, d: [QubitId; 8], state: &mut Vec<QubitId>, bound: u64) -> u64 {
+ let _unitary=super::super::super::const_arith::UnitaryGuard::new(wide_state());
+    let w = nbits(bound);
+    assert_eq!(state.len(), w, "chain state width");
+    let mut r: Vec<QubitId> = d.to_vec();
+    r.extend(state.iter().copied());
+    let k13 = U256::from(13u64);
+    for j in 0..w {
+        let top = r[j + 8];
+        c.x(top);
+        cadd_const_trunc(c, &r[j..j + 8], k13, top, false);
+        c.x(top);
+        sub_const(c, &r[j..j + 9], k13);
+    }
+    let nb = next_bound(bound);
+    let w2 = nbits(nb);
+    assert!(w2 <= w && w2 + 1 >= w);
+    if w2 < w {
+        c.free(r[w + 7]);
+        r.truncate(w + 7);
+    }
+    *state = r[8..].to_vec();
+    nb
+}
+
+/// Pop: exact inverse of `push_step` (state bound `now` back to `prev`).
+pub(super) fn pop_step(c: &mut Builder, d: [QubitId; 8], state: &mut Vec<QubitId>, now: u64, prev: u64) {
+ let _unitary=super::super::super::const_arith::UnitaryGuard::new(wide_state());
+    assert_eq!(next_bound(prev), now);
+    let (w2, w) = (nbits(now), nbits(prev));
+    assert_eq!(state.len(), w2, "chain state width");
+    let mut r: Vec<QubitId> = d.to_vec();
+    r.extend(state.iter().copied());
+    if w > w2 {
+        r.push(c.alloc_qubit());
+    }
+    let k13 = U256::from(13u64);
+    for j in (0..w).rev() {
+        add_const(c, &r[j..j + 9], k13);
+        let top = r[j + 8];
+        c.x(top);
+        csub_const_trunc(c, &r[j..j + 8], k13, top);
+        c.x(top);
+    }
+    *state = r[8..].to_vec();
+}
+
+fn fwsk2_const_dirty() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("FWSK2_CONST_DIRTY").is_some())
+}
+/// FWSK2: wires idle during a chain step: every packed group (P5 / Chained) other than `skip`, and the state wires
+/// of every chain other than `own` (a ChainBase group's own fields are not used: its wires are its chain's state).
+fn idle_pool(groups: &[Option<Group>], chains: &[Option<Chain>], skip: &[usize], own: Option<usize>) -> Vec<QubitId> {
+    let mut v: Vec<QubitId> = groups.iter().enumerate()
+        .filter(|(j, _)| !skip.contains(j))
+        .filter_map(|(_, p)| p.as_ref())
+        .filter(|p| p.state == GState::P5 || p.state == GState::Chained)
+        .flat_map(|p| [p.a2, p.a1, p.a0, p.h3, p.l3, p.b2, p.b1, p.b0]).collect();
+    for (j, ch) in chains.iter().enumerate() {
+        if Some(j) == own { continue; }
+        if let Some(ch) = ch { v.extend(ch.state.iter().copied()); }
+    }
+    v
+}
+
+impl Tape {
+    /// After group g reached P5 in a forward leg: start or extend its chain.
+    pub(super) fn chain_push(&mut self, c: &mut Builder, g: usize) { if g==2&&self.prefix_live{self.prefix_chain_base();self.refresh_aliases();return;}
+        let Some((cid, base)) = chain_of(g) else { return };
+        let grp = self.groups[g].as_mut().unwrap();
+        assert_eq!(grp.state, GState::P5);
+        let code = [grp.a2, grp.a1, grp.a0, grp.h3, grp.l3, grp.b2, grp.b1, grp.b0];
+        let d = pi_fwd(c, code);
+        if g == base {
+            assert!(self.chains[cid].is_none());
+            self.chains[cid] = Some(Chain { base, top: g, state: d.to_vec(), bounds: vec![243] });
+            grp.state = GState::ChainBase;
+        } else {
+            let pool = if fwsk2_const_dirty() { idle_pool(&self.groups, &self.chains, &[g], Some(cid)) } else { Vec::new() };
+            let grp = self.groups[g].as_mut().unwrap();
+            let ch = self.chains[cid].as_mut().expect("chain base not pushed");
+            assert_eq!(ch.top + 1, g, "chain push out of order");
+            let x = *ch.bounds.last().unwrap();
+            let mut nb = 0;
+            if wide_state() && g==1 {
+                super::super::super::lowroom::with_pool(pool,||merge_seed(c,d,&mut ch.state));nb=243*x;
+            }else if fwsk2_const_dirty() { super::super::super::lowroom::with_pool(pool, || { nb = push_step(c, d, &mut ch.state, x); }); } else { nb = push_step(c, d, &mut ch.state, x); }
+            ch.bounds.push(nb);
+            ch.top = g;
+            grp.state = if wide_state()&&g==1{GState::ChainBase}else{GState::Chained};
+        }
+        if wide_state(){self.refresh_aliases();}
+        if std::env::var_os("SQ_A2_TRACE").is_some() {
+            let ch = self.chains[cid].as_ref().unwrap();
+            eprintln!("SQ_A2 push g={g} chain={cid} bound={} wires={} live={}", ch.bounds.last().unwrap(), ch.state.len(), c.active_qubits());
+        }
+    }
+
+    /// Pop chain entries until group g is a plain P5 group again (LIFO; the walk reads groups top-down).
+    pub(super) fn unchain(&mut self, c: &mut Builder, g: usize) {
+        let (cid, _) = chain_of(g).expect("unchain: group not in a chain");
+        loop {
+            let top0 = self.chains[cid].as_ref().expect("unchain: no chain").top;
+            let pool = if fwsk2_const_dirty() { idle_pool(&self.groups, &self.chains, &[top0], Some(cid)) } else { Vec::new() };
+            let ch = self.chains[cid].as_mut().expect("unchain: no chain");
+            let top = ch.top;
+            assert!(top >= g, "unchain below the chain top");
+            if self.prefix_live&&top==2{let ch=self.chains[cid].take().unwrap();assert_eq!(ch.bounds,vec![prefix::CHAIN_BOUND]);self.prefix_unbase(c,ch.state);return;} if top == ch.base {
+                let ch = self.chains[cid].take().unwrap();
+                if self.prefix_live&&top==0{assert_eq!(ch.bounds,vec![60]);self.prefix_unbase(c,ch.state);}else{assert_eq!(ch.bounds, vec![243]);
+                let code = pi_inv(c, ch.state.try_into().unwrap());
+                let grp = self.groups[top].as_mut().unwrap();
+                assert_eq!(grp.state, GState::ChainBase);
+                [grp.a2, grp.a1, grp.a0, grp.h3, grp.l3, grp.b2, grp.b1, grp.b0] = code;
+                grp.state = GState::P5;}
+            } else {
+                let now = ch.bounds.pop().unwrap();
+                let prev = *ch.bounds.last().unwrap();
+                let grp = self.groups[top].as_mut().unwrap();
+                if wide_state()&&top==1 {
+                    assert_eq!(grp.state,GState::ChainBase);assert_eq!(now,243*prev);
+                    let mut d=[crate::circuit::NO_QUBIT;8];super::super::super::lowroom::with_pool(pool,||{d=split_seed(c,&mut ch.state);});
+                    [grp.a2,grp.a1,grp.a0,grp.h3,grp.l3,grp.b2,grp.b1,grp.b0]=pi_inv(c,d);
+                }else{
+                    assert_eq!(grp.state, GState::Chained);
+                    let d = digit_wires([grp.a2, grp.a1, grp.a0, grp.h3, grp.l3, grp.b2, grp.b1, grp.b0]);
+                    if fwsk2_const_dirty() { super::super::super::lowroom::with_pool(pool, || pop_step(c, d, &mut ch.state, now, prev)); } else { pop_step(c, d, &mut ch.state, now, prev); }
+                    pi_inv(c, d);
+                }
+                grp.state = GState::P5;
+                ch.top = top - 1;
+            }
+            if wide_state(){self.refresh_aliases();}
+            if std::env::var_os("SQ_A2_TRACE").is_some() {
+                eprintln!("SQ_A2 pop g={top} chain={cid} live={}", c.active_qubits());
+            }
+            if top == g {
+                return;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Exhaustive gate-level selftests (formal measurement variables: every HMR outcome is an independent symbol, so a
+// zero final phase holds on every measurement branch).
+
+/// Phase as an XOR of formal symbols; bit 0 is the constant -1.
+#[derive(Clone, Default, PartialEq, Debug)]
+struct Phase(Vec<u64>);
+impl Phase {
+    fn flip(&mut self, sym: usize) {
+        let (w, b) = (sym / 64, sym % 64);
+        if self.0.len() <= w {
+            self.0.resize(w + 1, 0);
+        }
+        self.0[w] ^= 1 << b;
+    }
+    fn is_zero(&self) -> bool {
+        self.0.iter().all(|&x| x == 0)
+    }
+}
+
+struct Sim {
+    q: Vec<bool>,
+    bits: Vec<usize>,
+    phase: Phase,
+    nsym: usize,
+}
+const SYM_ZERO: usize = usize::MAX;
+impl Sim {
+    fn new(nq: usize, nb: usize) -> Self {
+        Sim { q: vec![false; nq], bits: vec![SYM_ZERO; nb], phase: Phase::default(), nsym: 1 }
+    }
+    fn cond(&mut self, op: &Op, hit: bool) {
+        if !hit {
+            return;
+        }
+        if op.c_condition == NO_BIT {
+            self.phase.flip(0);
+            return;
+        }
+        let s = self.bits[op.c_condition.0 as usize];
+        if s != SYM_ZERO {
+            self.phase.flip(s);
+        }
+    }
+    fn step(&mut self, op: &Op) {
+        let t = op.q_target.0 as usize;
+        let a = op.q_control1.0 as usize;
+        let b = op.q_control2.0 as usize;
+        let uncond = op.c_condition == NO_BIT;
+        match op.kind {
+            K::X => { assert!(uncond); self.q[t] ^= true; }
+            K::CX => { assert!(uncond); self.q[t] ^= self.q[a]; }
+            K::CCX => { assert!(uncond); self.q[t] ^= self.q[a] & self.q[b]; }
+            K::Swap => { assert!(uncond); self.q.swap(t, a); }
+            K::Z => { let h = self.q[t]; self.cond(op, h); }
+            K::CZ => { let h = self.q[t] & self.q[a]; self.cond(op, h); }
+            K::CCZ => { let h = self.q[t] & self.q[a] & self.q[b]; self.cond(op, h); }
+            K::Hmr => {
+                let s = self.nsym;
+                self.nsym += 1;
+                self.bits[op.c_target.0 as usize] = s;
+                if self.q[t] {
+                    self.phase.flip(s);
+                }
+                self.q[t] = false;
+            }
+            K::R => { assert!(!self.q[t], "reset of nonzero wire {t}"); }
+            K::BitStore0 => self.bits[op.c_target.0 as usize] = SYM_ZERO,
+            K::Register | K::AppendToRegister | K::DebugPrint => {}
+            _ => panic!("unsupported gate {:?}", op.kind),
+        }
+    }
+}
+
+fn ccx_count(ops: &[Op]) -> usize {
+    ops.iter().filter(|o| matches!(o.kind, K::CCX | K::CCZ)).count()
+}
+fn val(q: &[bool], ws: &[QubitId]) -> u64 {
+    ws.iter().enumerate().fold(0, |v, (i, w)| v | ((q[w.0 as usize] as u64) << i))
+}
+fn set(q: &mut [bool], ws: &[QubitId], v: u64) {
+    for (i, w) in ws.iter().enumerate() {
+        q[w.0 as usize] = v >> i & 1 != 0;
+    }
+}
+
+/// The P5 code (wire order a2 a1 a0 h3 l3 b2 b1 b0, bit i = wire i) of every 5-trit word (trit i = digit i),
+/// computed by simulating the walk's own pack3 + pack5.
+pub fn p5_table() -> Vec<u8> {
+    let mut out = Vec::new();
+    for word in 0..243usize {
+        let mut c = Builder::new();
+        let mut tape = Tape::new(5);
+        let mut inputs = Vec::new();
+        for t in 0..5 {
+            let qs = c.alloc_qubits(2);
+            inputs.push((c.op_count(), qs[0], qs[1]));
+            tape.raw[t] = Some((qs[0], qs[1]));
+            if t == 2 {
+                tape.pack3(&mut c, 0);
+            }
+            if t == 4 {
+                tape.pack5(&mut c, 0);
+            }
+        }
+        let g = tape.groups[0].clone().unwrap();
+        let wires = [g.a2, g.a1, g.a0, g.h3, g.l3, g.b2, g.b1, g.b0];
+        let (nq, nb) = c.i13_dims();
+        let ops = c.take_ops();
+        let mut s = Sim::new(nq, nb);
+        let mut digits = word;
+        let vals: Vec<(bool, bool)> = (0..5).map(|_| { let v = digits % 3; digits /= 3; letter(v) }).collect();
+        for pos in 0..=ops.len() {
+            for (i, (at, a, b)) in inputs.iter().enumerate() {
+                if *at == pos {
+                    s.q[a.0 as usize] = vals[i].0;
+                    s.q[b.0 as usize] = vals[i].1;
+                }
+            }
+            if pos < ops.len() {
+                s.step(&ops[pos]);
+            }
+        }
+        out.push(val(&s.q, &wires) as u8);
+    }
+    out
+}
+
+pub fn study() {
+    let t = p5_table();
+    let mut seen = [false; 256];
+    for &c in &t {
+        assert!(!seen[c as usize], "P5 code not injective");
+        seen[c as usize] = true;
+    }
+    println!("P5_TABLE {}", t.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","));
+    let inv: Vec<usize> = (0..256).filter(|&c| !seen[c]).collect();
+    println!("P5_INVALID {:?}", inv);
+    let mut b = 243u64;
+    for k in 1..=60 {
+        b = next_bound(b);
+        print!("{k}:{b}/{} ", nbits(b));
+    }
+    println!();
+}
+
+/// pi over all 256 codes: valid P5 codes -> [0,243) bijectively, unused -> [243,256); pi_inv o pi = id.
+fn test_pi(table: &[u8]) {
+    let mut c = Builder::new();
+    let w: [QubitId; 8] = c.alloc_qubits(8).try_into().unwrap();
+    let d = pi_fwd(&mut c, w);
+    let mid = c.op_count();
+    let back = pi_inv(&mut c, d);
+    assert_eq!(back, w);
+    let (nq, nb) = c.i13_dims();
+    let ops = c.take_ops();
+    let mut valid = [false; 256];
+    for &code in table {
+        valid[code as usize] = true;
+    }
+    let mut seen = [false; 256];
+    for code in 0..256u64 {
+        let mut s = Sim::new(nq, nb);
+        set(&mut s.q, &w, code);
+        for op in &ops[..mid] {
+            s.step(op);
+        }
+        let dv = val(&s.q, &d);
+        assert_eq!(dv < 243, valid[code as usize], "pi code {code} -> {dv}");
+        assert!(!seen[dv as usize]);
+        seen[dv as usize] = true;
+        for op in &ops[mid..] {
+            s.step(op);
+        }
+        assert_eq!(val(&s.q, &w), code);
+        assert!(s.phase.is_zero());
+    }
+    println!("{{\"kind\":\"a2-digit-map\",\"codes\":256,\"valid_to_0_242\":243,\"unused_to_243_255\":13,\"ccx\":{},\"scratch\":0,\"value\":\"pass\",\"phase\":\"pass\"}}", ccx_count(&ops[..mid]));
+}
+
+/// One push step and its pop, exhaustively over x < bound, d < 243: values, garbage-free scratch, zero phase.
+fn test_step(bound: u64) -> (usize, usize, u32, u32) {
+    let w = nbits(bound);
+    let mut c = Builder::new();
+    let d: [QubitId; 8] = c.alloc_qubits(8).try_into().unwrap();
+    let st0 = c.alloc_qubits(w);
+    let base = c.active_qubits();
+    let mut st = st0.clone();
+    let nb = push_step(&mut c, d, &mut st, bound);
+    let mid = c.op_count();
+    let pushed = st.clone();
+    let peak_push = c.peak_total() - base;
+    let base2 = c.active_qubits();
+    pop_step(&mut c, d, &mut st, nb, bound);
+    let peak_pop = c.peak_total().saturating_sub(base2);
+    let (nq, nbits_) = c.i13_dims();
+    let ops = c.take_ops();
+    let (ccx_push, ccx_pop) = (ccx_count(&ops[..mid]), ccx_count(&ops[mid..]));
+    let live_push: std::collections::HashSet<u64> = d.iter().chain(pushed.iter()).map(|q| q.0).collect();
+    let live_pop: std::collections::HashSet<u64> = d.iter().chain(st.iter()).map(|q| q.0).collect();
+    for x in 0..bound {
+        for dv in 0..243u64 {
+            let mut s = Sim::new(nq, nbits_);
+            set(&mut s.q, &st0, x);
+            set(&mut s.q, &d, dv);
+            for op in &ops[..mid] {
+                s.step(op);
+            }
+            let y = 243 * x + dv;
+            assert_eq!(val(&s.q, &d), y & 255, "push low byte bound={bound} x={x} d={dv}");
+            assert_eq!(val(&s.q, &pushed), y >> 8, "push state bound={bound} x={x} d={dv}");
+            assert!(y >> 8 < nb);
+            assert!(s.q.iter().enumerate().all(|(i, &b)| !b || live_push.contains(&(i as u64))), "push garbage bound={bound} x={x} d={dv}");
+            assert!(s.phase.is_zero(), "push phase bound={bound} x={x} d={dv}");
+            for op in &ops[mid..] {
+                s.step(op);
+            }
+            assert_eq!(val(&s.q, &d), dv);
+            assert_eq!(val(&s.q, &st), x);
+            assert!(s.q.iter().enumerate().all(|(i, &b)| !b || live_pop.contains(&(i as u64))), "pop garbage bound={bound} x={x} d={dv}");
+            assert!(s.phase.is_zero(), "pop phase bound={bound} x={x} d={dv}");
+        }
+    }
+    (ccx_push, ccx_pop, peak_push, peak_pop)
+}
+
+/// Whole chain lifecycle through the walk's own Tape calls (pack_due in forward order, ensure_raw + take in reverse
+/// order, as the walkback does). `words` = None: every word of the `len` chained groups (243^len); Some(n): n
+/// pseudo-random words.
+fn test_lifecycle(len: usize, words: Option<usize>) -> (usize, usize, usize, u32) {
+    std::env::set_var("SQ_A2_CHAINS", "1");
+    std::env::set_var("SQ_A2_LEN", len.to_string());
+    std::env::set_var("SQ_A2_FIRST", "0");
+    let r = 5 * len + 5;
+    let mut c = Builder::new();
+    let mut tape = Tape::new(r);
+    let mut inputs = Vec::new();
+    let plain = 8 * len;
+    for t in 0..r {
+        let qs = c.alloc_qubits(2);
+        inputs.push((c.op_count(), qs[0], qs[1]));
+        tape.raw[t] = Some((qs[0], qs[1]));
+        tape.pack_due(&mut c, t, r, false);
+    }
+    // groups 0..len-1 are chained; the extra group stays live, as the walk's head does
+    assert!(tape.chains[0].as_ref().is_some_and(|ch| ch.top == len - 1));
+    let chained_wires: usize = tape.chains[0].as_ref().unwrap().state.len() + 8 * (len - 1);
+    let mut reads = Vec::new();
+    for t in (0..r).rev() {
+        tape.ensure_raw(&mut c, t);
+        if t > 0 {
+            tape.ensure_raw(&mut c, t - 1);
+        }
+        let (a, b) = tape.raw[t].take().unwrap();
+        reads.push((c.op_count(), t, a, b));
+        c.free(a);
+        c.free(b);
+    }
+    assert!(tape.all_consumed());
+    let (nq, nb) = c.i13_dims();
+    let peak = c.peak_total();
+    let ops = c.take_ops();
+    let total = words.unwrap_or_else(|| 243usize.pow(len as u32));
+    let mut rng = 0x9E3779B97F4A7C15u64 ^ len as u64;
+    for word in 0..total {
+        let mut s = Sim::new(nq, nb);
+        let letters: Vec<usize> = (0..r)
+            .map(|t| {
+                if words.is_none() && t < 5 * len {
+                    (word / 3usize.pow(t as u32)) % 3
+                } else {
+                    rng ^= rng << 13;
+                    rng ^= rng >> 7;
+                    rng ^= rng << 17;
+                    (rng % 3) as usize
+                }
+            })
+            .collect();
+        let (mut ii, mut ri) = (0, 0);
+        for pos in 0..=ops.len() {
+            while ii < inputs.len() && inputs[ii].0 == pos {
+                let (_, a, b) = inputs[ii];
+                assert!(!s.q[a.0 as usize] && !s.q[b.0 as usize]);
+                let (va, vb) = letter(letters[ii]);
+                s.q[a.0 as usize] = va;
+                s.q[b.0 as usize] = vb;
+                ii += 1;
+            }
+            while ri < reads.len() && reads[ri].0 == pos {
+                let (_, t, a, b) = reads[ri];
+                assert_eq!((s.q[a.0 as usize], s.q[b.0 as usize]), letter(letters[t]), "lifecycle len={len} word={word} t={t}");
+                s.q[a.0 as usize] = false;
+                s.q[b.0 as usize] = false;
+                ri += 1;
+            }
+            if pos < ops.len() {
+                s.step(&ops[pos]);
+            }
+        }
+        assert!(s.q.iter().all(|b| !b), "lifecycle garbage len={len} word={word}");
+        assert!(s.phase.is_zero(), "lifecycle phase len={len} word={word}");
+    }
+    std::env::remove_var("SQ_A2_CHAINS");
+    (total, plain, chained_wires, peak)
+}
+
+pub fn selftest() {
+    for synth in [true, false] {
+        if synth { std::env::set_var("HEO_CODEC_SYNTH", "1"); } else { std::env::remove_var("HEO_CODEC_SYNTH"); }
+        println!("{{\"kind\":\"a2-codec-mode\",\"p3_synthesized\":{synth}}}");
+        selftest_mode(synth);
+    }
+}
+
+fn selftest_mode(full: bool) {
+    let table = p5_table();
+    test_pi(&table);
+    // every push/pop step of chains up to 60 groups (bounds 243 -> 19), exhaustive over its whole input domain
+    let mut b = 243u64;
+    let mut tot = (0, 0);
+    let maxk: usize = if full { env_usize("SQ_A2_TEST_STEPS", 59) } else { 0 };
+    for k in 1..=maxk {
+        let (cp, cq, pk, pq) = test_step(b);
+        let nb = next_bound(b);
+        if k <= 13 {
+            tot.0 += cp;
+            tot.1 += cq;
+        }
+        println!("{{\"kind\":\"a2-chain-step\",\"push\":{k},\"bound_in\":{b},\"bound_out\":{nb},\"register_in\":{},\"register_out\":{},\"cases\":{},\"ccx_push\":{cp},\"ccx_pop\":{cq},\"scratch_push\":{pk},\"scratch_pop\":{pq},\"value\":\"pass\",\"phase\":\"pass\",\"cleanup\":\"pass\"}}",
+                 nbits(b) + 8, nbits(nb) + 8, b * 243);
+        b = nb;
+    }
+    if full {
+        println!("{{\"kind\":\"a2-chain14-cost\",\"groups\":14,\"wires_saved\":1,\"ccx_merge_steps\":{},\"ccx_unmerge_steps\":{}}}", tot.0, tot.1);
+    }
+    let (n, plain, wires, peak) = test_lifecycle(2, None);
+    println!("{{\"kind\":\"a2-tape-lifecycle\",\"chain_groups\":2,\"words\":{n},\"exhaustive\":true,\"plain_wires\":{plain},\"chained_wires\":{wires},\"peak\":{peak},\"value\":\"pass\",\"phase\":\"pass\",\"cleanup\":\"pass\"}}");
+    let nw = env_usize("SQ_A2_TEST_WORDS", 3000);
+    let (n, plain, wires, peak) = test_lifecycle(14, Some(if full { nw } else { nw / 10 }));
+    println!("{{\"kind\":\"a2-tape-lifecycle\",\"chain_groups\":14,\"words\":{n},\"exhaustive\":false,\"plain_wires\":{plain},\"chained_wires\":{wires},\"peak\":{peak},\"value\":\"pass\",\"phase\":\"pass\",\"cleanup\":\"pass\"}}");
+}
+
+pub fn wide_selftest(){
+ let mut c=Builder::new();let d:[QubitId;8]=c.alloc_qubits(8).try_into().unwrap();let st0=c.alloc_qubits(8);let mut st=st0.clone();
+ merge_seed(&mut c,d,&mut st);let joined=st.clone();let mid=c.op_count();let restored=split_seed(&mut c,&mut st);
+ assert_eq!(restored,d);assert_eq!(st,st0);let(nq,nb)=c.i13_dims();let ops=c.take_ops();
+ for x in 0..243u64{for y in 0..243u64{let mut s=Sim::new(nq,nb);set(&mut s.q,&st0,x);set(&mut s.q,&d,y);
+ for o in &ops[..mid]{s.step(o);}assert_eq!(val(&s.q,&joined),243*x+y);
+ for o in &ops[mid..]{s.step(o);}assert_eq!(val(&s.q,&st0),x);assert_eq!(val(&s.q,&d),y);assert!(s.phase.is_zero());}}
+ println!("WIDE_SEED PASS cases=59049 ccx={}",ccx_count(&ops[..mid]));
+ for bound in [59049u64,32769,32768,8193,2049,1365,1025]{
+ let mut c=Builder::new();let d:[QubitId;8]=c.alloc_qubits(8).try_into().unwrap();let st0=c.alloc_qubits(nbits(bound));let mut st=st0.clone();
+ let new_bound=push_step(&mut c,d,&mut st,bound);let joined=st.clone();let mid=c.op_count();pop_step(&mut c,d,&mut st,new_bound,bound);let(nq,nb)=c.i13_dims();let ops=c.take_ops();
+ for i in 0..8192u64{let x=if i<2{i*(bound-1)}else{(i*7193+239)%bound};let y=(i*17)%243;let mut s=Sim::new(nq,nb);set(&mut s.q,&st0,x);set(&mut s.q,&d,y);
+ for o in &ops[..mid]{s.step(o);}assert_eq!(val(&s.q,&joined),(243*x+y)>>8);assert_eq!(val(&s.q,&d),(243*x+y)&255);
+ for o in &ops[mid..]{s.step(o);}assert_eq!(val(&s.q,&st0),x);assert_eq!(val(&s.q,&d),y);assert!(s.phase.is_zero());
+ for q in 0..nq{if !d.contains(&QubitId(q as u64))&&!st0.contains(&QubitId(q as u64)){assert!(!s.q[q]);}}
+ }println!("WIDE_STEP PASS bound={bound} cases=8192 ccx={}",ccx_count(&ops[..mid]));
+ }
+}
+
+pub(super) fn dense_on()->bool {wide_state()&&std::env::var_os("WALK_DENSE").is_some()}
+fn bits128(x:u128)->usize{assert!(x>1);128-(x-1).leading_zeros() as usize}
+// Multiply the full stack state by3 and insert a legal binary-coded trit.
+// Each three-wire window is the inverse of restoring division by3.
+pub(super) fn dense_push(c:&mut Builder,d:[QubitId;2],state:&mut Vec<QubitId>,bound:u128){
+ assert_eq!(state.len(),bits128(bound));let w=state.len();let mut r=d.to_vec();r.extend(state.iter().copied());
+ for j in 0..w{let(a,b,h)=(r[j],r[j+1],r[j+2]);c.x(h);c.ccx(h,a,b);c.cx(h,a);c.x(h);c.x(a);c.cx(a,b);c.ccx(a,b,h);}
+ let width=bits128(3*bound);while r.len()>width {c.release_clean(r.pop().unwrap());}*state=r;
+}
+pub(super) fn dense_pop_digit(c:&mut Builder,state:&mut Vec<QubitId>,bound:u128)->[QubitId;2]{
+ assert_eq!(state.len(),bits128(3*bound));let w=bits128(bound);let mut r=state.clone();while r.len()<w+2{r.push(c.alloc_qubit());}
+ for j in (0..w).rev(){let(a,b,h)=(r[j],r[j+1],r[j+2]);c.ccx(a,b,h);c.cx(a,b);c.x(a);c.x(h);c.cx(h,a);c.ccx(h,a,b);c.x(h);}
+ *state=r[2..].to_vec();r[..2].try_into().unwrap()
+}
+impl Tape {
+ fn refresh_aliases(&mut self){
+  if let Some(ch)=self.chains[0].as_ref(){let q=ch.state[0];for p in self.groups.iter_mut().flatten(){if p.state==GState::ChainBase{p.a2=q;p.a1=q;p.a0=q;p.h3=q;p.l3=q;p.b2=q;p.b1=q;p.b0=q;}}}
+ }
+ fn dense_bound(&self)->u128 {self.dense_tail.last().map_or_else(||*self.chains[0].as_ref().unwrap().bounds.last().unwrap() as u128,|&(_,b)|3*b)}
+ pub(super) fn dense_pack_to(&mut self,c:&mut Builder,last:usize){
+  let start=self.dense_tail.last().map_or(351,|&(u,_)|u+1);
+  for u in start..=last {
+   let Some((t,s))=self.raw[u]else{break;};if t==crate::circuit::NO_QUBIT{break;}
+   assert!(self.shared[self.gid(u)].is_none(),"dense codec cannot discard shared carry");
+   let bound=self.dense_bound();dense_push(c,[t,s],&mut self.chains[0].as_mut().unwrap().state,bound);self.raw[u]=None;self.dense_tail.push((u,bound));self.refresh_aliases();
+  }
+ }
+ pub(super) fn dense_pop(&mut self,c:&mut Builder,u:usize){
+  while self.dense_tail.last().is_some_and(|&(v,_)|v>=u){
+   let(v,bound)=self.dense_tail.pop().unwrap();assert!(self.raw[v].is_none());let d=dense_pop_digit(c,&mut self.chains[0].as_mut().unwrap().state,bound);self.raw[v]=Some((d[0],d[1]));self.refresh_aliases();
+   let g=self.gid(v);let t0=5*g+self.off;
+   if g>self.gid(u) && v==t0 && self.state(g)==GState::Raw {
+    let complete=(t0..(t0+5).min(self.raw.len())).all(|i|self.raw[i].is_some_and(|(q,_)|q!=crate::circuit::NO_QUBIT));
+    if complete{self.repack(c,g,self.raw.len());}
+   }
+  }
+ }
+ pub(super) fn dense_repack_all(&mut self,c:&mut Builder,last:usize){
+  let start=self.dense_tail.last().map_or(351,|&(u,_)|u+1);
+  for u in start..=last{self.ensure_raw(c,u);self.dense_pack_to(c,u);}
+  assert_eq!(self.dense_tail.last().unwrap().0,last);
+ }
+}
+pub fn dense_selftest(){
+ for bound in [2u128,3,4,7,8,31,64,1000,59049,1u128<<60,7u128<<75]{
+  let mut c=Builder::new();let d:[QubitId;2]=c.alloc_qubits(2).try_into().unwrap();let st0=c.alloc_qubits(bits128(bound));let mut st=st0.clone();
+  dense_push(&mut c,d,&mut st,bound);let joined=st.clone();let mid=c.op_count();let dout=dense_pop_digit(&mut c,&mut st,bound);let(nq,nb)=c.i13_dims();let ops=c.take_ops();
+  let set128=|s:&mut Sim,qs:&[QubitId],v:u128|{for(i,q)in qs.iter().enumerate(){s.q[q.0 as usize]=(v>>i)&1!=0;}};
+  let val128=|s:&Sim,qs:&[QubitId]|{qs.iter().enumerate().fold(0u128,|v,(i,q)|v|((s.q[q.0 as usize] as u128)<<i))};
+  let count=bound.min(4096);for i in 0..count{let x=if bound<=4096{i}else if i<2{i*(bound-1)}else{(i*14424738719u128*2348261827)%bound};for dv in 0..3u128{
+   let mut sim=Sim::new(nq,nb);set128(&mut sim,&st0,x);set128(&mut sim,&d,dv);for o in &ops[..mid]{sim.step(o);}assert_eq!(val128(&sim,&joined),3*x+dv);
+   for o in &ops[mid..]{sim.step(o);}assert_eq!(val128(&sim,&st),x);assert_eq!(val128(&sim,&dout),dv);assert!(sim.phase.is_zero());
+  }}println!("DENSE_STEP PASS bound={bound} cases={} ccx={}",3*count,ccx_count(&ops[..mid]));
+ }
+}
+
+pub fn comparator_selftest(){
+ for w in 1..=7usize{for seeded in [false,true]{
+ let mut c=Builder::new();let a=c.alloc_qubits(w);let b=c.alloc_qubits(w);let seed=seeded.then(||c.alloc_qubit());let out=c.alloc_qubit();
+ crate::point_add::width_composition::xor_lt_seed(&mut c,&a,&b,seed,out);let(nq,nb)=c.i13_dims();let ops=c.take_ops();let mut cases=0;
+ for av in 0..1u64<<w{for bv in 0..1u64<<w{for ci in 0..if seeded{2}else{1}{for before in [false,true]{
+ let mut s=Sim::new(nq,nb);set(&mut s.q,&a,av);set(&mut s.q,&b,bv);if let Some(q)=seed{s.q[q.0 as usize]=ci!=0;}s.q[out.0 as usize]=before;
+ for o in &ops{s.step(o);}assert_eq!(s.q[out.0 as usize],before^(av<bv+ci));assert_eq!(val(&s.q,&a),av);assert_eq!(val(&s.q,&b),bv);if let Some(q)=seed{assert_eq!(s.q[q.0 as usize],ci!=0);}assert!(s.phase.is_zero());cases+=1;
+ }}}}println!("BORROW_CMP PASS width={w} seeded={seeded} cases={cases}");
+ }}
+}
+
+// Two exact radix-three stacks give sequential batch access without expanding
+// the untouched suffix into separately rounded P3/P5 groups.
+pub(super) struct DenseZip{pub(super) state:Vec<QubitId>,order:Vec<usize>,bound:u128}
+impl DenseZip{
+ fn new()->Self{Self{state:Vec::new(),order:Vec::new(),bound:1}}
+ fn push(&mut self,c:&mut Builder,u:usize,d:[QubitId;2]){
+  if self.order.is_empty(){self.state=d.to_vec();}else{dense_push(c,d,&mut self.state,self.bound);}
+  self.bound*=3;self.order.push(u);
+ }
+ fn pop(&mut self,c:&mut Builder)->(usize,[QubitId;2]){
+  let u=self.order.pop().unwrap();self.bound/=3;
+  let d=if self.order.is_empty(){std::mem::take(&mut self.state).try_into().unwrap()}else{dense_pop_digit(c,&mut self.state,self.bound)};(u,d)
+ }
+}
+impl Tape{
+ fn dense_take_digit(&mut self,c:&mut Builder,u:usize)->[QubitId;2]{
+  let(v,b)=self.dense_tail.pop().unwrap();assert_eq!(u,v);assert!(self.raw[u].is_none());
+  let d=dense_pop_digit(c,&mut self.chains[0].as_mut().unwrap().state,b);self.refresh_aliases();d
+ }
+ pub(super) fn dense_batch_begin(&mut self,c:&mut Builder,first:usize,division:bool){
+  assert!(self.dense_zip.is_none());let last=self.raw.len()-1;self.dense_pack_to(c,last);assert_eq!(self.dense_tail.last().unwrap().0,last);
+  let mut zip=DenseZip::new();if division{for u in (first..=last).rev(){let d=self.dense_take_digit(c,u);zip.push(c,u,d);}}
+  self.dense_zip=Some(zip);
+ }
+ pub(super) fn dense_batch_get(&mut self,c:&mut Builder,t:usize,division:bool){
+  assert!(self.raw[t].is_none());let d=if division{let(u,d)=self.dense_zip.as_mut().unwrap().pop(c);assert_eq!(u,t);d}else{self.dense_take_digit(c,t)};self.raw[t]=Some((d[0],d[1]));
+ }
+ pub(super) fn dense_batch_put(&mut self,c:&mut Builder,t:usize,division:bool){
+  if division{self.dense_pack_to(c,t);}else{let(a,b)=self.raw[t].take().unwrap();self.dense_zip.as_mut().unwrap().push(c,t,[a,b]);}
+  assert!(self.raw[t].is_none());
+ }
+ pub(super) fn dense_batch_end(&mut self,c:&mut Builder,last:usize){
+  let mut zip=self.dense_zip.take().unwrap();while !zip.order.is_empty(){let(u,d)=zip.pop(c);assert!(self.raw[u].is_none());self.raw[u]=Some((d[0],d[1]));self.dense_pack_to(c,u);}
+  let d=self.dense_take_digit(c,last);self.raw[last]=Some((d[0],d[1]));
+ }
+}
+
+pub fn zip_selftest(){
+ for count in [2usize,5,20,25,44]{
+ let mut c=Builder::new();let ds:Vec<[QubitId;2]>=(0..count).map(|_|c.alloc_qubits(2).try_into().unwrap()).collect();
+ let mut zip=DenseZip::new();for(u,&d)in ds.iter().enumerate(){zip.push(&mut c,u,d);}let mut cuts=Vec::new();let mut second=DenseZip::new();
+ for u in (0..count).rev(){let(v,d)=zip.pop(&mut c);assert_eq!(u,v);cuts.push((c.op_count(),u,d));second.push(&mut c,u,d);}
+ for u in 0..count{let(v,d)=second.pop(&mut c);assert_eq!(u,v);cuts.push((c.op_count(),u,d));}
+ let(nq,nb)=c.i13_dims();let ops=c.take_ops();for sample in 0..512usize{
+ let values:Vec<_>=(0..count).map(|j|((sample.wrapping_mul(1937+j*741)+j*j*31+(sample>>(j%8)))%3)as u64).collect();let mut sim=Sim::new(nq,nb);for(&d,&v)in ds.iter().zip(&values){set(&mut sim.q,&d,v);}
+ let mut at=0;for &(end,u,d)in &cuts{for op in &ops[at..end]{sim.step(op);}assert_eq!(val(&sim.q,&d),values[u],"zip count={count} u={u} sample={sample}");at=end;}assert!(sim.phase.is_zero());
+ }println!("ZIP PASS letters={count} cases=512 ccx={}",ccx_count(&ops));
+ }
+}
