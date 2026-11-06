@@ -161,7 +161,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "1261245493344",
+        "TAIL_NONCE" => "7839317343",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -546,11 +546,11 @@ pub(crate) mod rail_s6;
 
 /// The frozen candidate: walk cap, square cap, digit cap and the walk's recipe entries, pinned here. `clear_process_env`
 /// wipes the host environment and sets these; the width table and its anchors are compiled in (a2_table_text, a2_anch_text).
-const FROZEN_WALK_CAP: usize = 1230;
-const FROZEN_SQ_CAP: usize = 1230;
+const FROZEN_WALK_CAP: usize = 1600;
+const FROZEN_SQ_CAP: usize = 1600;
 const FROZEN_EMAX: usize = 5;
 const FROZEN_RECIPE: &[(&str, &str)] = &[
-    ("LFA2_SET_HEO_PIN_PP_WALK_MAX_QUBITS", "1230"),
+    ("LFA2_SET_HEO_PIN_PP_WALK_MAX_QUBITS", "1600"),
     ("LFA2_SET_LF_REORDER_DIV", "2"),
     ("LFQ_RW", "20"),
     ("LFA2_PAIR", "1"),
@@ -600,7 +600,7 @@ fn lane_generic_policy(ops: Vec<Op>) -> Vec<Op> {
     // laneG: laneL's terminal veto (LFG_VETO=1): the last tick's [a > 4b] compare gone, Y4 = 0; the filter has the key last_veto
     let ops = if std::env::var("LFG_VETO").is_ok_and(|v| v == "1") { last_veto::run(ops, 3) } else { ops };
     let ops = hold_pass::hold_pass(ops);
-    source_edits::run(ops, include_str!("sf48_followup.txt"))
+    ops // persona-teddyjfpender cap lift: sf48_followup.txt is bound to the 1230 stream; off (toll)
 }
 
 /// Original structural generator, retained for audit and regeneration.

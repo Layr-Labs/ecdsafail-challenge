@@ -4098,7 +4098,10 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
 
     for &(lo, hi) in &bounds {
         let room=walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
-        let no_cout=hi==addend.len() && lo>0 && hi-lo>=3 && pinned.is_none() && NO_COUT.with(|f|f.get());
+        // persona-teddyjfpender cap lift: a one-chunk padded-top add (only reachable with more room; it panics below
+        // otherwise) takes the same no-carry-out known-top ripple as a last chunk, with no carry-in.
+        let one_pad=pad_top && lo==0 && bounds.len()==1 && Y15_CARRY_IN.with(|k|k.get()).is_none();
+        let no_cout=hi==addend.len() && (lo>0 || one_pad) && hi-lo>=3 && pinned.is_none() && NO_COUT.with(|f|f.get());
         let next=if no_cout {
             if let Some(d)=NO_COUT_TOP.with(|k|k.get()) {super::modular::KNOWN_TOP.with(|k|k.set(Some(d)));}
             let acc_last: &[QubitId] = if pad_top {pad_taken=true;&acc_full[lo..hi+1]} else {&acc[lo..hi]};
