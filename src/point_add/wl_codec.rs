@@ -128,23 +128,23 @@ fn wl_unpack(c: &mut Builder, b: usize) {
 }
 /// divide, after the payload-only pass: pack every block released by `upto`.
 pub(super) fn wl_codec_pack_upto(c: &mut Builder, upto: usize) {
-    if !WL_CODEC || !a2_code() || a2_pair() { return; }
+    if !WL_CODEC || !a2_code() { return; }
     for (b, &r) in WL_RELEASES.iter().enumerate() { if r <= upto { wl_pack(c, b); } }
 }
 /// start of fwd_tick(t): divide fused ticks and multiply rail-only ticks pack the block released at t.
 pub(super) fn wl_codec_fwd(c: &mut Builder, t: usize, fused: bool) {
-    if !WL_CODEC || !a2_code() || a2_pair() { return; }
+    if !WL_CODEC || !a2_code() { return; }
     let ph = c.phase_name();
     if (ph == "divide" && fused) || (ph == "multiply" && !fused) {
         for (b, &r) in WL_RELEASES.iter().enumerate() {
-            let due = if ph == "divide" { r == t && r > 37 } else { r == t };
+            let due = if ph == "divide" { r == t && r > lf_reorder(false) } else { r == t };
             if due { wl_pack(c, b); }
         }
     }
 }
 /// start of rev_tick(t): divide rail-only reverse pops every block at its last tick; multiply revF pops blocks >= 54.
 pub(super) fn wl_codec_rev(c: &mut Builder, t: usize, fused: bool) {
-    if !WL_CODEC || !a2_code() || a2_pair() { return; }
+    if !WL_CODEC || !a2_code() { return; }
     let ph = c.phase_name();
     for (b, &r) in WL_RELEASES.iter().enumerate() {
         let due = (ph == "divide" && !fused && r - 1 == t) || (ph == "multiply" && fused && r >= 54 && r - 1 == t);
@@ -153,7 +153,7 @@ pub(super) fn wl_codec_rev(c: &mut Builder, t: usize, fused: bool) {
 }
 /// multiply, between the revF loop and the payload-only reverse pass: pop the rest.
 pub(super) fn wl_codec_unpack_rest(c: &mut Builder) {
-    if !WL_CODEC || !a2_code() || a2_pair() { return; }
+    if !WL_CODEC || !a2_code() { return; }
     let left: Vec<usize> = WL_STATE.with(|s| s.borrow().keys().copied().collect());
     for b in left.into_iter().rev() { wl_unpack(c, b); }
 }

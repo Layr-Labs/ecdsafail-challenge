@@ -447,7 +447,6 @@ fn f_page5_out(c: &mut Builder, post: &mut [Rec], add: &mut [Lin], emax: usize, 
     // old->new substitution can merge a new q with another old placeholder.
     let q_ghost: Vec<QubitId> = (0..n).map(|_| f_ghost()).collect();
     for i in 0..n { y18_subst(post, q[i], q_ghost[i]); }
-    eprintln!("SF48_PAGE emax={emax} n={n} off={off} at={:?}", PAYLOAD_AT.with(|x|x.get()));
     Some(FPage5 { off, q_old: q, q_ghost, b })
 }
 fn f_page5_back(c: &mut Builder, post: &mut [Rec], add: &mut [Lin], p: FPage5) {
@@ -1177,14 +1176,11 @@ fn fold_fwd_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
     let (w110_al,w110_tl)=(c.active_qubits(),c.expected_total());
     prof.push(("ladder_peak", pk_l as i64));
     let ((), page_cleanup_peak) = c.r3_peak(|c| { if let Some(page5) = page5 {
-        if emax == 5 && sf48_page_on() {
-            sf48_page_cleanup(c, &mut post, &d, page5);
-        } else if emax == 7 && std::env::var_os("LFF_CUBIC_CLEANUP").is_some() {
+        if emax == 7 && std::env::var_os("LFF_CUBIC_CLEANUP").is_some() {
             f_page5_direct_cleanup(c, &mut post, &d, page5);
         } else {
-            if emax==5 {sf48_page_replay_cleanup(c,&mut post,&mut add,page5);} else {
             f_page5_back(c, &mut post, &mut add, page5);
-            while let Some(r) = post.pop() { f_pop(c, r); }}
+            while let Some(r) = post.pop() { f_pop(c, r); }
         }
     } else {
         while let Some(r) = post.pop() { f_pop(c, r); }
@@ -1379,14 +1375,11 @@ fn fold_inv_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
     f_inv_phase(c, "ladder_all", |c| if inv_drops.is_empty() { a_ladder_inv(c, acc, &add, kx, ckx, &plan) } else { a_ladder_inv_up_drop(c, acc, &add, kx, ckx, &plan, &inv_drops) });
     let (w110_al,w110_tl)=(c.active_qubits(),c.expected_total());
     let ((), page_cleanup_peak) = c.r3_peak(|c| { if let Some(page5) = page5 {
-        if emax == 5 && sf48_page_on() {
-            sf48_page_cleanup(c, &mut post, &d, page5);
-        } else if emax == 7 && std::env::var_os("LFF_CUBIC_CLEANUP").is_some() {
+        if emax == 7 && std::env::var_os("LFF_CUBIC_CLEANUP").is_some() {
             f_page5_direct_cleanup(c, &mut post, &d, page5);
         } else {
-            if emax==5 {sf48_page_replay_cleanup(c,&mut post,&mut add,page5);} else {
             f_page5_back(c, &mut post, &mut add, page5);
-            while let Some(r) = post.pop() { f_pop(c, r); }}
+            while let Some(r) = post.pop() { f_pop(c, r); }
         }
     } else {
         while let Some(r) = post.pop() { f_pop(c, r); }
@@ -1787,127 +1780,5 @@ mod f_tests {
         let inp = inputs(emax, 57, 40, None, 77);
         check_f(true, emax, 57, room, fin, &inp);
         check_f(false, emax, 57, room, fin, &inp);
-    }
-}
-
-
-thread_local!{static SF48_POOL_I:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};}
-fn sf48_pool_next()->usize{SF48_POOL_I.with(|v|{let i=v.get();v.set(i+1);i})}
-fn sf48_pool_log(c:&Builder,i:usize){
-    if cfg!(test){return;}
-    use std::io::Write;
-    let st=c.y42_alloc_state();
-    let text=|v:&[u32]|if v.is_empty(){"-".to_string()}else{v.iter().map(|x|x.to_string()).collect::<Vec<_>>().join(",")};
-    let mut f=std::fs::OpenOptions::new().create(true).append(true).open("sf48-page-alloc.tsv").unwrap();
-    writeln!(f,"{}\t{}\t{}\t{}",i,text(&st.0),text(&st.1),st.2).unwrap();
-}
-fn sf48_pool_restore(c:&mut Builder,i:usize){
-    if cfg!(test){return;}
-    let row=include_str!("sf48_page_alloc.tsv").lines().filter(|l|!l.trim().is_empty()&&!l.starts_with('#')).nth(i).expect("sf48 current parent allocation row");
-    let v:Vec<_>=row.split('\t').collect();assert_eq!(v.len(),4);assert_eq!(v[0].parse::<usize>().unwrap(),i);
-    let parse=|s:&str|->Vec<u32>{if s=="-"{vec![]}else{s.split(',').map(|x|x.parse().unwrap()).collect()}};
-    let(q,b,n)=(parse(v[1]),parse(v[2]),v[3].parse::<u32>().unwrap());
-    // The existing checked API requires identical free quantum set and held bit set.
-    // It changes only allocation order / dead-bit availability, never a value.
-    c.narrow_alloc_set(&q,&b,n);
-    eprintln!("SF48_PAGE_RETURN i={i} free_q={} free_b={} next_b={n}",q.len(),b.len());
-}
-fn sf48_page_replay_cleanup(c:&mut Builder,post:&mut Vec<Rec>,add:&mut[Lin],p:FPage5){
-    let i=sf48_pool_next();f_page5_back(c,post,add,p);while let Some(r)=post.pop(){f_pop(c,r);}sf48_pool_log(c,i);
-}
-
-
-// Local generated cleanup.
-// SF48_PAGE_MODE is a compile-time research switch (off/on/fault).
-fn sf48_page_on() -> bool { true }
-fn sf48_page_symbol(name: &str, d: &FDig, post: &[Rec], p: &FPage5) -> Lin {
-    let own = |i: usize| match &post[i] { Rec::And(q,_,_) | Rec::Maj(q,_,_,_) => l(*q), _=>unreachable!() };
-    if let Some(s)=name.strip_prefix('k') { if let Ok(i)=s.parse::<usize>() { return d.k[i].clone(); } }
-    match name {
-        "ks"=>l(d.ks), "qseed"=>d.q.clone(), "Q4"=>own(0), "Q5"=>own(1),
-        "H0"=>own(13), "H1"=>own(14),
-        "R0"=>l(p.b[0]), "R1"=>l(p.b[1]), "R2"=>l(p.b[2]),
-        "B3"=>own(8), "B4"=>own(9), "B5"=>own(10), "B6"=>own(11), "B7"=>own(12),
-        _=>panic!("sf48 phase symbol {name}"),
-    }
-}
-fn sf48_page_term(c: &mut Builder,m: crate::circuit::BitId,factors: &[&[&str]],d:&FDig,post:&[Rec],p:&FPage5,hosts:&[QubitId]) {
-    assert_eq!(hosts.len(),3);
-    if factors.is_empty() {c.x(hosts[0]);c.z_if(hosts[0],m);c.x(hosts[0]);return;}
-    assert!(factors.len()<=3);
-    let forms:Vec<Lin>=factors.iter().map(|names|names.iter().fold(Lin::k(false),|a,n|a.x(&sf48_page_symbol(n,d,post,p)))).collect();
-    for (j,f) in forms.iter().enumerate(){lin_xor_into(c,f,hosts[j]);}
-    match forms.len(){1=>c.z_if(hosts[0],m),2=>c.cz_if(hosts[0],hosts[1],m),3=>c.ccz_if(hosts[0],hosts[1],hosts[2],m),_=>unreachable!()}
-    for (j,f) in forms.iter().enumerate().rev(){lin_xor_into(c,f,hosts[j]);}
-}
-fn sf48_page_erase(c:&mut Builder,name:&str,terms:&[&[&str]],cubes:&[[&[&str];3]],d:&FDig,post:&[Rec],p:&FPage5,hosts:&[QubitId]) {
-    let form=sf48_page_symbol(name,d,post,p);assert!(!form.one&&form.w.len()==1);
-    let q=form.w[0];let m=c.alloc_bit();c.hmr(q,m);c.release_clean(q);
-    for names in terms {
-        let single:Vec<&[&str]>=names.iter().map(std::slice::from_ref).collect();
-        sf48_page_term(c,m,&single,d,post,p,hosts);
-    }
-    for cube in cubes {
-        if false && name=="B3" {continue;}
-        sf48_page_term(c,m,cube,d,post,p,hosts);
-    }
-    c.free_bit(m);
-}
-fn sf48_page_cleanup(c:&mut Builder,post:&mut Vec<Rec>,d:&FDig,p:FPage5) {
-    let sf48_i=sf48_pool_next();
-    assert_eq!(post.len(),15);assert_eq!(p.off,2);assert_eq!(p.b.len(),3);assert_eq!(d.k.len(),9);
-    // Allocate exactly the three replay owners, using the parent's parity-helper
-    // allocation order. Their value remains ZERO; the paged R fields stay paged.
-    let mut hosts=Vec::new();
-    for i in 0..p.q_old.len(){
-        let(a,b)=match &post[p.off+i]{Rec::Maj(_,a,b,_) =>(a.clone(),b.clone()),_=>unreachable!()};
-        let _=lin_pair_on(c,&a,&b);let q=c.alloc_qubit();lin_pair_off(c,&a,&b);
-        y18_subst(post,p.q_ghost[i],q);hosts.push(q);
-    }
-
-    sf48_page_erase(c,"H1",&[&["H0"],&["k1","H0"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"B7",&[&[],&["k8"],&["ks"],&["H0"],&["k0","ks"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"H0",&[&[],&["k7"],&["k8"],&["B6"],&["k0","ks"],&["k7","B6"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"B6",&[&["k6"],&["ks"],&["B5"],&["k6","B5"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"B5",&[&["k5"],&["ks"],&["B4"],&["k5","B4"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"B4",&[&["k4"],&["ks"],&["B3"],&["k4","B3"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"B3",&[&["k3"],&["ks"],&["R2"],&["k1","k2"],&["k3","R2"],&["k7","R2"],&["k8","qseed"],&["k8","R2"],&["ks","qseed"]],&[[&["k1"],&["k2"],&["k7","k8","R2"]]],d,post,&p,&hosts);
-    sf48_page_erase(c,"R2",&[&["k2"],&["ks"],&["R1"],&["k2","k7"],&["k2","k8"],&["k2","R1"],&["k6","k7"],&["k6","R1"],&["k8","R1"]],&[[&["k1"],&["k7"],&["k6","R1"]]],d,post,&p,&hosts);
-    sf48_page_erase(c,"R1",&[&["k1"],&["R0"],&["k1","k6"],&["k1","k7"],&["k1","R0"],&["k4","k5"],&["k4","R0"],&["k5","R0"],&["k6","k7"],&["k6","R0"],&["k7","R0"]],&[[&["k0"],&["k4"],&["k5","R0"]]],d,post,&p,&hosts);
-    sf48_page_erase(c,"R0",&[&["k0"],&["k0","k5"],&["k0","k6"],&["k0","Q5"],&["k3","k4"],&["k3","Q5"],&["k4","k5"],&["k5","k6"],&["k6","Q5"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"Q5",&[&["k2","k3"],&["k2","Q4"],&["k3","k4"],&["k4","k5"],&["k5","Q4"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"Q4",&[&["k1","k2"],&["k1","qseed"],&["k2","k3"],&["k3","k4"],&["k4","qseed"]],&[],d,post,&p,&hosts);
-    // These fair zero measurements account for the three parent replay-owner
-    // events. Every parity host has been restored to ZERO before its HMR.
-    for &q in hosts.iter().rev(){let m=c.alloc_bit();c.hmr(q,m);c.free_bit(m);c.release_clean(q);}
-    post.clear();
-    sf48_pool_restore(c,sf48_i);
-}
-
-#[cfg(test)]
-mod sf48_page_tests {
-    use super::*;
-    fn write_raw(ops:Vec<crate::circuit::Op>,path:&std::path::Path) {
-        use std::io::Write;
-        let mut f=std::fs::File::create(path).unwrap();
-        for o in ops {for v in [o.kind as u64,o.q_control2.0,o.q_control1.0,o.q_target.0,o.c_target.0,o.c_condition.0,o.r_target.0] {f.write_all(&v.to_le_bytes()).unwrap();}}
-    }
-    #[test]
-    fn sf48_page_fixture() {
-        std::env::set_var("LFF_PAGE5","1");
-        let mut c=Builder::new();let kb=c.alloc_qubits(9);let ks=c.alloc_qubit();
-        let k:Vec<Lin>=kb.iter().map(|&q|l(q)).collect();
-        let mut qser=Vec::new();let mut q=r_and(&mut c,&mut qser,k[1].clone(),k[0].clone());
-        let mut qb=vec![k[0].clone(),k[1].x(&k[0])];
-        for i in 2..4 {qb.push(k[i].x(&k[i-1]).x(&q));q=r_maj(&mut c,&mut qser,k[i].clone(),k[i-1].clone(),q);}
-        let d=FDig{g:vec![],tt:Lin::k(false),pre:vec![],ngate:0,early_g7:false,r2:Lin::k(false),yw:vec![],yer:vec![],tw:vec![],trec:vec![],r3v:None,ks,qser:vec![],k,qb,q,tops:0,full:false};
-        let mut post=Vec::new();let mut add=f_fields(&mut c,&mut post,&d,5,57);
-        let p=f_page5_out(&mut c,&mut post,&mut add,5,true).unwrap();
-        if sf48_page_on() {sf48_page_cleanup(&mut c,&mut post,&d,p);} else {
-            f_page5_back(&mut c,&mut post,&mut add,p);while let Some(r)=post.pop(){f_pop(&mut c,r);}
-        }
-        while let Some(r)=qser.pop(){f_pop(&mut c,r);}
-        let dir=std::env::var("SF48_FIXTURE_DIR").unwrap();std::fs::create_dir_all(&dir).unwrap();
-        write_raw(c.take_ops(),&std::path::Path::new(&dir).join(format!("page-{}.raw",option_env!("SF48_PAGE_MODE").unwrap_or("off"))));
     }
 }
