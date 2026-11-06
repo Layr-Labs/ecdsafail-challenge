@@ -1,6 +1,3 @@
-mod span_product;
-mod wide_pair;
-mod wide_span;
 mod hold_pass;
 mod seed_mult;
 mod product_eraser;
@@ -164,7 +161,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "1212214319",
+        "TAIL_NONCE" => "1263270054086",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -291,7 +288,7 @@ pub(crate) fn build_point_add() -> Vec<Op> {
         if std::env::var("LFG_SQTX").is_ok_and(|v| v == "1") {
             lfg_square_section(circ, x);
         } else {
-        pingpong::with_phase_cap(Some(FROZEN_SQ_CAP), || sub_square(circ, x, y));
+        pingpong::with_phase_cap(Some(required_env::<usize>("LF_SQUARE_CAP")), || sub_square(circ, x, y));
         }
         circ.set_phase("multiply");
         if seams { leapfrog::multiply_seamed(circ, y, x, ox); } else { leapfrog::multiply(circ, y, x); }
@@ -603,8 +600,11 @@ fn lane_generic_policy(ops: Vec<Op>) -> Vec<Op> {
     // laneG: laneL's terminal veto (LFG_VETO=1): the last tick's [a > 4b] compare gone, Y4 = 0; the filter has the key last_veto
     let ops = if std::env::var("LFG_VETO").is_ok_and(|v| v == "1") { last_veto::run(ops, 3) } else { ops };
     let ops = hold_pass::hold_pass(ops);
-    let ops=source_edits::run(ops, include_str!("sf48_followup.txt"));
-    wide_span::simplify(span_product::simplify(wide_pair::simplify(span_product::simplify(ops))))
+    let ops=source_edits::run(ops,include_str!("bind81_followup.txt"));
+    if std::env::var("QSTEP87_LATE_OFF").ok().as_deref()==Some("1"){return ops;}
+    let ops=source_edits::run(ops,include_str!("qstep87_later.txt"));
+    let ops=source_edits::run(ops,include_str!("qstep87_ur.txt"));
+    if option_env!("ARMI94_OFF")==Some("1"){ops}else{source_edits::run(ops,include_str!("armi94_followup.txt"))}
 }
 
 /// Original structural generator, retained for audit and regeneration.
@@ -650,7 +650,16 @@ pub fn build_generated() -> Vec<Op> {
     std::env::set_var("LFA2_EMAX", FROZEN_EMAX.to_string());
     std::env::set_var("HEO_PIN_PP_WALK_MAX_QUBITS", FROZEN_WALK_CAP.to_string());
     std::env::set_var("LF_SQUARE_CAP", FROZEN_SQ_CAP.to_string());
+    let recipe=include_str!("bind81_recipe.txt").to_owned();
+    for line in recipe.lines(){if let Some((k,v))=line.split_once('='){std::env::set_var(k,v);}}
+    eprintln!("BIND81_RECIPE {}",recipe.replace('\n',";"));
     let mut ops = build_point_add();
+    {use std::io::Write;let mut f=std::io::BufWriter::new(std::fs::File::create("bind81-builder.raw").unwrap());
+     for o in &ops {for v in [o.kind as u64,o.q_control2.0,o.q_control1.0,o.q_target.0,o.c_target.0,o.c_condition.0,o.r_target.0]{f.write_all(&v.to_le_bytes()).unwrap();}}f.flush().unwrap();}
+    if std::env::var("BIND81_RAW").ok().as_deref()==Some("1"){
+       let mut x=Op::empty();x.kind=OperationType::X;x.q_target=QubitId(0);ops.extend(std::iter::repeat_n(x,96));return apply_tail_nonce(ops,required_env("TAIL_NONCE"));
+    }
+
     // Effort-8 INT / B7b (`HEO_EMIT_ONLY=1`, research overlay only): stop after emission (the HEO phase report and
     // K3B_CELL traces are complete here), skipping the simplifier chain and the ops.bin write. Sweep instrument.
     if heo::research_on() && std::env::var("HEO_EMIT_ONLY").is_ok_and(|v| v == "1") {

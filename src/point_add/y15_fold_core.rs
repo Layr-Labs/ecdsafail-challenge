@@ -1803,7 +1803,8 @@ fn sf48_pool_log(c:&Builder,i:usize){
 }
 fn sf48_pool_restore(c:&mut Builder,i:usize){
     if cfg!(test){return;}
-    let row=include_str!("sf48_page_alloc.tsv").lines().filter(|l|!l.trim().is_empty()&&!l.starts_with('#')).nth(i).expect("sf48 current parent allocation row");
+    let rows=include_str!("bind81_page_alloc.tsv").to_owned();
+    let row=rows.lines().filter(|l|!l.trim().is_empty()&&!l.starts_with('#')).nth(i).expect("bind81 fresh off-state allocation row");
     let v:Vec<_>=row.split('\t').collect();assert_eq!(v.len(),4);assert_eq!(v[0].parse::<usize>().unwrap(),i);
     let parse=|s:&str|->Vec<u32>{if s=="-"{vec![]}else{s.split(',').map(|x|x.parse().unwrap()).collect()}};
     let(q,b,n)=(parse(v[1]),parse(v[2]),v[3].parse::<u32>().unwrap());
@@ -1819,7 +1820,7 @@ fn sf48_page_replay_cleanup(c:&mut Builder,post:&mut Vec<Rec>,add:&mut[Lin],p:FP
 
 // Local generated cleanup.
 // SF48_PAGE_MODE is a compile-time research switch (off/on/fault).
-fn sf48_page_on() -> bool { true }
+fn sf48_page_on() -> bool { std::env::var("BIND81_PAGE_ON").ok().as_deref()==Some("1") }
 fn sf48_page_symbol(name: &str, d: &FDig, post: &[Rec], p: &FPage5) -> Lin {
     let own = |i: usize| match &post[i] { Rec::And(q,_,_) | Rec::Maj(q,_,_,_) => l(*q), _=>unreachable!() };
     if let Some(s)=name.strip_prefix('k') { if let Ok(i)=s.parse::<usize>() { return d.k[i].clone(); } }

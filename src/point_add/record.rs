@@ -111,6 +111,7 @@ impl PeakCensus {
             return;
         }
         let (file, line) = self.batch.unwrap_or((file, line));
+        bind81_alloc("A",at,qid,file,line);
         self.owner.insert(qid, (at.phase, file, line));
         self.sample(at);
     }
@@ -119,6 +120,7 @@ impl PeakCensus {
         if !self.enabled {
             return;
         }
+        bind81_alloc("F",at,qid,"-",0);
         self.owner.remove(&qid);
         self.sample(at);
     }
@@ -150,6 +152,7 @@ impl PeakCensus {
 
     /// Report, if the window never closed on its own.
     pub fn finalize(&mut self) {
+        bind81_flush();
         if self.enabled && !self.printed {
             self.print();
         }
@@ -367,3 +370,7 @@ impl ReplaySites {
         }
     }
 }
+
+thread_local!{static BIND81_ALLOC:std::cell::RefCell<std::io::BufWriter<std::fs::File>>=std::cell::RefCell::new(std::io::BufWriter::new(std::fs::File::create("bind81-alloc.tsv").unwrap()));}
+fn bind81_alloc(k:&str,at:At,q:u64,file:&str,line:u32){use std::io::Write;BIND81_ALLOC.with(|f|writeln!(f.borrow_mut(),"{}\t{}\t{}\t{}\t{}\t{}\t{}",k,at.op,q,at.active,at.phase,file,line).unwrap());}
+fn bind81_flush(){use std::io::Write;BIND81_ALLOC.with(|f|f.borrow_mut().flush().unwrap());}
