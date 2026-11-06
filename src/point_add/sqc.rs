@@ -119,11 +119,42 @@ pub(super) fn emit(c: &mut Builder, recs: &[Rec], inverse: bool) -> usize {
         if r.ocomp { if let Some(o) = o { c.x(o); } }
         if r.neg { c.x(r.x); } if let Some(k)=r.frame {c.cx(k,r.x);} delta(c, recs, tw, i);
     };
+    let fuse = if !inverse && n>=2 {
+        let i=n-2; let j=n-1; let r=&recs[i]; let z=&recs[j];
+        let uses:Vec<usize>=recs.iter().enumerate().flat_map(|(k,r)|[r.o,r.ci].into_iter().filter_map(move|w|matches!(w,Some(W::T(v))if v==i).then_some(k))).collect();
+        r.carry && !z.carry && matches!(z.ci,Some(W::T(v))if v==i) && uses==vec![j]
+          && recs[..j].iter().all(|r|r.col!=z.col) && r.x!=z.x
+          && !matches!(r.o,Some(W::Q(q))if q==z.x) && !matches!(r.ci,Some(W::Q(q))if q==z.x)
+          && r.frame!=Some(z.x) && !r.flips.contains(&z.x) && !z.flips.contains(&z.x)
+          && !matches!(z.o,Some(W::T(v))if v==i) && !matches!(z.o,Some(W::Q(q))if q==z.x)
+    }else{false};
     if !inverse {
-        for i in 0..n { fa(c, &recs[i], &mut tw, i, true); if tw[i].is_some() { ands += 1; } }
+        for i in 0..n {
+          if fuse && i==n-1 {continue;}
+          if fuse && i==n-2 {
+            let r=&recs[i];let z=&recs[i+1];let (o,ci)=(rw(r.o,&tw),rw(r.ci,&tw));
+            assert!(!rail_opt_complement(o,ci));assert!(o.is_some()||ci.is_some());
+            assert!(o!=Some(z.x)&&ci!=Some(z.x));
+            if r.neg{c.x(r.x);}if let Some(f)=r.frame{c.cx(f,r.x);}
+            if r.ocomp{if let Some(o)=o{c.x(o);}}
+            if let Some(ci)=ci{for &f in &r.flips{c.cx(f,ci);}}
+            match(o,ci){
+              (Some(o),Some(ci))=>{c.cx(ci,r.x);c.cx(ci,o);c.ccx(r.x,o,z.x);c.cx(ci,z.x);c.cx(ci,o);c.cx(o,r.x);},
+              (Some(o),None)=>{c.ccx(r.x,o,z.x);c.cx(o,r.x);},
+              (None,Some(ci))=>{c.ccx(r.x,ci,z.x);c.cx(ci,r.x);},
+              _=>unreachable!(),
+            }
+            if r.ocomp{if let Some(o)=o{c.x(o);}}
+            if r.neg{c.x(r.x);}if let Some(f)=r.frame{c.cx(f,r.x);}
+            if let Some(o)=rw(z.o,&tw){c.cx(o,z.x);if z.ocomp{c.x(z.x);}}
+            for &f in &z.flips{c.cx(f,z.x);}
+            ands+=1;eprintln!("CAP67_TAIL_FUSED phase={} op={} active={} n={}",c.current_phase(),c.op_count(),c.active_qubits(),n);
+          }else{fa(c,&recs[i],&mut tw,i,true);if tw[i].is_some(){ands+=1;}}
+        }
         for i in (0..n).rev() {
-            hold(c, recs, &mut tw, i, false);
-            if let Some(q) = rw(recs[i].ci, &tw) { for &f in recs[i].flips.iter().rev() { c.cx(f, q); } }
+            if fuse && i==n-1{continue;}
+            if !(fuse && i==n-2){hold(c,recs,&mut tw,i,false);}
+            if let Some(q)=rw(recs[i].ci,&tw){for &f in recs[i].flips.iter().rev(){c.cx(f,q);}}
         }
     } else {
         for i in 0..n {

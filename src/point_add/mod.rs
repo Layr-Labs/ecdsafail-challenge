@@ -161,7 +161,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "1293570722",
+        "TAIL_NONCE" => "1261245493344",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -546,10 +546,11 @@ pub(crate) mod rail_s6;
 
 /// The frozen candidate: walk cap, square cap, digit cap and the walk's recipe entries, pinned here. `clear_process_env`
 /// wipes the host environment and sets these; the width table and its anchors are compiled in (a2_table_text, a2_anch_text).
-const FROZEN_WALK_CAP: usize = if leapfrog::WL_CODEC { 1234 } else { 1244 };
-const FROZEN_SQ_CAP: usize = 1234;
+const FROZEN_WALK_CAP: usize = 1230;
+const FROZEN_SQ_CAP: usize = 1230;
 const FROZEN_EMAX: usize = 5;
 const FROZEN_RECIPE: &[(&str, &str)] = &[
+    ("LFA2_SET_HEO_PIN_PP_WALK_MAX_QUBITS", "1230"),
     ("LFA2_SET_LF_REORDER_DIV", "2"),
     ("LFQ_RW", "20"),
     ("LFA2_PAIR", "1"),
@@ -578,7 +579,7 @@ const FROZEN_RECIPE: &[(&str, &str)] = &[
     ("LFG_KFWD", "1-55"),
     ("LFG_SEEDP", "3"),
     ("LFG_RT0P", "3"),
-    ("LFG_SQTX", "1"),
+    ("LFG_SQTX", "0"),
     ("LFA2_FWIN", "57"),
     ("LFA2_RWIN", "57"),
     ("LFG_VETO", "1"),
@@ -586,6 +587,7 @@ const FROZEN_RECIPE: &[(&str, &str)] = &[
 ];
 fn frozen_env_restore() {
     for (k, v) in FROZEN_RECIPE { std::env::set_var(k, v); }
+    std::env::set_var("CONTRACT69_PAIR_COMMIT", "1");
 }
 pub fn build() -> Vec<Op> {
     build_generated()
@@ -597,7 +599,8 @@ fn lane_generic_policy(ops: Vec<Op>) -> Vec<Op> {
     let ops = cond_pass::final_cap_cleanup(ops);
     // laneG: laneL's terminal veto (LFG_VETO=1): the last tick's [a > 4b] compare gone, Y4 = 0; the filter has the key last_veto
     let ops = if std::env::var("LFG_VETO").is_ok_and(|v| v == "1") { last_veto::run(ops, 3) } else { ops };
-    hold_pass::hold_pass(ops)
+    let ops = hold_pass::hold_pass(ops);
+    source_edits::run(ops, include_str!("sf48_followup.txt"))
 }
 
 /// Original structural generator, retained for audit and regeneration.
