@@ -1,3 +1,6 @@
+mod span_product;
+mod wide_pair;
+mod wide_span;
 mod hold_pass;
 mod seed_mult;
 mod product_eraser;
@@ -161,7 +164,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "1261245493344",
+        "TAIL_NONCE" => "1212214319",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -600,7 +603,8 @@ fn lane_generic_policy(ops: Vec<Op>) -> Vec<Op> {
     // laneG: laneL's terminal veto (LFG_VETO=1): the last tick's [a > 4b] compare gone, Y4 = 0; the filter has the key last_veto
     let ops = if std::env::var("LFG_VETO").is_ok_and(|v| v == "1") { last_veto::run(ops, 3) } else { ops };
     let ops = hold_pass::hold_pass(ops);
-    source_edits::run(ops, include_str!("sf48_followup.txt"))
+    let ops=source_edits::run(ops, include_str!("sf48_followup.txt"));
+    wide_span::simplify(span_product::simplify(wide_pair::simplify(span_product::simplify(ops))))
 }
 
 /// Original structural generator, retained for audit and regeneration.
