@@ -34,7 +34,6 @@ pub(super) fn a2_emax(_t: usize) -> usize {
 }
 /// laneW: no record limit, one k3 cell per tick (research pricing of the uncoded dense walk).
 pub(super) fn a2_dense() -> bool {
-    if a2_pair() { return true; }
     static V: OnceLock<bool> = OnceLock::new();
     *V.get_or_init(|| std::env::var("LFA2_DENSE").is_ok_and(|v| v == "1"))
 }
@@ -47,9 +46,7 @@ pub(super) fn a2_s6() -> bool {
     *V.get_or_init(|| std::env::var("LFA2_S6").is_ok_and(|v| v == "1") && a2_emax(0) <= 5)
 }
 fn a2_rail_s6(w: usize) -> bool { a2_s6() && super::rail_s6::rail_s6_plan(w).is_some() }
-include!("pair_record.rs");
 pub(super) fn a2_code() -> bool {
-    if a2_pair() { return true; }
     static V: OnceLock<bool> = OnceLock::new();
     *V.get_or_init(|| std::env::var("LFA2_CODE").is_ok_and(|v| v == "1"))
 }
@@ -70,7 +67,6 @@ fn a2_sp_pair(t: usize) -> Option<(QubitId, QubitId)> {
 }
 /// End of a forward tick: the letter's k3 goes into the block's cells (positions 2 and 3), its wire leaves.
 fn a2_code_commit(c: &mut Builder, t: usize, k3: QubitId) {
-    if a2_pair() { return a2_pair_commit(c,t,k3); }
     let f = a2_field(t);
     match a2_pos(t) {
         1 => {}
@@ -152,7 +148,6 @@ fn a2_block_forms(c: &mut Builder, t: usize) -> (Lin, Lin, Lin, Lin) {
 }
 /// Random-access read of the block: fresh wires (k3, k2). 3 Toffoli; erase with [`a2_code_read_erase`] (one conditional AND).
 pub(super) fn a2_code_read(c: &mut Builder, t: usize) -> (QubitId, QubitId) {
-    if a2_pair() { return a2_pair_read(c,t); }
     let (a, b, a0, b0) = a2_block_forms(c, t);
     let u = lin_and(c, &a0, &b0);
     let k3 = lin_and(c, &a, &b.x(&Lin::of(&[u])));
@@ -165,7 +160,6 @@ pub(super) fn a2_code_read(c: &mut Builder, t: usize) -> (QubitId, QubitId) {
     (k3, k2)
 }
 pub(super) fn a2_code_read_erase(c: &mut Builder, t: usize, k3: QubitId, k2: QubitId) {
-    if a2_pair() { return a2_pair_read_erase(c,t,k3,k2); }
     let cp = a2_cell(t).expect("a2 code: own cell");
     c.x(k3);
     and_erase(c, k2, cp, k3);
@@ -267,7 +261,6 @@ fn a2_field(t: usize) -> [Option<QubitId>; 2] {
 /// spent(t): an e >= 4 event at an earlier position of t's triple, as a linear form of the field (written at
 /// positions < pos(t) only): pos 1: 0; pos 2: f0; pos 3: f0 ^ f1.
 fn a2_spent(t: usize) -> Lin {
-    if a2_pair() { return a2_pair_spent(t); }
     if a2_code() { return Lin::k(false); }
     // position 1, or rail 0's first triple at position 2 (its position-1 tick is tick 0: never an event)
     if a2_pos(t) == 1 || t == 2 {
@@ -381,7 +374,6 @@ fn a2_read(c: &mut Builder, t: usize) -> QubitId {
 /// field un-written (f ^= 3 k3); pos 2: k3 is f1 itself; pos 1: k3 is f0 itself (the field leaves with it). The
 /// returned wire is erased by the k-letter erase against the rail.
 fn a2_consume(c: &mut Builder, t: usize) -> QubitId {
-    if a2_pair() { return a2_pair_consume(c,t); }
     let id = a2_tid(t);
     if a2_code() {
         let f = a2_field(t);
@@ -498,26 +490,53 @@ pub(super) fn t3p1_maj_on() -> bool {
     *V.get_or_init(|| !a2_dense() && !a2_code() && (T3P1_MAJ_BAKED || std::env::var("T3P1_MAJ").is_ok_and(|v| v == "1")))
 }
 thread_local! {
-    /// The pack's measurement bit while the pack is out.
-    static T3P1_PACK: std::cell::RefCell<Option<crate::circuit::BitId>> = const { std::cell::RefCell::new(None) };
+    /// The pack's measurement bit while the pack is out (laneT: a stack of (tick, lo, hi, bit)).
+    static T3P1_PACK: std::cell::RefCell<Vec<(T3Pack, crate::circuit::BitId)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
-/// z: both field wires of triples 0 .. T3P1_MAJ_TIDS - 1.
-fn t3p1_maj_z() -> Vec<QubitId> {
-    A2_REC.with(|r| {
+/// laneT: LFT_PACK = "tick:lo-hi,..." majority packs of closed record triples lo..hi (x* = f0 of triple hi - 1). Without it, the baked T3P1 entry where that is on.
+#[derive(Clone, Copy)]
+struct T3Pack { t: usize, lo: usize, hi: usize, c1: usize, c2: usize, thr: usize, xf1: bool }
+fn t3p1_list() -> Vec<T3Pack> {
+    if let Ok(v) = std::env::var("LFT_PACK") {
+        return v.split(',').filter(|x| !x.is_empty()).map(|r| {
+            let (r, xf1) = match r.strip_suffix("+1") { Some(x) => (x, true), None => (r, false) };
+            let (r, thr) = match r.split_once('@') { Some((x, y)) => (x, y.parse().unwrap()), None => (r, 0) };
+            let mut it = r.split(':');
+            let t: usize = it.next().unwrap().parse().unwrap();
+            let (a, b) = it.next().unwrap().split_once('-').unwrap();
+            let (c1, c2) = match it.next() { Some(cr) => { let (x, y) = cr.split_once('-').unwrap(); (x.parse().unwrap(), y.parse::<usize>().unwrap() + 1) } None => (0, 0) };
+            T3Pack { t, lo: a.parse().unwrap(), hi: b.parse().unwrap(), c1, c2, thr, xf1 }
+        }).collect();
+    }
+    if t3p1_maj_on() { vec![T3Pack { t: T3P1_MAJ_TICK, lo: 0, hi: T3P1_MAJ_TIDS, c1: 0, c2: 0, thr: 0, xf1: false }] } else { Vec::new() }
+}
+/// z: both field wires of triples lo .. hi - 1, the k2 cells of ticks c1 .. c2 - 1, and (xf1) f1 of triple hi - 1.
+fn t3p1_maj_z(p: T3Pack) -> Vec<QubitId> {
+    let mut z = A2_REC.with(|r| {
         let r = r.borrow();
-        let mut z = Vec::with_capacity(2 * T3P1_MAJ_TIDS);
-        for id in 0..T3P1_MAJ_TIDS - 1 {
+        let mut z = Vec::with_capacity(2 * (p.hi - p.lo));
+        for id in p.lo..p.hi - 1 {
             let f = r.get(&id).unwrap_or_else(|| panic!("t3p1: triple {id} has no field at the pack"));
             for (s, q) in f.iter().enumerate() {
                 z.push(q.unwrap_or_else(|| panic!("t3p1: triple {id} slot {s} is empty at the pack")));
             }
         }
+        if p.xf1 { z.push(r.get(&(p.hi - 1)).and_then(|f| f[1]).expect("t3p1: f1 of the last triple")); }
         z
-    })
+    });
+    for t in p.c1..p.c2 { z.push(a2_cell(t).unwrap_or_else(|| panic!("t3p1: tick {t} has no k2 cell"))); }
+    z
 }
-pub(super) fn t3p1_pack(c: &mut Builder) {
-    let z = t3p1_maj_z();
-    let last = T3P1_MAJ_TIDS - 1;
+pub(super) fn t3p1_pack_tick(c: &mut Builder, t: usize) {
+    for p in t3p1_list() { if p.t == t { t3p1_pack(c, p); } }
+}
+pub(super) fn t3p1_unpack_tick(c: &mut Builder, t: usize) {
+    let top = T3P1_PACK.with(|s| s.borrow().iter().rev().take_while(|e| e.0.t == t).count());
+    for _ in 0..top { t3p1_unpack(c); }
+}
+fn t3p1_pack(c: &mut Builder, p: T3Pack) {
+    let z = t3p1_maj_z(p);
+    let last = p.hi - 1;
     let xs = A2_REC.with(|r| r.borrow().get(&last).and_then(|f| f[0])).expect("t3p1: x* (f0 of the last packed triple)");
     for &q in &z {
         c.cx(xs, q);
@@ -526,27 +545,24 @@ pub(super) fn t3p1_pack(c: &mut Builder) {
     c.hmr(xs, m);
     c.release_clean(xs);
     A2_REC.with(|r| r.borrow_mut().get_mut(&last).unwrap()[0] = None);
-    T3P1_PACK.with(|p| {
-        assert!(p.borrow().is_none(), "t3p1: pack while a pack is out");
-        *p.borrow_mut() = Some(m);
-    });
+    T3P1_PACK.with(|s| s.borrow_mut().push((p, m)));
     if std::env::var("ROOM_TRACE").is_ok_and(|v| v == "1") {
         eprintln!("T3P1_PACK out n={} active={}", z.len() + 1, c.active_qubits());
     }
 }
-pub(super) fn t3p1_unpack(c: &mut Builder) {
-    let m = T3P1_PACK.with(|p| p.borrow_mut().take()).expect("t3p1: unpack without a pack");
-    let z = t3p1_maj_z();
+fn t3p1_unpack(c: &mut Builder) {
+    let (p, m) = T3P1_PACK.with(|s| s.borrow_mut().pop()).expect("t3p1: unpack without a pack");
+    let z = t3p1_maj_z(p);
     let a0 = c.active_qubits();
     let e0 = c.expected_total();
     let xs = c.alloc_qubit();
-    let peak = t3p1_threshold_top(c, &z, xs);
+    let peak = t3p1_threshold_top(c, &z, xs, p.thr);
     c.z_if(xs, m);
     c.free_bit(m);
     for &q in &z {
         c.cx(xs, q);
     }
-    let last = T3P1_MAJ_TIDS - 1;
+    let last = p.hi - 1;
     A2_REC.with(|r| r.borrow_mut().get_mut(&last).unwrap()[0] = Some(xs));
     if std::env::var("ROOM_TRACE").is_ok_and(|v| v == "1") {
         eprintln!("T3P1_PACK in n={} active={a0} peak={peak} cost={:.1}", z.len() + 1, c.expected_total() - e0);
@@ -555,13 +571,15 @@ pub(super) fn t3p1_unpack(c: &mut Builder) {
 /// out ^= [wt(z) >= 2^k] with 2^k <= len(z) < 2^(k+1): carry-save reduction of the columns below k (full adders,
 /// a half adder's carry when two bits are left; residual column bits are never needed), the column-k bit copied
 /// out, every AND measured away. Returns the peak live count.
-fn t3p1_threshold_top(c: &mut Builder, z: &[QubitId], out: QubitId) -> u32 {
+fn t3p1_threshold_top(c: &mut Builder, z: &[QubitId], out: QubitId, thr: usize) -> u32 {
     let n = z.len();
     let k = (usize::BITS - 1 - n.leading_zeros()) as usize;
     assert!(n >= 2 && (1usize << k) <= n && n < (1usize << (k + 1)));
     enum St { Fa(QubitId, QubitId, QubitId, QubitId), Ha(QubitId, QubitId, QubitId) }
     let mut steps: Vec<St> = Vec::new();
     let mut col: Vec<QubitId> = z.to_vec();
+    // laneT: thr != 0: residual column bits, as forms, for the comparison [wt >= thr]
+    let mut res: Vec<Lin> = Vec::new();
     for _w in 0..k {
         let mut next = Vec::new();
         while col.len() >= 3 {
@@ -584,6 +602,11 @@ fn t3p1_threshold_top(c: &mut Builder, z: &[QubitId], out: QubitId) -> u32 {
             let carry = and_new(c, a, b);
             steps.push(St::Ha(a, b, carry));
             next.push(carry);
+            res.push(Lin::of(&[a, b]));
+        } else if col.len() == 1 {
+            res.push(Lin::of(&[col[0]]));
+        } else {
+            res.push(Lin::k(false));
         }
         col = next;
     }
@@ -591,7 +614,24 @@ fn t3p1_threshold_top(c: &mut Builder, z: &[QubitId], out: QubitId) -> u32 {
     if let Some(&b) = col.first() {
         c.cx(b, out);
     }
+    // laneT: out ^= [wt mod 2^k >= thr] for thr in (2^(k-1), 2^k), which excludes wt >= 2^k when n < 2^k + 2^(k-1)
+    let mut recs: Vec<(QubitId, Lin, Lin)> = Vec::new();
+    if thr != 0 && thr != (1 << k) {
+        assert!(thr > (1 << (k - 1)) && thr < (1 << k) && n < (1 << k) + (1 << (k - 1)), "t3p1: threshold {thr} for n = {n}");
+        let j = thr.trailing_zeros() as usize;
+        let mut ge = res[j].clone(); // [wt mod 2^(j + 1) >= thr mod 2^(j + 1)]
+        for i in j + 1..k {
+            let (a, b) = if thr >> i & 1 == 1 { (res[i].clone(), ge.clone()) } else { (res[i].x(&Lin::k(true)), ge.x(&Lin::k(true))) };
+            let q = lin_and(c, &a, &b);
+            ge = if thr >> i & 1 == 1 { l_of(q) } else { l_of(q).x(&Lin::k(true)) };
+            recs.push((q, a, b));
+        }
+        lin_xor_into(c, &ge, out);
+    }
     let peak = c.active_qubits();
+    while let Some((q, a, b)) = recs.pop() {
+        lin_and_erase(c, q, &a, &b);
+    }
     for s in steps.into_iter().rev() {
         match s {
             St::Fa(a, b, cc, carry) => {
@@ -607,7 +647,8 @@ fn t3p1_threshold_top(c: &mut Builder, z: &[QubitId], out: QubitId) -> u32 {
     }
     peak
 }
-pub(super) fn a2_rec_empty() -> bool { A2_REC.with(|r| r.borrow().is_empty()) && A2_PAIR_PACKED.with(|r| r.borrow().is_empty()) }
+fn l_of(q: QubitId) -> Lin { Lin::of(&[q]) }
+pub(super) fn a2_rec_empty() -> bool { A2_REC.with(|r| r.borrow().is_empty()) }
 /// round17 v4: R1 on A ticks (LFA2_R1, default on): the 8-way barrel has an R1 plan at width w no dearer than its plain one.
 fn a2_r1_ok(w: usize) -> bool {
     if a2_rail_s6(w) { return !std::env::var("LFA2_R1").is_ok_and(|v| v == "0"); }
@@ -629,7 +670,7 @@ fn fast_k_erase_a_g(c: &mut Builder, t: &[QubitId], k1: QubitId, k2: QubitId, k3
 
 /// Forget every field (tests that build several circuits in one process).
 #[cfg(test)]
-pub(super) fn a2_rec_clear() { A2_REC.with(|r| r.borrow_mut().clear()); A2_PAIR_PACKED.with(|r| r.borrow_mut().clear()); }
+pub(super) fn a2_rec_clear() { A2_REC.with(|r| r.borrow_mut().clear()) }
 
 /// [`zlin_on`] over bits 2..8 (A's deep candidate up to v = 8): t_i <- z_i = t_i ^ b_i ^ dq (i = 2..8).
 fn zlin_on_a(c: &mut Builder, t: &[QubitId], b: &[QubitId], vtop: usize) {
@@ -966,8 +1007,7 @@ fn yp8_reserve_a(tl: usize, bl: usize, t: usize, fwd: bool) -> usize {
     let pad = a2_emax(t) + 3;
     let old=yp8_reserve(tl, bl, t, fwd) + (a2_emax(t) - 2) + pad.saturating_sub((tl + 1).max(6)) + pad.saturating_sub((bl + 1).max(6));
     if std::env::var("RAIL_OPT_RESERVE").ok().as_deref()==Some("1") {
-        if a2_pair() { old - 3 + usize::from(a2_pair_second(t)) }
-        else if a2_code() { if a2_pos(t) <= 2 || t == 4 { old - 3 } else { old - 1 } } else { old-(2+usize::from(a2_pos(t)==1||t==2)) }
+        if a2_code() { if a2_pos(t) <= 2 || t == 4 { old - 3 } else { old - 1 } } else { old-(2+usize::from(a2_pos(t)==1||t==2)) }
     } else { old }
 }
 /// [`yp8_add_halve_forced_choice`] with the A decision (k3 and the record's spent form).
@@ -1092,31 +1132,6 @@ fn fast_k_erase_a(c: &mut Builder, t: &[QubitId], k1: QubitId, k2: QubitId, k3: 
         c.pop_condition();
     }
     c.free_bit(m1);
-    if emax <= 5 {
-        // Q3: k2 ^ k3 = z0 z1 on x3 = 2^e odd with e <= 5, so that wire goes last with a Clifford fix; k3 = (k2 ^ k3) z2 z3 goes
-        // first, one AND under its measurement instead of the two of z0 z1 z2 z3.
-        if w >= 6 { c.cx(k3, k2); }
-        let m3 = c.alloc_bit();
-        c.hmr(k3, m3);
-        c.release_clean(k3);
-        if w >= 6 {
-            c.push_condition(m3);
-            let b2 = and_new(c, t[2], t[3]);
-            c.cz(k2, b2);
-            and_erase(c, b2, t[2], t[3]);
-            c.pop_condition();
-        }
-        c.free_bit(m3);
-        let m2 = c.alloc_bit();
-        c.hmr(k2, m2);
-        c.release_clean(k2);
-        c.cz_if(t[0], t[1], m2);
-        c.free_bit(m2);
-        for i in (0..nz).rev() {
-            c.x(t[i]);
-        }
-        return;
-    }
     let m2 = c.alloc_bit();
     c.hmr(k2, m2);
     c.release_clean(k2);
@@ -1198,7 +1213,6 @@ pub(super) mod a2_ref {
         let mut rr = [r0, x.sar(1)];
         let fam = |m: u32| -> bool { let r0 = m & 0x15; let r1 = m & 0x2a; super::a2_dense() || if super::a2_code() { r0.count_ones() <= 2 && r1.count_ones() <= 2 } else { r0.count_ones() <= 1 && r1.count_ones() <= 1 } };
         let mut pfx: u32 = 0;
-        let mut pair_big = [false;6];
         let mut out = Vec::new();
         for t in 0..r {
             let a = t & 1;
@@ -1226,9 +1240,8 @@ pub(super) mod a2_ref {
             let v = if z { 99 } else { xd.ctz() };
             let e_eq = !z && (tk.neg_p() == (bn ^ !sd));
             if t % 6 == 0 { pfx = 0; }
-            let mut cap = if t == 0 || last || main || !super::a2_tick(t) { 3 } else { super::a2_emax(t) };
+            let mut cap = if t == 0 || last || main { 3 } else { super::a2_emax(t) };
             if cap > 3 && !fam(pfx | 1 << (t % 6)) { cap = 3; }
-            if super::a2_pair() && super::a2_pair_second(t) && pair_big[super::a2_pair_partner(t)%6] { cap=3; }
             let l = lwin(t);
             let h = anch[t.min(anch.len() - 1)].saturating_sub(l - 2);
             let (wa, wb) = (tk.winv(h, l), b.winv(h, l));
@@ -1248,7 +1261,6 @@ pub(super) mod a2_ref {
                 deep = g != sd;
             }
             if deep && v - 1 >= 4 { pfx |= 1 << (t % 6); }
-            pair_big[t%6]=deep && v-1>=4;
             if t < 1 && std::env::var("LFA2_DBG").is_ok() {
                 eprintln!("A2_REFDBG t={t} T2={:x?} B={:x?} sd={sd} v={v} E={e_eq} deep={deep} added={added} flipped={flipped}", tk.0[0], b.0[0]);
             }
