@@ -16,10 +16,7 @@ use crate::circuit::QubitId;
 /// starts clean, and after the first CX `u[0]` already holds what a clean
 /// carry-in wire would have held — so it serves as the first nonlinear control
 /// and no wire is needed either way.
-#[track_caller]
 pub(crate) fn cmp_lt_phase(circ: &mut Builder, u: &[QubitId], v: &[QubitId], borrow_in: Option<QubitId>) {
-    // C35_TRACE (no effect on the gates): the call site, width and seed of every phase compare.
-    if super::leapfrog::C35_TRACE { let l = std::panic::Location::caller(); eprintln!("C35_SITE\t{}:{}\t{}\t{}\t{}", l.file(), l.line(), u.len(), borrow_in.is_some() as u8, circ.op_count()); }
     cmp_lt_phase_v0(circ, u, v, borrow_in, None)
 }
 
@@ -29,6 +26,17 @@ pub(crate) fn cmp_lt_phase(circ: &mut Builder, u: &[QubitId], v: &[QubitId], bor
 pub(crate) fn cmp_lt_phase_v0(circ: &mut Builder, u: &[QubitId], v: &[QubitId], borrow_in: Option<QubitId>, v0cl: Option<crate::circuit::BitId>) {
     if super::dirty_boundary_probe::try_tail(circ,u,v,borrow_in){return;}
     if super::constant_templates::square_compare(circ,u,v,borrow_in){return;}
+    if super::walk_policy::frozen() {
+        let room=super::walk_policy::physical_cap().saturating_sub(circ.active_qubits() as usize);
+        if u.len()-1>room {
+            if room>0 {super::cross_chunk_probe::phase(circ,u,v,borrow_in,room);}else{
+                let used:Vec<_>=u.iter().chain(v).copied().chain(borrow_in).collect();
+                let pool:Vec<_>=circ.walk_live().into_iter().filter(|q|!used.contains(q)).collect();
+                super::dirty_boundary_probe::zero_phase(circ,u,v,borrow_in,&pool);
+            }
+            return;
+        }
+    }
     let _dirty_trace=super::dirty_boundary_probe::Trace::new(circ,"cmp_lt_phase",u.len());
 
     let n = u.len();
@@ -51,10 +59,7 @@ pub(crate) fn cmp_lt_phase_v0(circ: &mut Builder, u: &[QubitId], v: &[QubitId], 
     assert!(!borrow_in.is_some_and(|q|u.contains(&q)),"seed cannot alias the accumulator");
     let last = n - 1;
 
-    // C35_WIDEN diagnostics (pads = 0 in every kept build): idle wires taken before the carries, measured after them
-    let pads = super::leapfrog::C35_PADS.with(|p| p.replace(0));
-    let all = circ.alloc_qubits(pads + last);
-    let carries = &all[pads..];
+    let carries = circ.alloc_qubits(last);
     circ.x_all(u);
 
     // Forward: borrow-prefix ladder over bits 0..last.
@@ -110,8 +115,7 @@ pub(crate) fn cmp_lt_phase_v0(circ: &mut Builder, u: &[QubitId], v: &[QubitId], 
     circ.free_bit(m0);
     circ.cx(u[0], v[0]);
 
-    for i in (0..pads).rev() { let m = circ.alloc_bit(); circ.hmr(all[i], m); circ.free_bit(m); }
-    circ.free_vec(&all);
+    circ.free_vec(&carries);
     circ.x_all(u);
 }
 
@@ -132,8 +136,10 @@ pub(crate) fn cmp_lt_phase_v0(circ: &mut Builder, u: &[QubitId], v: &[QubitId], 
 ///
 /// The caller owns `target` and frees it.
 /// [`erase_with_compare`] with `b[0]` known to hold the classical bit `b0cl` (see [`cmp_lt_phase_v0`]).
+#[track_caller]
 pub fn erase_with_compare_v0(circ: &mut Builder, target: QubitId, a: &[QubitId], b: &[QubitId], b0cl: crate::circuit::BitId) {
     let bit = circ.alloc_bit();
+    circ.walk_anchor(format!("{}:{}:{}",circ.phase_name(),std::panic::Location::caller(),a.len()));
     circ.hmr(target, bit);
     circ.push_condition(bit);
     cmp_lt_phase_v0(circ, a, b, None, Some(b0cl));
@@ -149,14 +155,11 @@ pub fn erase_with_compare(
     b: &[QubitId],
     borrow_in: Option<QubitId>,
 ) {
-    let y16 = super::leapfrog::y16_enter(circ); // y16 trace (no effect on the gates)
     let bit = circ.alloc_bit();
+    circ.walk_anchor(format!("{}:{}:{}",circ.phase_name(),std::panic::Location::caller(),a.len()));
     circ.hmr(target, bit);
     circ.push_condition(bit);
     cmp_lt_phase(circ, a, b, borrow_in);
-    if (false&&super::narrow::frame_fault_site(a.len(),false))||(false&&super::narrow::frame_fault_site(a.len(),true)){circ.z_if(a[0],bit);}
     circ.pop_condition();
     circ.free_bit(bit);
-    super::leapfrog::y16_leave(circ, 1, y16);
-    super::leapfrog::y17_log(circ, || format!("cmp{}{}={:.1}", a.len(), if borrow_in.is_some() { "s" } else { "" }, circ.expected_total() - y16.0));
 }

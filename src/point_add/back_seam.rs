@@ -155,7 +155,7 @@ pub(crate) fn coord_op_at(
         c.free_bit_vec(a0);
         if std::env::var_os("R5_CBITS_PAD").is_some() {
             // reset the free-list top the control's temp register used to cover (static zero set)
-            let pad = c.alloc_qubits(if std::env::var_os("R5_CBITS_PAD_ALL").is_some() { super::pingpong::heo_hooks::cap().saturating_sub(c.active_qubits() as usize) } else { n });
+            let pad = c.alloc_qubits(if std::env::var_os("R5_CBITS_PAD_ALL").is_some() { super::walk_policy::physical_cap().saturating_sub(c.active_qubits() as usize) } else { n });
             c.free_vec(&pad);
         }
         return;

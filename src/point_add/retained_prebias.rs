@@ -8,7 +8,7 @@ fn plan(c:&Builder,r:usize,fw:usize,drop:bool)->Option<Plan>{
  let base_bits=super::super::optional_env::<usize>("PP_PREBIAS_RETAIN_BITS")?;
  let bits=if env_flag("PP_SPRINT_MIXED") && (370..=402).contains(&r) {29}else{(base_bits as isize+super::super::go_slice("GO_PRB",r,b'd')) as usize};
  assert!(bits>=12&&bits<=fw&&fw>=36&&!split_fold());
- let room=walk_max_qubits().saturating_sub(c.active_qubits()as usize);
+ let room=walk_max_qubits().saturating_sub(c.active_qubits()as usize); let room=super::super::walk_policy::room("prebias_plan",&format!("{r}:{fw}:{}",drop as u8),room);
  let loans=REPLAY_SIGN_LOANS.with(|s|s.get());
  let Some(old_bounds)=composition_bounds(c,r,false) else {if !drop{drop_trace(r,false,"nocomp",String::new());}return None;};
  let (bounds,db)=if drop{drop_exact_lead(c,&old_bounds,r,false,fw)?}else{(retained_rebalance(c,&old_bounds,r,false),0.0)};
@@ -55,7 +55,6 @@ pub(super)fn try_replay(c:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId],fw
  let Some(p)=plan(c,r,fw,false).or_else(||plan(c,r,fw,true))else{return false;};
  if p.dropped{eprintln!("DROP_EXACT_LEAD mul=0 r={} base={} saving={} bounds={:?}",r,c.active_qubits(),p.saving,p.bounds);}
  eprintln!("RETAINED_PREBIAS {} {} {} {} {} {}",r,c.active_qubits(),fw,p.bits,p.prefix,p.saving);
- super::super::leapfrog::y17_log(c,||format!("retained(r={r},room={},fw={fw},bits={},prefix={},exact={},dropped={},loans={},bridge={},bounds={:?})",walk_max_qubits().saturating_sub(c.active_qubits()as usize),p.bits,p.prefix,p.exact,p.dropped,REPLAY_SIGN_LOANS.with(|s|s.get()),super::super::bridge::budget(),p.bounds.iter().map(|&(a,b)|b-a).collect::<Vec<_>>()));
  if env_flag("PP_COMPOSE_TRACE"){eprintln!("COMPOSE_RETAIN {} {} {} {} {} {:?}",r,c.active_qubits(),fw,p.bits,REPLAY_SIGN_LOANS.with(|s|s.get()),p.bounds);}
  if p.exact {eprintln!("EXACT_RETAINED_FOLD div {} {}",r,fw);}
  c.swap(sign,b[0]);c.cx(a[0],sign);c.cx(b[0],sign);c.cx_all(b[0],&b[1..]);
