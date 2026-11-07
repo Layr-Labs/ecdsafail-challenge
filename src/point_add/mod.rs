@@ -21,6 +21,7 @@ use classical::{coord_add3x, coord_rsub, coord_sub};
 use pingpong::{divide, multiply};
 use square::sub_square;
 
+mod peephole;
 mod affine_simplify;
 mod interned_witness;
 mod quadratic_simplify;
@@ -604,7 +605,8 @@ fn lane_generic_policy(ops: Vec<Op>) -> Vec<Op> {
     if std::env::var("QSTEP87_LATE_OFF").ok().as_deref()==Some("1"){return ops;}
     let ops=source_edits::run(ops,include_str!("qstep87_later.txt"));
     let ops=source_edits::run(ops,include_str!("qstep87_ur.txt"));
-    if option_env!("ARMI94_OFF")==Some("1"){ops}else{source_edits::run(ops,include_str!("armi94_followup.txt"))}
+    let ops = if option_env!("ARMI94_OFF")==Some("1"){ops}else{source_edits::run(ops,include_str!("armi94_followup.txt"))};
+    peephole::cancel(ops)
 }
 
 /// Original structural generator, retained for audit and regeneration.
