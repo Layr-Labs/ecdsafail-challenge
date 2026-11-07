@@ -4138,8 +4138,6 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
             // narrow (narrow.rs): a seeded compare in a NARROW class reads fewer bits, its seed moving with the window
             let (compare,borrow)=if c35_pads==0{super::narrow::chunk(multiply,phi,compare,addend,borrow,tie.is_some())}else{(compare,borrow)};
             let (_compare_id,compare,borrow)=super::narrow::compare_window_compare(multiply,round,phi,compare,addend,borrow);
-            eprintln!("BIND81_BOUND\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",circ.current_phase(),circ.op_count(),round,multiply as u8,plo,phi,compare,seeded as u8,borrow.is_some() as u8);
-
             circ.record_replay_site('B', round, phi, compare);
             trace_replay_predictor('B',round,multiply,phi,compare,addend,borrow);
             // y33-c35 diagnostic (inert at C35_FAULT = 0): faults 4 and 5 read 2 bits

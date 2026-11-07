@@ -881,29 +881,6 @@ fn lfq_railwin(delta: usize) -> usize {
     if std::env::var_os("LFQ_RAILWIN_TRACE").is_some() { eprintln!("Q_RAILSPLIT delta={delta} k={k}"); }
     delta.saturating_sub(k)
 }
-/// Q5 rail window: LFQ_RW=k > 0 compares only the top k positions of a rail seam's low chunk, seeded with the addend bit below the window
-/// (a tie on k positions with a wrong seed leaves a phase error: rate 2^-k / 4 under the coin). Forms: b + NOT add + cin.
-fn q5_rw_k() -> usize {
-    static K: OnceLock<usize> = OnceLock::new();
-    *K.get_or_init(|| std::env::var("LFQ_RW").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
-}
-fn q5_rail_cmp(c: &mut Builder, b: &[QubitId], add: &[Vec<QubitId>], lo: usize, delta: usize, cin: QubitId) {
-    let k = q5_rw_k();
-    if k == 0 || delta - lo <= k + 1 {
-        carry_out_parity_xor(c, &b[lo..delta], &add[lo..delta], true, cin, None);
-        return;
-    }
-    let qlo = delta - k;
-    let sd = add[qlo - 1].first().copied().filter(|q| add[qlo - 1].len() == 1 && *q != cin && !add[qlo..delta].iter().any(|l| l.contains(q)) && !b[qlo..delta].contains(q));
-    match sd {
-        Some(q) => {
-            c.x(q);
-            carry_out_parity_xor(c, &b[qlo..delta], &add[qlo..delta], true, q, None);
-            c.x(q);
-        }
-        None => carry_out_parity_xor(c, &b[qlo..delta], &add[qlo..delta], true, cin, None),
-    }
-}
 fn carry_out_xor(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, out: Option<QubitId>) {
     let n = a.len();
     // Phase-only form: the top carry is never built. carry[n] = c ^ (a ^ c)(b ^ c) with c = carry[n - 1], so
@@ -1128,17 +1105,11 @@ fn capped_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId
         // y28: in the divide's fused pass the outcome is kept and its phase applied in the mirrored subtract
         if !y28_store(delta, n, m) {
             c.push_condition(m);
-            let mut qlo = lfq_railwin(delta);
-            let rw = q5_rw_k();
-            let mut seed = ncin;
-            if rw > 0 && delta > rw + 1 && qlo == 0 {
-                qlo = delta - rw;
-                seed = a[qlo - 1]; // a holds NOT a here: the addend bit below the window predicts the carry
-            }
+            let qlo = lfq_railwin(delta);
             if r1s && qlo == 0 {
                 CMP_MODE.with(|x| x.set(r1req));
             }
-            carry_out_xor(c, &a[qlo..delta], &b[qlo..delta], seed, None);
+            carry_out_xor(c, &a[qlo..delta], &b[qlo..delta], ncin, None);
             c.pop_condition();
             c.free_bit(m);
         }
@@ -1358,7 +1329,7 @@ fn rail_add(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: Option<QubitId>)
     // y28: as in [`capped_add`]
     if !y28_store(delta, n, m) {
         c.push_condition(m);
-        q5_rail_cmp(c, b, &add, 0, delta, ncin);
+        carry_out_parity_xor(c, &b[..delta], &add[..delta], true, ncin, None);
         c.pop_condition();
         c.free_bit(m);
     }
@@ -5272,7 +5243,7 @@ fn rail_add_mid(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, res
         // y28: as in [`capped_add`]
         if !y28_store(delta, n, m) {
             c.push_condition(m);
-            q5_rail_cmp(c, b, &add, 0, delta, cin);
+            carry_out_parity_xor(c, &b[..delta], &add[..delta], true, cin, None);
             c.pop_condition();
             c.free_bit(m);
         }
@@ -5294,14 +5265,6 @@ fn rail_add_mid(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, res
             c.hmr(cq, m);
             c.release_clean(cq);
             c.push_condition(m);
-            if q5_rw_k() > 0 && delta - k > q5_rw_k() + 1 {
-                q5_rail_cmp(c, b, &add, k, delta, cin);
-                c.pop_condition();
-                c.free_bit(m);
-                pacc(c, "split.yp8_erase_rev", q0);
-                ladder_parity_add_tail(c, &lo, &lo_add, &lc, k);
-                return;
-            }
             let i = k - 1;
             let ci = lc[i].expect("y29: live kept carry");
             c.cx(ci, b[i]);
@@ -5332,7 +5295,7 @@ fn rail_add_mid(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, res
         c.release_clean(cq);
         c.push_condition(m);
         let qlo = lfq_railwin(delta);
-        q5_rail_cmp(c, b, &add, qlo, delta, cin);
+        carry_out_parity_xor(c, &b[qlo..delta], &add[qlo..delta], true, cin, None);
         c.pop_condition();
         c.free_bit(m);
         pacc(c, "split.yp8_erase_rev", q0);
@@ -5386,7 +5349,7 @@ fn rail_add_mid(c: &mut Builder, a: &[QubitId], b: &[QubitId], cin: QubitId, res
         c.release_clean(cq);
         c.push_condition(m);
         let qlo = lfq_railwin(delta);
-        q5_rail_cmp(c, b, &add, qlo, delta, cin);
+        carry_out_parity_xor(c, &b[qlo..delta], &add[qlo..delta], true, cin, None);
         c.pop_condition();
         c.free_bit(m);
         pacc(c, "split.yp8_erase_rev", q0);
@@ -6960,7 +6923,7 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
         Y28_KEEP.with(|d| d.set(true));
         Y42_FWD_NEXT.with(|x| x.set(t + 1 < fused_end || (n2d && std::env::var("LFQ_Y42LAST").is_ok_and(|v| v == "1"))));
         fwd_tick(c, &mut wk, t, Some(&mut pay));
-        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_pack(c); }
+        t3p1_pack_tick(c, t);
         Y42_FWD_NEXT.with(|x| x.set(false));
         Y28_KEEP.with(|d| d.set(false));
         SKIP_PAY_ROT_AT.with(|s| s.set(usize::MAX));
@@ -7038,7 +7001,7 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
             pacc(c, "rt0.div", q0);
             continue;
         }
-        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_unpack(c); }
+        t3p1_unpack_tick(c, t);
         Y28_USE.with(|d| d.set(true));
         rev_tick(c, &mut wk, t, None);
         Y28_USE.with(|d| d.set(false));
@@ -7097,7 +7060,7 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
     let mut t0_bits = None;
     for t in 0..rounds() {
         fwd_tick(c, &mut wk, t, None);
-        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_pack(c); }
+        t3p1_pack_tick(c, t);
         if t0f && t == 0 {
             t0_bits = Some(t0_out(c, &wk));
         }
@@ -7152,7 +7115,7 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
         rounds()
     };
     for t in (ahead..fused_top).rev() {
-        if t == T3P1_MAJ_TICK && t3p1_maj_on() { t3p1_unpack(c); }
+        t3p1_unpack_tick(c, t);
         rev_tick(c, &mut wk, t, Some(&mut pay));
     }
     wl_codec_unpack_rest(c);
