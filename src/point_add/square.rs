@@ -129,17 +129,6 @@ fn row_addsub_cin(circ:&mut Builder, xi:QubitId, operand:&[QubitId], acc:&[Qubit
 /// been undone, so the result's top bit is zero: measured terminal.
 fn diag_correction_known_top(circ:&mut Builder, x:&[QubitId], product:&[QubitId]) {
     let m=x.len();
-    if super::env_flag("G3_SQ_SPARSE_KT") {
-        // G3 (low-cap square): no m pads and no full-width ladder; the mapped add is planned to the room left
-        // under the phase cap. Same value, x + ~x_low << m, with the top position empty.
-        let one = circ.alloc_qubit(); circ.x(one);
-        let mut map: Vec<Vec<QubitId>> = x.iter().map(|&q| vec![q]).collect();
-        for &q in x.iter().take(m-1) { map.push(vec![q, one]); }
-        map.push(Vec::new());
-        sparse_diag_add(circ, &map, product, false, cut_sqident() && 2*m >= 4);
-        circ.x(one); circ.free(one);
-        return;
-    }
     let pads=circ.alloc_qubits(m);
     for i in 0..m-1 { circ.cx(x[i],pads[i]); circ.x(pads[i]); }
     let mut value=x.to_vec();
@@ -157,55 +146,10 @@ fn diag_correction_known_top(circ:&mut Builder, x:&[QubitId], product:&[QubitId]
 /// SQ_CIN_SPREAD leaf: rows carry the whole diagonal spread through their
 /// carry-in, the top spread bit x[m-1]*2^(2m-1) is one CX onto a still-zero
 /// wire, and only the correction subtract remains. No preload, no spread add.
-/// round10/square-chains: one row of tri_square_cin (the loop body, verbatim; `continue` -> `return`).
-fn tri_row(circ:&mut Builder, x:&[QubitId], product:&[QubitId], inverse:bool, i:usize) {
-    let m=x.len();
-        let row=&product[2*i+1..i+m+1];
-        let borrowed=super::env_flag("SQ_BORROW_ROW_CARRIES").then(|| &product[m+i+1..2*m-1]);
-        if i==0 && row0_copy() {
-            // SQ_ROW0_COPY: row 0 on the zero window would leave
-            // F = x0 ? v+1 : 2^k - v. Store F - 1 = x0 ? v : ~v instead (top bit
-            // zero), which is Clifford and self-inverse. The leaf then holds
-            // x^2 - 2; see [`sub_square_offset`] for where the 2 goes.
-            for j in 0..m-1 { circ.cx(x[j+1],row[j]); circ.x(row[j]); circ.cx(x[0],row[j]); }
-            return;
-        }
-        if inverse && i==1 && row0_copy() && super::env_flag("SQ_ROW1_INVERSE_CARRIES") {
-            let out=row1_known_output(x);
-            if super::env_flag("I48_TRACE"){eprintln!("I48_ROW1 {} {}",m,circ.active_qubits());}
-            row_addsub_cin(circ,x[1],&x[2..],row,true,false,Some(&out),borrowed);
-            return;
-        }
-        if inverse && i==0 && super::env_flag("SQ_ROW0_INVERSE_CARRIES") {
-            // Before row 0 the product is all zero, so every framed output bit
-            // is known: x0 on the k low bits, 1 on the top.
-            let k=m-1;
-            let mut out=vec![(false,vec![x[0]]);k];
-            out.push((true,Vec::new()));
-            row_addsub_cin(circ,x[0],&x[1..],row,true,false,Some(&out),borrowed);
-            return;
-        }
-        // Forward row 0 sees a zero window: framed acc[0] = NOT x0 = NOT carry_in,
-        // so its first carry is x[1].
-        let first=super::env_flag("SQ_ROW0_CARRY") && !inverse && i==0;
-        row_addsub_cin(circ,x[i],&x[i+1..],row,inverse,first,None,borrowed);
-}
-
-/// round10/square-chains: leaf inverse with rows m-2..2 emitted by sqleaf (depth-D conditioned), rows 1, 0 as main.
-fn tri_square_cin_inv_native(circ:&mut Builder, x:&[QubitId], product:&[QubitId]) {
-    let m=x.len();
-    circ.cx(x[m-1],product[2*m-1]);
-    diag_correction_known_top(circ,x,product);
-    super::sqleaf::rows(circ,x,product);
-    tri_row(circ,x,product,true,1);
-    tri_row(circ,x,product,true,0);
-}
-
 fn tri_square_cin(circ:&mut Builder, x:&[QubitId], product:&[QubitId], inverse:bool) {
     let m=x.len();
     assert_eq!(product.len(),2*m);
     assert!(m>=3);
-    if inverse && m>=8 && super::sqleaf::active() { return tri_square_cin_inv_native(circ,x,product); }
     if inverse {
         circ.cx(x[m-1],product[2*m-1]);
         diag_correction_known_top(circ,x,product);
@@ -813,10 +757,6 @@ fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
     // SQ_ASM_TAIL=E: ripple the carry only E bits past the cross word. The
     // bits above hold b^2 and are random, so a carry reaches E bits in with
     // probability about 2^-E. An approximate cut, priced as a sell.
-    // y33-c35 (leapfrog::C35_SQ_REPLAN): a forward plan of one chunk with nothing held or deferred is not forced on
-    // the inverse, which then plans for its own room (as it does when the forward add took the plain ripple).
-    let replan=super::leapfrog::C35_SQ_REPLAN&&inverse&&held.is_empty()&&xkept.is_empty()&&recover.as_ref().is_some_and(|(p,f)|p.sizes.len()==1&&f.is_empty());
-    let recover=if replan{None}else{recover};
     let full=acc;
     let acc=match super::optional_env::<usize>("SQ_ASM_TAIL"){Some(e)=>&full[..full.len().min(cross.len()+e)],None=>full};
     let mut room=super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits()as usize);
@@ -859,10 +799,7 @@ fn add_cross(circ:&mut Builder,cross:&[QubitId],acc:&[QubitId],inverse:bool,
         }
         // bit0 of the source is zero, so acc[0] and the first carry stay put.
         let defer=!inverse && super::env_flag("SQ_DEFER_CROSS_PHASE");
-        // y33-c35 diagnostic (inert at C35_FAULT = 0): fault 3 on the re-planned inverse
-        super::leapfrog::C35_SQ_FX.with(|x|x.set(replan&&super::leapfrog::C35_FAULT==3));
         let pending=super::width_composition::direct_add_phase_transport(circ,&map,&acc[1..],cross[0],&plan,defer,&fixes);
-        super::leapfrog::C35_SQ_FX.with(|x|x.set(false));
         if inverse {circ.x_all(acc);}
         for &q in &tops{circ.reacquire(q);}
         if super::env_flag("SQ_FIT_CROSS_TRACE") {eprintln!("FIT_CROSS {} {} {} {} {}",acc.len(),room,plan.peak,plan.extra2,inverse as u8);}
@@ -965,7 +902,6 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
     // top of the 2(hi+1)-bit cross word is zero after this subtraction.
     let first=if !flat_sum_carries.is_empty() && (go_b2()||super::env_flag("SQ_FLAT_SHARE_C0")){assert!(row0_copy());Carry0::Known(flat_sum_carries[0])}else if let Some(q)=k0{assert!(row0_copy());Carry0::Known(q)}else{Carry0::Full};
     let odd_tops = lo < m - lo && super::env_flag("SQ_ODD_NODE_TOPS");
-    super::modular::dsq_keep_scope(true, || {
     if odd_tops {
         let c1=if cut_sqident(){Carry1::CopiesCarry0}else{Carry1::Full};
         super::modular::addsub_wide_known_top(circ,a2,&cross,true,first,c1,false);
@@ -974,19 +910,16 @@ fn tri_square_k2r_inner(circ: &mut Builder, x: &[QubitId], product: &[QubitId], 
     } else {
         addsub_wide_low(circ,a2,&cross,true,first,Carry1::Full);
     }
-    });
     // SQ_ROW0_COPY: b2 holds b^2 + Nb with Nb = 2 (mod 4), so its bit 1 is
     // always set. Clearing it subtracts b2 - 2, which keeps the bit-1 carry
     // identity below and adds 2 to this node's cross offset.
     if row0_copy() {circ.x(b2[1]);}
-    super::modular::dsq_keep_scope(true, || {
     if super::env_flag("SQ_ZERO_TOP_CROSS") {
         // 2ab < 2^(lo+hi+1), while cross has 2*(hi+1) bits: its top is zero.
         let (c0,c1)=if cut_sqident(){(Carry0::Zero,Carry1::CopiesCarry0)}else{(Carry0::Full,Carry1::Full)};
         super::modular::addsub_wide_known_top(circ,b2,&cross,true,c0,c1,false);
     } else if cut_sqident() {addsub_wide_low(circ,b2,&cross,true,Carry0::Zero,Carry1::CopiesCarry0);}
     else {sub_wide(circ,b2,&cross);}
-    });
     if row0_copy() {circ.x(b2[1]);}
     if let Some(q)=k0{circ.cx(cross[1],q);circ.release_clean(q);}
     // product += 2ab << lo, exact full ripple to the top (x^2 < 2^(2m), so the
@@ -1123,11 +1056,7 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
     let product = circ.alloc_qubits(2 * x.len());
     let k=super::optional_env::<usize>(match policy_name{"SQ_A_POLICY"=>"GO_B3_A","SQ_B_POLICY"=>"GO_B3_B","SQ_C_POLICY"=>"GO_B3_C",_=>"GO_B3_X"}).unwrap_or(0);
     let old=GO_B3.with(|g|g.replace((x.len(),k)));
-    let g2=super::env_flag("G2_TRACE");
-    let g2t=|c:&Builder|c.report_totals().map(|t|t.1).unwrap_or(0.0);
-    let (t0,_)=(g2t(circ),circ.take_win_peak());
     let retained = tri_square_k2r(circ, x, &product);
-    let (t1,p1)=(g2t(circ),circ.take_win_peak());
     GO_B3.with(|g|g.set(old));
     let mut loans=Vec::new();
     if super::env_flag("SQ_LEND_RETAINED_ZEROS"){retained_zero_bits(&retained,x.len(),&mut loans);}
@@ -1158,7 +1087,6 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
     for &q in &loans{circ.release_clean(q);}
     if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() || super::native_sfuse_b::mode()>0 {SQ_LOANS.with(|l|*l.borrow_mut()=loans.clone());}
     folds(circ, &consumer_product);
-    let (t2,p2)=(g2t(circ),circ.take_win_peak());
     if super::j_fuse::j_sfuse() || super::j_fuse::j_sfuse_b() || super::native_sfuse_b::mode()>0 {SQ_LOANS.with(|l|l.borrow_mut().clear());}
     // Every consumer restores its temporary work and source. Reclaim the same
     // physical wire identities before the retained inverse consumes them.
@@ -1167,8 +1095,6 @@ fn with_square(circ: &mut Builder, x: &[QubitId], policy_name: &str, folds: impl
     for &l in &cross2_loans{cross2_restore(circ,l);}
     if alias{circ.cx(x[0],product[0]);}
     tri_square_k2r_inv(circ, x, &product, retained);
-    let (t3,p3)=(g2t(circ),circ.take_win_peak());
-    if g2 {eprintln!("G2_SQ {} m={} build T={:.0} peak={} folds T={:.0} peak={} inverse T={:.0} peak={}",policy_name,x.len(),t1-t0,p1,t2-t1,p2,t3-t2,p3);}
     circ.free_vec(&product);
     OUTER_SQUARE_POLICY.with(|p| p.set(old_policy));
     if price_branches {circ.set_phase("square_between");}
@@ -1214,13 +1140,6 @@ pub(super) fn sub_square_offset() -> U256 {
     let na = square_offset(h, "SQ_A_POLICY");
     let nb = square_offset(h, "SQ_B_POLICY");
     let nc = square_offset(h + 1, "SQ_C_POLICY");
-    if super::sqc::on() {
-        // C direct has no product offset; its correction ripple leaves out short by 2^129 in frame 2^128.
-        let wa = U256::from(1).add_mod(p - pow(h), p);
-        let wb = two_n.add_mod(p - pow(h), p);
-        let old=na.mul_mod(wa,p).add_mod(nb.mul_mod(wb,p),p).add_mod(pow(h+1).mul_mod(pow(h),p),p);
-        return if super::square_split::enabled(){old.add_mod(super::square_split::correction(),p)}else{old};
-    }
     // out -= A (1 - 2^h) + B (2^N - 2^h) + C 2^h.
     let wa = U256::from(1).add_mod(p - pow(h), p);
     let wb = two_n.add_mod(p - pow(h), p);
@@ -1233,77 +1152,8 @@ thread_local! {
 }
 
 pub fn sub_square(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
-    sub_square_x(circ, out, y);
-    super::modular::dsq_check();
-}
-fn sub_square_x(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
-    // G3_SQ_EXACT_SPLIT: every ladder the square splits to fit its cap erases its boundary carries exactly
-    // (whole-chunk compares in reverse order) instead of through the HEO_FIT_K window, so a capped square
-    // spends no lambda. Off in the default recipe.
-    if super::env_flag("G3_SQ_EXACT_SPLIT") {
-        super::modular::shared_exact_split_scope(circ, |c| sub_square_body(c, out, y));
-    } else {
-        sub_square_body(circ, out, y);
-    }
-}
-
-/// round10/square-chains: the leaf square, for the C-direct wrap witness.
-pub(super) fn sqc_leaf(c: &mut Builder, x: &[QubitId], product: &[QubitId], inverse: bool) {
-    super::sqleaf::scoped(inverse, || tri_square_cin(c, x, product, inverse))
-}
-
-/// round10/square-chains (SQC_G1M=1): A folded in frame 1; out slid to frame 2^128 (one-digit REDC);
-/// C = (a+b)^2 added directly with chained rows; B folded in frame 2^128 (weight 2^128 - 1); slide back.
-fn sub_square_g1m(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
-    let h = N / 2;
-    let (y_lo, y_hi) = y.split_at(h);
-    let trace = std::env::var_os("SQC_TRACE").is_some();
-    let tt = |c: &Builder| c.report_totals().map(|t| t.1).unwrap_or(0.0);
-    let t0 = tt(circ);
-    super::sqleaf::scoped(!std::env::var("SQC_LEAF_A").is_ok_and(|v| v == "0"), || with_square(circ, y_lo, "SQ_A_POLICY", |circ, a2| {
-        mod_addsub(circ, true, a2, out);
-        if super::square_split::enabled(){
-            super::square_split::slide(circ,out);
-            let view:Vec<QubitId>=out[h..].iter().chain(out[..h].iter()).copied().collect();
-            mod_addsub(circ,false,a2,&view);
-        }else{fold_shifted(circ, false, a2, out, h);}
-    }));
-    let t1 = tt(circ);
-    let (p0, k1) = (circ.take_win_peak(), if super::square_split::enabled(){0}else{super::sqc::redc(circ, out, false)});
-    let p1 = circ.take_win_peak(); let t2 = tt(circ);
-    let outx: Vec<QubitId> = out[h..].iter().chain(out[..h].iter()).copied().collect();
-    let sum_carry=circ.alloc_qubit();
-    let held_sum=circ.alloc_qubits(h);
-    circ.cx_pairs(y_hi,&held_sum);
-    let mut sum=held_sum.clone();
-    sum.push(sum_carry);
-    add_wide(circ, y_lo, &sum);
-    let t3 = tt(circ);
-    let k2 = super::sqc::c_direct(circ, &outx, &sum);
-    let p2 = circ.take_win_peak(); let t4 = tt(circ);
-    let a:Vec<Option<QubitId>>=(0..sum.len()).map(|j|y_lo.get(j).copied()).collect();
-    let b:Vec<Option<QubitId>>=(0..sum.len()).map(|j|y_hi.get(j).copied()).collect();
-    super::sqc::erase_sum(circ,&sum,&a,&b);
-    for &q in held_sum.iter().rev(){circ.release_clean(q);}
-    circ.free(sum_carry);
-    let t5 = tt(circ);
-    super::sqleaf::scoped(true, || with_square(circ, y_hi, "SQ_B_POLICY", |circ, b2| {
-        fold_shifted(circ, true, b2, &outx, h);
-        mod_addsub(circ, false, b2, &outx);
-    }));
-    let t6 = tt(circ);
-    let k3 = if std::env::var("RAIL_OPT_SEED").ok().as_deref()==Some("1") {super::sqc::rail_opt_redc_seed(circ,out)} else {super::sqc::redc(circ, out, true)};
-    let p3 = circ.take_win_peak(); let t7 = tt(circ);
-    if trace {
-        eprintln!("SQC_G1M A={:.1} slide_in={:.1}({}) peak={} sum={:.1} c_direct={:.1}({}) peak={} restore={:.1} B={:.1} slide_out={:.1}({}) peak={} p0={}",
-            t1 - t0, t2 - t1, k1, p1, t3 - t2, t4 - t3, k2, p2, t5 - t4, t6 - t5, t7 - t6, k3, p3, p0);
-    }
-}
-
-fn sub_square_body(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
     assert_eq!(y.len(), N);
     assert_eq!(out.len(), N);
-    if super::sqc::on() { return sub_square_g1m(circ, out, y); }
     let h = N / 2;
     let (y_lo, y_hi) = y.split_at(h);
 
@@ -1340,7 +1190,7 @@ fn sub_square_body(circ: &mut Builder, out: &[QubitId], y: &[QubitId]) {
                     }
                 }
                 if super::native_sfuse_b::mode()>0 {
-                    if super::native_sfuse_b::mode()==1 {if super::leapfrog::t6_seedfuse(){super::leapfrog::square_seed_r0(circ,b2,out);}else{mod_addsub(circ,true,b2,out);}}
+                    if super::native_sfuse_b::mode()==1 {mod_addsub(circ,true,b2,out);}
                     else {super::native_sfuse_b::prepare_native(circ,out,b2);}
                     return;
                 }
@@ -1450,100 +1300,4 @@ fn skywalk_merged_high_stream(circ:&mut Builder, high:&[QubitId], consume:impl F
     super::stream_wide::add(circ,hi(6),&small,None,&restored_small);
     for i in 0..10 {circ.cx(hi(10)[i],small[i]);}
     circ.free_vec(&small);
-}
-
-/// G3 unit check of the square phase alone, under the submission env (as `build()` installs it):
-/// `out == x - y^2 - sub_square_offset() (mod p)`, `y` restored, no phase, every other wire back to |0>.
-/// Extra pins `G3_UT_PINS="K=V;K=V"` and the phase cap `G3_UT_CAP` are read before the env is cleared.
-/// `cargo test --release --lib g3_square_unit -- --nocapture`
-#[cfg(test)]
-mod g3_tests {
-    use super::*;
-    use crate::circuit::{analyze_ops, QubitOrBit};
-    use crate::sim::Simulator;
-    use sha3::digest::{ExtendableOutput, Update};
-
-    #[test]
-    fn g3_square_unit() {
-        let pins = std::env::var("G3_UT_PINS").unwrap_or_default();
-        let cap: Option<usize> = std::env::var("G3_UT_CAP").ok().and_then(|v| v.parse().ok());
-        let batches: usize = std::env::var("G3_UT_BATCHES").ok().and_then(|v| v.parse().ok()).unwrap_or(16);
-        let ut_seed = std::env::var("G3_UT_SEED").unwrap_or_default();
-        super::super::clear_process_env();
-        super::super::install_skywalk_submission_recipe();
-        std::env::set_var("EXACT_PAIR_CARRY", "1");
-        super::super::leapfrog::install_recipe();
-        for kv in pins.split(';').filter(|k| !k.is_empty()) {
-            let (k, v) = kv.split_once('=').unwrap();
-            std::env::set_var(k, v);
-        }
-        let mut c = Builder::new();
-        let x = c.alloc_qubits(N);
-        let y = c.alloc_qubits(N);
-        super::super::pingpong::with_phase_cap(cap, || sub_square(&mut c, &x, &y));
-        c.declare_qubit_register(&x);
-        c.declare_qubit_register(&y);
-        if pins.contains("PEAK_CENSUS") { c.finalize_records(); }
-        let offset = sub_square_offset();
-        let ops = c.take_ops();
-        let (nq, nb, _, _) = analyze_ops(ops.iter());
-        let rx: Vec<QubitOrBit> = x.iter().map(|&q| QubitOrBit::Qubit(q)).collect();
-        let ry: Vec<QubitOrBit> = y.iter().map(|&q| QubitOrBit::Qubit(q)).collect();
-        let p = super::super::SECP256K1_P;
-        let mut h = sha3::Shake256::default();
-        h.update(b"g3-square");
-        h.update(ut_seed.as_bytes());
-        let mut xof = h.finalize_xof();
-        let mut sim = Simulator::new(nq as usize, (nb as usize).max(1), &mut xof);
-        let mut s = 0x9e37_79b9_7f4a_7c15u64;
-        let mut rnd = || {
-            let mut v = U256::ZERO;
-            for i in 0..4 { s ^= s << 13; s ^= s >> 7; s ^= s << 17; v |= U256::from(s) << (64 * i); }
-            v.reduce_mod(p)
-        };
-        let one = U256::from(1u64);
-        let (mut bad, mut bad_plus, mut ybad, mut phase, mut anc) = (0usize, 0usize, 0usize, 0usize, 0usize);
-        for b in 0..batches {
-            sim.clear_for_shot();
-            let mut exp = Vec::new();
-            for shot in 0..64 {
-                let (xv, yv) = match (b, shot) {
-                    (0, 0) => (U256::ZERO, U256::ZERO),
-                    (0, 1) => (U256::ZERO, p - one),
-                    (0, 2) => (p - one, one),
-                    (0, 3) => (one, (one << 128) - one),
-                    (0, 4) => (p - one, p - one),
-                    (0, 5) => (U256::ZERO, (one << 255) - one),
-                    _ => (rnd(), rnd()),
-                };
-                sim.set_register(&rx, xv, shot);
-                sim.set_register(&ry, yv, shot);
-                let sq = yv.mul_mod(yv, p);
-                exp.push((xv.add_mod(p - sq.add_mod(offset, p), p), xv.add_mod(p - sq, p).add_mod(offset, p), yv));
-            }
-            sim.apply_iter(ops.iter());
-            for (shot, e) in exp.iter().enumerate() {
-                let o = sim.get_register(&rx, shot);
-                if o.reduce_mod(p) != e.0 && (b > 0 || shot >= 6) { bad += 1; }
-                if o.reduce_mod(p) != e.1 { bad_plus += 1; }
-                if sim.get_register(&ry, shot) != e.2 { ybad += 1; }
-            }
-            // edge shots (batch 0, shots 0..6) sit outside the walk's input domain; count them apart
-            let pm = if b == 0 { sim.phase & !0x3f } else { sim.phase };
-            if b == 0 && sim.phase & 0x3f != 0 { eprintln!("G3_UT edge phase mask={:#x}", sim.phase & 0x3f); }
-            phase += pm.count_ones() as usize;
-            if pm != 0 { let s = pm.trailing_zeros() as usize; eprintln!("G3_UT phase miss b={b} shot={s} y={:#x}", exp[s].2); }
-            for q in x.iter().chain(y.iter()) { *sim.qubit_mut(*q) = 0; }
-            if sim.qubits.iter().any(|&v| v != 0) { anc += 1; }
-        }
-        let shots = 64 * batches;
-        eprintln!(
-            "G3_UT pins={pins} cap={cap:?} wires={nq} T/shot={:.0} shots={shots} out_bad(-off)={bad} out_bad(+off)={bad_plus} y_bad={ybad} phase_bad={phase} ancilla_bad_batches={anc} offset_zero={}",
-            sim.stats.toffoli_gates as f64 / shots as f64, offset == U256::ZERO
-        );
-        assert_eq!(anc, 0);
-        assert_eq!(ybad, 0);
-        assert_eq!(phase, 0);
-        assert_eq!(bad, 0);
-    }
 }
