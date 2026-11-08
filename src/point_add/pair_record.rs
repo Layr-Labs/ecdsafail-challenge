@@ -62,13 +62,7 @@ fn a2_pair_commit(c: &mut Builder, t: usize, k3: QubitId) {
     // F=f0+f1; swap the small-bit values when the second letter is big.
     c.cx(k3,f); a2_pair_swap(c,k3,r,s); c.cx(k3,r);
     // On the exact legal pair care, f1=F*r. Clear and release f1.
-    if std::env::var("CONTRACT69_PAIR_COMMIT").is_ok_and(|v| v == "1") {
-        let contract69_m = c.alloc_bit();
-        c.hmr(k3,contract69_m);
-        c.cz_if(f,r,contract69_m);
-        c.release_clean(k3);
-        c.free_bit(contract69_m);
-    } else { c.ccx(f,r,k3); c.release_clean(k3); }
+    c.ccx(f,r,k3); c.release_clean(k3);
     A2_REC.with(|v| v.borrow_mut().get_mut(&t).expect("pair second field")[0]=None);
 }
 fn a2_pair_pop(c: &mut Builder, first: usize) {
