@@ -35,7 +35,7 @@ fn f_lev_min() -> usize {
 /// Wires the IPK fold can shed by itself for its ladder (1 Toffoli each): c4, c3 (not with the top-wire shed), the gate
 /// ANDs above k1 k2, and the K - 3 levels of the digit in place.
 pub(super) fn f_own_sheds(emax: usize) -> usize {
-    1 + usize::from(f_c3_shed_on()) + if a_gate_shed_on() { match emax { 3 => 0, 5 => 1, 6 => 2, _ => 3 } } else { 0 } + emax + f_extra_sheds(emax)
+    1 + usize::from(f_c3_shed_on()) + if a_gate_shed_on() { match emax { 5 => 1, 6 => 2, _ => 3 } } else { 0 } + emax + f_extra_sheds(emax)
 }
 /// The least ladder budget of the IPK fold's forward main ladder on `nbits` bits, dropped kept carries included.
 pub(super) fn f_min_budget(nbits: usize) -> usize {
@@ -43,7 +43,7 @@ pub(super) fn f_min_budget(nbits: usize) -> usize {
     if !f_drop_on() {
         return b0;
     }
-    (1..b0).find(|&b| f_drops().iter().any(|ds| f_drop_plan(nbits, b, ds).is_some())).unwrap_or(b0)
+    (1..b0).find(|&b| F_DROPS.iter().any(|ds| f_drop_plan(nbits, b, ds).is_some())).unwrap_or(b0)
 }
 fn f_fix(f: &mut Lin, w: QubitId, d: &Lin) {
     if f.w.contains(&w) {
@@ -144,21 +144,6 @@ fn f_rename(d: &mut FDig, old: QubitId, new: QubitId) {
 /// in the clear). Level n writes t_j onto Y_j for the top min(n, K - 4) j < K and erases those t_j (top down); level
 /// K - 3 also writes p onto Y3 and erases r3. Returns (state, kept carry, Q on [4, K) in current forms).
 #[allow(clippy::too_many_arguments)]
-// laneG (r34C keep-inner, forward half): the serial chunk's inner carries stay live across the ladder instead of being measured away and
-// re-derived under a phase compare. MAJ(not W_j, A_j, c_j) = MAJ(L_j, A_j, c_j) with W_j = L_j ^ A_j ^ c_j. LFG_KFWD = "lo-hi,..." ticks.
-thread_local! {
-    static KF_REQ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static KF_INNER: std::cell::RefCell<Option<Vec<QubitId>>> = const { std::cell::RefCell::new(None) };
-}
-pub(super) fn lfg_kfwd() -> bool {
-    let Ok(v) = std::env::var("LFG_KFWD") else { return false };
-    let Some((rev, t)) = PAYLOAD_AT.with(|x| x.get()) else { return false };
-    if rev || (115..=120).contains(&super::late_t(t)) { return false; }
-    v.split(',').filter(|p| !p.is_empty()).any(|p| match p.split_once('-') {
-        Some((a, b)) => a.parse::<usize>().is_ok_and(|a| a <= t) && b.parse::<usize>().is_ok_and(|b| t <= b),
-        None => p.parse::<usize>().is_ok_and(|x| x == t),
-    })
-}
 fn f_digit(c: &mut Builder, acc: &[QubitId], nm: [QubitId; 3], k1: QubitId, k2: QubitId, k3: QubitId, emax: usize, c3: QubitId, c4: QubitId, fwd: bool, lev: usize) -> (FDig, Option<QubitId>, Vec<Lin>) {
     let kx = 3 + emax;
     let fc3 = l(c3);
@@ -209,15 +194,13 @@ fn f_digit(c: &mut Builder, acc: &[QubitId], nm: [QubitId; 3], k1: QubitId, k2: 
         add_lo.push(aj);
     }
     let ckx = if fwd {
-        let kf = KF_REQ.with(|x| x.replace(false));
         for j in (4..kx).rev() {
             lin_xor_into(c, &add_lo[j - 4], acc[j]);
             c.cx(cc[j - 4], acc[j]);
-            if j > 4 && !kf {
+            if j > 4 {
                 m_carry_erase(c, cc[j - 4], acc[j - 1], &add_lo[j - 5], cc[j - 5]);
             }
         }
-        if kf { KF_INNER.with(|x| *x.borrow_mut() = Some(cc[1..kx - 4].to_vec())); }
         Some(cc[kx - 4])
     } else {
         None
@@ -395,40 +378,32 @@ fn f_nfields(d: &FDig, emax: usize) -> usize {
 // q[6+i] ^ B[i] (plus K), so B[i] ^= q[6+i] makes its wire the required
 // combination.  The q records retain exact K/Kprev/qprev parents.
 struct FPage5 {
-    // laneW: the last `credit` continued-Q owners q6..q(K) (post[off..off + credit]) and their U borrows.
-    off: usize,
-    q_old: Vec<QubitId>,
-    q_ghost: Vec<QubitId>,
-    b: Vec<QubitId>,
+    q_old: [QubitId; 5],
+    q_ghost: [QubitId; 5],
+    b: [QubitId; 5],
 }
 // The same source-level eligibility used by the physical page operation and
 // by callers that must reserve room before entering the fold. The credit is
 // only a potential five-owner release: the fold still pages only if its
 // unpaged final ladder plan does not fit, then verifies the actual budget.
 fn f_page5_room_credit(emax: usize) -> usize {
-    // laneW: q6 .. q(K) read only U[1 ..]: K - 5 = emax - 2 owners page at any emax (5 wires at emax 7, 3 at emax 5).
-    if emax >= 5 && std::env::var("LFF_PAGE5").ok().as_deref() == Some("1") { emax - 2 } else { 0 }
+    if emax == 7 && std::env::var("LFF_PAGE5").ok().as_deref() == Some("1") { 5 } else { 0 }
 }
 fn f_page5_out(c: &mut Builder, post: &mut [Rec], add: &mut [Lin], emax: usize, tight: bool) -> Option<FPage5> {
     if !tight || f_page5_room_credit(emax) == 0 {
         return None;
     }
-    let n = f_page5_room_credit(emax);
-    let (uw, _) = a_widths(emax);
-    // post = [q(K - 4 .. K) (5 MAJ carries), B0 .. B(uw - 2), H0, H1]
-    let nq = post.len() - (uw - 1) - 2;
-    assert_eq!(nq, 5, "W110 post shape");
-    let off = nq - n;
-    let q: Vec<QubitId> = (0..n).map(|i| match &post[off + i] {
+    assert_eq!(post.len(), 17, "W110 post shape");
+    let q = std::array::from_fn(|i| match &post[i] {
         Rec::Maj(id, _, _, _) => *id,
         _ => panic!("W110 continued-Q shape"),
-    }).collect();
-    let b: Vec<QubitId> = (0..n).map(|i| match &post[nq + i] {
+    });
+    let b = std::array::from_fn(|i| match &post[5+i] {
         Rec::And(id, _, _) | Rec::Maj(id, _, _, _) => *id,
         _ => panic!("W110 U-borrow shape"),
-    }).collect();
+    });
     // Mutate the value owners and rewrite every Lin consumer to the new basis.
-    for i in 0..n {
+    for i in 0..5 {
         assert!(add[11+i].w.contains(&q[i]) && add[11+i].w.contains(&b[i]), "W110 U output parent shape");
         c.cx(q[i], b[i]);
         f_fix_vec(add, b[i], &l(q[i]));
@@ -436,8 +411,8 @@ fn f_page5_out(c: &mut Builder, post: &mut [Rec], add: &mut [Lin], emax: usize, 
     }
     for f in add.iter() { for &old in &q { assert!(!f.w.contains(&old), "W110 q still needed by value addend"); } }
     // Reverse recurrence order: q[i-1] remains live at each measurement.
-    for i in (0..n).rev() {
-        match &post[off + i] {
+    for i in (0..5).rev() {
+        match &post[i] {
             Rec::Maj(id, a, bb, ci) => f_pop(c, Rec::Maj(*id, a.clone(), bb.clone(), ci.clone())),
             _ => unreachable!(),
         }
@@ -445,16 +420,15 @@ fn f_page5_out(c: &mut Builder, post: &mut [Rec], add: &mut [Lin], emax: usize, 
     // Every old q ID is now free and may be reused by ladder carries.  Pending
     // records must use nonallocated ghosts; otherwise replay's global
     // old->new substitution can merge a new q with another old placeholder.
-    let q_ghost: Vec<QubitId> = (0..n).map(|_| f_ghost()).collect();
-    for i in 0..n { y18_subst(post, q[i], q_ghost[i]); }
-    eprintln!("SF48_PAGE emax={emax} n={n} off={off} at={:?}", PAYLOAD_AT.with(|x|x.get()));
-    Some(FPage5 { off, q_old: q, q_ghost, b })
+    let q_ghost = std::array::from_fn(|_| f_ghost());
+    for i in 0..5 { y18_subst(post, q[i], q_ghost[i]); }
+    Some(FPage5 { q_old: q, q_ghost, b })
 }
 fn f_page5_back(c: &mut Builder, post: &mut [Rec], add: &mut [Lin], p: FPage5) {
     // Rebuild q6..q10 in forward order.  y18_subst advances all future
     // parent versions and the target's own id before the canonical undo.
-    for i in 0..p.q_old.len() {
-        let (a, b, ci) = match &post[p.off + i] {
+    for i in 0..5 {
+        let (a, b, ci) = match &post[i] {
             Rec::Maj(_, a, b, ci) => (a.clone(), b.clone(), ci.clone()),
             _ => unreachable!(),
         };
@@ -610,7 +584,7 @@ fn f_sheds(emax: usize, nbits: usize, at_ladder: usize, ngate: usize, c3_ok: boo
     // past the whole menu: the ladder drops kept carries (y28 card s2-1), 1 then 2
     let mut drops = 0;
     if drops_ok && f_drop_on() && a_plan(nbits, budget(sh + lmin)).is_none() {
-        for (i, ds) in f_drops().iter().enumerate() {
+        for (i, ds) in F_DROPS.iter().enumerate() {
             if f_drop_plan(nbits, budget(sh + lmin), ds).is_some() {
                 drops = i + 1;
                 break;
@@ -1015,28 +989,12 @@ fn f_digit_pebble(c: &mut Builder, acc: &[QubitId], nm: [QubitId; 3], k1: QubitI
 
 /// The drop sets tried (1 then 2 dropped kept carries).
 const F_DROPS: [&[usize]; 2] = [&[0], &[0, 2]];
-/// laneQ LFQ_DROPS=1: alternate kept carries dropped up to five sets (each dropped carry's carry-in stays live), and the inverse ladder may drop too.
-const F_DROPS_Q: [&[usize]; 4] = [&[0], &[0, 2], &[0, 2, 4], &[0, 2, 4, 6, 8]];
-pub(super) fn lfq_drops() -> bool { std::env::var("LFQ_DROPS").is_ok_and(|v| v == "1") }
-fn f_drops() -> &'static [&'static [usize]] { if lfq_drops() { &F_DROPS_Q } else { &F_DROPS } }
-/// laneQ LFQ_PAGEFIRST=1: the forward fold pages the Q owners (3 T) before it drops kept carries.
-fn lfq_pagefirst() -> bool { std::env::var("LFQ_PAGEFIRST").is_ok_and(|v| v == "1") }
-/// laneQ LFQ_KPAGE=1: payload-only ticks erase the decoded (k3, k2) before the fold's fields and decode them again before the gate records return.
-pub(super) fn lfq_kpage() -> bool { std::env::var("LFQ_KPAGE").is_ok_and(|v| v == "1") }
-thread_local! {
-    /// laneQ: this fold may page (k3, k2) of tick t (set by the tick, taken by the fold).
-    pub(super) static KPAGE_AT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
-    /// laneQ: (k3, k2) left after the forward fold; the tick decodes them again for its rotation.
-    pub(super) static KPAGE_LATE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// laneQ: the wires of (k3, k2) after a paged fold.
-    pub(super) static KPAGE_RET: std::cell::Cell<Option<(QubitId, QubitId)>> = const { std::cell::Cell::new(None) };
-}
 /// The final physical ladder choice, after every owner release including an
 /// optional five-wire page. A pre-page shed estimate cannot select its drops.
 fn f_final_plan(nbits: usize, budget: usize, drops_ok: bool) -> Option<(Vec<usize>, Vec<usize>)> {
     if let Some(p) = a_plan(nbits, budget) { return Some((p, Vec::new())); }
     if drops_ok && f_drop_on() {
-        for ds in f_drops() {
+        for ds in F_DROPS {
             if let Some(p) = f_drop_plan(nbits, budget, ds) { return Some((p, ds.to_vec())); }
         }
     }
@@ -1044,7 +1002,6 @@ fn f_final_plan(nbits: usize, budget: usize, drops_ok: bool) -> Option<(Vec<usiz
 }
 fn f_ngate(emax: usize) -> usize {
     match emax {
-        3 => 1,
         5 => 2,
         6 => 3,
         _ => 4,
@@ -1053,13 +1010,6 @@ fn f_ngate(emax: usize) -> usize {
 /// round17 fold-core: the forward A fold with the digit held in place (IPK, levelled); values and interface as
 /// [`fold_fwd_a`]. Level and own sheds are chosen for the room at the ladder (level 0 = [`fold_fwd_a`]'s wires).
 #[allow(clippy::too_many_arguments)]
-/// laneR: per-stage expected Toffoli of a fold (ROOM_TRACE).
-struct FStg { last: f64, rows: Vec<(&'static str, f64)> }
-impl FStg {
-    fn new(c: &Builder) -> FStg { FStg { last: c.expected_total(), rows: Vec::new() } }
-    fn mark(&mut self, c: &Builder, name: &'static str) { let e = c.expected_total(); self.rows.push((name, e - self.last)); self.last = e; }
-    fn done(&self, dir: &str) { if room_trace() { eprintln!("FSTG {dir} {}", self.rows.iter().map(|(n, v)| format!("{n}={v:.1}")).collect::<Vec<_>>().join(" ")); } }
-}
 fn fold_fwd_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3], k1: QubitId, k2: QubitId, k3: QubitId, emax: usize, fin: usize, mut esh: Option<&mut ESh>) -> Vec<usize> {
     LOAN_ACTIVE.with(|x| x.set(false));
     let mw = acc.len();
@@ -1067,16 +1017,12 @@ fn fold_fwd_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
     let a_in = c.active_qubits();
     assert!(fin <= 6 && (fin >= 4) == esh.is_some());
     let nbits = mw - kx;
-    let kp_t = KPAGE_AT.with(|x| x.take());
-    let (mut k2, mut k3) = (k2, k3);
     // with the top-wire shed, c2, c1 and the top wires leave first (as fold_fwd_a) and c3 stays
     let early = esh.is_some();
     let n_fin = usize::from(fin >= 1) + usize::from(fin >= 2) + usize::from(fin >= 3) + esh.as_deref().map_or(0, f_esh_count);
-    let kf = lfg_kfwd();
-    let at_ladder = (a_in as usize + a_fixed(emax) + if kf { kx - 5 } else { 0 }).saturating_sub(n_fin);
+    let at_ladder = (a_in as usize + a_fixed(emax)).saturating_sub(n_fin);
     let sh = f_sheds(emax, nbits, at_ladder, f_ngate(emax), !early, true);
     let (sh_c4, sh_c3, gsh, lev) = (sh.c4, sh.c3, sh.gsh, sh.lev);
-    let mut stg = FStg::new(c);
     let c1 = lin_and(c, &l(acc[0]), &l(e[0]));
     let c2 = maj_wire(c, &l(acc[1]), &l(e[1]), &l(c1));
     let c3 = maj_wire(c, &l(acc[2]), &l(e[2]), &l(c2));
@@ -1094,18 +1040,17 @@ fn fold_fwd_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
             esh_out(c, st);
         }
     }
-    let pebble = PAYLOAD_AT.with(|x| x.get().is_some_and(|(rev,t)| !rev && (115..=120).contains(&super::late_t(t))));
+    let pebble = PAYLOAD_AT.with(|x| x.get().is_some_and(|(rev,t)| !rev && (115..=120).contains(&t)));
     if pebble { eprintln!("W118_PEBBLE fwd emax={emax}"); }
     let ((mut d, ckx, _), pk_k) = c.r3_peak(|c| {
         if pebble {
             let early_g7 = emax == 7 && gsh == 3 && lev >= 7
-                && PAYLOAD_AT.with(|x| x.get().is_some_and(|(r, t)| !r && super::late_t(t) == 115))
+                && PAYLOAD_AT.with(|x| x.get() == Some((false, 115)))
                 && w136_enabled();
             f_digit_pebble(c, acc, nm, k1, k2, k3, emax, c3, c4, true, lev, early_g7)
         }
-        else { KF_REQ.with(|x| x.set(kf)); f_digit(c, acc, nm, k1, k2, k3, emax, c3, c4, true, lev) }
+        else { f_digit(c, acc, nm, k1, k2, k3, emax, c3, c4, true, lev) }
     });
-    stg.mark(c, "digit");
     let ckx = ckx.unwrap();
     let mut prof = vec![("in", a_in as i64), ("kpeak", pk_k as i64), ("kphase_end", c.active_qubits() as i64)];
     if sh_c4 {
@@ -1130,22 +1075,13 @@ fn fold_fwd_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
         }
     }
     f_gates_out(c, &mut d, gsh, fin >= 3, k1, k2);
-    let kp_g = kp_t.map(|t| {
-        super::a2_code_read_erase(c, t, k3, k2);
-        let (g3, g2) = (f_ghost(), f_ghost());
-        f_rename(&mut d, k3, g3);
-        f_rename(&mut d, k2, g2);
-        (t, g3, g2)
-    });
     f_klo_out(c, acc, nm, &mut d, sh.klo, &mut [], &mut []);
     let qold = f_qser_out(c, &mut d, sh.qs, &mut []);
     prof.push(("shed", c.active_qubits() as i64));
-    stg.mark(c, "sheds");
     let mut post: Vec<Rec> = Vec::new();
     let (w110_a0,w110_t0)=(c.active_qubits(),c.expected_total());
     let mut add = f_fields(c, &mut post, &d, emax, mw);
     let (w110_af,w110_tf)=(c.active_qubits(),c.expected_total());
-    stg.mark(c, "fields");
     if dbg == 2 {
         for (b, f) in add.iter().enumerate() {
             if f.w.contains(&c3) { eprintln!("DBG add[{b}] reads c3"); }
@@ -1159,7 +1095,7 @@ fn fold_fwd_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
         eprintln!("F_FOLD fwd emax={emax} held={} fixed={} fin={fin} lev={lev} sheds {sh:?}", c.active_qubits() as isize - a_in as isize, a_fixed(emax));
     }
     let unpaged_budget = cells::cap().saturating_sub(c.active_qubits() as usize);
-    let unpaged_plan = f_final_plan(nbits, unpaged_budget, !lfq_pagefirst());
+    let unpaged_plan = f_final_plan(nbits, unpaged_budget, true);
     // W118-v2: pay five page replays only if neither existing plan fits.
     // Select the final chunk plan after those five owners are actually free.
     let page5 = f_page5_out(c, &mut post, &mut add, emax, unpaged_plan.is_none());
@@ -1171,25 +1107,19 @@ fn fold_fwd_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
         eprintln!("F_FOLD fwd drops {:?} plan {:?}", drops, plan);
     }
     let (w110_ap,w110_tp)=(c.active_qubits(),c.expected_total());
-    stg.mark(c, "page");
     let ((), pk_l) = c.r3_peak(|c| ladder_d(c, acc, &add, kx, ckx, &plan, &drops));
-    stg.mark(c, "ladder");
     let (w110_al,w110_tl)=(c.active_qubits(),c.expected_total());
     prof.push(("ladder_peak", pk_l as i64));
     let ((), page_cleanup_peak) = c.r3_peak(|c| { if let Some(page5) = page5 {
-        if emax == 5 && sf48_page_on() {
-            sf48_page_cleanup(c, &mut post, &d, page5);
-        } else if emax == 7 && std::env::var_os("LFF_CUBIC_CLEANUP").is_some() {
+        if std::env::var_os("LFF_CUBIC_CLEANUP").is_some() {
             f_page5_direct_cleanup(c, &mut post, &d, page5);
         } else {
-            if emax==5 {sf48_page_replay_cleanup(c,&mut post,&mut add,page5);} else {
             f_page5_back(c, &mut post, &mut add, page5);
-            while let Some(r) = post.pop() { f_pop(c, r); }}
+            while let Some(r) = post.pop() { f_pop(c, r); }
         }
     } else {
         while let Some(r) = post.pop() { f_pop(c, r); }
     }});
-    stg.mark(c, "cleanup");
     if std::env::var_os("LFF_PAGE5_TRACE").is_some() { eprintln!("W120_CLEANUP fwd peak={page_cleanup_peak} end={} cubic={}", c.active_qubits(), std::env::var_os("LFF_CUBIC_CLEANUP").is_some()); }
     if std::env::var_os("LFF_PAGE5_TRACE").is_some() { eprintln!("W110_STAGE fwd emax={emax} fields_q={} fields_T={:.1} page_q={} page_T={:.1} ladder_peak={pk_l} ladder_end_q={w110_al} ladder_T={:.1} back_q={} back_T={:.1}", w110_af as isize-w110_a0 as isize,w110_tf-w110_t0,w110_ap as isize-w110_af as isize,w110_tp-w110_tf,w110_tl-w110_tp,c.active_qubits() as isize-w110_al as isize,c.expected_total()-w110_tl); }
     f_qser_back(c, &mut d, &qold, &mut [&mut add]);
@@ -1208,40 +1138,14 @@ fn fold_fwd_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
     }
     let c4 = if sh_c4 { lin_and(c, &l(acc[3]), &l(c3n)) } else { c4 };
     prof.push(("rebuilt", c.active_qubits() as i64));
-    stg.mark(c, "rebuild");
     // the serial chunk's kept carry, by its compare (acc[4..K) holds W's bits)
-    match KF_INNER.with(|x| x.borrow_mut().take()) {
-        Some(inner) => {
-            let mut ch = vec![c4];
-            ch.extend(inner.iter().copied());
-            ch.push(ckx);
-            for j in (5..=kx).rev() {
-                let (q, ci) = (ch[j - 4], ch[j - 5]);
-                lin_xor_into(c, &add[j - 1], acc[j - 1]);
-                c.cx(ci, acc[j - 1]);
-                m_carry_erase(c, q, acc[j - 1], &add[j - 1], ci);
-                c.cx(ci, acc[j - 1]);
-                lin_xor_into(c, &add[j - 1], acc[j - 1]);
-            }
-        }
-        None => kept_erase(c, acc, &add, 4, kx, c4, ckx),
-    }
-    stg.mark(c, "kept_erase");
+    kept_erase(c, acc, &add, 4, kx, c4, ckx);
     while let Some(r) = d.qser.pop() {
         f_pop(c, r);
     }
     f_restore(c, acc, nm, emax, &mut d, c3n, &mut [], false);
     prof.push(("restored", c.active_qubits() as i64));
     f_tchain_out(c, &mut d);
-    if let Some((t, g3, g2)) = kp_g {
-        let (nk3, nk2) = super::a2_code_read(c, t);
-        f_rename(&mut d, g3, nk3);
-        f_rename(&mut d, g2, nk2);
-        k3 = nk3;
-        k2 = nk2;
-        KPAGE_RET.with(|x| x.set(Some((nk3, nk2))));
-    }
-    let _ = k3;
     f_gates_back(c, &mut d, gsh, fin >= 3, k1, k2);
     for j in (0..d.yw.len()).rev() {
         let (a, b) = d.yer[j].clone();
@@ -1265,10 +1169,7 @@ fn fold_fwd_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
         let c2 = if fin >= 1 { maj_wire(c, &l(acc[1]), &l(e[1]), &l(c1)) } else { c2 };
         (c1, c2)
     };
-    stg.mark(c, "restore");
     fold_undo_low_c(c, acc, e, [c1, c2, c3n, c4], None);
-    stg.mark(c, "low_undo");
-    stg.done("fwd");
     if room_trace() {
         eprintln!("F_PROF fwd cap={} lev={lev} {:?}", cells::cap(), prof);
     }
@@ -1293,13 +1194,10 @@ fn fold_inv_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
     let kx = 3 + emax;
     let a_in = c.active_qubits();
     let nbits = mw - kx;
-    let kp_t = KPAGE_AT.with(|x| x.take());
-    let (mut k2, mut k3) = (k2, k3);
     let n_fin = usize::from(fin >= 1) + usize::from(fin >= 2) + usize::from(fin >= 3);
-    let at_ladder = (a_in as usize + a_fixed(emax)).saturating_sub(n_fin + if kp_t.is_some() { 2 } else { 0 });
+    let at_ladder = (a_in as usize + a_fixed(emax)).saturating_sub(n_fin);
     let sh = f_sheds(emax, nbits, at_ladder, f_ngate(emax), true, false);
     let (sh_c4, sh_c3, gsh, lev) = (sh.c4, sh.c3, sh.gsh, sh.lev);
-    let mut stg = FStg::new(c);
     let (c1, c2, c3, c4) = f_inv_phase(c, "entry_setup", |c| {
     c.cx(e[0], acc[0]);
     let c1 = lin_and(c, &l(acc[0]), &l(e[0]));
@@ -1321,22 +1219,9 @@ fn fold_inv_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
     }
     (c1, c2, c3, c4)
     });
-    stg.mark(c, "low");
     let (mut d, _, mut add_lo) = f_inv_phase(c, "digit", |c| f_digit(c, acc, nm, k1, k2, k3, emax, c3, c4, false, lev));
-    stg.mark(c, "digit");
     // the serial chunk's kept carry, built exactly from W's bits [4, K) (its addend = Q's forms on [4, K))
-    // laneR: the kept seed's chain is the serial chunk's carries exactly (exact seed c4; MAJ(~W, a, c) = MAJ(L, a, c) with
-    // W = L ^ a ^ c), so where the ladder can spare the wires they stay and the serial build below is not paid again.
-    let serial_hold = A2R_SERIAL_HOLD.with(|x| x.get());
-    let mut held: Vec<QubitId> = Vec::new();
-    let ckx = if serial_hold {
-        let (q, h) = f_inv_phase(c, "kept_seed", |c| a_lt_value_hold(c, &acc[4..kx], &d.qb[0..kx - 4], c4));
-        held = h;
-        q
-    } else {
-        f_inv_phase(c, "kept_seed", |c| a_lt_value(c, &acc[4..kx], &d.qb[0..kx - 4], c4))
-    };
-    stg.mark(c, "kept_seed");
+    let ckx = f_inv_phase(c, "kept_seed", |c| a_lt_value(c, &acc[4..kx], &d.qb[0..kx - 4], c4));
     if sh_c4 {
         lin_and_erase(c, c4, &l(acc[3]), &l(c3));
     }
@@ -1358,13 +1243,6 @@ fn fold_inv_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
         f_gates_out(c, &mut d, gsh, fin >= 3, k1, k2);
         f_klo_out(c, acc, nm, &mut d, sh.klo, &mut [], &mut [&mut add_lo]);
     });
-    let kp_g = kp_t.map(|t| {
-        super::a2_code_read_erase(c, t, k3, k2);
-        let (g3, g2) = (f_ghost(), f_ghost());
-        f_rename(&mut d, k3, g3);
-        f_rename(&mut d, k2, g2);
-        (t, g3, g2)
-    });
     let qold = f_inv_phase(c, "qser_out", |c| f_qser_out(c, &mut d, sh.qs, &mut [&mut add_lo]));
     let mut post: Vec<Rec> = Vec::new();
     let (w110_a0,w110_t0)=(c.active_qubits(),c.expected_total());
@@ -1374,24 +1252,20 @@ fn fold_inv_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
     let page5 = f_inv_phase(c, "page_out", |c| f_page5_out(c, &mut post, &mut add, emax, f_final_plan(nbits, unpaged_budget, false).is_none()));
     if page5.is_some() { eprintln!("W118_PAGE inv budget={unpaged_budget} min={} emax={emax}", a_min_budget(nbits)); }
     let budget = cells::cap().saturating_sub(c.active_qubits() as usize);
-    let (plan, inv_drops) = f_final_plan(nbits, budget, lfq_drops()).unwrap_or_else(|| panic!("fold-core: the inverse IPK fold's ladder does not fit: budget {budget}, need {}, active {}, cap {}, lev {lev}", a_min_budget(nbits), c.active_qubits(), cells::cap()));
+    let (plan, _) = f_final_plan(nbits, budget, false).unwrap_or_else(|| panic!("fold-core: the inverse IPK fold's ladder does not fit: budget {budget}, need {}, active {}, cap {}, lev {lev}", a_min_budget(nbits), c.active_qubits(), cells::cap()));
     let (w110_ap,w110_tp)=(c.active_qubits(),c.expected_total());
-    f_inv_phase(c, "ladder_all", |c| if inv_drops.is_empty() { a_ladder_inv(c, acc, &add, kx, ckx, &plan) } else { a_ladder_inv_up_drop(c, acc, &add, kx, ckx, &plan, &inv_drops) });
+    f_inv_phase(c, "ladder_all", |c| a_ladder_inv(c, acc, &add, kx, ckx, &plan));
     let (w110_al,w110_tl)=(c.active_qubits(),c.expected_total());
     let ((), page_cleanup_peak) = c.r3_peak(|c| { if let Some(page5) = page5 {
-        if emax == 5 && sf48_page_on() {
-            sf48_page_cleanup(c, &mut post, &d, page5);
-        } else if emax == 7 && std::env::var_os("LFF_CUBIC_CLEANUP").is_some() {
+        if std::env::var_os("LFF_CUBIC_CLEANUP").is_some() {
             f_page5_direct_cleanup(c, &mut post, &d, page5);
         } else {
-            if emax==5 {sf48_page_replay_cleanup(c,&mut post,&mut add,page5);} else {
             f_page5_back(c, &mut post, &mut add, page5);
-            while let Some(r) = post.pop() { f_pop(c, r); }}
+            while let Some(r) = post.pop() { f_pop(c, r); }
         }
     } else {
         while let Some(r) = post.pop() { f_pop(c, r); }
     }});
-    stg.mark(c, "cleanup");
     if std::env::var_os("LFF_PAGE5_TRACE").is_some() { eprintln!("W120_CLEANUP inv peak={page_cleanup_peak} end={} cubic={}", c.active_qubits(), std::env::var_os("LFF_CUBIC_CLEANUP").is_some()); }
     if std::env::var_os("LFF_PAGE5_TRACE").is_some() { eprintln!("W110_STAGE inv emax={emax} fields_q={} fields_T={:.1} page_q={} page_T={:.1} ladder_end_q={w110_al} ladder_T={:.1} back_q={} back_T={:.1}", w110_af as isize-w110_a0 as isize,w110_tf-w110_t0,w110_ap as isize-w110_af as isize,w110_tp-w110_tf,w110_tl-w110_tp,c.active_qubits() as isize-w110_al as isize,c.expected_total()-w110_tl); }
     f_inv_phase(c, "qser_back", |c| f_qser_back(c, &mut d, &qold, &mut [&mut add, &mut add_lo]));
@@ -1409,18 +1283,7 @@ fn fold_inv_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
     }
     (c1, c2, c3n, c4)
     });
-    stg.mark(c, "rebuild");
     f_inv_phase(c, "digit_restore", |c| f_restore(c, acc, nm, emax, &mut d, c3n, &mut add_lo, true));
-    stg.mark(c, "restore");
-    if let Some((t, g3, g2)) = kp_g {
-        let (nk3, nk2) = f_inv_phase(c, "kpage_read", |c| super::a2_code_read(c, t));
-        f_rename(&mut d, g3, nk3);
-        f_rename(&mut d, g2, nk2);
-        k3 = nk3;
-        k2 = nk2;
-        KPAGE_RET.with(|x| x.set(Some((nk3, nk2))));
-    }
-    let _ = k3;
     // At emax=7, the three shed gate ANDs only reappear in the serial Y erase
     // forms. Rebuild each after the matching carry has been returned, rather
     // than holding all three across the serial carry build.
@@ -1435,13 +1298,12 @@ fn fold_inv_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
     } else {
         f_inv_phase(c, "gates_back", |c| f_gates_back(c, &mut d, gsh, fin >= 3, k1, k2));
     }
-    stg.mark(c, "gates_back");
     // the serial chunk: its sums taken back bottom up, its carries built again
     let mut cc: Vec<QubitId> = vec![c4];
     f_inv_phase(c, "serial_carry_build", |c| {
     for j in 4..kx {
         if j > 4 {
-            let t = if serial_hold { held[j - 5] } else { m_carry(c, acc[j - 1], &add_lo[j - 5], cc[j - 5]) };
+            let t = m_carry(c, acc[j - 1], &add_lo[j - 5], cc[j - 5]);
             cc.push(t);
         }
         c.cx(cc[j - 4], acc[j]);
@@ -1449,7 +1311,6 @@ fn fold_inv_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
     }
     });
     cc.push(ckx);
-    stg.mark(c, "serial_build");
     // ... and the serial sweep's carries, digit bits and chain measured away top down
     f_inv_phase(c, "serial_carry_return", |c| {
     for j in (4..kx).rev() {
@@ -1487,8 +1348,6 @@ fn fold_inv_f(c: &mut Builder, acc: &[QubitId], e: [QubitId; 3], nm: [QubitId; 3
     maj_wire_erase(c, c2, &l(acc[1]), &l(e[1]), &l(c1));
     lin_and_erase(c, c1, &l(acc[0]), &l(e[0]));
     });
-    stg.mark(c, "serial_return");
-    stg.done("inv");
     assert!(d.trec.iter().all(|r| r.is_none()) && d.qser.is_empty());
     assert_eq!(c.active_qubits(), a_in, "fold-core: the inverse IPK fold left a wire");
     plan
@@ -1722,42 +1581,6 @@ mod f_tests {
             check_f(false, emax, 57, least, 2, &inp);
         }
     }
-    /// laneQ: the IPK fold at emax 3, forward and inverse, room from plenty to the menu's end, and the inverse with drops.
-    #[test]
-    fn f_fold_e3() {
-        let inp = inputs(3, 55, 0, Some(8), 0x5eed ^ 3u64 ^ 55u64 << 8);
-        for mw in [55usize, 57] {
-            let inp = if mw == 55 { inp.clone() } else { inputs(3, 57, 0, Some(8), 0x77) };
-            let least = a_min_budget(mw - 6) as isize - f_own_sheds(3) as isize;
-            for room in [40isize, 12, 5, 2, least.max(2)] {
-                check_f(true, 3, mw, room, 0, &inp);
-                check_f(false, 3, mw, room, 0, &inp);
-                check_f(true, 3, mw, room, 2, &inp);
-                check_f(false, 3, mw, room, 2, &inp);
-            }
-        }
-    }
-    /// laneQ: the inverse ladder with alternate drops, exhaustive low bits.
-    #[test]
-    fn f_fold_inv_drops() {
-        std::env::set_var("LFQ_DROPS", "1");
-        let lowb: usize = 8;
-        for mw in [57usize] {
-            for emax in [5usize, 7] {
-                let inp = inputs(emax, mw, 0, Some(lowb), 0x5eed ^ emax as u64 ^ (mw as u64) << 8);
-                let least = a_min_budget(mw - 3 - emax) as isize - f_own_sheds(emax) as isize - f_page5_room_credit(emax) as isize;
-                let (nb, mb) = (mw - 3 - emax, a_min_budget(mw - 3 - emax));
-                std::env::set_var("LFF_PAGE5", "1");
-                for extra in 0..=3usize {
-                    if extra == 0 || f_drops().iter().any(|ds| f_drop_plan(nb, mb - extra, ds).is_some()) {
-                        check_f(false, emax, mw, least - extra as isize, 2, &inp);
-                        check_f(true, emax, mw, least - extra as isize, 2, &inp);
-                    }
-                }
-            }
-        }
-        std::env::remove_var("LFQ_DROPS");
-    }
     /// The forward fold past the whole own-shed menu: 1 and 2 dropped kept carries (exhaustive low bits, LFF_EXH).
     #[test]
     fn f_fold_drops() {
@@ -1787,128 +1610,5 @@ mod f_tests {
         let inp = inputs(emax, 57, 40, None, 77);
         check_f(true, emax, 57, room, fin, &inp);
         check_f(false, emax, 57, room, fin, &inp);
-    }
-}
-
-
-thread_local!{static SF48_POOL_I:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};}
-fn sf48_pool_next()->usize{SF48_POOL_I.with(|v|{let i=v.get();v.set(i+1);i})}
-fn sf48_pool_log(c:&Builder,i:usize){
-    if cfg!(test){return;}
-    use std::io::Write;
-    let st=c.y42_alloc_state();
-    let text=|v:&[u32]|if v.is_empty(){"-".to_string()}else{v.iter().map(|x|x.to_string()).collect::<Vec<_>>().join(",")};
-    let mut f=std::fs::OpenOptions::new().create(true).append(true).open("sf48-page-alloc.tsv").unwrap();
-    writeln!(f,"{}\t{}\t{}\t{}",i,text(&st.0),text(&st.1),st.2).unwrap();
-}
-fn sf48_pool_restore(c:&mut Builder,i:usize){
-    if cfg!(test){return;}
-    let rows=include_str!("bind81_page_alloc.tsv").to_owned();
-    let row=rows.lines().filter(|l|!l.trim().is_empty()&&!l.starts_with('#')).nth(i).expect("bind81 fresh off-state allocation row");
-    let v:Vec<_>=row.split('\t').collect();assert_eq!(v.len(),4);assert_eq!(v[0].parse::<usize>().unwrap(),i);
-    let parse=|s:&str|->Vec<u32>{if s=="-"{vec![]}else{s.split(',').map(|x|x.parse().unwrap()).collect()}};
-    let(q,b,n)=(parse(v[1]),parse(v[2]),v[3].parse::<u32>().unwrap());
-    // The existing checked API requires identical free quantum set and held bit set.
-    // It changes only allocation order / dead-bit availability, never a value.
-    c.narrow_alloc_set(&q,&b,n);
-    eprintln!("SF48_PAGE_RETURN i={i} free_q={} free_b={} next_b={n}",q.len(),b.len());
-}
-fn sf48_page_replay_cleanup(c:&mut Builder,post:&mut Vec<Rec>,add:&mut[Lin],p:FPage5){
-    let i=sf48_pool_next();f_page5_back(c,post,add,p);while let Some(r)=post.pop(){f_pop(c,r);}sf48_pool_log(c,i);
-}
-
-
-// Local generated cleanup.
-// SF48_PAGE_MODE is a compile-time research switch (off/on/fault).
-fn sf48_page_on() -> bool { std::env::var("BIND81_PAGE_ON").ok().as_deref()==Some("1") }
-fn sf48_page_symbol(name: &str, d: &FDig, post: &[Rec], p: &FPage5) -> Lin {
-    let own = |i: usize| match &post[i] { Rec::And(q,_,_) | Rec::Maj(q,_,_,_) => l(*q), _=>unreachable!() };
-    if let Some(s)=name.strip_prefix('k') { if let Ok(i)=s.parse::<usize>() { return d.k[i].clone(); } }
-    match name {
-        "ks"=>l(d.ks), "qseed"=>d.q.clone(), "Q4"=>own(0), "Q5"=>own(1),
-        "H0"=>own(13), "H1"=>own(14),
-        "R0"=>l(p.b[0]), "R1"=>l(p.b[1]), "R2"=>l(p.b[2]),
-        "B3"=>own(8), "B4"=>own(9), "B5"=>own(10), "B6"=>own(11), "B7"=>own(12),
-        _=>panic!("sf48 phase symbol {name}"),
-    }
-}
-fn sf48_page_term(c: &mut Builder,m: crate::circuit::BitId,factors: &[&[&str]],d:&FDig,post:&[Rec],p:&FPage5,hosts:&[QubitId]) {
-    assert_eq!(hosts.len(),3);
-    if factors.is_empty() {c.x(hosts[0]);c.z_if(hosts[0],m);c.x(hosts[0]);return;}
-    assert!(factors.len()<=3);
-    let forms:Vec<Lin>=factors.iter().map(|names|names.iter().fold(Lin::k(false),|a,n|a.x(&sf48_page_symbol(n,d,post,p)))).collect();
-    for (j,f) in forms.iter().enumerate(){lin_xor_into(c,f,hosts[j]);}
-    match forms.len(){1=>c.z_if(hosts[0],m),2=>c.cz_if(hosts[0],hosts[1],m),3=>c.ccz_if(hosts[0],hosts[1],hosts[2],m),_=>unreachable!()}
-    for (j,f) in forms.iter().enumerate().rev(){lin_xor_into(c,f,hosts[j]);}
-}
-fn sf48_page_erase(c:&mut Builder,name:&str,terms:&[&[&str]],cubes:&[[&[&str];3]],d:&FDig,post:&[Rec],p:&FPage5,hosts:&[QubitId]) {
-    let form=sf48_page_symbol(name,d,post,p);assert!(!form.one&&form.w.len()==1);
-    let q=form.w[0];let m=c.alloc_bit();c.hmr(q,m);c.release_clean(q);
-    for names in terms {
-        let single:Vec<&[&str]>=names.iter().map(std::slice::from_ref).collect();
-        sf48_page_term(c,m,&single,d,post,p,hosts);
-    }
-    for cube in cubes {
-        if false && name=="B3" {continue;}
-        sf48_page_term(c,m,cube,d,post,p,hosts);
-    }
-    c.free_bit(m);
-}
-fn sf48_page_cleanup(c:&mut Builder,post:&mut Vec<Rec>,d:&FDig,p:FPage5) {
-    let sf48_i=sf48_pool_next();
-    assert_eq!(post.len(),15);assert_eq!(p.off,2);assert_eq!(p.b.len(),3);assert_eq!(d.k.len(),9);
-    // Allocate exactly the three replay owners, using the parent's parity-helper
-    // allocation order. Their value remains ZERO; the paged R fields stay paged.
-    let mut hosts=Vec::new();
-    for i in 0..p.q_old.len(){
-        let(a,b)=match &post[p.off+i]{Rec::Maj(_,a,b,_) =>(a.clone(),b.clone()),_=>unreachable!()};
-        let _=lin_pair_on(c,&a,&b);let q=c.alloc_qubit();lin_pair_off(c,&a,&b);
-        y18_subst(post,p.q_ghost[i],q);hosts.push(q);
-    }
-
-    sf48_page_erase(c,"H1",&[&["H0"],&["k1","H0"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"B7",&[&[],&["k8"],&["ks"],&["H0"],&["k0","ks"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"H0",&[&[],&["k7"],&["k8"],&["B6"],&["k0","ks"],&["k7","B6"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"B6",&[&["k6"],&["ks"],&["B5"],&["k6","B5"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"B5",&[&["k5"],&["ks"],&["B4"],&["k5","B4"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"B4",&[&["k4"],&["ks"],&["B3"],&["k4","B3"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"B3",&[&["k3"],&["ks"],&["R2"],&["k1","k2"],&["k3","R2"],&["k7","R2"],&["k8","qseed"],&["k8","R2"],&["ks","qseed"]],&[[&["k1"],&["k2"],&["k7","k8","R2"]]],d,post,&p,&hosts);
-    sf48_page_erase(c,"R2",&[&["k2"],&["ks"],&["R1"],&["k2","k7"],&["k2","k8"],&["k2","R1"],&["k6","k7"],&["k6","R1"],&["k8","R1"]],&[[&["k1"],&["k7"],&["k6","R1"]]],d,post,&p,&hosts);
-    sf48_page_erase(c,"R1",&[&["k1"],&["R0"],&["k1","k6"],&["k1","k7"],&["k1","R0"],&["k4","k5"],&["k4","R0"],&["k5","R0"],&["k6","k7"],&["k6","R0"],&["k7","R0"]],&[[&["k0"],&["k4"],&["k5","R0"]]],d,post,&p,&hosts);
-    sf48_page_erase(c,"R0",&[&["k0"],&["k0","k5"],&["k0","k6"],&["k0","Q5"],&["k3","k4"],&["k3","Q5"],&["k4","k5"],&["k5","k6"],&["k6","Q5"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"Q5",&[&["k2","k3"],&["k2","Q4"],&["k3","k4"],&["k4","k5"],&["k5","Q4"]],&[],d,post,&p,&hosts);
-    sf48_page_erase(c,"Q4",&[&["k1","k2"],&["k1","qseed"],&["k2","k3"],&["k3","k4"],&["k4","qseed"]],&[],d,post,&p,&hosts);
-    // These fair zero measurements account for the three parent replay-owner
-    // events. Every parity host has been restored to ZERO before its HMR.
-    for &q in hosts.iter().rev(){let m=c.alloc_bit();c.hmr(q,m);c.free_bit(m);c.release_clean(q);}
-    post.clear();
-    sf48_pool_restore(c,sf48_i);
-}
-
-#[cfg(test)]
-mod sf48_page_tests {
-    use super::*;
-    fn write_raw(ops:Vec<crate::circuit::Op>,path:&std::path::Path) {
-        use std::io::Write;
-        let mut f=std::fs::File::create(path).unwrap();
-        for o in ops {for v in [o.kind as u64,o.q_control2.0,o.q_control1.0,o.q_target.0,o.c_target.0,o.c_condition.0,o.r_target.0] {f.write_all(&v.to_le_bytes()).unwrap();}}
-    }
-    #[test]
-    fn sf48_page_fixture() {
-        std::env::set_var("LFF_PAGE5","1");
-        let mut c=Builder::new();let kb=c.alloc_qubits(9);let ks=c.alloc_qubit();
-        let k:Vec<Lin>=kb.iter().map(|&q|l(q)).collect();
-        let mut qser=Vec::new();let mut q=r_and(&mut c,&mut qser,k[1].clone(),k[0].clone());
-        let mut qb=vec![k[0].clone(),k[1].x(&k[0])];
-        for i in 2..4 {qb.push(k[i].x(&k[i-1]).x(&q));q=r_maj(&mut c,&mut qser,k[i].clone(),k[i-1].clone(),q);}
-        let d=FDig{g:vec![],tt:Lin::k(false),pre:vec![],ngate:0,early_g7:false,r2:Lin::k(false),yw:vec![],yer:vec![],tw:vec![],trec:vec![],r3v:None,ks,qser:vec![],k,qb,q,tops:0,full:false};
-        let mut post=Vec::new();let mut add=f_fields(&mut c,&mut post,&d,5,57);
-        let p=f_page5_out(&mut c,&mut post,&mut add,5,true).unwrap();
-        if sf48_page_on() {sf48_page_cleanup(&mut c,&mut post,&d,p);} else {
-            f_page5_back(&mut c,&mut post,&mut add,p);while let Some(r)=post.pop(){f_pop(&mut c,r);}
-        }
-        while let Some(r)=qser.pop(){f_pop(&mut c,r);}
-        let dir=std::env::var("SF48_FIXTURE_DIR").unwrap();std::fs::create_dir_all(&dir).unwrap();
-        write_raw(c.take_ops(),&std::path::Path::new(&dir).join(format!("page-{}.raw",option_env!("SF48_PAGE_MODE").unwrap_or("off"))));
     }
 }
