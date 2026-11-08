@@ -161,7 +161,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "1263270054086",
+        "TAIL_NONCE" => "50520801699",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -724,7 +724,26 @@ pub fn build_generated() -> Vec<Op> {
     x.kind = OperationType::X;
     x.q_target = QubitId(0);
     ops.extend(std::iter::repeat_n(x, 96));
-    apply_tail_nonce(ops, nonce)
+    let ops = apply_tail_nonce(ops, nonce);
+    // 45 charged CCX operations that did not fire in any of 9,024,000 screened
+    // inputs (1,000 nonce seeds) and remained inert on 16 fixed measurement
+    // corpora. The index is bound to this exact final stream.
+    let dead_rows: Vec<usize> = include_str!("dead-robust-1000.idx")
+        .lines()
+        .filter(|line| !line.is_empty() && *line != "idx")
+        .map(|line| line.split('\t').next().unwrap().parse().unwrap())
+        .collect();
+    assert_eq!(dead_rows.len(), 45, "dead-CCX index must contain 45 rows");
+    let dead: std::collections::BTreeSet<usize> = dead_rows.into_iter().collect();
+    assert_eq!(dead.len(), 45, "dead-CCX index rows must be unique");
+    let before = ops.len();
+    let ops: Vec<Op> = ops
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, op)| (!dead.contains(&i)).then_some(op))
+        .collect();
+    assert_eq!(before - ops.len(), 45, "dead-CCX index must remove 45 ops");
+    ops
 }
 
 
