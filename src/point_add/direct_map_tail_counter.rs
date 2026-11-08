@@ -1,0 +1,268 @@
+//! Direct E7/S5 complete stages11..15. Source only; no allocation or dispatch.
+//! The map/tail reuse S5 and the three returned scalar owners as eight zero
+//! ports. C stays on tag, E stays size-minus1, PH stays outside the map.
+use super::builder::B;
+use super::direct_column::Column;
+use super::frogdrop_col::ColPar;
+use super::mask::mc_xor;
+use crate::circuit::QubitId;
+use std::collections::BTreeSet;
+
+fn xor(b:&mut B,c:&[(QubitId,bool)],t:QubitId,clean:&[QubitId],universe:&[QubitId]){
+    assert!(!c.iter().any(|q|q.0==t));
+    let mut seen=BTreeSet::new();
+    let d:Vec<_>=universe.iter().copied().filter(|q|*q!=t&&!clean.contains(q)
+        &&!c.iter().any(|p|p.0==*q)&&seen.insert(*q)).collect();
+    mc_xor(b,c,t,clean,&d);
+}
+
+/// Same RA64 predicate as the qualified parent, with the complete physical
+/// counter always at Q121..127. No predicate is read inside a map frame.
+fn done(b:&mut B,col:&Column<'_>,target:QubitId,extra:&[(QubitId,bool)],bank:&[QubitId]){
+    let mut base=vec![(col.phase,false)];
+    base.extend(col.q[64..121].iter().map(|&q|(q,true)));
+    for &(q,n) in extra{
+        if let Some(old)=base.iter().find(|x|x.0==q){if old.1!=n{return;}}
+        else{base.push((q,n));}
+    }
+    xor(b,&base,target,&[],bank);
+    base.extend(col.q[121..128].iter().map(|&q|(q,true)));
+    xor(b,&base,target,&[],bank);
+}
+
+/// This must also supply MAP_CTRL_S before the special B0 endpoint, because
+/// its map-parity correction depends on the actual skipped columns.
+pub(crate) fn controlled(cp:&ColPar)->bool{
+    !cp.nomap&&cp.sz!=(0,0)&&cp.dn&&cp.m>121
+}
+
+/// Entry after stage10: E=top size-1, S=0, tag=C, three other roles0.
+/// Exit: tagged E if C, phase updated, counter incremented exactly once.
+pub(crate) fn finish(b:&mut B,col:&Column<'_>,cp:&ColPar){
+    assert!(!cp.nomap&&cp.sz!=(0,0));
+    assert_eq!((cp.n,cp.nq,col.q.len(),col.ring.len()),(257,128,128,257));
+    assert!((2..=128).contains(&cp.m)&&cp.emax<=31);
+    let r=col.roles;
+    let scratch:Vec<_>=std::iter::once(r.tag).chain(col.meta.sum.iter().copied())
+        .chain([r.cut,r.toggle,r.prefix]).collect();
+    assert_eq!(scratch.len(),9);
+    let mut held:BTreeSet<_>=[col.phase,r.tag].into_iter().collect();
+    if let Some(p)=col.compact{held.extend(p.iter().copied());}
+    let mut seen=BTreeSet::new();
+    let bank:Vec<_>=col.ring.iter().chain(col.q).chain(&col.meta.y)
+        .chain(&scratch[1..]).chain(col.dirty).copied()
+        .filter(|q|!held.contains(q)&&seen.insert(*q)).collect();
+    let par=super::frogdrop::MapPar{clo:cp.n-cp.smax.1,chi:cp.n-cp.smax.0,
+        m:if cp.dn{128}else{cp.m},tail:cp.tail,emax:cp.emax};
+    // Public pure-HT makes PH a global one; map replay borrows it only after
+    // an explicit X and returns it before the second derived-DONE query.
+    let pure_ht=cp.ht&&!cp.hr&&!cp.sw&&!cp.dl&&!cp.dq;
+    super::r13prof::mk(b,20);super::frogdrop::direct_map::apply_stage_with_loans(b,col.ring,col.q,&col.meta.y,
+        &scratch,col.phase,&par,cp.m,cp.dn,pure_ht,&bank,col.clean_external,
+        |b,target,donors|done(b,col,target,&[],donors));
+    super::r13prof::mk(b,20);super::r13prof::mk(b,21);
+    if cp.sw||cp.dl{
+        assert!(cp.sw,"delayed C uses the complete public switching-tail envelope");
+        let par=super::frogdrop::direct_tail::TailPar{l0:cp.l0,qb:cp.qb,
+            szlo:cp.sz.0,sylo:cp.sy.0,swl_hi:cp.swl.1,m:cp.m};
+        super::frogdrop::direct_tail::apply(b,col.ring,col.q,&col.meta.y,
+            &scratch,col.phase,&par,false,&bank);
+    }
+    super::r13prof::mk(b,21);super::r13prof::mk(b,22);counter(b,col,cp,&bank);super::r13prof::mk(b,22);
+}
+
+/// S5 is zero after the complete tail. Its five lanes plus toggle supply
+/// the six exact increment carries. Neither metadata E nor persistent C
+/// is borrowed as clean. No physical counter relocation is used.
+fn counter(b:&mut B,col:&Column<'_>,cp:&ColPar,bank:&[QubitId]){
+    if !cp.dn&&!cp.fin{return;}
+    let r=col.roles;let flag=r.cut;
+    let clean:Vec<_>=col.meta.sum.iter().copied().chain([r.toggle]).collect();
+    let cnt=&col.q[121..128];
+    let sched=super::frogdrop_sched::from_text(super::pointadd_frogdrop::SCHED_FROGDROP);
+    let first=sched.cols.iter().position(|c|c.fin).expect("public first finisher");
+    assert!(cp.col<sched.cols.len()&&cp.col.saturating_sub(first)+1<128);
+    if cp.dn{
+        done(b,col,flag,&[(r.tag,true)],bank);
+        super::arith::inc(b,flag,cnt,&clean);
+        done(b,col,flag,&[(r.tag,true)],bank);
+    }
+    if cp.fin{
+        let mut fresh=vec![(col.phase,false),(r.tag,true)];
+        fresh.extend(col.meta.y.iter().map(|&q|(q,true)));
+        // Fresh = PH & Y1 & !C & !DONE, using the unchanged exact parent
+        // notion of DONE. Previous counters are now at least2, without wrap.
+        xor(b,&fresh,flag,&clean,bank);
+        done(b,col,flag,&fresh,bank);
+        b.cx(flag,cnt[0]);
+        let mut made=fresh;
+        made.push((cnt[0],false));made.extend(cnt[1..].iter().map(|&q|(q,true)));
+        // Inherited l0=128 lies above the physical data end121, so the
+        // old l0..ctop payload-zero clause is empty, exactly as in parent.
+        assert_eq!(cp.l0,128);
+        xor(b,&made,flag,&clean,bank);
+    }
+}
+
+// Three-role sibling: literal counter/predicate with context-field substitutions.
+pub(crate) fn done3(b:&mut B,col:&super::frogdrop::direct_map::k1_map3::Context<'_>,target:QubitId,extra:&[(QubitId,bool)],bank:&[QubitId]){
+    let mut base=vec![(col.ph,false)];
+    base.extend(col.q[64..121].iter().map(|&q|(q,true)));
+    for &(q,n) in extra{
+        if let Some(old)=base.iter().find(|x|x.0==q){if old.1!=n{return;}}
+        else{base.push((q,n));}
+    }
+    xor(b,&base,target,&[],bank);
+    base.extend(col.q[121..128].iter().map(|&q|(q,true)));
+    xor(b,&base,target,&[],bank);
+}
+/// WP5 is an independent, default-off construction gate. C659 remains unchanged
+/// until the coordinator merges the baked selector hunk.
+pub(crate) fn wp5_enabled()->bool {std::env::var("C658_WP5").as_deref()==Ok("1")}
+pub(crate) fn wp5_m6a_enabled()->bool {std::env::var("C658_WP5_M6A").as_deref()==Ok("1")}
+pub(crate) fn wp5_m6b_enabled()->bool {std::env::var("C658_WP5_M6B").as_deref()==Ok("1")}
+
+/// Seven counter bits, four clean low carries and one restored dirty donor.
+/// The high bit is toggled before changing either of its low controls.
+/// The fifth S lane remains a clean helper for the adjacent predicates.
+fn inc_wp5(b:&mut B,ctrl:QubitId,bits:&[QubitId],clean:&[QubitId],bank:&[QubitId]){
+    assert_eq!(bits.len(),7);assert_eq!(clean.len(),5);
+    let mut prev=ctrl;
+    for i in 1..5 {b.and_c(prev,bits[i-1],clean[i-1]);prev=clean[i-1];}
+    let donor=bank.iter().copied().find(|q|*q!=ctrl&&!bits.contains(q)&&!clean.contains(q))
+        .expect("WP5 counter needs one restored dirty donor");
+    xor(b,&[(prev,false),(bits[4],false),(bits[5],false)],bits[6],&[],&[donor]);
+    b.ccx(prev,bits[4],bits[5]);
+    for i in (1..5).rev(){
+        b.cx(clean[i-1],bits[i]);
+        let p=if i==1{ctrl}else{clean[i-2]};
+        b.and_u(p,bits[i-1],clean[i-1]);
+    }
+    b.cx(ctrl,bits[0]);
+}
+
+fn counter3_with(b:&mut B,col:&super::frogdrop::direct_map::k1_map3::Context<'_>,cp:&ColPar,bank:&[QubitId],wp5:bool){
+    if !cp.dn&&!cp.fin{return;}
+    let r=col.roles;let flag=r.cut;
+    let clean:Vec<_>=col.sum.iter().copied().chain((!wp5).then_some(r.toggle)).collect();
+    let cnt=&col.q[121..128];
+    let sched=super::frogdrop_sched::from_text(super::pointadd_frogdrop::SCHED_FROGDROP);
+    let first=sched.cols.iter().position(|c|c.fin).expect("public first finisher");
+    assert!(cp.col<sched.cols.len()&&cp.col.saturating_sub(first)+1<128);
+    if cp.dn{
+        done3(b,col,flag,&[(r.tag,true)],bank);
+        if wp5 {inc_wp5(b,flag,cnt,&clean,bank);}else{super::arith::inc(b,flag,cnt,&clean);}
+        done3(b,col,flag,&[(r.tag,true)],bank);
+    }
+    if cp.fin{
+        let mut fresh=vec![(col.ph,false),(r.tag,true)];
+        fresh.extend(col.y.iter().map(|&q|(q,true)));
+        // Fresh = PH & Y1 & !C & !DONE, using the unchanged exact parent
+        // notion of DONE. Previous counters are now at least2, without wrap.
+        xor(b,&fresh,flag,&clean,bank);
+        done3(b,col,flag,&fresh,bank);
+        b.cx(flag,cnt[0]);
+        let mut made=fresh;
+        made.push((cnt[0],false));made.extend(cnt[1..].iter().map(|&q|(q,true)));
+        // Inherited l0=128 lies above the physical data end121, so the
+        // old l0..ctop payload-zero clause is empty, exactly as in parent.
+        assert_eq!(cp.l0,128);
+        xor(b,&made,flag,&clean,bank);
+    }
+}
+
+fn counter3(b:&mut B,col:&super::frogdrop::direct_map::k1_map3::Context<'_>,cp:&ColPar,bank:&[QubitId]){
+    counter3_with(b,col,cp,bank,wp5_enabled()&&col.payload.is_some());
+}
+
+/// K6 hands off after the complete stage10/controller/payload return. This
+/// function never evaluates or supplies an independent fourth scalar role.
+pub(crate) fn finish3(b:&mut B,col:&super::frogdrop::direct_map::k1_map3::Context<'_>,cp:&ColPar){
+    use super::frogdrop::direct_map::k1_map3::{self as k1,Error};
+    col.validate();let bank=col.donors();
+    #[cfg(test)] let mark=b.recording_len();
+    super::r13prof::mk(b,20);k1::apply(b,col,cp,|b,target,donors|done3(b,col,target,&[],donors));super::r13prof::mk(b,20);
+    #[cfg(test)] if k1::complete_adapter::enabled(){
+        let tape=b.k1_current_since(mark);
+        let zeros:Vec<_>=col.sum.iter().copied().chain([col.roles.cut,col.roles.toggle]).chain(col.terminal_loans.iter().copied()).filter(|q|super::c659::retained(*q)).collect();
+        k1::complete_adapter::tag("zero",&tape,&zeros);
+        match k1::mode(cp.col){
+            k1::Mode::HostedZero=>k1::complete_adapter::tag("host0",&tape,&[col.ph]),
+            k1::Mode::HostedOne=>k1::complete_adapter::tag("host1",&tape,&[col.ph]),_=>{},
+        }
+    }
+    super::r13prof::mk(b,21);
+    if cp.sw||cp.dl {
+        k1::require(cp.sw,Error::Selector);
+        let par=super::frogdrop::direct_tail::TailPar{l0:cp.l0,qb:cp.qb,
+            szlo:cp.sz.0,sylo:cp.sy.0,swl_hi:cp.swl.1,m:cp.m};
+        let mut scratch=col.scratch();
+        if col.payload.is_some(){
+            if wp5_enabled(){super::frogdrop::direct_tail::k1_tail3::apply7(b,col.ring,col.q,col.y,
+                &scratch,col.ph,&par,false,&bank);}
+            else{super::frogdrop::direct_tail::k1_tail3::apply3(b,col.ring,col.q,col.y,
+                &scratch,col.ph,&par,false,&bank);}
+        }else{
+            k1::require(col.terminal_loans.len()==2||super::c659::t23_enabled()&&col.terminal_loans.len()==1,Error::Loan);
+            scratch.push(col.terminal_loans[0]);
+            // With C658_T23, P1 is the tail helper while P0 is the toggle.
+            // Both return before the unchanged counter consumer below.
+            super::frogdrop::direct_tail::k1_terminal_hosted(b,col.ring,col.q,col.y,
+                &scratch,col.ph,&par,false,&bank);
+        }
+    }
+    super::r13prof::mk(b,21);
+    super::r13prof::mk(b,22);counter3(b,col,cp,&bank);super::r13prof::mk(b,22);
+}
+
+/// Diagnostic bridge at the actual map/tail/counter caller. Parent dispatch
+/// returns before candidate context construction; product traversal is literal.
+pub(crate) fn finish_diagnostic(b:&mut B,col:&Column<'_>,cp:&ColPar,
+    profile:super::frogdrop::direct_map::k1_map3::Diagnostic,
+    boundary:super::frogdrop::direct_map::k1_map3::Boundary){
+    use super::frogdrop::direct_map::k1_map3::{Context,Roles3,Diagnostic};
+    if profile==Diagnostic::Parent {finish(b,col,cp);return;}
+    let context=Context{ring:col.ring,q:col.q,y:&col.meta.y,sum:&col.meta.sum,
+        roles:Roles3{tag:col.roles.tag,cut:col.roles.cut,toggle:col.roles.toggle},
+        ph:col.phase,payload:col.compact,terminal_loans:col.clean_external,boundary};
+    finish3(b,&context,cp);
+}
+
+// Literal parent body plus one test-only zero-operation observation boundary.
+#[cfg(test)]
+pub(crate) fn finish_k1_observed(b:&mut B,col:&Column<'_>,cp:&ColPar,mut pre_tail:impl FnMut(&mut B)){
+    assert!(!cp.nomap&&cp.sz!=(0,0));
+    assert_eq!((cp.n,cp.nq,col.q.len(),col.ring.len()),(257,128,128,257));
+    assert!((2..=128).contains(&cp.m)&&cp.emax<=31);
+    let r=col.roles;
+    let scratch:Vec<_>=std::iter::once(r.tag).chain(col.meta.sum.iter().copied())
+        .chain([r.cut,r.toggle,r.prefix]).collect();
+    assert_eq!(scratch.len(),9);
+    let mut held:BTreeSet<_>=[col.phase,r.tag].into_iter().collect();
+    if let Some(p)=col.compact{held.extend(p.iter().copied());}
+    let mut seen=BTreeSet::new();
+    let bank:Vec<_>=col.ring.iter().chain(col.q).chain(&col.meta.y)
+        .chain(&scratch[1..]).chain(col.dirty).copied()
+        .filter(|q|!held.contains(q)&&seen.insert(*q)).collect();
+    let par=super::frogdrop::MapPar{clo:cp.n-cp.smax.1,chi:cp.n-cp.smax.0,
+        m:if cp.dn{128}else{cp.m},tail:cp.tail,emax:cp.emax};
+    // Public pure-HT makes PH a global one; map replay borrows it only after
+    // an explicit X and returns it before the second derived-DONE query.
+    let pure_ht=cp.ht&&!cp.hr&&!cp.sw&&!cp.dl&&!cp.dq;
+    super::frogdrop::direct_map::apply_stage_with_loans(b,col.ring,col.q,&col.meta.y,
+        &scratch,col.phase,&par,cp.m,cp.dn,pure_ht,&bank,col.clean_external,
+        |b,target,donors|done(b,col,target,&[],donors));
+    pre_tail(b);
+    if cp.sw||cp.dl{
+        assert!(cp.sw,"delayed C uses the complete public switching-tail envelope");
+        let par=super::frogdrop::direct_tail::TailPar{l0:cp.l0,qb:cp.qb,
+            szlo:cp.sz.0,sylo:cp.sy.0,swl_hi:cp.swl.1,m:cp.m};
+        super::frogdrop::direct_tail::apply(b,col.ring,col.q,&col.meta.y,
+            &scratch,col.phase,&par,false,&bank);
+    }
+    counter(b,col,cp,&bank);
+}
+
+
+#[cfg(test)]
+#[path="r14_k1_fixture.rs"] mod r14_k1_fixture;

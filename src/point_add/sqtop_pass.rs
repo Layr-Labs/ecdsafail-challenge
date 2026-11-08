@@ -116,24 +116,6 @@ fn fault() -> Option<(char, usize)> {
 }
 
 pub(super) fn run(ops: Vec<Op>) -> Vec<Op> {
-    run_impl(ops, false)
-}
-
-#[cfg(lane_r_research)]
-pub(super) fn run_final(ops: Vec<Op>) -> Vec<Op> {
-    run_impl(ops, true)
-}
-
-fn known_one_hmr(ops: &[Op], depth: &[u32], i: usize) -> bool {
-    if i < 2 || depth[i] != 1 || ops[i].c_condition != NO_BIT { return false; }
-    let set = ops[i - 2];
-    let push = ops[i - 1];
-    set.kind == K::BitStore1 && depth[i - 2] == 0 && set.c_condition == NO_BIT
-        && push.kind == K::PushCondition && depth[i - 1] == 0
-        && push.c_condition == set.c_target
-}
-
-fn run_impl(ops: Vec<Op>, final_pass: bool) -> Vec<Op> {
     let m = mode();
     if m.is_empty() || m == "0" {
         return ops;
@@ -199,7 +181,7 @@ fn run_impl(ops: Vec<Op>, final_pass: bool) -> Vec<Op> {
                     run.push(i);
                 } else if o.kind == K::CX && o.q_target == st.s2 && o.q_control1 != st.s2 && plain(i) {
                     run.push(i);
-                } else if o.kind == K::Hmr && o.q_target == st.s2 && (plain(i) || (final_pass && known_one_hmr(&ops, &depth, i))) {
+                } else if o.kind == K::Hmr && o.q_target == st.s2 && plain(i) {
                     h = Some(i);
                     break;
                 } else {
