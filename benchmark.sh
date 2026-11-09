@@ -185,9 +185,12 @@ cleanup_pgid=""
 reap() {
   [[ -n "${cleanup_pgid}" ]] || return 0
   if [[ "${bwrap_via_sudo}" -eq 1 ]]; then
-    sudo -n kill -KILL -"${cleanup_pgid}" 2>/dev/null || true
+    # `-s KILL --` keeps the negative pgid from being read as an option. Ubuntu 24.04's
+    # /usr/bin/kill (procps-ng 4.0.4) reads `kill -KILL -15989` as kill(-1, SIGKILL):
+    # only the first digit survives, and -1 signals every process on the machine.
+    sudo -n kill -s KILL -- -"${cleanup_pgid}" 2>/dev/null || true
   else
-    kill -KILL -"${cleanup_pgid}" 2>/dev/null || true
+    kill -s KILL -- -"${cleanup_pgid}" 2>/dev/null || true
   fi
 }
 cleanup() {
