@@ -1,0 +1,430 @@
+//! Complete K1 sibling construction. Production/default dispatch is parent.
+//! No traversal allocation or K6 raw entry implementation lives here.
+use super::*;
+use super::super::super::k1_pad_add::{self as pad,Enable,Literal,Exclusions};
+#[path="k1_entry3.rs"] mod entry;
+
+#[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
+pub(crate) enum Diagnostic { #[default] Parent, ThreeRole }
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub(crate) enum Error { Shape,Alias,HeldPort,Selector,EarlyCancellation,FrameRecipe,Capacity,Boundary,Loan,Unsupported }
+pub(crate) fn require(ok:bool,error:Error) {if !ok {std::panic::panic_any(error);}}
+fn capture_ready(b:&B) {
+    require(!b.cancel_simple_pairs&&!b.cancel_commuting_pairs&&!b.global_cancel,Error::EarlyCancellation);
+    require(!b.force_unitary_and&&!b.no_rows,Error::FrameRecipe);
+}
+fn lit(b:&mut B,c:&[(QubitId,bool)],target:QubitId,dirty:&[QubitId]) {
+    require(!c.iter().any(|x|x.0==target),Error::Alias);
+    let held:Vec<_>=c.iter().map(|x|x.0).chain([target]).collect();
+    let d=bank(dirty,&held);require(d.len()>=c.len().saturating_sub(2),Error::Capacity);
+    mc_xor(b,c,target,&[],&d);
+}
+fn active(b:&mut B,c:&[(QubitId,bool)],target:QubitId,nand:Option<(QubitId,QubitId)>,dirty:&[QubitId]) {
+    lit(b,c,target,dirty);
+    if let Some((ph,tag))=nand {
+        #[cfg(test)] if complete_adapter::omits(complete_adapter::Fault::OuterControl){return;}
+        let mut off=c.to_vec();off.extend([(ph,false),(tag,false)]);
+        #[cfg(test)] let mark=b.recording_len();
+        lit(b,&off,target,dirty);
+        #[cfg(test)] if complete_adapter::enabled(){complete_adapter::tag("active-off",&b.k1_current_since(mark),&[]);}
+    }
+}
+fn swap(b:&mut B,c:&[(QubitId,bool)],a:QubitId,z:QubitId,nand:Option<(QubitId,QubitId)>,dirty:&[QubitId]) {
+    b.cx(a,z);let mut ctl=c.to_vec();ctl.push((z,false));active(b,&ctl,a,nand,dirty);b.cx(a,z);
+}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub(crate) enum Mode { HostedZero,Plain,Native,PureHt,HostedOne }
+pub(crate) fn mode(column:usize)->Mode {
+    match column {0..=35=>Mode::HostedZero,36..=96=>Mode::Plain,97..=113=>Mode::Native,
+        114..=119=>Mode::PureHt,120..=202=>Mode::HostedOne,_=>{require(false,Error::Selector);unreachable!()}}
+}
+pub(crate) fn source_column(cp:&super::super::super::frogdrop_col::ColPar) {
+    let schedule=super::super::super::frogdrop_sched::from_text(super::super::super::pointadd_frogdrop::SCHED_FROGDROP);
+    let(columns,_,_)=super::super::super::pointadd_frogdrop::col_pars(&schedule);
+    require(cp.col<columns.len()&&format!("{cp:?}")==format!("{:?}",columns[cp.col]),Error::Selector);
+}
+/// K6 must supply this only after through_stage10, both controller coordinates
+/// and every raw payload epoch have closed. It grants no additional clean lane.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub(crate) enum Boundary { Stage10Returned, EndpointDoneBeforeB0, ControllerOpen, PayloadOpen }
+#[derive(Clone,Copy,Debug)]
+pub(crate) struct Roles3 {pub tag:QubitId,pub cut:QubitId,pub toggle:QubitId}
+pub(crate) struct Context<'a> {
+    pub ring:&'a[QubitId],pub q:&'a[QubitId],pub y:&'a[QubitId],pub sum:&'a[QubitId],
+    pub roles:Roles3,pub ph:QubitId,pub payload:Option<&'a[QubitId]>,
+    pub terminal_loans:&'a[QubitId],pub boundary:Boundary,
+}
+impl Context<'_> {
+    pub(crate) fn scratch(&self)->Vec<QubitId> {std::iter::once(self.roles.tag).chain(self.sum.iter().copied())
+        .chain([self.roles.cut,self.roles.toggle]).collect()}
+    pub(crate) fn validate(&self) {
+        require(self.boundary==Boundary::Stage10Returned,Error::Boundary);
+        self.validate_ports();
+    }
+    pub(crate) fn validate_endpoint(&self) {
+        require(self.boundary==Boundary::EndpointDoneBeforeB0,Error::Boundary);
+        self.validate_ports();
+    }
+    fn validate_ports(&self) {
+        require((self.ring.len(),self.q.len(),self.y.len(),self.sum.len())==(257,128,7,5),Error::Shape);
+        require(if self.payload.is_some(){self.terminal_loans.is_empty()}else{self.terminal_loans.len()==2},Error::Loan);
+        if let Some(p)=self.payload {require(p.len()==258,Error::Shape);}
+        let ports:Vec<_>=self.ring.iter().chain(self.q).chain(self.y).chain(self.sum).copied()
+            .chain([self.roles.tag,self.roles.cut,self.roles.toggle,self.ph])
+            .chain(self.payload.into_iter().flatten().copied()).chain(self.terminal_loans.iter().copied()).collect();
+        require(ports.iter().copied().collect::<BTreeSet<_>>().len()==ports.len(),Error::Alias);
+    }
+    pub(crate) fn donors(&self)->Vec<QubitId> {
+        // Explicit universe: no ambient dirty bank and no fourth role exists.
+        self.ring.iter().chain(self.q).chain(self.y).chain(self.sum).copied()
+            .chain([self.roles.cut,self.roles.toggle]).collect()
+    }
+}
+
+struct Core3 {
+    m:Vec<QubitId>,ez:Vec<QubitId>,t:QubitId,e:QubitId,source:usize,
+    dirty:Vec<QubitId>,held:Vec<QubitId>,nand:Option<(QubitId,QubitId)>,
+}
+impl Core3 {
+    fn eq(&self,b:&mut B,value:usize) {
+        let c:Vec<_>=self.m.iter().enumerate().map(|(j,&q)|(q,value>>j&1==0)).collect();
+        lit(b,&c,self.e,&self.dirty);
+    }
+    fn ge(&self,b:&mut B,size:usize) {
+        if size==0 {b.x(self.e);}else if size<=128 {range(b,&self.m,size-1,128,&[],self.e,&[],&self.dirty);}
+    }
+    fn walk(&self,b:&mut B,n:usize,lo:usize,hi:usize,mut body:impl FnMut(&mut B,usize,QubitId)) {
+        if lo>=hi {return;}b.x(self.e);self.ge(b,n-lo);
+        for lane in lo..hi {
+            if lane>lo {let size=n-lane;if (1..=128).contains(&size) {self.eq(b,size-1);}}
+            body(b,lane,self.e);
+        }
+        b.x(self.e);self.ge(b,n-hi+1);
+    }
+    fn add_padding(&self,b:&mut B,ring:&[QubitId],source:&[QubitId],target:&[QubitId],
+        enable:Enable,controls:&[QubitId])->Vec<G> {
+        require(target.len()>=source.len(),Error::Shape);let h=target.len()-source.len();
+        let pool:Vec<_>=ring.iter().copied().filter(|q|!source.contains(q)&&!target.contains(q)&&!controls.contains(q)).collect();
+        let nd=enable.donors_needed();require(pool.len()>=h+nd,Error::Capacity);
+        let padding=&pool[..h];let donors=&pool[h..h+nd];
+        let held:Vec<_>=self.held.iter().chain(&self.m).chain(&self.ez).copied().chain([self.t,self.e])
+            .filter(|q|!source.contains(q)&&!target.contains(q)&&!padding.contains(q)&&!donors.contains(q)&&!controls.contains(q)).collect();
+        let row=pad::pad_add_f(b,source,target,padding,&enable,donors,Exclusions{held:&held,forbidden:&[]})
+            .expect("qualified PAD_ADD caller contract");
+        #[cfg(test)]
+        complete_adapter::pad_tag(&row,source,target,padding,donors,controls);
+        row
+    }
+    fn widen(&self,b:&mut B,ring:&[QubitId],flag:(QubitId,bool))->Vec<G> {
+        let signed=Literal{wire:flag.0,positive:true};
+        let(enable,controls)=match self.nand {
+            None=>(Enable::Literals(vec![signed]),vec![flag.0]),
+            Some((ph,c))=>(Enable::Native{flag:signed,ph,c},vec![flag.0,ph,c]),
+        };
+        let add=self.add_padding(b,ring,&self.ez,&self.m,enable,&controls);
+        record(b,|b|{if flag.1{b.x(flag.0);}b.play(&add,true);if flag.1{b.x(flag.0);}})
+    }
+    fn stages(&self,b:&mut B,flag:(QubitId,bool),mut body:impl FnMut(&mut B,usize,QubitId)) {
+        for k in 0..5 {
+            let controls=[flag,(self.ez[k],false)];
+            active(b,&controls,self.e,self.nand,&self.dirty);body(b,k,self.e);
+            active(b,&controls,self.e,self.nand,&self.dirty);
+        }
+    }
+    fn ring_rot(&self,b:&mut B,ring:&[QubitId],flag:(QubitId,bool),up:bool) {
+        let r=record(b,|b|self.stages(b,flag,|b,k,e|super::super::crot_up(b,e,ring,1usize<<k)));
+        b.play(&r,!up);
+    }
+    fn q_rot(&self,b:&mut B,q:&[QubitId],flag:(QubitId,bool),down:bool) {
+        let mut support:BTreeSet<_>=(0..self.source).collect();
+        let r=record(b,|b|self.stages(b,flag,|b,k,e|{
+            let step=(1usize<<k)%q.len();super::super::crot_up_care(b,e,q,step,&support);
+            let more:Vec<_>=support.iter().map(|i|(i+step)%q.len()).collect();support.extend(more);
+        }));b.play(&r,down);
+    }
+    fn shift(&self,b:&mut B,ring:&[QubitId],lo:usize,hi:usize,flag:(QubitId,bool),up:bool) {
+        let order:Vec<_>=if up{(0..5).rev().collect()}else{(0..5).collect()};
+        for k in order {
+            let step=1usize<<k;if step>=hi {continue;}
+            let r=record(b,|b|{
+                for lane in step..lo.max(step) {swap(b,&[flag,(self.ez[k],false)],ring[lane],ring[lane-step],self.nand,&self.dirty);}
+                self.walk(b,ring.len(),lo.max(step),hi,|b,lane,e|{
+                    swap(b,&[flag,(self.ez[k],false),(e,false)],ring[lane],ring[lane-step],self.nand,&self.dirty);
+                });
+            });b.play(&r,up);
+        }
+    }
+    fn pminus(&self,b:&mut B,ring:&[QubitId],lo:usize,hi:usize,tail:usize,flag:(QubitId,bool)) {
+        require(lo>42+tail&&hi<=ring.len(),Error::Shape);
+        if flag.1 {b.x(flag.0);}
+        for &q in &ring[..lo.min(256)] {active(b,&[(flag.0,false)],q,self.nand,&self.dirty);}
+        self.walk(b,ring.len(),lo,hi.min(256),|b,lane,e|active(b,&[(flag.0,false),(e,false)],ring[lane],self.nand,&self.dirty));
+        for(target,k)in[(&ring[..10+tail],976u64),(&ring[32..33+tail],1u64)] {
+            let held:Vec<_>=target.iter().copied().chain([flag.0]).collect();
+            let r=record(b,|b|super::super::super::modp_frogdrop::add_const_exact(b,target,Some(flag.0),k,&bank(&self.dirty,&held)));
+            if let Some((ph,c))=self.nand {nand_literal(b,&r,true,ph,c,&self.dirty);}else{b.play(&r,true);}
+        }
+        if flag.1 {b.x(flag.0);}
+    }
+    fn masked_swap(&self,b:&mut B,ring:&[QubitId],q:&[QubitId],lo:usize,hi:usize) {
+        let n=ring.len();let qlo=n.saturating_sub(q.len());
+        for l in hi.max(qlo)..n {swap(b,&[],ring[l],q[n-1-l],self.nand,&self.dirty);}
+        self.walk(b,n,lo.max(qlo),hi,|b,l,e|swap(b,&[(e,true)],ring[l],q[n-1-l],self.nand,&self.dirty));
+    }
+    /// Generalized sibling of qualified c119 ordinary rows. Same physical
+    /// rotation, descending widths, ring-order padding and exact E walk.
+    fn frame(&self,b:&mut B,ring:&[QubitId],q:&[QubitId],par:&super::super::MapPar)->Vec<G> {
+        let(llo,lhi)=(257-par.chi,257-par.clo);
+        require(0<llo&&llo<=lhi&&lhi<257&&self.source<=par.m&&par.m<=128,Error::Shape);
+        let rot=record(b,|b|super::super::rot_by_range(b,ring,&self.m,llo-1,lhi-1,false,&bank(&self.dirty,&self.m)));
+        let v:Vec<_>=(0..257).map(|i|ring[(i+256)%257]).collect();
+        record(b,|b|{
+            b.play(&rot,false);let mut begun=false;
+            for i in (llo..256).rev() {
+                let nm=(par.m-1).min(256-i);let n=nm.min(self.source-1);
+                let h=nm+par.tail.min(256-i-nm)-n;let variable=i<lhi;
+                if variable {if !begun {b.x(self.e);begun=true;}self.eq(b,i);}
+                let controls=if variable{vec![self.e,v[i]]}else{vec![v[i]]};
+                let target=&v[i+1..i+1+n+h];
+                let pool=ring.iter().filter(|q|!target.contains(q)&&!controls.contains(q)).count();
+                require(pool>=h+usize::from(variable)+42,Error::Capacity);
+                let enable=Enable::Literals(controls.iter().map(|&wire|Literal{wire,positive:true}).collect());
+                let row=self.add_padding(b,ring,&q[1..1+n],target,enable,&controls);b.play(&row,false);
+            }
+            if begun {self.eq(b,llo-1);}b.play(&rot,true);
+        })
+    }
+}
+
+struct Captured {tape:Vec<G>,frame:Vec<G>,first:usize,second:usize}
+fn pure(g:&G)->bool {matches!(g,G::X(..)|G::Cx(..)|G::Ccx(..)|G::Swap(..))}
+fn ports(g:&G)->Vec<QubitId> {
+    match *g {G::X(a)=>vec![a],G::Cx(a,z)|G::Swap(a,z)=>vec![a,z],G::Ccx(a,c,z)=>vec![a,c,z],
+        _=>{require(false,Error::FrameRecipe);unreachable!()}}
+}
+/// At this source frame Q has just been normalized. The single capped-zero
+/// exception is swapped with the unreachable (original X even, shift zero)
+/// metadata code. A basis transposition needs only a six-control X and CNOTs.
+/// The raw multiplicand uses Q[1..]; the five shift bits and parity are held.
+fn normalized_loan(b:&mut B,c:&Core3,q0:QubitId,first:bool)->Vec<G> {
+    record(b,|b|{
+        let mut linear=c.ez.clone();
+        if !first {linear.push(c.t);}
+        for &v in &linear {b.cx(q0,v);}
+        let mut guard:Vec<_>=c.ez.iter().copied().map(|q|(q,false)).collect();
+        guard.push((c.t,!first));
+        lit(b,&guard,q0,&c.dirty);
+        for &v in linear.iter().rev(){b.cx(q0,v);}
+        b.x(q0);
+    })
+}
+/// On the native inactive sector metadata_swap already cleared all seven
+/// y/T/E cells. Preserve arbitrary Q0 in the unused exponent bit instead.
+/// On every active input this is exactly the ordinary cap-aware loan.
+fn scoped_normalized_loan(b:&mut B,c:&Core3,q0:QubitId,first:bool)->Vec<G> {
+    let active=normalized_loan(b,c,q0,first);
+    let Some((ph,tag))=c.nand else {return active;};
+    record(b,|b|{
+        nand_literal(b,&active,false,ph,tag,&c.dirty);
+        b.ccx(ph,tag,c.e);b.cswap(c.e,q0,c.ez[0]);b.ccx(ph,tag,c.e);
+    })
+}
+/// Before the operand swap Q0 is the complement of T. After the swap it
+/// equals T XOR [shift=0]. The latter follows from coprimality: T=1 implies
+/// the other operand is odd and the recorded shift is positive; with T=0,
+/// the other operand is odd exactly for shift zero. Saturation preserves this.
+fn unrotated_loan(b:&mut B,c:&Core3,q0:QubitId,first_operand:bool)->Vec<G> {
+    let code=record(b,|b|{
+        b.cx(c.t,q0);
+        if first_operand {b.x(q0);}else{
+            let zero:Vec<_>=c.ez.iter().copied().map(|q|(q,true)).collect();
+            lit(b,&zero,q0,&c.dirty);
+        }
+    });
+    let Some((ph,tag))=c.nand else{return code;};
+    record(b,|b|{
+        nand_literal(b,&code,false,ph,tag,&c.dirty);
+        b.ccx(ph,tag,c.e);b.cswap(c.e,q0,c.ez[0]);b.ccx(ph,tag,c.e);
+    })
+}
+fn ring_only(b:&mut B,c:&Core3,ring:&[QubitId],q0:QubitId,lo:usize,hi:usize,tail:usize,
+    flag:(QubitId,bool),first_operand:bool,subtract:bool,paired:bool){
+    let code=unrotated_loan(b,c,q0,first_operand);
+    let four=Core{mword:c.m.clone(),ez:c.ez.clone(),t:c.t,e:c.e,g:q0,source_bound:c.source,
+        dirty:c.dirty.iter().copied().filter(|w|*w!=q0).collect(),native_nand:c.nand,
+        row_recode:false,row_external:vec![],walk_clean:vec![]};
+    b.play(&code,false);
+    let old=(b.force_unitary_and,b.no_rows);
+    if paired{b.force_unitary_and=true;b.no_rows=true;}
+    if subtract{
+        if c.nand.is_some(){four.native_pminus(b,ring,lo,hi,tail,flag);}
+        else{four.pminus(b,ring,lo,hi,tail,flag);}
+    }else{four.shift(b,ring,lo,hi,flag,!first_operand);}
+    (b.force_unitary_and,b.no_rows)=old;b.play(&code,true);
+}
+fn normalized_rows(b:&mut B,c:&Core3,ring:&[QubitId],q:&[QubitId],par:&super::super::MapPar,external:&[QubitId])->Vec<G> {
+    let core=Core{mword:c.m.clone(),ez:c.ez.clone(),t:c.t,e:c.e,g:q[0],source_bound:c.source,
+        dirty:c.dirty.iter().copied().filter(|w|*w!=q[0]).collect(),native_nand:None,
+        row_recode:true,row_external:external.to_vec(),walk_clean:vec![]};
+    record(b,|b|core.frame(b,ring,q,par,false))
+}
+
+fn body(b:&mut B,ctx:&Context<'_>,par:&super::super::MapPar,core:&Core3,normalized:bool,paired:bool)->Captured {
+    let(ring,q)=(ctx.ring,ctx.q);require(par.emax==31,Error::Selector);
+    let(lo,hi)=(par.clo,par.chi);let hi2=(hi+par.emax).min(256);
+    let wide=super::super::MapPar{clo:lo,chi:hi2,m:par.m,tail:par.tail,emax:par.emax};
+    let rev:Vec<_>=ring.iter().rev().copied().collect();
+    let probe=record(b,|b|{
+        let held:Vec<_>=q[..32].iter().chain(&core.ez).copied().chain([core.e]).collect();
+        trailing_probe(b,&q[..32],&core.ez,31,&[],core.e,&bank(&core.dirty,&held),None);
+        let held:Vec<_>=rev[..32].iter().chain(&core.ez).copied().chain([core.e,q[0]]).collect();
+        trailing_probe(b,&rev[..32],&core.ez,31,&[],core.e,&bank(&core.dirty,&held),Some((q[0],false)));
+    });
+    let play_active=|b:&mut B,r:&[G],inv:bool|if let Some((ph,c))=core.nand {
+        nand_literal(b,r,inv,ph,c,&core.dirty);
+    }else{b.play(r,inv);};
+    let wy=core.widen(b,ring,(core.t,true));let wx=core.widen(b,ring,(core.t,false));
+    let frame=if paired {
+        // The outer paired wrapper must execute an exact unitary and its
+        // inverse on arbitrary inactive Q and E inputs, with no measurement.
+        let old=(b.force_unitary_and,b.no_rows);
+        b.force_unitary_and=true;b.no_rows=true;
+        let r=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||normalized_rows(b,core,ring,q,&wide,if !paired{ctx.terminal_loans}else{&[]})));
+        (b.force_unitary_and,b.no_rows)=old;
+        match r{Ok(tape)=>tape,Err(panic)=>std::panic::resume_unwind(panic)}
+    }else if normalized {normalized_rows(b,core,ring,q,&wide,if !paired{ctx.terminal_loans}else{&[]})}else{core.frame(b,ring,q,&wide)};
+    let prepare=if normalized {scoped_normalized_loan(b,core,q[0],true)}else{vec![]};
+    let prepare_second=if normalized {scoped_normalized_loan(b,core,q[0],false)}else{vec![]};
+    #[cfg(test)]
+    complete_adapter::tag("frame",&frame,&[]);
+    require(!frame.is_empty()&&((normalized&&!paired)||frame.iter().all(pure)),Error::FrameRecipe);
+    if !normalized||paired {require(frame.iter().flat_map(ports).all(|q|!core.held.contains(&q)),Error::HeldPort);}
+    // One literal recipe is deliberately used for both occurrences. Positions
+    // are captured in this fresh tape only, before any cancellation.
+    #[cfg(test)]
+    complete_adapter::tag("probe",&probe,&[]);
+    b.begin();play_active(b,&probe,false);
+    let t_in=record(b,|b|{b.x(q[0]);b.cx(q[0],core.t);b.x(q[0]);});play_active(b,&t_in,false);
+    let(y,x)=((core.t,true),(core.t,false));
+    core.ring_rot(b,ring,y,true);b.play(&wy,false);if normalized{ring_only(b,core,ring,q[0],lo,hi2,par.tail,y,true,false,paired);}else{core.shift(b,ring,lo,hi2,y,false);}core.q_rot(b,q,x,true);
+    b.play(&prepare,false);let first=b.recording_len();b.play(&frame,false);b.play(&prepare,true);
+    core.q_rot(b,q,x,false);if normalized{ring_only(b,core,ring,q[0],lo,hi2,par.tail,y,true,true,paired);}else{core.pminus(b,ring,lo,hi2,par.tail,y);}
+    b.play(&wy,true);core.ring_rot(b,ring,y,false);core.masked_swap(b,ring,q,lo,hi);
+    core.ring_rot(b,ring,x,true);b.play(&wx,false);if normalized{ring_only(b,core,ring,q[0],lo,hi2,par.tail,x,false,true,paired);}else{core.pminus(b,ring,lo,hi2,par.tail,x);}
+    core.q_rot(b,q,y,true);b.play(&prepare_second,false);let second=b.recording_len();b.play(&frame,true);b.play(&prepare_second,true);core.q_rot(b,q,y,false);
+    if normalized{ring_only(b,core,ring,q[0],lo,hi2,par.tail,x,false,false,paired);}else{core.shift(b,ring,lo,hi2,x,true);}b.play(&wx,true);core.ring_rot(b,ring,x,false);
+    let t_out=record(b,|b|{b.x(ring[256]);b.cx(ring[256],core.t);b.x(ring[256]);});
+    #[cfg(test)] complete_adapter::tag("tout",&t_out,&[]);
+    
+    #[cfg(test)] if !complete_adapter::omits(complete_adapter::Fault::TErase){play_active(b,&t_out,false);}
+    #[cfg(not(test))] play_active(b,&t_out,false);
+    
+    #[cfg(test)] if !complete_adapter::omits(complete_adapter::Fault::ProbeReturn){play_active(b,&probe,true);}
+    #[cfg(not(test))] play_active(b,&probe,true);let tape=b.end();
+    require(tape[first..first+frame.len()]==frame,Error::FrameRecipe);
+    if !normalized||paired {require(tape[second..second+frame.len()].iter().eq(frame.iter().rev()),Error::FrameRecipe);}
+    Captured{tape,frame,first,second}
+}
+fn metadata_swap(b:&mut B,y:&[QubitId],m:&[QubitId],ph:QubitId,c:QubitId,dirty:&[QubitId]) {
+    #[cfg(test)] let mark=b.recording_len();
+    for i in 0..7 {swap(b,&[(ph,false),(c,false)],y[i],m[i],None,dirty);}
+    #[cfg(test)] if complete_adapter::enabled(){complete_adapter::tag("dswap",&b.k1_current_since(mark),&[]);}
+}
+fn stage(b:&mut B,ctx:&Context<'_>,par:&super::super::MapPar,source:usize,native:bool,normalized:bool,paired:bool)->Captured {
+    let scratch=ctx.scratch();let m=&scratch[1..];let dirty=ctx.donors();
+    let held:Vec<_>=std::iter::once(ctx.ph).chain([ctx.roles.tag]).chain(ctx.terminal_loans.iter().copied())
+        .chain(ctx.payload.into_iter().flatten().copied()).collect();
+    let nand=native.then_some((ctx.ph,ctx.roles.tag));
+    let core=Core3{m:m.to_vec(),ez:ctx.y[..5].to_vec(),t:ctx.y[5],e:ctx.y[6],source,dirty,held,nand};
+    if native {require((source,par.m,257-par.chi,257-par.clo)==(128,128,1,128),Error::Selector);}
+    let en=entry::entry(b,ctx.ring,ctx.q,ctx.y,m,nand,&core.dirty);
+    b.begin();b.play(&en,false);
+    if native {metadata_swap(b,ctx.y,m,ctx.ph,ctx.roles.tag,&core.dirty);}
+    let middle=body(b,ctx,par,&core,normalized,paired);let offset=b.recording_len();b.play(&middle.tape,false);
+    #[cfg(test)]
+    if native&&!complete_adapter::omits(complete_adapter::Fault::DReturn) {metadata_swap(b,ctx.y,m,ctx.ph,ctx.roles.tag,&core.dirty);}
+    #[cfg(not(test))]
+    if native {metadata_swap(b,ctx.y,m,ctx.ph,ctx.roles.tag,&core.dirty);}
+    b.play(&en,true);let tape=b.end();
+    Captured{tape,frame:middle.frame,first:offset+middle.first,second:offset+middle.second}
+}
+
+fn paired_clean(b:&mut B,r:&Captured,c:QubitId,ph:QubitId) {
+    capture_ready(b);require(c!=ph,Error::Alias);
+    require(r.tape.iter().all(pure)&&r.tape.iter().flat_map(ports).all(|q|q!=c&&q!=ph),Error::HeldPort);
+    let n=r.frame.len();require(n>0&&r.first+n<=r.second&&r.second+n<=r.tape.len(),Error::FrameRecipe);
+    require(r.tape[r.first..r.first+n]==r.frame,Error::FrameRecipe);
+    require(r.tape[r.second..r.second+n].iter().eq(r.frame.iter().rev()),Error::FrameRecipe);
+    let ccx=r.frame.iter().filter(|g|matches!(g,G::Ccx(..))).count();
+    let cx=r.frame.iter().filter(|g|matches!(g,G::Cx(..)|G::Swap(..))).count();
+    require(2*ccx<4*ccx+2*cx,Error::FrameRecipe);
+    b.play_ctrl_full(&r.tape[..r.first],c,ph);b.play(&r.frame,false);
+    #[cfg(test)] let mark=b.recording_len();
+    #[cfg(test)]
+    if complete_adapter::omits(complete_adapter::Fault::OuterControl){b.play(&r.tape[r.first+n..r.second],false);}
+    else {b.play_ctrl_full(&r.tape[r.first+n..r.second],c,ph);}
+    #[cfg(not(test))]
+    b.play_ctrl_full(&r.tape[r.first+n..r.second],c,ph);
+    #[cfg(test)] if complete_adapter::enabled(){complete_adapter::tag("controlled-middle",&b.k1_current_since(mark),&[]);}
+    b.play(&r.frame,true);
+    b.play_ctrl_full(&r.tape[r.second+n..],c,ph);
+}
+
+/// Hosted parent body, with no second independent PH metadata argument.
+/// Core methods, entry, row recoding and all map operations remain inherited.
+pub(crate) fn hosted_record(b:&mut B,ring:&[QubitId],q:&[QubitId],y:&[QubitId],
+    scratch:&[QubitId],host:QubitId,par:&super::super::MapPar,source:usize,
+    dirty:&[QubitId],row_recode:bool,row_external:&[QubitId])->Vec<G> {
+    require(scratch.len()==8&&y.len()==7,Error::Shape);
+    let p:Vec<_>=ring.iter().chain(q).chain(y).chain(scratch).copied().chain([host]).chain(row_external.iter().copied()).collect();
+    require(p.iter().copied().collect::<BTreeSet<_>>().len()==p.len(),Error::Alias);
+    let mut seen=BTreeSet::new();
+    let universe:Vec<_>=ring.iter().chain(q).chain(y).chain(&scratch[1..]).chain(dirty).copied()
+        .filter(|q|*q!=scratch[0]&&*q!=host&&seen.insert(*q)).collect();
+    let core=Core{mword:scratch[1..].to_vec(),ez:y[..5].to_vec(),t:y[5],e:y[6],g:host,
+        source_bound:source,dirty:universe,native_nand:None,row_recode,row_external:row_external.to_vec(),
+        walk_clean:if row_recode{q[source..].iter().chain(row_external).copied().collect()}else{vec![]}};
+    require(2<=source&&source<=q.len()&&q.len()<=128,Error::Shape);
+    record(b,|b|{
+        let en=entry_record(b,ring,q,y,&core.mword,host,source,ring.len()-par.chi,ring.len()-par.clo,&core.dirty,row_recode);
+        b.play(&en,false);super::k1_hosted_map_body(b,ring,q,par,&core);b.play(&en,true);
+    })
+}
+
+/// Diagnostic S11 map only. Source metadata determines the complete mode;
+/// external caller owns DONE and must pass the unchanged parity predicate.
+pub(crate) fn apply(b:&mut B,ctx:&Context<'_>,cp:&super::super::super::frogdrop_col::ColPar,
+    mut done:impl FnMut(&mut B,QubitId,&[QubitId])) {
+    ctx.validate();capture_ready(b);
+    source_column(cp);
+    require(cp.col<=202&&!cp.nomap&&cp.sz!=(0,0)&&cp.n==257&&cp.nq==128,Error::Selector);
+    let selected=mode(cp.col);let pure_ht=cp.ht&&!cp.hr&&!cp.sw&&!cp.dl&&!cp.dq;
+    let controlled=cp.dn&&cp.m>121;
+    require(controlled==matches!(selected,Mode::Native|Mode::PureHt),Error::Selector);
+    require(!controlled||pure_ht==matches!(selected,Mode::PureHt),Error::Selector);
+    let par=super::super::MapPar{clo:257-cp.smax.1,chi:257-cp.smax.0,m:if cp.dn{128}else{cp.m},tail:cp.tail,emax:cp.emax};
+    let dirty=ctx.donors();let scratch=ctx.scratch();
+    match selected {
+        Mode::HostedZero|Mode::HostedOne=>{
+            let late=selected==Mode::HostedOne;
+            require(if late{pure_ht&&cp.dn&&cp.m<=121}else{cp.hr&&!cp.ht&&!cp.dn},Error::Selector);
+            let qend=if cp.dn{121}else{128};
+            let r=hosted_record(b,ctx.ring,&ctx.q[..qend],ctx.y,&scratch,ctx.ph,&par,cp.m,&dirty,true,ctx.terminal_loans);
+            if late {b.x(ctx.ph);}b.play(&r,false);if late {b.x(ctx.ph);}
+        },
+        Mode::Plain=>{require(!controlled,Error::Selector);let r=stage(b,ctx,&par,cp.m,false,true,false);b.play(&r.tape,false);},
+        Mode::Native=>{
+            let d=bank(&dirty,ctx.q);done(b,ctx.roles.tag,&d);
+            let r=stage(b,ctx,&par,cp.m,true,true,false);b.play(&r.tape,false);done(b,ctx.roles.tag,&d);
+        },
+        Mode::PureHt=>{
+            let r=stage(b,ctx,&par,cp.m,false,true,true);let d=bank(&dirty,ctx.q);
+            done(b,ctx.roles.tag,&d);b.x(ctx.roles.tag);b.x(ctx.ph);
+            paired_clean(b,&r,ctx.roles.tag,ctx.ph);b.x(ctx.ph);b.x(ctx.roles.tag);done(b,ctx.roles.tag,&d);
+        },
+    }
+}
+
+#[cfg(test)]
+#[path="k1_complete_adapter.rs"]
+pub(crate) mod complete_adapter;
