@@ -7,7 +7,7 @@ const BLOCK: usize = 16_384;
 const LOOKAHEAD: usize = 12;
 const GROWTH_DIVISOR: usize = 128;
 
-#[derive(Default, Debug)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct Counts {
     pub(super) equal_pairs: u64,
     pub(super) sandwiches: u64,
@@ -106,8 +106,17 @@ fn sandwich(b: Op, g: Op) -> Option<Op> {
 
 // Move the *original* first Toffoli right through commuting middle gates.
 // Its replacement is emitted only after the entire middle has been emitted.
-pub(super) fn lower(block: &[Op], mut emit: impl FnMut(Op), stats: &mut Counts) {
-    let mut expansion = block.len() / GROWTH_DIVISOR;
+pub(super) fn lower(block: &[Op], emit: impl FnMut(Op), stats: &mut Counts) {
+    lower_configured(block, LOOKAHEAD, block.len() / GROWTH_DIVISOR, emit, stats);
+}
+
+pub(super) fn lower_configured(
+    block: &[Op],
+    lookahead: usize,
+    mut expansion: usize,
+    mut emit: impl FnMut(Op),
+    stats: &mut Counts,
+) {
     let mut i = 0;
     'scan: while i < block.len() {
         let a = block[i];
@@ -131,7 +140,7 @@ pub(super) fn lower(block: &[Op], mut emit: impl FnMut(Op), stats: &mut Counts) 
                     }
                 }
             }
-            for j in i + 1..block.len().min(i + 1 + LOOKAHEAD) {
+            for j in i + 1..block.len().min(i + 1 + lookahead) {
                 let b = block[j];
                 if !plain(b) {
                     break;
