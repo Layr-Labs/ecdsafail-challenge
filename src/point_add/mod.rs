@@ -163,7 +163,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "50790220341",
+        "TAIL_NONCE" => "1267314036214",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -744,6 +744,9 @@ pub fn build_generated() -> Vec<Op> {
     // corpora (577,536 shots), on all 16 fixed measurement corpora, and lies
     // outside conditional execution. This is an empirical support cut, not a
     // universal deadness claim.
+    {use std::io::Write;let mut f=std::io::BufWriter::new(std::fs::File::create("q27-predead.raw").unwrap());
+     for o in &ops {for v in [o.kind as u64,o.q_control2.0,o.q_control1.0,o.q_target.0,o.c_target.0,o.c_condition.0,o.r_target.0]{f.write_all(&v.to_le_bytes()).unwrap();}}f.flush().unwrap();}
+    if std::env::var("Q27_DEAD_OFF").ok().as_deref()==Some("1"){return source_edits::run(ops,include_str!("q27_later.txt"));}
     let dead_rows: Vec<usize> = include_str!("dead-direct64-q1228.idx")
         .lines()
         .filter(|line| !line.is_empty() && *line != "idx")
