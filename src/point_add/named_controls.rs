@@ -406,3 +406,6 @@ fn apply_configured<const N: usize>(ops: &mut Vec<Op>, slots: usize, retain: boo
     ops.truncate(write);
     counts
 }
+
+#[path = "measured_targets.rs"]
+pub(super) mod measured_targets;
