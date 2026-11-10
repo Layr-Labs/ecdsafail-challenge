@@ -1,0 +1,12 @@
+'use strict';
+const path=require('path'),Module=require('module');
+const {checkedSource}=require('../field128-height-experiment/pinned.cjs');
+const {replace,SectorSigned}=require('./parts.cjs');
+const file=path.join(__dirname,'../q654-next/regen.cjs');
+let s=checkedSource(file,'0cac8f32c234456119814212636c846c5a2c3125d96a69ef102d1c91028d69e1');
+s=replace(s,"const {Signed}=require('./walks.cjs');",'const Signed=module.replacement;');
+s=replace(s,'x.tag[6]=walk.L[1];','x.tag[6]=walk.L[1];x.tag[5]=walk.L[0];');
+s=replace(s,'[scale,scale.plan(),false]','[scale,[{fn:()=>scale.raw(-1,-1,walk.L[0])}].concat(scale.plan(),[{fn:()=>scale.raw(-1,-1,walk.L[0])}]),false]');
+s=replace(s,'q===walk.tag[6]&&g===walk','q===walk.tag.at(-1)&&g===walk');
+s=replace(s,'if(q===653||q===655||q===656)','if(q===652||q===653||q===655||q===656)');
+const m=new Module(file,module);m.filename=file;m.paths=module.paths;m.replacement=SectorSigned;m._compile(s,file);module.exports=m.exports;
