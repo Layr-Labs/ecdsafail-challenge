@@ -163,7 +163,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "1267314036214",
+        "TAIL_NONCE" => "6100284432519",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -746,7 +746,11 @@ pub fn build_generated() -> Vec<Op> {
     // universal deadness claim.
     {use std::io::Write;let mut f=std::io::BufWriter::new(std::fs::File::create("q27-predead.raw").unwrap());
      for o in &ops {for v in [o.kind as u64,o.q_control2.0,o.q_control1.0,o.q_target.0,o.c_target.0,o.c_condition.0,o.r_target.0]{f.write_all(&v.to_le_bytes()).unwrap();}}f.flush().unwrap();}
-    if std::env::var("Q27_DEAD_OFF").ok().as_deref()==Some("1"){return source_edits::run(ops,include_str!("q27_later.txt"));}
+    if std::env::var("Q27_DEAD_OFF").ok().as_deref()==Some("1"){
+        let ops2 = source_edits::run(ops,include_str!("q27_later.txt"));
+        if std::env::var("HP2").ok().as_deref()==Some("1"){return hold_pass::hold_pass_holds_only(ops2);}
+        return ops2;
+    }
     let dead_rows: Vec<usize> = include_str!("dead-direct64-q1228.idx")
         .lines()
         .filter(|line| !line.is_empty() && *line != "idx")
