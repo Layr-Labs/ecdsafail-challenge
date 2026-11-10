@@ -1,0 +1,11 @@
+'use strict';
+const {run,cases}=require('./sim.cjs');
+const [patch,N='64',seed='5',lanesShow='0,1,2,3']=process.argv.slice(2);
+const cs=cases(+N,+seed,process.env.MODE||'mix');const show=lanesShow.split(',').map(Number);
+const num=(get,base,step,len,l)=>{let x=0n;for(let i=len;i--;)x=(x<<1n)|BigInt(get(base+step*i,l));return x;};
+const rows=[];
+run(patch,cs,{W:2,snap:(i,label,S,W,get)=>{for(const l of show){const c=cs[l%cs.length];
+  const Sreg=num(get,129,-1,128,l),M=num(get,259,-1,128,l),T=num(get,260,1,128,l);
+  const h=[0,1,130,131,388,646,647,648,649,650].map(q=>get(q,l)).join('');
+  rows.push(`L${l} st${i}(${label}) S=${Sreg.toString(16)} M=${M.toString(16)} T=${T.toString(16)} h[0,1,130,131,388,646-650]=${h}`+(i===0?`  | r=${c.r.toString(16)} v=${c.v.toString(16)} q=${(c.r/c.v).toString(16)} rm=${(c.r%c.v).toString(16)} u=${c.u.toString(16)} clz=${128-c.v.toString(2).length}`:''));}}});
+console.log(rows.sort((a,b)=>parseInt(a.slice(1))-parseInt(b.slice(1))).join('\n'));
