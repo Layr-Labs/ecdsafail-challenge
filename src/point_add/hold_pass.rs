@@ -339,11 +339,6 @@ fn insert_loans(ops: &[Op], loans: &[Loan]) -> Result<Vec<Op>, Vec<Loan>> {
 
 /// Dup loans (longest first, one window per wire at a time, failing ones dropped), then holds under the stream's own
 /// width.
-pub fn hold_pass_holds_only(ops: Vec<Op>) -> Vec<Op> {
-    let (nq, _nb) = dims(&ops);
-    holds(ops, nq)
-}
-
 pub fn hold_pass(ops: Vec<Op>) -> Vec<Op> {
     let (nq, nb) = dims(&ops);
     let regs = registers(&ops);

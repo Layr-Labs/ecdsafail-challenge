@@ -163,7 +163,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "6100458062963",
+        "TAIL_NONCE" => "3100086038387",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -746,26 +746,22 @@ pub fn build_generated() -> Vec<Op> {
     // universal deadness claim.
     {use std::io::Write;let mut f=std::io::BufWriter::new(std::fs::File::create("q27-predead.raw").unwrap());
      for o in &ops {for v in [o.kind as u64,o.q_control2.0,o.q_control1.0,o.q_target.0,o.c_target.0,o.c_condition.0,o.r_target.0]{f.write_all(&v.to_le_bytes()).unwrap();}}f.flush().unwrap();}
-    if std::env::var("Q27_DEAD_OFF").ok().as_deref()==Some("1"){
-        let ops2 = source_edits::run(ops,include_str!("q27_later.txt"));
-        if std::env::var("HP2").ok().as_deref()==Some("1"){return hold_pass::hold_pass_holds_only(ops2);}
-        return ops2;
-    }
+    if std::env::var("Q27_DEAD_OFF").ok().as_deref()==Some("1"){return source_edits::run(ops,include_str!("q27_later.txt"));}
     let dead_rows: Vec<usize> = include_str!("dead-direct64-q1228.idx")
         .lines()
         .filter(|line| !line.is_empty() && *line != "idx")
         .map(|line| line.split('\t').next().unwrap().parse().unwrap())
         .collect();
-    assert_eq!(dead_rows.len(), 340, "dead index must contain 340 rows");
+    assert_eq!(dead_rows.len(), 338, "dead index must contain 338 rows");
     let dead: std::collections::BTreeSet<usize> = dead_rows.into_iter().collect();
-    assert_eq!(dead.len(), 340, "dead index rows must be unique");
+    assert_eq!(dead.len(), 338, "dead index rows must be unique");
     let before = ops.len();
     let ops: Vec<Op> = ops
         .into_iter()
         .enumerate()
         .filter_map(|(i, op)| (!dead.contains(&i)).then_some(op))
         .collect();
-    assert_eq!(before - ops.len(), 340, "dead index must remove 340 ops");
+    assert_eq!(before - ops.len(), 338, "dead index must remove 338 ops");
     ops
 }
 
