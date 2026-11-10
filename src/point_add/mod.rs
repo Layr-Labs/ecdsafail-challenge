@@ -163,7 +163,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "6100284432519",
+        "TAIL_NONCE" => "6100458062963",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
