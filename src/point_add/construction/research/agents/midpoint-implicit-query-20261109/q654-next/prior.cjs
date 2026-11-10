@@ -1,0 +1,11 @@
+'use strict';
+const path=require('path'),Module=require('module');
+const {checkedSource}=require('../field128-height-experiment/pinned.cjs');
+const name=path.join(__dirname,'../q655-trim/backend.cjs');
+let src=checkedSource(name,'8c12410173163c768fd2e6b6ae0e363077fb4d659b6e10aa1e6e29491db9e8a5');
+const a='m._compile(src,file);module.exports=m.exports;';
+const previous='module.exports={emitMultiplySparse,emitDivideSparse,emitMultiply654,emitDivide654};';
+const exposed='module.exports={f,d,replace,lowValuationSweep,plusOneMod,dirtyDigit};';
+if(src.split(a).length!==2)throw Error('cannot reuse prior construction');
+src=src.replace(a,'m._compile(src.replace('+JSON.stringify(previous)+','+JSON.stringify(exposed)+'),file);module.exports=m.exports;');
+const m=new Module(name,module);m.filename=name;m.paths=module.paths;m._compile(src,name);module.exports=m.exports;
