@@ -359,6 +359,44 @@ pub fn hold_pass(ops: Vec<Op>) -> Vec<Op> {
     match s1 { Some(s) => holds(s, nq), None => holds(ops, nq) }
 }
 
+/// Build the exact duplicate loans and map every upper wire into the first `cap` wires.
+/// Unlike `hold_pass`, this does not add product-hold nomads: it is the width-only path.
+pub fn dup_relocate(ops: Vec<Op>, cap: usize) -> Option<Vec<Op>> {
+    let (nq, nb) = dims(&ops);
+    if cap >= nq || cap == 0 {
+        eprintln!("dup_relocate: no compaction requested ({nq} wires, target {cap})");
+        return None;
+    }
+    let regs = registers(&ops);
+    let mut dcs = dup_candidates(&ops, nq, nb, &regs);
+    dcs.sort_by_key(|l| std::cmp::Reverse(l.r - l.e));
+    let mut per: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+    let mut chosen = vec![];
+    for l in dcs {
+        let v = per.entry(l.w).or_default();
+        if v.iter().all(|&(a, b)| l.r <= a || l.e >= b) {
+            v.push((l.e, l.r));
+            chosen.push(l);
+        }
+    }
+    let mut banned: std::collections::HashSet<Loan> = std::collections::HashSet::new();
+    for _ in 0..8 {
+        let ls: Vec<Loan> = chosen.iter().filter(|l| !banned.contains(l)).copied().collect();
+        match insert_loans(&ops, &ls) {
+            Ok(mapped) => {
+                eprintln!("dup_relocate: {} dup loans before relocation", ls.len());
+                return relocate(&mapped, cap);
+            }
+            Err(failed) => {
+                for l in failed {
+                    banned.insert(l);
+                }
+            }
+        }
+    }
+    relocate(&ops, cap)
+}
+
 fn holds(ops: Vec<Op>, cap: usize) -> Vec<Op> {
     let ops_in = ops.clone();
     let (nq, nb) = dims(&ops);
@@ -412,4 +450,57 @@ fn holds(ops: Vec<Op>, cap: usize) -> Vec<Op> {
         if let Some(a) = after.get(&i) { out.extend(a.iter().copied()); }
     }
     match relocate(&out, nq) { Some(r) => r, None => { eprintln!("hold_pass: relocation failed, stream unchanged"); ops_in } }
+}
+
+/// q792 diagnostic (dev only, called under Q792_RELOC): symbolic live profile of a stream (wires not provably |0>),
+/// the instants above `cap`, and how many live wires there have an exact duplicate (dup-loan supply). No edit.
+pub fn q792_census(ops: &[Op], cap: usize) {
+    let (nq, nb) = dims(ops);
+    let regs = registers(ops);
+    let mut sym = Sym::new(nq, nb, &regs);
+    let mut ch = vec![];
+    let (mut mx, mut mxi, mut over, mut runs, mut prev_over) = (0i64, 0usize, 0usize, 0usize, false);
+    let mut hist: std::collections::BTreeMap<i64, usize> = Default::default();
+    let mut dup_at_over_min = i64::MAX;
+    let mut sampled = 0usize;
+    let (mut const_min, mut const_max) = (i64::MAX, 0i64);
+    let mut const_hist: std::collections::BTreeMap<i64, usize> = Default::default();
+    for (i, o) in ops.iter().enumerate() {
+        sym.step(o, &mut ch); ch.clear();
+        let l = sym.live;
+        if l > mx { mx = l; mxi = i; }
+        let ov = l > cap as i64;
+        if ov { over += 1; *hist.entry(l).or_insert(0) += 1; if !prev_over { runs += 1; }
+            // dup supply at a sample of over-cap instants (every 4096th over-cap op)
+            if over % 4096 == 1 { sampled += 1;
+                let nd = (0..nq).filter(|&w| sym.has_dup(w)).count() as i64; dup_at_over_min = dup_at_over_min.min(nd);
+                let nc = (0..nq).filter(|&w| sym.q[w] == ONE).count() as i64; const_min = const_min.min(nc); const_max = const_max.max(nc);
+                *const_hist.entry(nc).or_insert(0) += 1; } }
+        prev_over = ov;
+    }
+    eprintln!("Q792CEN nq {nq} sym-live max {mx} at op {mxi}; ops above cap {cap}: {over} in {runs} runs; hist {:?}; dup wires at sampled over-cap instants (min over {sampled}) {}",
+              hist, if sampled > 0 { dup_at_over_min } else { -1 });
+    eprintln!("Q792CONST constant-1 wires at sampled over-cap instants: min {} max {} hist {:?}", const_min, const_max, const_hist);
+}
+
+/// q792 diagnostic: dup_relocate's loan stage (same selection), then the symbolic-live census of the loaned stream:
+/// how many instants stay above `cap` after every exact dup loan (R12_HOLDQ's supply).
+pub fn q792_loan_census(ops: &[Op], cap: usize) {
+    let (nq, nb) = dims(ops);
+    let regs = registers(ops);
+    let mut dcs = dup_candidates(ops, nq, nb, &regs);
+    let ncand = dcs.len();
+    dcs.sort_by_key(|l| std::cmp::Reverse(l.r - l.e));
+    let mut per: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+    let mut chosen = vec![];
+    for l in dcs { let v = per.entry(l.w).or_default(); if v.iter().all(|&(a, b)| l.r <= a || l.e >= b) { v.push((l.e, l.r)); chosen.push(l); } }
+    let mut banned: std::collections::HashSet<Loan> = std::collections::HashSet::new();
+    for _ in 0..8 {
+        let ls: Vec<Loan> = chosen.iter().filter(|l| !banned.contains(l)).copied().collect();
+        match insert_loans(ops, &ls) {
+            Ok(m) => { eprintln!("Q792LOAN candidates {ncand} chosen {} inserted {}", chosen.len(), ls.len()); q792_census(&m, cap); return; }
+            Err(f) => { for l in f { banned.insert(l); } }
+        }
+    }
+    eprintln!("Q792LOAN insert failed");
 }
