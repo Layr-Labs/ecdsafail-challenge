@@ -1,0 +1,1 @@
+'use strict';module.exports={id:'D26 complete candidate source',applySource(s){s=require('./i9-divide-d25-component.cjs').applySource(s);s=require('./i9-divide-p-d26-forward-host.cjs')(s);s=require('./i9-divide-p-d26-outer-virtual.cjs')(s);s=require('./i9-divide-p-d26-reverse-host.cjs')(s);return s;}};

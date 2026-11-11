@@ -1,0 +1,1 @@
+'use strict';module.exports={id:'D25 alpha snapshot',complete:false,applySource:require('./i9-divide-p-d25-alpha.cjs'),status:'Alpha641-free; compatibility gather to641 retained; no winding/boundary host admission'};
