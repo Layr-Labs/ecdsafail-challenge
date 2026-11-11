@@ -331,7 +331,7 @@ fn simplify_with_products(ops: Vec<Op>, use_products: bool) -> Vec<Op> {
     let mut truth = Support::new(&ops);
     let mut products = use_products.then(|| product::Index::new(&truth, &ops));
     let mut result = Vec::with_capacity(ops.len());
-    for op in ops {
+    for op in into_chunks(ops).into_iter().rev().flatten() {
         // Query the pre-op state; remove old keys before truth mutates it.
         let product_hit = products
             .as_mut()
@@ -355,3 +355,50 @@ fn simplify_with_products(ops: Vec<Op>, use_products: bool) -> Vec<Op> {
     result
 }
 
+
+/// Split `ops` into chunks from the end, shrinking the source as it goes (a shrinking realloc frees the tail in place), so the
+/// caller frees each chunk once consumed: the pass holds about one copy of the stream instead of two. Memory only; the op
+/// sequence the pass sees is unchanged (chunks are consumed in reverse push order = stream order).
+fn into_chunks(mut ops: Vec<Op>) -> Vec<Vec<Op>> {
+    const CHUNK: usize = 1 << 24;
+    let mut chunks = Vec::new();
+    while ops.len() > CHUNK {
+        let tail = ops.split_off(ops.len() - CHUNK);
+        ops.shrink_to_fit();
+        chunks.push(tail);
+    }
+    chunks.push(ops);
+    chunks
+}
+
+/// q765-C: streaming twin of `simplify_products` (one round). `header` must carry every Register /
+/// AppendToRegister op of the stream plus ops touching the max qubit and max bit, so that `analyze_ops(header)`
+/// equals `analyze_ops(stream)`; the per-op loop is the same as `simplify_with_products(.., true)`.
+pub(crate) fn simplify_products_stream(header: &[Op], ops: impl Iterator<Item = Op>, mut sink: impl FnMut(Op)) {
+    let mut affine = AffineSupport::new(header);
+    let mut quadratic = QuadraticSupport::new(header);
+    let mut truth = Support::new(header);
+    let mut products = Some(product::Index::new(&truth, header));
+    let mut result = Vec::new();
+    for op in ops {
+        let product_hit = products
+            .as_mut()
+            .and_then(|index| index.before(&truth, &op));
+        let affine_rewrite = affine.step(&op);
+        let quadratic_rewrite = quadratic.step(&op);
+        let truth_rewrite = truth.step(&op);
+        if let Some(index) = &mut products {
+            index.after(&truth, &op);
+        }
+        let rewrite = match (affine_rewrite, quadratic_rewrite) {
+            (Rewrite::Keep, Rewrite::Keep) => truth_rewrite,
+            (Rewrite::Keep, quadratic_proof) => quadratic_proof,
+            (affine_proof, _) => affine_proof,
+        };
+        match (rewrite, product_hit) {
+            (Rewrite::Keep, Some(hit)) => hit.emit(op, &mut result),
+            (old_proof, _) => old_proof.emit(op, &mut result),
+        }
+        for o in result.drain(..) { sink(o); }
+    }
+}
