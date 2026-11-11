@@ -552,6 +552,67 @@ pub(super) fn t3p1_unpack(c: &mut Builder) {
         eprintln!("T3P1_PACK in n={} active={a0} peak={peak} cost={:.1}", z.len() + 1, c.expected_total() - e0);
     }
 }
+// ---------------------------------------------------------------------------------------------------------------------
+// r1227 record pack (DonRwetter): after forward tick R1227_PK_TICK of each walk (divide, then multiply), the flag F of the last committed
+// pair (x*) is fanned out into every record flag closed by that tick (z = the 41 flags F/f) and X-measured away, so the
+// divide's later forward ticks plan with one wire more. Before reverse tick R1227_PK_TICK of the divide it is rebuilt
+// as x* = [wt(z ^ x*) >= R1227_PK_THETA] (one carry-save tree, every AND measured away; constant-one pad wires
+// makes the tree's 2^k test equal to theta), its phase is fixed from the measurement, and the fan-out is undone. A
+// block whose weight is out of range restores a wrong record: a classical failure of that input (measured ~0.02 per
+// 9,024-shot draw). Exact on every in-range block. Ported from the r1226 research hook (R1226_PACK_REAL, walk 0).
+// ---------------------------------------------------------------------------------------------------------------------
+const R1227_PK_TICK: usize = 83;
+const R1227_PK_THETA: usize = 21;
+thread_local! {
+    static R1227_PK: std::cell::RefCell<Option<(usize, crate::circuit::BitId, Vec<QubitId>)>> = const { std::cell::RefCell::new(None) };
+}
+fn r1227_pk_cells(t: usize, skip: usize) -> Vec<QubitId> {
+    // the flags only (pairs' F, raw ticks' f): density ~0.2, so 41 cells carry x* better than all 124 record cells
+    let mut z = Vec::new();
+    for u in 1..=t {
+        if !a2_tick(u) { continue; }
+        let p = a2_pair_partner(u);
+        if a2_tick(p) {
+            if u > p || p > t || !a2_pair_is_packed(u) || u == skip { continue; }
+            if let Some(f) = A2_REC.with(|r| r.borrow().get(&u).and_then(|f| f[0])) { z.push(f); }
+        } else if let Some(f) = A2_REC.with(|r| r.borrow().get(&u).and_then(|f| f[0])) { z.push(f); }
+    }
+    z
+}
+pub(super) fn r1227_pk_pack(c: &mut Builder, t: usize) {
+    if t != R1227_PK_TICK { return; }
+    let mut first = None;
+    for u in (1..=t).rev() { if a2_tick(u) && a2_pair_partner(u) > u && a2_pair_partner(u) <= t && a2_tick(a2_pair_partner(u)) && a2_pair_is_packed(u) { first = Some(u); break; } }
+    let u = first.expect("r1227 pack: no committed pair");
+    let f = A2_REC.with(|r| r.borrow().get(&u).and_then(|f| f[0])).expect("r1227 pack: F");
+    let z = r1227_pk_cells(t, u);
+    for &q in &z { c.cx(f, q); }
+    let m = c.alloc_bit();
+    c.hmr(f, m);
+    c.release_clean(f);
+    A2_REC.with(|r| r.borrow_mut().get_mut(&u).unwrap()[0] = None);
+    R1227_PK.with(|p| { assert!(p.borrow().is_none(), "r1227 pack: pack while a pack is out"); *p.borrow_mut() = Some((u, m, z)); });
+}
+pub(super) fn r1227_pk_unpack(c: &mut Builder, t: usize) {
+    if t != R1227_PK_TICK { return; }
+    let (u, m, z) = R1227_PK.with(|p| p.borrow_mut().take()).expect("r1227 pack: unpack without a pack");
+    assert_eq!(z, r1227_pk_cells(t, u), "r1227 pack: the closed cells changed between pack and unpack");
+    let n = z.len();
+    assert_eq!(n, 41, "r1227 pack: theta 21 is balanced for the 41 flags of this stream only");
+    let k = (usize::BITS - (R1227_PK_THETA - 1).leading_zeros()) as usize;
+    let pad = (1usize << k) - R1227_PK_THETA;
+    assert!(n + pad < (1usize << (k + 1)), "r1227 pack: pad pushes the block past 2^(k+1)");
+    let mut zx = z.clone();
+    let mut pads = Vec::new();
+    for _ in 0..pad { let q = c.alloc_qubit(); c.x(q); pads.push(q); zx.push(q); }
+    let xs = c.alloc_qubit();
+    let _peak = t3p1_threshold_top(c, &zx, xs);
+    for q in pads { c.x(q); c.release_clean(q); }
+    c.z_if(xs, m);
+    c.free_bit(m);
+    for &q in &z { c.cx(xs, q); }
+    A2_REC.with(|r| r.borrow_mut().get_mut(&u).unwrap()[0] = Some(xs));
+}
 /// out ^= [wt(z) >= 2^k] with 2^k <= len(z) < 2^(k+1): carry-save reduction of the columns below k (full adders,
 /// a half adder's carry when two bits are left; residual column bits are never needed), the column-k bit copied
 /// out, every AND measured away. Returns the peak live count.

@@ -163,7 +163,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "70001792491447",
+        "TAIL_NONCE" => "5200526813618",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -744,8 +744,10 @@ pub fn build_generated() -> Vec<Op> {
     // corpora (577,536 shots), on all 16 fixed measurement corpora, and lies
     // outside conditional execution. This is an empirical support cut, not a
     // universal deadness claim.
+    {use std::io::Write;let mut f=std::io::BufWriter::new(std::fs::File::create("q27-predead.raw").unwrap());
+     for o in &ops {for v in [o.kind as u64,o.q_control2.0,o.q_control1.0,o.q_target.0,o.c_target.0,o.c_condition.0,o.r_target.0]{f.write_all(&v.to_le_bytes()).unwrap();}}f.flush().unwrap();}
     if std::env::var("Q27_DEAD_OFF").ok().as_deref()==Some("1"){
-        let mut ops2 = source_edits::run_positions(ops,include_str!("q27_later.txt"));
+        let mut ops2 = source_edits::run(ops,include_str!("q27_later.txt"));
         if std::env::var("HP2").ok().as_deref()==Some("1"){ ops2 = hold_pass::hold_pass_holds_only(ops2); }
         if std::env::var("HP3").ok().as_deref()==Some("1"){ ops2 = hold_pass::exact_final_pass(ops2); }
         return ops2;
