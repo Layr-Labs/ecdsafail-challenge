@@ -1,3 +1,4 @@
+mod bdd_reduce;
 mod hold_pass;
 mod gate_fold;
 mod named_controls;
@@ -750,7 +751,7 @@ pub fn build_generated() -> Vec<Op> {
         let mut ops2 = source_edits::run(ops,include_str!("q27_later.txt"));
         if std::env::var("HP2").ok().as_deref()==Some("1"){ ops2 = hold_pass::hold_pass_holds_only(ops2); }
         if std::env::var("HP3").ok().as_deref()==Some("1"){ ops2 = hold_pass::exact_final_pass(ops2); }
-        return ops2;
+        return bdd_reduce::simplify(ops2);
     }
     let dead_rows: Vec<usize> = include_str!("dead-direct64-q1228.idx")
         .lines()
