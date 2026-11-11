@@ -41,16 +41,28 @@ struct Sym {
     members: HashMap<u128, Vec<u32>>,
     live: i64,
     atoms: u64,
+    /// hp3: flat products. A factor that is exactly a product atom is replaced by that atom's factors, so a product
+    /// has one canonical atom however it was nested ((a.b).c = a.(b.c) = a.b.c, a.(a.b) = a.b). Off = original model.
+    flat: bool,
+    pfac: HashMap<u128, Vec<Val>>,
 }
 impl Sym {
-    fn new(nq: usize, nb: usize, regs: &[Vec<usize>; 4]) -> Self {
-        let mut s = Sym { q: vec![ZV; nq], b: vec![ZV; nb], stack: vec![], members: HashMap::new(), live: 0, atoms: 0 };
+    fn new(nq: usize, nb: usize, regs: &[Vec<usize>; 4]) -> Self { Self::new_mode(nq, nb, regs, false) }
+    fn new_mode(nq: usize, nb: usize, regs: &[Vec<usize>; 4], flat: bool) -> Self {
+        let mut s = Sym { q: vec![ZV; nq], b: vec![ZV; nb], stack: vec![], members: HashMap::new(), live: 0, atoms: 0, flat, pfac: HashMap::new() };
         for &w in regs[0].iter().chain(regs[1].iter()) { let a = s.fresh(); s.set_q(w, a); }
         for &x in regs[2].iter().chain(regs[3].iter()) { s.b[x] = s.fresh(); }
         s
     }
     fn fresh(&mut self) -> Val { self.atoms += 1; Val { l: mix128(self.atoms, &[0xA70]), c: false } }
     fn prod(&mut self, f: &mut Vec<Val>) -> Val {
+        if self.flat && f.iter().any(|v| !v.c && self.pfac.contains_key(&v.l)) {
+            let mut g = Vec::with_capacity(f.len() + 4);
+            for &v in f.iter() {
+                match if v.c { None } else { self.pfac.get(&v.l) } { Some(fs) => g.extend_from_slice(fs), None => g.push(v) }
+            }
+            *f = g;
+        }
         f.retain(|&v| v != ONE);
         if f.iter().any(|&v| v == ZV) { return ZV; }
         f.sort(); f.dedup();
@@ -62,6 +74,7 @@ impl Sym {
                 let mut words = Vec::with_capacity(3 * f.len());
                 for v in f.iter() { words.push(v.l as u64); words.push((v.l >> 64) as u64); words.push(v.c as u64); }
                 let p = Val { l: mix128(0xB0D, &words), c: false };
+                if self.flat { self.pfac.entry(p.l).or_insert_with(|| f.clone()); }
                 p
             }
         }
@@ -192,10 +205,11 @@ fn push(b: u64) -> Op { let mut o = mk(K::PushCondition, NONE, NONE); o.c_condit
 /// Map a logical stream whose wires >= `cap` are nomads onto physical wires 0 .. cap - 1. A nomad lives in a slot whose
 /// own wire is provably 0 and is moved by SWAP (outside condition blocks, or between a pop and re-push of clean
 /// levels) when that wire is touched. Returns None if some op finds no free slot.
-pub fn relocate(ops: &[Op], cap: usize) -> Option<Vec<Op>> {
+pub fn relocate(ops: &[Op], cap: usize) -> Option<Vec<Op>> { relocate_mode(ops, cap, false) }
+fn relocate_mode(ops: &[Op], cap: usize, flat: bool) -> Option<Vec<Op>> {
     let (nq, nb) = dims(ops);
     let regs = registers(ops);
-    let mut sym = Sym::new(nq, nb, &regs);
+    let mut sym = Sym::new_mode(nq, nb, &regs, flat);
     let mut touches: Vec<Vec<u32>> = vec![vec![]; cap];
     for (i, o) in ops.iter().enumerate() { let (tw, n) = touched(o); for &w in &tw[..n] { if w < cap { touches[w].push(i as u32); } } }
     let next = |w: usize, i: usize| -> usize { let v = &touches[w]; let p = v.partition_point(|&x| (x as usize) < i); if p < v.len() { v[p] as usize } else { usize::MAX } };
@@ -339,6 +353,56 @@ fn insert_loans(ops: &[Op], loans: &[Loan]) -> Result<Vec<Op>, Vec<Loan>> {
 
 /// Dup loans (longest first, one window per wire at a time, failing ones dropped), then holds under the stream's own
 /// width.
+pub fn hold_pass_holds_only(ops: Vec<Op>) -> Vec<Op> {
+    let (nq, _nb) = dims(&ops);
+    holds(ops, nq)
+}
+
+/// Control peephole: an unconditional CCX (empty condition stack, no c_condition) whose controls are degenerate in the
+/// exact affine-form model: a control provably 0, or controls complementary (c AND NOT c = 0) -> the CCX is the identity
+/// and is dropped; a control provably 1 -> CX from the other control (X if both are 1); controls equal (c AND c = c) -> CX.
+/// Every wire, bit, the phase and the R/Hmr draw schedule are unchanged; only Toffolis disappear.
+/// Returns the stream and the counts (zero, complementary, one, equal).
+pub fn ctrl_peephole(ops: Vec<Op>) -> (Vec<Op>, [usize; 4]) {
+    let (nq, nb) = dims(&ops);
+    let regs = registers(&ops);
+    let mut sym = Sym::new(nq, nb, &regs);
+    let mut ch = vec![];
+    let mut out = Vec::with_capacity(ops.len());
+    let mut n = [0usize; 4];
+    for o in ops.iter() {
+        let mut rep: Option<Option<Op>> = None; // Some(None) = drop, Some(Some(op)) = replace
+        if o.kind == K::CCX && o.c_condition == NO_BIT && sym.stack.is_empty() {
+            let (c1, c2, t) = (o.q_control1.0 as usize, o.q_control2.0 as usize, o.q_target.0 as usize);
+            let (a, b) = (sym.q[c1], sym.q[c2]);
+            if a == ZV || b == ZV { rep = Some(None); n[0] += 1; }
+            else if a.l == b.l && a.c != b.c { rep = Some(None); n[1] += 1; }
+            else if a == ONE && b == ONE { rep = Some(Some(mk(K::X, NONE, t))); n[2] += 1; }
+            else if a == ONE { rep = Some(Some(mk(K::CX, c2, t))); n[2] += 1; }
+            else if b == ONE { rep = Some(Some(mk(K::CX, c1, t))); n[2] += 1; }
+            else if a == b { rep = Some(Some(mk(K::CX, c1, t))); n[3] += 1; }
+        }
+        match rep {
+            Some(Some(p)) => { p.validate(); out.push(p); }
+            Some(None) => {}
+            None => out.push(*o),
+        }
+        sym.step(o, &mut ch); ch.clear();
+    }
+    eprintln!("hold_pass: control peephole: {} zero, {} complementary, {} one, {} equal", n[0], n[1], n[2], n[3]);
+    (out, n)
+}
+
+/// Exact final pass (lane E-EXACT; the hp3 machinery as a general pass): the control peephole, then product holds under
+/// the flat-product model with late copies at the stream's own width. Clifford-only, no measurement added, every wire
+/// value, bit, phase and R/Hmr draw kept. A relocation failure makes the hold step a no-op (fail closed).
+pub fn exact_final_pass(ops: Vec<Op>) -> Vec<Op> {
+    let (ops, n) = ctrl_peephole(ops);
+    let (ops, nh) = hold_pass_flat(ops, true);
+    eprintln!("exact_final_pass: {} Toffoli removed by the control peephole, {nh} flat late-copy holds", n.iter().sum::<usize>());
+    ops
+}
+
 pub fn hold_pass(ops: Vec<Op>) -> Vec<Op> {
     let (nq, nb) = dims(&ops);
     let regs = registers(&ops);
@@ -359,18 +423,33 @@ pub fn hold_pass(ops: Vec<Op>) -> Vec<Op> {
     match s1 { Some(s) => holds(s, nq), None => holds(ops, nq) }
 }
 
-fn holds(ops: Vec<Op>, cap: usize) -> Vec<Op> {
+fn holds(ops: Vec<Op>, cap: usize) -> Vec<Op> { holds_impl(ops, cap, false, false).0 }
+
+/// hp3: holds under the flat-product model (`flat`), optionally with a late copy (`late`): when no wire holds the
+/// product at the rebuild, the copy is taken from the last holder just before the op that destroys it (outside any
+/// condition) instead of right after the first build, so the hold occupies a wire only over [copy, rebuild].
+/// Returns the stream and the number of holds placed (0 and the input stream if relocation fails).
+pub fn hold_pass_flat(ops: Vec<Op>, late: bool) -> (Vec<Op>, usize) {
+    let (nq, _nb) = dims(&ops);
+    holds_impl(ops, nq, true, late)
+}
+
+fn holds_impl(ops: Vec<Op>, cap: usize, flat: bool, late: bool) -> (Vec<Op>, usize) {
     let ops_in = ops.clone();
     let (nq, nb) = dims(&ops);
     let cap = cap as i64;
     let regs = registers(&ops);
-    let mut sym = Sym::new(nq, nb, &regs);
+    let mut sym = Sym::new_mode(nq, nb, &regs, flat);
     let mut ch = vec![];
     let mut live = vec![0i32; ops.len()];
     for (i, o) in ops.iter().enumerate() { sym.step(o, &mut ch); ch.clear(); live[i] = sym.live as i32; }
-    let mut sym = Sym::new(nq, nb, &regs);
+    let mut sym = Sym::new_mode(nq, nb, &regs, flat);
     let mut lastp: HashMap<u128, (usize, usize)> = HashMap::new(); // atom -> (op, target)
-    let mut cands: Vec<(usize, usize, usize, usize)> = vec![]; // (j, tj, i, ti)
+    // value hash -> (op that removed its last holder, that holder, the holder's constant bit, condition stack empty before that op)
+    let mut gone: HashMap<u128, (usize, usize, bool, bool)> = HashMap::new();
+    // (j, tj, i, ti, s, src, comp): the copy CX(src -> hold) (+ X if comp) goes right after op s
+    let mut cands: Vec<(usize, usize, usize, usize, usize, usize, bool)> = vec![];
+    let mut held_at_rebuild = 0usize;
     for (i, o) in ops.iter().enumerate() {
         if o.kind == K::CCX && o.c_condition == NO_BIT && sym.stack.is_empty() {
             let (t, c1, c2) = (o.q_target.0 as usize, o.q_control1.0 as usize, o.q_control2.0 as usize);
@@ -378,30 +457,56 @@ fn holds(ops: Vec<Op>, cap: usize) -> Vec<Op> {
                 let mut f = sym.gate(o); f.push(sym.q[c1]); f.push(sym.q[c2]);
                 let p = sym.prod(&mut f);
                 if p.l != 0 {
-                    if let Some(&(j, tj)) = lastp.get(&p.l) { cands.push((j, tj, i, t)); }
+                    if let Some(&(j, tj)) = lastp.get(&p.l) {
+                        let mut c = (j, tj, i, t, j, tj, false);
+                        if late {
+                            if sym.members.contains_key(&p.l) { held_at_rebuild += 1; }
+                            else if let Some(&(e, u, uc, se)) = gone.get(&p.l) {
+                                if e > j && e <= i && se { c.4 = e - 1; c.5 = u; c.6 = uc != p.c; }
+                            }
+                        }
+                        cands.push(c);
+                    }
                     lastp.insert(p.l, (i, t));
                 }
             }
         }
-        sym.step(o, &mut ch); ch.clear();
+        if late {
+            let (tw, n) = touched(o);
+            let mut olds = [(0usize, ZV); 3];
+            for k in 0..n { olds[k] = (tw[k], sym.q[tw[k]]); }
+            let se = sym.stack.is_empty();
+            sym.step(o, &mut ch); ch.clear();
+            for &(w, v) in &olds[..n] {
+                if v.l != 0 && sym.q[w] != v && !sym.members.contains_key(&v.l) { gone.insert(v.l, (i, w, v.c, se)); }
+            }
+        } else {
+            sym.step(o, &mut ch); ch.clear();
+        }
     }
     let mut extra = vec![0i32; ops.len() + 1];
     let mut order: Vec<usize> = (0..cands.len()).collect();
-    order.sort_by_key(|&k| cands[k].2 - cands[k].0);
-    let mut chosen: Vec<(usize, usize, usize, usize, usize)> = vec![];
+    order.sort_by_key(|&k| cands[k].2 - cands[k].4);
+    let mut chosen: Vec<(usize, usize, usize, usize, usize, usize, bool, usize)> = vec![];
     for k in order {
-        let (j, tj, i, ti) = cands[k];
-        if i - j > 2_000_000 { continue; }
-        if !(j..=i).all(|x| live[x] + extra[x] + 1 <= cap as i32) { continue; }
-        for x in j..=i { extra[x] += 1; }
-        chosen.push((j, tj, i, ti, nq + chosen.len()));
+        let (j, tj, i, ti, s, src, comp) = cands[k];
+        if i - s > 2_000_000 { continue; }
+        if !(s..=i).all(|x| live[x] + extra[x] + 1 <= cap as i32) { continue; }
+        for x in s..=i { extra[x] += 1; }
+        chosen.push((j, tj, i, ti, s, src, comp, nq + chosen.len()));
     }
-    eprintln!("hold_pass: {} candidates, {} holds placed", cands.len(), chosen.len());
+    if late {
+        eprintln!("hold_pass: {} candidates ({} late copies, {} held at rebuild), {} holds placed ({} late)", cands.len(),
+            cands.iter().filter(|c| c.4 != c.0).count(), held_at_rebuild, chosen.len(), chosen.iter().filter(|c| c.4 != c.0).count());
+    } else {
+        eprintln!("hold_pass: {} candidates, {} holds placed", cands.len(), chosen.len());
+    }
     let mut after: HashMap<usize, Vec<Op>> = HashMap::new();
     let mut replace: HashMap<usize, Vec<Op>> = HashMap::new();
-    for &(j, tj, i, ti, h) in &chosen {
-        let mut c = mk(K::CX, tj, h); c.c_condition = ops[j].c_condition;
-        after.entry(j).or_default().push(c);
+    for &(j, _tj, i, ti, s, src, comp, h) in &chosen {
+        let mut c = mk(K::CX, src, h); c.c_condition = if s == j { ops[j].c_condition } else { NO_BIT };
+        after.entry(s).or_default().push(c);
+        if comp { after.entry(s).or_default().push(mk(K::X, NONE, h)); }
         let mut a = mk(K::CX, h, ti); a.c_condition = ops[i].c_condition;
         let mut b = mk(K::CX, ti, h); b.c_condition = ops[i].c_condition;
         replace.insert(i, vec![a, b]);
@@ -411,5 +516,6 @@ fn holds(ops: Vec<Op>, cap: usize) -> Vec<Op> {
         if let Some(r) = replace.get(&i) { out.extend(r.iter().copied()); } else { out.push(o); }
         if let Some(a) = after.get(&i) { out.extend(a.iter().copied()); }
     }
-    match relocate(&out, nq) { Some(r) => r, None => { eprintln!("hold_pass: relocation failed, stream unchanged"); ops_in } }
+    let n = chosen.len();
+    match relocate_mode(&out, nq, flat) { Some(r) => (r, n), None => { eprintln!("hold_pass: relocation failed, stream unchanged"); (ops_in, 0) } }
 }
