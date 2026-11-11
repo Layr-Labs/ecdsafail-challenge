@@ -1,3 +1,4 @@
+//! point_add: reversible secp256k1 affine point addition (target + classical offset).
 mod hold_pass;
 mod gate_fold;
 mod named_controls;
@@ -69,7 +70,7 @@ fn env_raw(name: &str) -> Option<String> {
         "I50_SPLIT_BRIDGE" => "1",
         "I35_CELLS" => "0",
         "I35_TRACE" => "0",
-        "I35_BUDGET" => "1",
+        "I35_BUDGET" => "0",
         "PP_WALK_EXTRA_ROUNDS" => "683:4:1",
         "SQ_ASM_TAIL" => "24",
         "SQ_ROW1_INVERSE_CARRIES" => "1",
@@ -163,7 +164,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "40000630292283",
+        "TAIL_NONCE" => "70001792491447",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
