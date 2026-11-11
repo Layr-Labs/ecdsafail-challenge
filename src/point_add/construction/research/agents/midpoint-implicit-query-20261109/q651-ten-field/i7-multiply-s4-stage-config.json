@@ -1,0 +1,115 @@
+{
+  "width": 649,
+  "multiplyModule": "./i7-multiply-s4-m-save.cjs",
+  "divideModule": "./i7-multiply-s4-d-module.cjs",
+  "historyModule": "./i7-multiply-s4-r-cancel-save.cjs",
+  "upperPatches": [
+    "./i7-multiply-s4-u-upper-partial.cjs"
+  ],
+  "historyNine": true,
+  "stages": {
+    "upper": {
+      "logical": [
+        256,
+        642,
+        643,
+        644,
+        645,
+        646,
+        647,
+        648
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646,
+        647
+      ]
+    },
+    "multiply": {
+      "logical": [
+        640,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646
+      ]
+    },
+    "divide": {
+      "logical": [
+        640,
+        641,
+        642,
+        643,
+        646,
+        647,
+        649,
+        650
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646,
+        647
+      ]
+    },
+    "history": {
+      "logical": [
+        0,
+        1,
+        130,
+        131,
+        388,
+        646,
+        647
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646
+      ]
+    }
+  },
+  "helperSites": [
+    512,
+    641,
+    642,
+    643,
+    644,
+    645,
+    646,
+    647
+  ],
+  "divideEntry": "./i7-multiply-s4-d-cancel-save.cjs",
+  "expected": {
+    "ops": 1741298591,
+    "ccx": 690895863
+  },
+  "expectedBasis": {
+    "label": "estimated replacement sum from measured S4 stages; no full point emission",
+    "scope": "mixed-stage 649 source, U16 partial and D14 eight helper; NOT a648 circuit"
+  }
+}

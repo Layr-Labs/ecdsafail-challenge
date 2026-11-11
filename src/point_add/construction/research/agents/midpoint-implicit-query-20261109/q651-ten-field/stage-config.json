@@ -1,0 +1,304 @@
+{
+  "width": 648,
+  "stageSign": 647,
+  "helperSites": [
+    512,
+    641,
+    642,
+    643,
+    644,
+    645,
+    646
+  ],
+  "upperSign": 647,
+  "upperMapMode": "owner",
+  "stages": {
+    "multiply": {
+      "logical": [
+        640,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646
+      ]
+    },
+    "history": {
+      "logical": [
+        0,
+        1,
+        130,
+        131,
+        388,
+        646,
+        647
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646
+      ]
+    },
+    "divide": {
+      "logical": [
+        640,
+        641,
+        642,
+        646,
+        647,
+        649,
+        650
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646
+      ]
+    },
+    "upper": {
+      "logical": [
+        256,
+        642,
+        643,
+        644,
+        645,
+        646,
+        648
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646
+      ]
+    }
+  },
+  "packages": {
+    "multiply": {
+      "entry": "../../r48/S4/package/s4-m-save.cjs",
+      "files": "../../r48/S4/INTEGRATION.json",
+      "prices": "prices-multiply.json"
+    },
+    "history": {
+      "entry": "../../r48/R8/regen648.cjs",
+      "files": "../../r48/R8/INTEGRATION.json",
+      "prices": "../../r48/R8/integration-receipt.json"
+    },
+    "divide": {
+      "entry": "../D19/integration/divide-648.cjs",
+      "files": "d19-files.json",
+      "prices": "../D19/PRICES.json"
+    },
+    "upper": {
+      "entry": "../U20/upper-648.cjs",
+      "files": "../U20/INTEGRATION.json",
+      "prices": "../U20/PRICES-I7.json"
+    }
+  },
+  "fallback649": {
+    "divide": {
+      "entry": "../../r48/D17/integration/divide-648.cjs",
+      "files": "../../r48/D17/INTEGRATION.json",
+      "prices": "prices-divide-test.json",
+      "map": {
+        "logical": [
+          640,
+          641,
+          642,
+          646,
+          647,
+          649,
+          650
+        ],
+        "physical": [
+          512,
+          641,
+          642,
+          643,
+          644,
+          645,
+          646
+        ]
+      }
+    },
+    "upper": {
+      "entry": "../../r48/U18/upper-u18-s3.cjs",
+      "files": "../../r48/U18/INTEGRATION.json",
+      "prices": "prices-upper-test.json",
+      "map": {
+        "logical": [
+          256,
+          642,
+          643,
+          644,
+          645,
+          646,
+          647,
+          648
+        ],
+        "physical": [
+          512,
+          641,
+          642,
+          643,
+          644,
+          645,
+          646,
+          647
+        ],
+        "signPhysical": 648,
+        "mode": "owner"
+      }
+    }
+  },
+  "missing": "Complete U20 merged upper with fixed sign647 and seven helpers, current prices and owner stress. D19 is bound to the I7 snapshot of its owner portable-check; refresh --divide-files if its bytes change. Width649 defaults retain the D17/U18 test fallback.",
+  "multiplyModule": "./i7-multiply-s4-m-save.cjs",
+  "historyModule": "./i7-history-regen648.cjs",
+  "divideEntry": "./i7-divide-divide-648.cjs",
+  "divideModule": "./divide-i.cjs",
+  "upperPatches": [
+    "./i7-upper-upper-648.cjs"
+  ],
+  "expected": {
+    "ops": 1779660231,
+    "ccx": 762086759
+  },
+  "expectedBasis": {
+    "label": "estimated measured-stage sum, inherited shell plus transport delta; whole preflight must confirm",
+    "baseline": "b573fae1/n651a",
+    "shellOps": 26784661,
+    "transportOps": 0
+  },
+  "stagePrices": {
+    "multiply": {
+      "ops": 80016196,
+      "ccx": 42505572,
+      "semanticSHA256": "59dc390cd09435ee4e1bd831f14da609a2bd2286db2eb6de1f8a866a36e4a554",
+      "hashConvention": "s4-four-u32",
+      "ownerReceipt": "r48\\S4\\price-M-save-forward.json",
+      "ownerSHA256": "d7f95320a64b8aa2671743ee96cf55324cc9f646e564dc06b2afff9f684d0c08"
+    },
+    "history": {
+      "ops": 72237424,
+      "ccx": 28396246,
+      "sha256": "649523a3bdfb4bceb53c2e952b6c3564c0f51b7a9ff998feac31926be56a8e31",
+      "helpers": [
+        0,
+        1,
+        130,
+        131,
+        388,
+        646,
+        647
+      ],
+      "seconds": 16.974,
+      "semanticSHA256": "649523a3bdfb4bceb53c2e952b6c3564c0f51b7a9ff998feac31926be56a8e31"
+    },
+    "divide": {
+      "ops": 163686063,
+      "ccx": 77600410,
+      "semanticSHA256": "1e59b2fcf9be3a3660c30ae35a0c7babf6fa5ad1cfd3b8e0c33373aadf3c7c89",
+      "hashConvention": "I6 divide: four little-endian u32 words per ABI semantic event; gate=[0,a,b,t], metadata=[kind,a,b_or_1023,record]",
+      "streams": [
+        {
+          "direction": "forward",
+          "ops": 163686063,
+          "ccx": 77600410,
+          "semanticEvents": 163685777,
+          "semanticSHA256": "1e59b2fcf9be3a3660c30ae35a0c7babf6fa5ad1cfd3b8e0c33373aadf3c7c89",
+          "banPhysical647": "ABSENT",
+          "banPhysical648": "ABSENT",
+          "mapsChecked": [
+            {
+              "direction": "forward",
+              "occurrence": 1
+            },
+            {
+              "direction": "forward",
+              "occurrence": 2
+            },
+            {
+              "direction": "reverse",
+              "occurrence": 1
+            },
+            {
+              "direction": "reverse",
+              "occurrence": 2
+            }
+          ],
+          "seconds": 116.106
+        },
+        {
+          "direction": "reverse",
+          "ops": 163686063,
+          "ccx": 77600410,
+          "semanticEvents": 163685777,
+          "semanticSHA256": "1e59b2fcf9be3a3660c30ae35a0c7babf6fa5ad1cfd3b8e0c33373aadf3c7c89",
+          "banPhysical647": "ABSENT",
+          "banPhysical648": "ABSENT",
+          "mapsChecked": [
+            {
+              "direction": "forward",
+              "occurrence": 1
+            },
+            {
+              "direction": "forward",
+              "occurrence": 2
+            },
+            {
+              "direction": "reverse",
+              "occurrence": 1
+            },
+            {
+              "direction": "reverse",
+              "occurrence": 2
+            }
+          ],
+          "seconds": 171.499
+        }
+      ]
+    },
+    "upper": [
+      {
+        "back": false,
+        "ops": 260794348,
+        "ccx": 108689663,
+        "conditions": 0,
+        "writerOps": 260794348
+      },
+      {
+        "back": true,
+        "ops": 299703050,
+        "ccx": 122773443,
+        "conditions": 352,
+        "writerOps": 299703754
+      }
+    ]
+  },
+  "priceGate": {
+    "cap": 1900000000,
+    "pass": true,
+    "headroom": 120339769
+  }
+}
