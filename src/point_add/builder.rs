@@ -338,7 +338,17 @@ impl Builder {
             v.sort_unstable();
             v
         };
-        assert_eq!(sorted(&self.free_qubits), sorted(&before.0), "y42: the payload op changed the set of free wires");
+        // persona-teddyjfpender cap lift: with more room the payload op may take fresh wires (ids from next_qubit) and give
+        // them back; they are clean and free, so keep them at the bottom of the free list (popped only once the base's
+        // list is exhausted). With no extras this is the original assert, byte for byte in effect.
+        let mut extras: Vec<u32> = Vec::new();
+        {
+            let mut b0 = sorted(&before.0);
+            for &q in &self.free_qubits {
+                if let Ok(i) = b0.binary_search(&q) { b0.remove(i); } else { extras.push(q); }
+            }
+            assert!(b0.is_empty(), "y42: the payload op changed the set of free wires (kept a base wire)");
+        }
         assert!(self.next_bit >= before.2 && next_bit >= before.2, "y42: bit counter");
         let mut now = before.1.clone();
         now.extend(before.2..self.next_bit);
@@ -349,7 +359,9 @@ impl Builder {
         let mut base = before.1.clone();
         base.extend(before.2..next_bit);
         assert_eq!(sorted(&bits), sorted(&base), "y42: the recorded free bits are not this tick's");
-        self.free_qubits = free_q.to_vec();
+        let mut fq = extras;
+        fq.extend_from_slice(free_q);
+        self.free_qubits = fq;
         self.free_bits = bits;
         self.next_bit = next_bit;
     }
