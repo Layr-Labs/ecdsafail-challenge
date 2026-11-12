@@ -1,0 +1,1 @@
+'use strict';const p=require('./i9-divide-divide-647-partial.cjs');module.exports={wholeStageFreed:false,status:'OPEN: D25 alpha+winding snapshot with compatibility count0 gathers',build(pub){return p.build(pub,{d25:require('./i9-divide-d25-component.cjs')});}};
