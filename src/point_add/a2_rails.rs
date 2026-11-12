@@ -606,97 +606,17 @@ pub(super) fn r1227_pk_unpack(c: &mut Builder, t: usize) {
     let k = (usize::BITS - (theta - 1).leading_zeros()) as usize;
     let pad = (1usize << k) - theta;
     assert!(n + pad < (1usize << (k + 1)), "r1227 pack: pad pushes the block past 2^(k+1)");
-    // The constant is entered column by column (r1227_threshold_const), so no pad wire is set. The ids the pad wires
-    // would take are still drawn and returned before x* is drawn after them: x* and the allocator leave the unpack as
-    // they did with the padded tree, and the rest of the walk is the same stream, wire for wire.
-    let held: Vec<QubitId> = (0..pad).map(|_| c.alloc_qubit()).collect();
+    let mut zx = z.clone();
+    let mut pads = Vec::new();
+    for _ in 0..pad { let q = c.alloc_qubit(); c.x(q); pads.push(q); zx.push(q); }
     let xs = c.alloc_qubit();
-    for q in held { c.release_clean(q); }
-    let peak = r1227_threshold_const(c, &z, pad, k, xs);
+    let peak = t3p1_threshold_top(c, &zx, xs);
     eprintln!("R1227_PK unpack t={t} cells={n} theta={theta} pad={pad} peak={peak}");
+    for q in pads { c.x(q); c.release_clean(q); }
     c.z_if(xs, m);
     c.free_bit(m);
     for &q in &z { c.cx(xs, q); }
     A2_REC.with(|r| r.borrow_mut().get_mut(&u).unwrap()[0] = Some(xs));
-}
-/// out ^= [wt(z) + pad >= 2^k], for pad < 2^k and wt(z) + pad < 2^(k+1): the carry-save tree of
-/// [`t3p1_threshold_top`] with the constant pad entered as one constant bit per column (bit w of pad in column w)
-/// instead of pad constant-one wires. A constant 1 that meets the last bit a of its column gives sum !a and carry a
-/// (no AND: the wire moves on to the next column); one that meets the last two bits a, b gives carry a | b (one AND).
-/// Same output as the padded tree on every input, with fewer ANDs (38 instead of 49 for 41 flags and pad 11). Every
-/// AND is measured away. Returns the peak live count.
-fn r1227_threshold_const(c: &mut Builder, z: &[QubitId], pad: usize, k: usize, out: QubitId) -> u32 {
-    assert!(pad < (1usize << k) && z.len() + pad < (1usize << (k + 1)));
-    enum St { Fa(QubitId, QubitId, QubitId, QubitId), Ha(QubitId, QubitId, QubitId), Or(QubitId, QubitId, QubitId) }
-    let mut steps: Vec<St> = Vec::new();
-    let mut col: Vec<QubitId> = z.to_vec();
-    for w in 0..k {
-        let one = (pad >> w) & 1 == 1;
-        let mut next = Vec::new();
-        while col.len() >= 3 {
-            let a = col.pop().unwrap();
-            let b = col.pop().unwrap();
-            let cc = col.pop().unwrap();
-            c.cx(a, b);
-            c.cx(a, cc);
-            let carry = and_new(c, b, cc);
-            c.cx(a, carry);
-            c.cx(b, cc);
-            c.cx(a, cc);
-            steps.push(St::Fa(a, b, cc, carry));
-            col.insert(0, cc);
-            next.push(carry);
-        }
-        match (col.len(), one) {
-            (2, false) => {
-                let (a, b) = (col[1], col[0]);
-                let carry = and_new(c, a, b);
-                steps.push(St::Ha(a, b, carry));
-                next.push(carry);
-            }
-            (2, true) => {
-                let (a, b) = (col[1], col[0]);
-                c.x(a);
-                c.x(b);
-                let carry = and_new(c, a, b);
-                c.x(carry);
-                c.x(a);
-                c.x(b);
-                steps.push(St::Or(a, b, carry));
-                next.push(carry);
-            }
-            (1, true) => next.push(col[0]),
-            _ => {}
-        }
-        col = next;
-    }
-    assert!(col.len() <= 1, "r1227 pack: column k holds {} bits", col.len());
-    if let Some(&b) = col.first() {
-        c.cx(b, out);
-    }
-    let peak = c.active_qubits();
-    for s in steps.into_iter().rev() {
-        match s {
-            St::Fa(a, b, cc, carry) => {
-                c.cx(a, cc);
-                c.cx(b, cc);
-                c.cx(a, carry);
-                and_erase(c, carry, b, cc);
-                c.cx(a, cc);
-                c.cx(a, b);
-            }
-            St::Ha(a, b, carry) => and_erase(c, carry, a, b),
-            St::Or(a, b, carry) => {
-                c.x(a);
-                c.x(b);
-                c.x(carry);
-                and_erase(c, carry, a, b);
-                c.x(a);
-                c.x(b);
-            }
-        }
-    }
-    peak
 }
 /// out ^= [wt(z) >= 2^k] with 2^k <= len(z) < 2^(k+1): carry-save reduction of the columns below k (full adders,
 /// a half adder's carry when two bits are left; residual column bits are never needed), the column-k bit copied
