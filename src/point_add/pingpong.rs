@@ -4098,7 +4098,10 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
 
     for &(lo, hi) in &bounds {
         let room=walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
-        let no_cout=hi==addend.len() && lo>0 && hi-lo>=3 && pinned.is_none() && NO_COUT.with(|f|f.get());
+        // persona-teddyjfpender cap lift: a one-chunk padded-top add (only reachable with more room; it panics below
+        // otherwise) takes the same no-carry-out known-top ripple as a last chunk, with no carry-in.
+        let one_pad=pad_top && lo==0 && bounds.len()==1 && Y15_CARRY_IN.with(|k|k.get()).is_none();
+        let no_cout=hi==addend.len() && (lo>0 || one_pad) && hi-lo>=3 && pinned.is_none() && NO_COUT.with(|f|f.get());
         let next=if no_cout {
             if let Some(d)=NO_COUT_TOP.with(|k|k.get()) {super::modular::KNOWN_TOP.with(|k|k.set(Some(d)));}
             let acc_last: &[QubitId] = if pad_top {pad_taken=true;&acc_full[lo..hi+1]} else {&acc[lo..hi]};
@@ -4138,8 +4141,6 @@ fn chunked_add(circ: &mut Builder, addend: &[QubitId], acc: &[QubitId], round: u
             // narrow (narrow.rs): a seeded compare in a NARROW class reads fewer bits, its seed moving with the window
             let (compare,borrow)=if c35_pads==0{super::narrow::chunk(multiply,phi,compare,addend,borrow,tie.is_some())}else{(compare,borrow)};
             let (_compare_id,compare,borrow)=super::narrow::compare_window_compare(multiply,round,phi,compare,addend,borrow);
-            eprintln!("BIND81_BOUND\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",circ.current_phase(),circ.op_count(),round,multiply as u8,plo,phi,compare,seeded as u8,borrow.is_some() as u8);
-
             circ.record_replay_site('B', round, phi, compare);
             trace_replay_predictor('B',round,multiply,phi,compare,addend,borrow);
             // y33-c35 diagnostic (inert at C35_FAULT = 0): faults 4 and 5 read 2 bits
