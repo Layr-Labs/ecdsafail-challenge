@@ -34,7 +34,6 @@ pub(super) fn a2_emax(_t: usize) -> usize {
 }
 /// laneW: no record limit, one k3 cell per tick (research pricing of the uncoded dense walk).
 pub(super) fn a2_dense() -> bool {
-    if a2_pair() { return true; }
     static V: OnceLock<bool> = OnceLock::new();
     *V.get_or_init(|| std::env::var("LFA2_DENSE").is_ok_and(|v| v == "1"))
 }
@@ -47,9 +46,7 @@ pub(super) fn a2_s6() -> bool {
     *V.get_or_init(|| std::env::var("LFA2_S6").is_ok_and(|v| v == "1") && a2_emax(0) <= 5)
 }
 fn a2_rail_s6(w: usize) -> bool { a2_s6() && super::rail_s6::rail_s6_plan(w).is_some() }
-include!("pair_record.rs");
 pub(super) fn a2_code() -> bool {
-    if a2_pair() { return true; }
     static V: OnceLock<bool> = OnceLock::new();
     *V.get_or_init(|| std::env::var("LFA2_CODE").is_ok_and(|v| v == "1"))
 }
@@ -70,7 +67,6 @@ fn a2_sp_pair(t: usize) -> Option<(QubitId, QubitId)> {
 }
 /// End of a forward tick: the letter's k3 goes into the block's cells (positions 2 and 3), its wire leaves.
 fn a2_code_commit(c: &mut Builder, t: usize, k3: QubitId) {
-    if a2_pair() { return a2_pair_commit(c,t,k3); }
     let f = a2_field(t);
     match a2_pos(t) {
         1 => {}
@@ -152,7 +148,6 @@ fn a2_block_forms(c: &mut Builder, t: usize) -> (Lin, Lin, Lin, Lin) {
 }
 /// Random-access read of the block: fresh wires (k3, k2). 3 Toffoli; erase with [`a2_code_read_erase`] (one conditional AND).
 pub(super) fn a2_code_read(c: &mut Builder, t: usize) -> (QubitId, QubitId) {
-    if a2_pair() { return a2_pair_read(c,t); }
     let (a, b, a0, b0) = a2_block_forms(c, t);
     let u = lin_and(c, &a0, &b0);
     let k3 = lin_and(c, &a, &b.x(&Lin::of(&[u])));
@@ -165,7 +160,6 @@ pub(super) fn a2_code_read(c: &mut Builder, t: usize) -> (QubitId, QubitId) {
     (k3, k2)
 }
 pub(super) fn a2_code_read_erase(c: &mut Builder, t: usize, k3: QubitId, k2: QubitId) {
-    if a2_pair() { return a2_pair_read_erase(c,t,k3,k2); }
     let cp = a2_cell(t).expect("a2 code: own cell");
     c.x(k3);
     and_erase(c, k2, cp, k3);
@@ -267,7 +261,6 @@ fn a2_field(t: usize) -> [Option<QubitId>; 2] {
 /// spent(t): an e >= 4 event at an earlier position of t's triple, as a linear form of the field (written at
 /// positions < pos(t) only): pos 1: 0; pos 2: f0; pos 3: f0 ^ f1.
 fn a2_spent(t: usize) -> Lin {
-    if a2_pair() { return a2_pair_spent(t); }
     if a2_code() { return Lin::k(false); }
     // position 1, or rail 0's first triple at position 2 (its position-1 tick is tick 0: never an event)
     if a2_pos(t) == 1 || t == 2 {
@@ -381,7 +374,6 @@ fn a2_read(c: &mut Builder, t: usize) -> QubitId {
 /// field un-written (f ^= 3 k3); pos 2: k3 is f1 itself; pos 1: k3 is f0 itself (the field leaves with it). The
 /// returned wire is erased by the k-letter erase against the rail.
 fn a2_consume(c: &mut Builder, t: usize) -> QubitId {
-    if a2_pair() { return a2_pair_consume(c,t); }
     let id = a2_tid(t);
     if a2_code() {
         let f = a2_field(t);
@@ -552,72 +544,6 @@ pub(super) fn t3p1_unpack(c: &mut Builder) {
         eprintln!("T3P1_PACK in n={} active={a0} peak={peak} cost={:.1}", z.len() + 1, c.expected_total() - e0);
     }
 }
-// ---------------------------------------------------------------------------------------------------------------------
-// r1227 record pack (DonRwetter): in each walk (the divide, then the multiply), after forward tick R1227_PK_TICK the
-// flag F of the last committed pair (x*) is fanned out into the record flags closed by that tick (z = the 41 flags:
-// pairs' F and raw ticks' f) and X-measured away, so that walk's later ticks plan with one wire more. Before reverse
-// tick R1227_PK_TICK of the same walk x* is rebuilt as [wt(z ^ x*) >= R1227_PK_THETA] by one carry-save tree (the
-// flags plus constant-one pad wires make the tree's 2^k test equal to theta; every AND is measured away), its phase is
-// fixed from the X-measurement bit, and the fan-out is undone. A block of flag weight >= theta restores a wrong record:
-// a classical failure of that input (measured ~0.02-0.035 per 9,024-shot draw per pack). Exact on every other block.
-// The two packs never overlap (the divide unpacks before the multiply packs). Port of the r1226 research hook
-// (R1226_PACK_REAL with R1226_PACK_CELLS=F).
-// ---------------------------------------------------------------------------------------------------------------------
-const R1227_PK_TICK: usize = 83;
-/// theta = ceil(n / 2) for the n flags of the pack (21 for the 41 flags of the 1226/1227 streams).
-const R1227_PK_THETA: usize = 0;
-thread_local! {
-    static R1227_PK: std::cell::RefCell<Option<(usize, crate::circuit::BitId, Vec<QubitId>)>> = const { std::cell::RefCell::new(None) };
-}
-fn r1227_pk_cells(t: usize, skip: usize) -> Vec<QubitId> {
-    // the flags only (pairs' F, raw ticks' f): density ~0.2, so 41 cells carry x* better than all 124 record cells
-    let mut z = Vec::new();
-    for u in 1..=t {
-        if !a2_tick(u) { continue; }
-        let p = a2_pair_partner(u);
-        if a2_tick(p) {
-            if u > p || p > t || !a2_pair_is_packed(u) || u == skip { continue; }
-            if let Some(f) = A2_REC.with(|r| r.borrow().get(&u).and_then(|f| f[0])) { z.push(f); }
-        } else if let Some(f) = A2_REC.with(|r| r.borrow().get(&u).and_then(|f| f[0])) { z.push(f); }
-    }
-    z
-}
-pub(super) fn r1227_pk_pack(c: &mut Builder, t: usize) {
-    if t != R1227_PK_TICK { return; }
-    let mut first = None;
-    for u in (1..=t).rev() { if a2_tick(u) && a2_pair_partner(u) > u && a2_pair_partner(u) <= t && a2_tick(a2_pair_partner(u)) && a2_pair_is_packed(u) { first = Some(u); break; } }
-    let u = first.expect("r1227 pack: no committed pair");
-    let f = A2_REC.with(|r| r.borrow().get(&u).and_then(|f| f[0])).expect("r1227 pack: F");
-    let z = r1227_pk_cells(t, u);
-    for &q in &z { c.cx(f, q); }
-    let m = c.alloc_bit();
-    c.hmr(f, m);
-    c.release_clean(f);
-    A2_REC.with(|r| r.borrow_mut().get_mut(&u).unwrap()[0] = None);
-    R1227_PK.with(|p| { assert!(p.borrow().is_none(), "r1227 pack: pack while a pack is out"); *p.borrow_mut() = Some((u, m, z)); });
-}
-pub(super) fn r1227_pk_unpack(c: &mut Builder, t: usize) {
-    if t != R1227_PK_TICK { return; }
-    let (u, m, z) = R1227_PK.with(|p| p.borrow_mut().take()).expect("r1227 pack: unpack without a pack");
-    assert_eq!(z, r1227_pk_cells(t, u), "r1227 pack: the closed cells changed between pack and unpack");
-    let n = z.len();
-    assert!((30..=63).contains(&n), "r1227 pack: {n} flags is outside the range this code was priced for");
-    let theta = if R1227_PK_THETA > 0 { R1227_PK_THETA } else { (n + 1) / 2 };
-    let k = (usize::BITS - (theta - 1).leading_zeros()) as usize;
-    let pad = (1usize << k) - theta;
-    assert!(n + pad < (1usize << (k + 1)), "r1227 pack: pad pushes the block past 2^(k+1)");
-    let mut zx = z.clone();
-    let mut pads = Vec::new();
-    for _ in 0..pad { let q = c.alloc_qubit(); c.x(q); pads.push(q); zx.push(q); }
-    let xs = c.alloc_qubit();
-    let peak = t3p1_threshold_top(c, &zx, xs);
-    eprintln!("R1227_PK unpack t={t} cells={n} theta={theta} pad={pad} peak={peak}");
-    for q in pads { c.x(q); c.release_clean(q); }
-    c.z_if(xs, m);
-    c.free_bit(m);
-    for &q in &z { c.cx(xs, q); }
-    A2_REC.with(|r| r.borrow_mut().get_mut(&u).unwrap()[0] = Some(xs));
-}
 /// out ^= [wt(z) >= 2^k] with 2^k <= len(z) < 2^(k+1): carry-save reduction of the columns below k (full adders,
 /// a half adder's carry when two bits are left; residual column bits are never needed), the column-k bit copied
 /// out, every AND measured away. Returns the peak live count.
@@ -673,7 +599,7 @@ fn t3p1_threshold_top(c: &mut Builder, z: &[QubitId], out: QubitId) -> u32 {
     }
     peak
 }
-pub(super) fn a2_rec_empty() -> bool { A2_REC.with(|r| r.borrow().is_empty()) && A2_PAIR_PACKED.with(|r| r.borrow().is_empty()) }
+pub(super) fn a2_rec_empty() -> bool { A2_REC.with(|r| r.borrow().is_empty()) }
 /// round17 v4: R1 on A ticks (LFA2_R1, default on): the 8-way barrel has an R1 plan at width w no dearer than its plain one.
 fn a2_r1_ok(w: usize) -> bool {
     if a2_rail_s6(w) { return !std::env::var("LFA2_R1").is_ok_and(|v| v == "0"); }
@@ -695,7 +621,7 @@ fn fast_k_erase_a_g(c: &mut Builder, t: &[QubitId], k1: QubitId, k2: QubitId, k3
 
 /// Forget every field (tests that build several circuits in one process).
 #[cfg(test)]
-pub(super) fn a2_rec_clear() { A2_REC.with(|r| r.borrow_mut().clear()); A2_PAIR_PACKED.with(|r| r.borrow_mut().clear()); }
+pub(super) fn a2_rec_clear() { A2_REC.with(|r| r.borrow_mut().clear()) }
 
 /// [`zlin_on`] over bits 2..8 (A's deep candidate up to v = 8): t_i <- z_i = t_i ^ b_i ^ dq (i = 2..8).
 fn zlin_on_a(c: &mut Builder, t: &[QubitId], b: &[QubitId], vtop: usize) {
@@ -1032,8 +958,7 @@ fn yp8_reserve_a(tl: usize, bl: usize, t: usize, fwd: bool) -> usize {
     let pad = a2_emax(t) + 3;
     let old=yp8_reserve(tl, bl, t, fwd) + (a2_emax(t) - 2) + pad.saturating_sub((tl + 1).max(6)) + pad.saturating_sub((bl + 1).max(6));
     if std::env::var("RAIL_OPT_RESERVE").ok().as_deref()==Some("1") {
-        if a2_pair() { old - 3 + usize::from(a2_pair_second(t)) }
-        else if a2_code() { if a2_pos(t) <= 2 || t == 4 { old - 3 } else { old - 1 } } else { old-(2+usize::from(a2_pos(t)==1||t==2)) }
+        if a2_code() { if a2_pos(t) <= 2 || t == 4 { old - 3 } else { old - 1 } } else { old-(2+usize::from(a2_pos(t)==1||t==2)) }
     } else { old }
 }
 /// [`yp8_add_halve_forced_choice`] with the A decision (k3 and the record's spent form).
@@ -1264,7 +1189,6 @@ pub(super) mod a2_ref {
         let mut rr = [r0, x.sar(1)];
         let fam = |m: u32| -> bool { let r0 = m & 0x15; let r1 = m & 0x2a; super::a2_dense() || if super::a2_code() { r0.count_ones() <= 2 && r1.count_ones() <= 2 } else { r0.count_ones() <= 1 && r1.count_ones() <= 1 } };
         let mut pfx: u32 = 0;
-        let mut pair_big = [false;6];
         let mut out = Vec::new();
         for t in 0..r {
             let a = t & 1;
@@ -1292,9 +1216,8 @@ pub(super) mod a2_ref {
             let v = if z { 99 } else { xd.ctz() };
             let e_eq = !z && (tk.neg_p() == (bn ^ !sd));
             if t % 6 == 0 { pfx = 0; }
-            let mut cap = if t == 0 || last || main || !super::a2_tick(t) { 3 } else { super::a2_emax(t) };
+            let mut cap = if t == 0 || last || main { 3 } else { super::a2_emax(t) };
             if cap > 3 && !fam(pfx | 1 << (t % 6)) { cap = 3; }
-            if super::a2_pair() && super::a2_pair_second(t) && pair_big[super::a2_pair_partner(t)%6] { cap=3; }
             let l = lwin(t);
             let h = anch[t.min(anch.len() - 1)].saturating_sub(l - 2);
             let (wa, wb) = (tk.winv(h, l), b.winv(h, l));
@@ -1314,7 +1237,6 @@ pub(super) mod a2_ref {
                 deep = g != sd;
             }
             if deep && v - 1 >= 4 { pfx |= 1 << (t % 6); }
-            pair_big[t%6]=deep && v-1>=4;
             if t < 1 && std::env::var("LFA2_DBG").is_ok() {
                 eprintln!("A2_REFDBG t={t} T2={:x?} B={:x?} sd={sd} v={v} E={e_eq} deep={deep} added={added} flipped={flipped}", tk.0[0], b.0[0]);
             }
