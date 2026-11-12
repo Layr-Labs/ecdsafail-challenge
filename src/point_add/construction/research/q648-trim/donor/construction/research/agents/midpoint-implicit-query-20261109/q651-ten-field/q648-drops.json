@@ -1,0 +1,19 @@
+{
+  "_comment": "hole (q648): the stage logical each stage gives up for 648 (owner decides; PLACEHOLDERS until set). Edit, then run: node q648-configs.cjs",
+  "upper": 647,
+  "multiply": 647,
+  "divide": 643,
+  "history": 388,
+  "_owners": {
+    "upper": "ringhole/papers",
+    "multiply": "papers",
+    "divide": "evict",
+    "history": "ledger"
+  },
+  "_status": {
+    "upper": "closed: 647 free (ringhole 07b1021 + papers 9fac745, ledger ac6a7ab)",
+    "multiply": "confirmed: tight-landed c70da44 (multiply on 7 sites, 647 dropped) ALL OK at 649",
+    "divide": "closed: evict d1a2902, 643 never emitted",
+    "history": "ledger (census on 50d99e1: only park uses 388 = Jtop; 7 sites 0,1,130,131,646,647,648)"
+  }
+}

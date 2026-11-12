@@ -1,0 +1,112 @@
+{
+  "width": 649,
+  "multiplyModule": "./m6-multiply-649.cjs",
+  "divideModule": "./divide-i.cjs",
+  "historyModule": "../q648w/r648-history.cjs",
+  "upperPatches": [
+    "./u-upper-649.cjs"
+  ],
+  "historyNine": true,
+  "stages": {
+    "upper": {
+      "logical": [
+        256,
+        642,
+        643,
+        644,
+        645,
+        646,
+        648
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646
+      ]
+    },
+    "multiply": {
+      "logical": [
+        640,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646
+      ]
+    },
+    "divide": {
+      "logical": [
+        640,
+        641,
+        642,
+        646,
+        647,
+        649,
+        650
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646
+      ]
+    },
+    "history": {
+      "logical": [
+        0,
+        1,
+        130,
+        131,
+        646,
+        647,
+        648
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646
+      ]
+    }
+  },
+  "helperSites": [
+    512,
+    641,
+    642,
+    643,
+    644,
+    645,
+    646,
+    647
+  ],
+  "divideEntry": "./d14-divide-649.cjs",
+  "upperPackage": {
+    "entry": "../U15/integration/upper-649.cjs",
+    "files": "../U15/INTEGRATION-U15.json",
+    "prices": "../U15/PRICES.json"
+  },
+  "expected": null,
+  "expectedBasis": {
+    "label": "q648 tight check of every landed stage at width 649: multiply,history,upper,divide"
+  }
+}
