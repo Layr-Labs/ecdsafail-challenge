@@ -1,0 +1,14 @@
+'use strict';
+const fs=require('fs'),path=require('path'),Module=require('module');
+const file=path.join(__dirname,'multiply-650.cjs');let s=fs.readFileSync(file,'utf8');
+const anchor='const mul=Function(';if(s.split(anchor).length!==2)throw Error('detail M anchor');
+s=s.replace(anchor,String.raw`const a=f.indexOf('run(ff.g);'),b=f.indexOf('run(unn,true);}',a)+15;
+if(a<0||b<15)throw Error('detail M bounds');
+let body=f.slice(a,b).replace(/((?:run\((?!\[\[)[^;]*\)|prep\([^;]*\)|unit\([^;]*\)|power\([^;]*\)|prod\([^;]*\)));/g,(m,st)=>st+";TAP("+JSON.stringify(st)+");");
+body=body.replace('prod(false);',"TAP('phase');prod(false);");f=f.slice(0,a)+body+f.slice(b);
+f=replace(f,"emitPUnit(back,buf=>sink('packed',buf));","{let k=0;emitPUnit(back,buf=>sink('packed',buf),()=>TAP('unit.'+(back?'b.':'')+['lift','len','walk','len2','lift2'][k++]));}");
+f=replace(f,'function emitPUnit(reverse,sink){','function emitPUnit(reverse,sink,seg){');
+f=replace(f,'sink(G.g);}if(inv)ops.reverse();}return l.nct.map','sink(G.g);}if(inv)ops.reverse();if(seg)seg();}return l.nct.map');
+f='const TAP=(name)=>globalThis.__iWindowEnd(name);'+f;
+const mul=Function(`);
+const m=new Module(file,module);m.filename=file;m.paths=Module._nodeModulePaths(__dirname);m._compile(s,file);module.exports=m.exports;
