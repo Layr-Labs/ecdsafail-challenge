@@ -1,0 +1,338 @@
+{
+  "width": 647,
+  "stageSign": 646,
+  "helperSites": [
+    512,
+    641,
+    642,
+    643,
+    644,
+    645
+  ],
+  "upperSign": 646,
+  "upperMapMode": "dynamic",
+  "stages": {
+    "multiply": {
+      "logical": [
+        640,
+        641,
+        642,
+        643,
+        644,
+        645
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645
+      ]
+    },
+    "history": {
+      "logical": [
+        0,
+        1,
+        130,
+        131,
+        388,
+        646
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645
+      ]
+    },
+    "divide": {
+      "logical": [
+        640,
+        642,
+        646,
+        647,
+        649,
+        650
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645
+      ]
+    },
+    "upper": {
+      "logical": [
+        256,
+        642,
+        643,
+        644,
+        645,
+        648
+      ],
+      "physical": [
+        512,
+        641,
+        642,
+        643,
+        644,
+        645
+      ]
+    }
+  },
+  "packages": {
+    "multiply": {
+      "entry": "../../r55/S6/M-final/multiply-647.cjs",
+      "files": "../../r55/S6/INTEGRATION-M.json",
+      "prices": "../../r55/S6/PRICES-M.json"
+    },
+    "history": {
+      "entry": "../../r55/S6/R-selected/regen647.cjs",
+      "files": "../../r55/S6/INTEGRATION-R.json",
+      "prices": "../../r55/S6/PRICES-R.json"
+    },
+    "divide": {
+      "entry": "../D26/integration/divide-647.cjs",
+      "files": "../D26/INTEGRATION.json",
+      "prices": "../D26/PRICES.json"
+    },
+    "upper": {
+      "entry": "../U45/integration/upper-647.cjs",
+      "files": "../U45/INTEGRATION.json",
+      "prices": "../U45/PRICES.json"
+    }
+  },
+  "missing": "Final D26/U45 must affirm wholeStageFreed and pass preflight. Diagnostic D24+D23/U40 never authorizes emission.",
+  "fallback648": {
+    "divide": {
+      "entry": "diagnostic/divide/divide-diagnostic.cjs",
+      "files": "diagnostic/divide/FILES.json",
+      "prices": "diagnostic/divide/PRICES.json",
+      "map": {
+        "logical": [
+          640,
+          641,
+          642,
+          646,
+          647,
+          649,
+          650
+        ],
+        "physical": [
+          512,
+          641,
+          642,
+          643,
+          644,
+          645,
+          647
+        ]
+      }
+    },
+    "upper": {
+      "entry": "diagnostic/upper/upper-diagnostic.cjs",
+      "files": "diagnostic/upper/FILES.json",
+      "prices": "diagnostic/upper/PRICES.json",
+      "map": {
+        "logical": [
+          256,
+          642,
+          643,
+          644,
+          645,
+          648
+        ],
+        "physical": [
+          512,
+          641,
+          642,
+          643,
+          644,
+          645
+        ],
+        "signPhysical": 646,
+        "mode": "dynamic"
+      }
+    }
+  },
+  "stageTestOnly": false,
+  "multiplyModule": "./i9-multiply-multiply-647.cjs",
+  "historyModule": "./i9-history-regen647.cjs",
+  "divideEntry": "./i9-divide-divide-647.cjs",
+  "divideModule": "./divide-i.cjs",
+  "upperPatches": [
+    "./i9-upper-upper-647.cjs"
+  ],
+  "expected": {
+    "ops": 1826485209,
+    "ccx": 853838803
+  },
+  "expectedBasis": {
+    "label": "estimated measured-stage sum, inherited shell plus transport delta; whole preflight must confirm",
+    "baseline": "b573fae1/n651a",
+    "shellOps": 26784661,
+    "transportOps": 0
+  },
+  "stagePrices": {
+    "multiply": {
+      "ops": 80803961,
+      "ccx": 45199451,
+      "semanticSHA256": "27739360e6c2875c9b4d2f296eb2ba75fb055e3cf197a63945a258c5753867fc",
+      "packedSHA256": "c31a1fe3959ecd99b875c2ae9938e1de29076f04229c2821918afdf8ce8f76f7",
+      "ban": "PASS",
+      "seconds": 94.829,
+      "hashConvention": "four little-endian u32 per semantic event: gate=[0,a,b,t], hmr=[1,wire,record,1023], phase=[2,wire,record,1023]"
+    },
+    "history": {
+      "ops": 67987890,
+      "ccx": 26724566,
+      "sha256": "a3bee6aea0837087347d67185a554bb8a66f0e86418e6fa5b237908ac8e31603",
+      "ban": "PASS",
+      "seconds": 36.587,
+      "hashConvention": "packed u32 gates; native sentinel645 normalized by final sink",
+      "semanticSHA256": "a3bee6aea0837087347d67185a554bb8a66f0e86418e6fa5b237908ac8e31603"
+    },
+    "divide": {
+      "ops": 126694487,
+      "ccx": 62610086,
+      "semanticSHA256": "888d4d9e68cdfde5deb6a8aa63ffab119b1bdeb32f7f8f21e542675fac035620",
+      "hashConvention": "I6 divide: four little-endian u32 words per ABI semantic event; gate=[0,a,b,t], metadata=[kind,a,b_or_1023,record]",
+      "streams": [
+        {
+          "direction": "forward",
+          "ops": 126694487,
+          "ccx": 62610086,
+          "semanticEvents": 126694201,
+          "semanticSHA256": "888d4d9e68cdfde5deb6a8aa63ffab119b1bdeb32f7f8f21e542675fac035620",
+          "sixHelperBan": "PASS",
+          "banPhysical646": "ABSENT passenger",
+          "banPhysical647": "ABSENT",
+          "banPhysical648": "ABSENT",
+          "mapsChecked": [
+            {
+              "direction": "forward",
+              "occurrence": 1
+            },
+            {
+              "direction": "forward",
+              "occurrence": 2
+            },
+            {
+              "direction": "reverse",
+              "occurrence": 1
+            },
+            {
+              "direction": "reverse",
+              "occurrence": 2
+            }
+          ],
+          "seconds": 82.908
+        },
+        {
+          "direction": "reverse",
+          "ops": 126694487,
+          "ccx": 62610086,
+          "semanticEvents": 126694201,
+          "semanticSHA256": "888d4d9e68cdfde5deb6a8aa63ffab119b1bdeb32f7f8f21e542675fac035620",
+          "sixHelperBan": "PASS",
+          "banPhysical646": "ABSENT passenger",
+          "banPhysical647": "ABSENT",
+          "banPhysical648": "ABSENT",
+          "mapsChecked": [
+            {
+              "direction": "forward",
+              "occurrence": 1
+            },
+            {
+              "direction": "forward",
+              "occurrence": 2
+            },
+            {
+              "direction": "reverse",
+              "occurrence": 1
+            },
+            {
+              "direction": "reverse",
+              "occurrence": 2
+            }
+          ],
+          "seconds": 119.097
+        }
+      ],
+      "evidence": "measured stage emission; whole totals inferred two-call replacement; static CCX is not executed Toffoli",
+      "baseline": {
+        "name": "b573fae1 / n651a",
+        "perDivideOps": 129735712,
+        "perDivideCCX": 47506447,
+        "wholeOps": 1603275477,
+        "wholeCCX": 516689221,
+        "evidence": "inherited measured denominator"
+      },
+      "wholeDeltaVsB573": {
+        "ops": -6082450,
+        "ccx": 30207278,
+        "evidence": "inferred: two emitted divider calls"
+      },
+      "wholeReplacingOnlyDivides": {
+        "ops": 1597193027,
+        "ccx": 546896499,
+        "evidence": "inferred; other b573 stages unchanged"
+      },
+      "wholeDeltaVsD24PlusD23": {
+        "ops": 9610796,
+        "ccx": 8699200,
+        "evidence": "inferred: two emitted divider calls"
+      },
+      "wholeDeltaVsD23": {
+        "ops": 9610800,
+        "ccx": 8699200,
+        "evidence": "inferred: two emitted divider calls"
+      },
+      "wholeDeltaVsD25PlusD23": {
+        "ops": 8116540,
+        "ccx": 7983864,
+        "evidence": "inferred: two emitted divider calls"
+      },
+      "wholeDeltaVsD22": {
+        "ops": 21527190,
+        "ccx": 19294466,
+        "evidence": "inferred: two emitted divider calls"
+      },
+      "complete647": true,
+      "campaignEstimate": {
+        "evidence": "estimated from user rounded 1779M subtotal containing D23",
+        "ops": 1788610800,
+        "remainingUnder1900M": 111389200,
+        "scope": "Includes this complete divider; remaining U and whole-stage handoffs not completed here"
+      },
+      "failureRate": "open: not evaluated",
+      "executedToffoli": "open: not evaluated"
+    },
+    "upper": [
+      {
+        "back": false,
+        "ops": 294190424,
+        "ccx": 140263352,
+        "conditions": 0,
+        "writerOps": 294190424
+      },
+      {
+        "back": true,
+        "ops": 330172808,
+        "ccx": 151043901,
+        "conditions": 352,
+        "writerOps": 330173512
+      }
+    ]
+  },
+  "priceGate": {
+    "cap": 1900000000,
+    "pass": true,
+    "headroom": 73514791
+  }
+}
