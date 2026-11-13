@@ -781,15 +781,7 @@ fn a2r_direct_e(c: &mut Builder, tg: &[QubitId], b: &[QubitId], s: [QubitId; 3],
 fn body_inv_direct(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: usize, b: &[QubitId], tg: &[QubitId], proxy: usize, owns_k3: bool) {
     let (e_start, a_start) = (c.expected_total(), c.active_qubits());
     let (k0, _) = cells::y15_split_spec(proxy, true, N);
-    // Q1228 shelf: reverse tick 92 is the sole 1229 binder. One column off
-    // the direct-E carry triangle retires its three top scratch wires.
-    let shelf_mode = std::env::var("A2R_Q1228_SHELF").ok();
-    let shelf = usize::from(
-        t == 92
-            && (shelf_mode.as_deref() == Some("force")
-                || (shelf_mode.as_deref() != Some("0") && cells::cap() == 1228)),
-    );
-    let kw = k0 + a2_ext(t, 0) - shelf;
+    let kw = k0 + a2_ext(t, 0);
     let mw = fold_window(t, true);
     assert!(mw + 8 < N - kw, "a2r: the window overlaps the fold");
     let e = a2r_direct_e(c, tg, b, s, kw);
