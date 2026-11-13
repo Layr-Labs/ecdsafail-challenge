@@ -25,7 +25,30 @@
 //! Boolean functions; contexts are sets of classical bit VALUES (a push captures the value, as the simulator does).
 
 use crate::circuit::{BitId, Op, OperationType as K, QubitId, RegisterId};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap as StdHashMap, HashSet as StdHashSet};
+
+// shadow: a fast non-cryptographic hasher for the pass's internal tables. None of the tables is iterated in a way that
+// reaches the output (every use is a lookup by key; the few iterations are over Vecs or are sorted first), so the hasher
+// cannot change the result.
+#[derive(Default, Clone, Copy)]
+struct Fx(u64);
+const FXK: u64 = 0x517c_c1b7_2722_0a95;
+impl Fx { #[inline(always)] fn add(&mut self, x: u64) { self.0 = (self.0.rotate_left(5) ^ x).wrapping_mul(FXK); } }
+impl std::hash::Hasher for Fx {
+    #[inline] fn finish(&self) -> u64 { self.0.rotate_left(26) }
+    #[inline] fn write(&mut self, bytes: &[u8]) {
+        let mut ch = bytes.chunks_exact(8);
+        for c in &mut ch { self.add(u64::from_le_bytes(c.try_into().unwrap())); }
+        for &b in ch.remainder() { self.add(b as u64); }
+    }
+    #[inline] fn write_u8(&mut self, x: u8) { self.add(x as u64); }
+    #[inline] fn write_u32(&mut self, x: u32) { self.add(x as u64); }
+    #[inline] fn write_u64(&mut self, x: u64) { self.add(x); }
+    #[inline] fn write_usize(&mut self, x: usize) { self.add(x as u64); }
+}
+type FxB = std::hash::BuildHasherDefault<Fx>;
+type HashMap<K, V> = StdHashMap<K, V, FxB>;
+type HashSet<K> = StdHashSet<K, FxB>;
 
 const NQ: u32 = u32::MAX;
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -56,9 +79,14 @@ fn op(kind: u8, c1: u32, t: u32, cc: u32) -> L { L { kind, c2: NQ, c1, t, ct: NQ
 const ZERO: u32 = 0; const ONE: u32 = 1;
 const T_OPQ: u8 = 2; const T_AND: u8 = 3; const T_COND: u8 = 5; const T_SET: u8 = 6;
 const XSET_CAP: usize = 96;
-struct Vals { node: Vec<(u8, u32, u32)>, h: HashMap<(u8, u32, u32), u32>, store: Vec<Vec<u32>>, hs: HashMap<Vec<u32>, u32> }
+struct Vals { node: Vec<(u8, u32, u32)>, h: HashMap<(u8, u32, u32), u32>, pool: Vec<u32>, spans: Vec<(u64, u32)>, shash: Vec<u64>, hs: HashMap<u64, Vec<u32>>, scratch: Vec<u32> }
+// shadow: `hs` maps a set's hash to the node ids with that hash; the set itself lives once, in `store` (memory only:
+// lookups compare the stored sets, so the interning is exactly the same).
+// a set's hash is the XOR of a mixed hash of its members, so the hash of a symmetric difference is the XOR of the two
+// hashes (a bucket key only: equal keys are always compared member by member)
+fn zob(x: u32) -> u64 { let mut z = (x as u64).wrapping_add(0x9e37_79b9_7f4a_7c15); z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9); z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb); z ^ (z >> 31) }
 impl Vals {
-    fn new() -> Self { Vals { node: vec![(0, 0, 0), (1, 0, 0)], h: HashMap::new(), store: Vec::new(), hs: HashMap::new() } }
+    fn new() -> Self { Vals { node: vec![(0, 0, 0), (1, 0, 0)], h: HashMap::default(), pool: Vec::new(), spans: Vec::new(), shash: Vec::new(), hs: HashMap::default(), scratch: Vec::new() } }
     fn opq(&mut self) -> u32 { let i = self.node.len() as u32; self.node.push((T_OPQ, i, 0)); i }
     fn mk(&mut self, t: u8, a: u32, b: u32) -> u32 {
         if let Some(&i) = self.h.get(&(t, a, b)) { return i; }
@@ -72,30 +100,53 @@ impl Vals {
     fn xor(&mut self, a: u32, b: u32) -> u32 {
         if a == ZERO { return b; } if b == ZERO { return a; } if a == b { return ZERO; }
         let one_a = [a]; let one_b = [b];
-        let sa: &[u32] = if self.node[a as usize].0 == T_SET { &self.store[self.node[a as usize].1 as usize] } else { &one_a };
-        let sb: &[u32] = if self.node[b as usize].0 == T_SET { &self.store[self.node[b as usize].1 as usize] } else { &one_b };
-        let mut r: Vec<u32> = Vec::with_capacity(sa.len() + sb.len());
-        let (mut i, mut j) = (0, 0);
-        while i < sa.len() && j < sb.len() {
-            if sa[i] < sb[j] { r.push(sa[i]); i += 1; } else if sa[i] > sb[j] { r.push(sb[j]); j += 1; } else { i += 1; j += 1; }
+        let mut r: Vec<u32> = std::mem::take(&mut self.scratch); r.clear();
+        let ha = if self.node[a as usize].0 == T_SET { self.shash[self.node[a as usize].1 as usize] } else { zob(a) };
+        let hb = if self.node[b as usize].0 == T_SET { self.shash[self.node[b as usize].1 as usize] } else { zob(b) };
+        {
+            let sa: &[u32] = if self.node[a as usize].0 == T_SET { let (st, ln) = self.spans[self.node[a as usize].1 as usize]; &self.pool[st as usize..st as usize + ln as usize] } else { &one_a };
+            let sb: &[u32] = if self.node[b as usize].0 == T_SET { let (st, ln) = self.spans[self.node[b as usize].1 as usize]; &self.pool[st as usize..st as usize + ln as usize] } else { &one_b };
+            // symmetric difference of two sorted duplicate-free lists; one side a single element: binary search + copies
+            let one = |big: &[u32], x: u32, r: &mut Vec<u32>| {
+                let pos = big.partition_point(|&y| y < x);
+                r.extend_from_slice(&big[..pos]);
+                if pos < big.len() && big[pos] == x { r.extend_from_slice(&big[pos + 1..]); } else { r.push(x); r.extend_from_slice(&big[pos..]); }
+            };
+            if sb.len() == 1 { one(sa, sb[0], &mut r); }
+            else if sa.len() == 1 { one(sb, sa[0], &mut r); }
+            else {
+                r.reserve(sa.len() + sb.len());
+                let (mut i, mut j) = (0, 0);
+                while i < sa.len() && j < sb.len() {
+                    if sa[i] < sb[j] { r.push(sa[i]); i += 1; } else if sa[i] > sb[j] { r.push(sb[j]); j += 1; } else { i += 1; j += 1; }
+                }
+                r.extend_from_slice(&sa[i..]); r.extend_from_slice(&sb[j..]);
+            }
         }
-        r.extend_from_slice(&sa[i..]); r.extend_from_slice(&sb[j..]);
-        match r.len() {
+        let res = match r.len() {
             0 => ZERO,
             1 => r[0],
             l if l > XSET_CAP => self.opq(),
             _ => {
-                if let Some(&id) = self.hs.get(&r) { return id; }
-                let si = self.store.len() as u32; self.store.push(r.clone());
-                let id = self.node.len() as u32; self.node.push((T_SET, si, 0)); self.hs.insert(r, id); id
+                let hk = ha ^ hb;
+                let mut found = NQ;
+                if let Some(ids) = self.hs.get(&hk) {
+                    for &id in ids { let (st, ln) = self.spans[self.node[id as usize].1 as usize]; if &self.pool[st as usize..st as usize + ln as usize] == r.as_slice() { found = id; break; } }
+                }
+                if found != NQ { found } else {
+                    let si = self.spans.len() as u32; self.spans.push((self.pool.len() as u64, r.len() as u32)); self.pool.extend_from_slice(&r); self.shash.push(hk);
+                    let id = self.node.len() as u32; self.node.push((T_SET, si, 0)); self.hs.entry(hk).or_default().push(id); id
+                }
             }
-        }
+        };
+        self.scratch = r;
+        res
     }
     fn cond(&mut self, ctx: u32, x: u32) -> u32 { if ctx == 0 || x == ZERO { x } else { self.mk(T_COND, ctx, x) } }
 }
 struct Ctxs { sets: Vec<Vec<u32>>, h: HashMap<Vec<u32>, u32> }
 impl Ctxs {
-    fn new() -> Self { let mut c = Ctxs { sets: vec![vec![]], h: HashMap::new() }; c.h.insert(vec![], 0); c }
+    fn new() -> Self { let mut c = Ctxs { sets: vec![vec![]], h: HashMap::default() }; c.h.insert(vec![], 0); c }
     fn add(&mut self, c: u32, b: u32) -> u32 {
         if b == BV1 { return c; }
         if self.sets[c as usize].contains(&b) { return c; }
@@ -134,14 +185,21 @@ fn analyze(ops: &[L]) -> Analysis {
     let mut nbits: u32 = 2;
     let mut bv: Vec<u32> = vec![BV0; nb as usize];
     for b in 0..nb as usize { if reg_b[b] { bv[b] = nbits; nbits += 1; } }
-    let mut holders: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut holders: HashMap<u32, Vec<u32>> = HashMap::default();
     for q in 0..nq { if qv[q as usize] != ZERO { holders.entry(qv[q as usize]).or_default().push(q); } }
     let mut stack: Vec<u32> = vec![0];
     let mut opctx: Vec<u32> = vec![0; n];
     let mut contribs: Vec<Contrib> = Vec::new();
     let mut open: Vec<Vec<u32>> = vec![Vec::new(); nq as usize];
-    let mut zhold = HashMap::new(); let mut endhold = HashMap::new();
-    let mut fixcz: HashMap<u32, Vec<(u32, u32, u32)>> = HashMap::new();
+    // shadow: oterm[t][i] is the term of contribution open[t][i]; act[t] holds the open contributions of t that can still change
+    // at a read (not yet read, or still tracking Z-only reads or a nonempty condition intersection); the rest are no-ops there
+    let mut oterm: Vec<Vec<u32>> = vec![Vec::new(); nq as usize];
+    let mut act: Vec<Vec<u32>> = vec![Vec::new(); nq as usize];
+    // terms of the open contributions are distinct on one wire (a repeat would have cancelled the earlier one), so a set
+    // answers 'is there a match' and the match, if any, is found from the back
+    let mut oset: Vec<HashSet<u32>> = (0..nq).map(|_| HashSet::default()).collect();
+    let mut zhold = HashMap::default(); let mut endhold = HashMap::default();
+    let mut fixcz: HashMap<u32, Vec<(u32, u32, u32)>> = HashMap::default();
     let mut misc = Vec::new(); let mut unc = Vec::new();
     let mut bcreator: Vec<u32> = vec![NQ; nbits as usize]; let mut bslot: Vec<u32> = vec![NQ; nbits as usize];
     let mut bderived: Vec<bool> = vec![false; nbits as usize]; let mut depth_after: Vec<u8> = vec![0; n];
@@ -176,19 +234,28 @@ fn analyze(ops: &[L]) -> Analysis {
         }
         for &q in reads.iter() {
             if q == NQ { continue; }
-            for &ci in &open[q as usize] {
-                let c = &mut contribs[ci as usize];
-                if c.first_read == NQ { c.first_read = k32; }
-                if c.inter.as_ref().map_or(true, |x| !x.is_empty()) {
-                    let own = &cx.sets[c.ctx as usize];
-                    let rs: Vec<u32> = cx.sets[ctx as usize].iter().copied().filter(|b| !own.contains(b)).collect();
-                    c.inter = Some(match c.inter.take() { None => rs, Some(mut x) => { x.retain(|b| rs.contains(b)); x } });
+            let qi = q as usize;
+            let mut idx = 0;
+            while idx < act[qi].len() {
+                let ci = act[qi][idx];
+                {
+                    let c = &mut contribs[ci as usize];
+                    'body: {
+                        if c.first_read == NQ { c.first_read = k32; }
+                        if c.inter.as_ref().map_or(true, |x| !x.is_empty()) {
+                            let own = &cx.sets[c.ctx as usize];
+                            let rs: Vec<u32> = cx.sets[ctx as usize].iter().copied().filter(|b| !own.contains(b)).collect();
+                            c.inter = Some(match c.inter.take() { None => rs, Some(mut x) => { x.retain(|b| rs.contains(b)); x } });
+                        }
+                        if !c.zonly { break 'body; }
+                        if o.kind == K_Z && c.reads.len() < 64 {
+                            zhold.insert((ci, k32), (hold(c.va, &holders), hold(c.vb, &holders)));
+                            c.reads.push((k32, ctx));
+                        } else { c.zonly = false; c.reads = Vec::new(); }
+                    }
                 }
-                if !c.zonly { continue; }
-                if o.kind == K_Z && c.reads.len() < 64 {
-                    zhold.insert((ci, k32), (hold(c.va, &holders), hold(c.vb, &holders)));
-                    c.reads.push((k32, ctx));
-                } else { c.zonly = false; c.reads = Vec::new(); }
+                let c = &contribs[ci as usize];
+                if c.first_read != NQ && !c.zonly && c.inter.as_ref().is_some_and(|x| x.is_empty()) { act[qi].swap_remove(idx); } else { idx += 1; }
             }
         }
         match o.kind {
@@ -202,22 +269,23 @@ fn analyze(ops: &[L]) -> Analysis {
                     else if bare == va { misc.push((k32, 1, o.c1)); } else if bare == vb { misc.push((k32, 2, o.c2)); }
                 }
                 if o.kind != K_X {
-                    if let Some(p) = open[t].iter().position(|&ci| contribs[ci as usize].term == term) {
-                        let ci = open[t].remove(p);
+                    if let Some(p) = if oset[t].contains(&term) { oterm[t].iter().rposition(|&x| x == term) } else { None } {
+                        let ci = open[t].remove(p); oterm[t].remove(p); oset[t].remove(&term);
+                        if let Some(i) = act[t].iter().position(|&x| x == ci) { act[t].swap_remove(i); }
                         let c = &mut contribs[ci as usize]; c.end_kind = E_CANCEL; c.end_op = k32;
                         if o.kind == K_CCX && qv[t] == term { unc.push(k32); }
                     } else if o.kind == K_CCX && term != ZERO {
                         let ci = contribs.len() as u32;
                         contribs.push(Contrib { swapped: false, op: k32, wire: o.t, term, ctx, va, vb, reads: vec![], zonly: true, end_kind: E_OPEN, end_op: NQ, end_bit: NQ, inter: None, first_read: NQ, end_sole: false });
-                        open[t].push(ci);
-                        if open[t].len() > 512 { let old = open[t].remove(0); let c = &mut contribs[old as usize]; c.zonly = false; c.reads = Vec::new(); }
+                        open[t].push(ci); oterm[t].push(term); oset[t].insert(term); act[t].push(ci);
+                        if open[t].len() > 512 { let old = open[t].remove(0); let ot = oterm[t].remove(0); oset[t].remove(&ot); if let Some(i) = act[t].iter().position(|&x| x == old) { act[t].swap_remove(i); } let c = &mut contribs[old as usize]; c.zonly = false; c.reads = Vec::new(); }
                     }
                 }
                 let nv = v.xor(qv[t], term); setq!(t, nv);
             }
             K_SWAP => {
                 let (a, b) = (o.c1 as usize, o.t as usize);
-                if ctx == 0 { let (xa, xb) = (qv[a], qv[b]); setq!(a, xb); setq!(b, xa); open.swap(a, b); for &ci in &open[a] { contribs[ci as usize].wire = a as u32; contribs[ci as usize].swapped = true; } for &ci in &open[b] { contribs[ci as usize].wire = b as u32; contribs[ci as usize].swapped = true; } }
+                if ctx == 0 { let (xa, xb) = (qv[a], qv[b]); setq!(a, xb); setq!(b, xa); open.swap(a, b); oterm.swap(a, b); oset.swap(a, b); act.swap(a, b); for &ci in &open[a] { contribs[ci as usize].wire = a as u32; contribs[ci as usize].swapped = true; } for &ci in &open[b] { contribs[ci as usize].wire = b as u32; contribs[ci as usize].swapped = true; } }
                 else { let x = v.opq(); setq!(a, x); let y = v.opq(); setq!(b, y); }
             }
             K_R | K_HMR => {
@@ -225,6 +293,7 @@ fn analyze(ops: &[L]) -> Analysis {
                 let mut newb = NQ;
                 if o.kind == K_HMR { newb = nbits; nbits += 1; bv[o.ct as usize] = newb; bcreator.push(k32); bslot.push(o.ct); bderived.push(false); }
                 let sole = open[t].len() == 1 && contribs[open[t][0] as usize].term == qv[t];
+                oterm[t].clear(); oset[t].clear(); act[t].clear();
                 for ci in std::mem::take(&mut open[t]) {
                     let c = &mut contribs[ci as usize];
                     c.end_kind = if o.kind == K_HMR { E_HMR } else { E_R }; c.end_op = k32; c.end_bit = newb; c.end_sole = sole && ctx == 0;
@@ -283,8 +352,8 @@ fn forms_at(ops: &[L], a: &Analysis, p: usize, start: &[u32], at: &[usize]) -> O
 
 /// Phase (-1)^(Fa * Fb) as CZ / Z / NEG ops under the per-op condition `cc`.
 fn phase_ops(fa: &(Vec<u32>, bool), fb: &(Vec<u32>, bool), cc: u32) -> Vec<L> {
-    let mut pairs: HashMap<(u32, u32), bool> = HashMap::new();
-    let mut singles: HashMap<u32, bool> = HashMap::new();
+    let mut pairs: HashMap<(u32, u32), bool> = HashMap::default();
+    let mut singles: HashMap<u32, bool> = HashMap::default();
     for &u in &fa.0 { for &w in &fb.0 { if u == w { *singles.entry(u).or_insert(false) ^= true; } else { let key = if u < w { (u, w) } else { (w, u) }; *pairs.entry(key).or_insert(false) ^= true; } } }
     if fb.1 { for &u in &fa.0 { *singles.entry(u).or_insert(false) ^= true; } }
     if fa.1 { for &w in &fb.0 { *singles.entry(w).or_insert(false) ^= true; } }
@@ -300,16 +369,26 @@ fn pair_op(u: u32, w: u32, cc: u32) -> L { if u == w { op(K_Z, NQ, u, cc) } else
 
 struct Edits { delete: HashSet<u32>, replace: HashMap<u32, Vec<L>>, after: HashMap<u32, Vec<L>>, before: HashMap<u32, Vec<L>> }
 impl Edits {
-    fn new() -> Self { Edits { delete: HashSet::new(), replace: HashMap::new(), after: HashMap::new(), before: HashMap::new() } }
+    fn new() -> Self { Edits { delete: HashSet::default(), replace: HashMap::default(), after: HashMap::default(), before: HashMap::default() } }
     fn touched(&self, k: u32) -> bool { self.delete.contains(&k) || self.replace.contains_key(&k) }
     fn apply(&self, ops: &[L]) -> Vec<L> {
+        // only the ops that carry an edit are visited one by one; the runs in between are copied as they are
+        let mut keys: Vec<u32> = Vec::with_capacity(self.before.len() + self.replace.len() + self.delete.len() + self.after.len());
+        keys.extend(self.before.keys()); keys.extend(self.replace.keys()); keys.extend(self.delete.iter()); keys.extend(self.after.keys());
+        keys.sort_unstable(); keys.dedup();
         let mut out = Vec::with_capacity(ops.len() + 1024);
-        for (k, o) in ops.iter().enumerate() {
-            let k32 = k as u32;
+        let mut prev = 0usize;
+        for &k32 in &keys {
+            let k = k32 as usize;
+            if k >= ops.len() { continue; }
+            out.extend_from_slice(&ops[prev..k]);
+            let o = &ops[k];
             if let Some(v) = self.before.get(&k32) { out.extend_from_slice(v); }
             if let Some(v) = self.replace.get(&k32) { out.extend_from_slice(v); } else if !self.delete.contains(&k32) { out.push(*o); }
             if let Some(v) = self.after.get(&k32) { out.extend_from_slice(v); }
+            prev = k + 1;
         }
+        out.extend_from_slice(&ops[prev..]);
         out
     }
 }
@@ -363,7 +442,7 @@ fn plan_muf(ops: &[L], levers: &str, fault: &str) -> (Edits, [usize; 4], [f64; 4
     if levers.contains('f') {
         struct Site { ci: u32, wire: u32, op: u32, end: u32, uses: Vec<(u32, u32)>, after: Vec<(u32, Vec<L>)>, replace: Vec<(u32, L)>, delete: Vec<u32>, save: f64, bit: u32 }
         let mut sites: Vec<Site> = Vec::new();
-        let mut taken: HashSet<u32> = HashSet::new();
+        let mut taken: HashSet<u32> = HashSet::default();
         for (ci, c) in a.contribs.iter().enumerate() {
             let ci = ci as u32;
             if !c.zonly || ed.touched(c.op) { continue; }
@@ -434,7 +513,7 @@ fn plan_muf(ops: &[L], levers: &str, fault: &str) -> (Edits, [usize; 4], [f64; 4
             sites.push(s);
         }
         // a fix must not read a wire whose value a kept site changes at that time
-        let mut iv: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
+        let mut iv: HashMap<u32, Vec<(u32, u32)>> = HashMap::default();
         for s in &sites { iv.entry(s.wire).or_default().push((s.op, s.end)); }
         let mut faulted = false;
         for s in &sites {
@@ -529,7 +608,7 @@ fn plan_muf(ops: &[L], levers: &str, fault: &str) -> (Edits, [usize; 4], [f64; 4
         // the measured erase's phase fix: every op of the stream under the outcome bit (quantum ops get c; no inner
         // measurement, no other lever's op)
         let want: HashSet<u32> = cands.iter().map(|x| x.5).collect();
-        let mut kops: HashMap<u32, Vec<u32>> = HashMap::new();
+        let mut kops: HashMap<u32, Vec<u32>> = HashMap::default();
         for j in 0..ops.len() { for &b in &a.cx.sets[a.opctx[j] as usize] { if want.contains(&b) { kops.entry(b).or_default().push(j as u32); } } }
         for (cop, cb, cp, sink, block, k, _e) in cands {
             let o = ops[cop as usize];
