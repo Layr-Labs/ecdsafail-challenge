@@ -1,658 +1,595 @@
-//! The circuit builder: wire and bit allocation, the gate vocabulary every
-//! construction in this tree emits through, and the phase report.
+//! froghop-double builder: qubit pool, op emission and a small gate IR that can be emitted forward or inverted.
 //!
-//! Everything here is book-keeping over one `Vec<Op>`. The two censuses it
-//! carries only observe that vector -- see [`record`](super::record) -- so no
-//! knob reachable from this file can move the op stream.
+//! Gates are always emitted through `g()`. While a recording is open, they go to the recording instead of the
+//! op stream; `play(rec, inverse)` emits a recording forward or as its exact inverse. The only non-self-inverse
+//! gates are the measurement-based AND pair: `AndC` (Toffoli into a fresh |0> target, 1 Toffoli) and `AndU`
+//! (X-basis measurement of the target plus a classically conditioned CZ fix-up, 0 Toffoli). They invert into
+//! each other.
 
-use crate::circuit::{BitId, Op, OperationType, QubitId, QubitOrBit, RegisterId, NO_BIT};
+use crate::circuit::{BitId, Op, OperationType, QubitId, RegisterId, NO_BIT, NO_QUBIT, NO_REG};
+use std::collections::BTreeSet;
 
-use super::record::{At, CcxCensus, PeakCensus, ReplaySites};
-
-/// Width of [`Builder::phase_kind_ops`]: one slot per [`OperationType`], so
-/// `op.kind as usize` indexes it directly. `DebugPrint` is the last variant.
-const OP_KINDS: usize = OperationType::DebugPrint as usize + 1;
-
-pub struct Builder {
-    ops: Vec<Op>,
-    model: bool,
-    model_depth: usize,
-    model_total: usize,
-    model_weighted: f64,
-    model_phase_native: usize,
-    model_phase_weighted: f64,
-    model_max: u32,
-    /// Ops of each kind emitted since the last [`Builder::set_phase`]; only the
-    /// two Toffoli kinds are reported, but indexing by `kind` is cheaper than
-    /// branching on it.
-    phase_kind_ops: [usize; OP_KINDS],
-    next_qubit: u32,
-    next_bit: u32,
-    free_bits: Vec<u32>,
-    next_register: u32,
-    free_qubits: Vec<u32>,
-    active_qubits: u32,
-    peak_qubits: u32,
-    phase: &'static str,
-    peak_census: PeakCensus,
-    ccx_census: CcxCensus,
-    replay_sites: ReplaySites,
-    /// PP_J_SFUSE: parked wire ids a fresh allocation must not take.
-    avoid_ids: Vec<u32>,
-    /// K3b: running (B count, B sum 2^-w, F count, F sum 2^-w) over replay repair sites (lambda proxy).
-    pub k3b_sites: (usize, f64, usize, f64),
-    /// B3a phase report (`HEO_PHASE_REPORT=1` under the research overlay).
-    /// Observes the op stream only; off in the default build.
-    report: Option<Box<PhaseReport>>,
-    /// B3b: running peak since the last `take_win_peak` (book-keeping only).
-    win_peak: u32,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum G {
+    X(QubitId),
+    Cx(QubitId, QubitId),
+    Ccx(QubitId, QubitId, QubitId),
+    Cz(QubitId, QubitId),
+    Swap(QubitId, QubitId),
+    /// t ^= a & b with t known to be |0> (compute).
+    AndC(QubitId, QubitId, QubitId),
+    /// t = a & b -> |0> by measurement (uncompute).
+    AndU(QubitId, QubitId, QubitId),
+    /// X conditioned on a classical bit.
+    XIf(QubitId, BitId),
+    /// Z conditioned on a classical bit.
+    ZIf(QubitId, BitId),
 }
 
-/// Per-phase native / expected Toffoli and peak, plus the global peak's op and
-/// phase. Expected weight is 2^-(condition depth), the same rule as model mode.
-#[derive(Default)]
-pub struct PhaseReport {
-    depth: u32,
-    phase_native: usize,
-    phase_expected: f64,
-    total_native: usize,
-    total_expected: f64,
-    peak: u32,
-    peak_op: usize,
-    peak_phase: &'static str,
+fn fable_chk() -> bool {
+    static E: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("FABLE_CHK").is_some());
+    *E
+}
+fn r8_freechk() -> bool {
+    static E: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("R8_FREECHK").is_some());
+    *E
 }
 
-impl Builder {
-    pub(crate) fn current_phase(&self)->&'static str {self.phase}
-    /// R3: run `body` and return its peak live count.
-    pub(crate) fn r3_peak<R>(&mut self,body:impl FnOnce(&mut Self)->R)->(R,u32){let saved=self.win_peak;self.win_peak=self.active_qubits();let r=body(self);let peak=self.win_peak.max(self.active_qubits);self.win_peak=saved.max(peak);(r,peak)}
-    pub(crate) fn fold_trace(&mut self,label:&str,body:impl FnOnce(&mut Self)) {
-        if std::env::var_os("FOLD_FD_TRANSPORT").is_none(){body(self);return;}
-        let saved=self.win_peak;let base=self.active_qubits();let before=self.report_totals().map_or(0.,|x|x.1);self.win_peak=base;body(self);let peak=self.win_peak;self.win_peak=saved.max(peak);
-        eprintln!("FOLD_FD_PART\t{label}\t{base}\t{peak}\t{}",self.report_totals().map_or(0.,|x|x.1)-before);
-    }
+pub struct B {
+    pub ops: Vec<Op>,
+    next_q: u64,
+    free_q: BTreeSet<u64>,
+    pub live: u64,
+    pub peak: u64,
+    bit: BitId,
+    rec: Vec<Vec<G>>,
+    pub tof: u64,
+    pub peak_op: usize,
+    next_bit: u64,
+    /// highest live count since the last `take_sect_peak` (profiling only)
+    pub sect_peak: std::cell::Cell<u64>,
+    /// R8-ROOM0 dev instrument: open condition blocks (profiling only)
+    pub cdepth: i32,
+}
+
+impl B {
     pub fn new() -> Self {
-        Self {
-            ops: Vec::new(),
-            // Count-only model mode is disabled in this submission.
-            model: false,
-            model_depth: 0, model_total: 0, model_weighted: 0.0,
-            model_phase_native: 0, model_phase_weighted: 0.0, model_max: 0,
-            phase_kind_ops: [0; OP_KINDS],
-            next_qubit: 0,
-            next_bit: 0,
-            free_bits: Vec::new(),
-            next_register: 0,
-            free_qubits: Vec::new(),
-            active_qubits: 0,
-            peak_qubits: 0,
-            phase: "init",
-            peak_census: PeakCensus::new(),
-            ccx_census: CcxCensus::new(),
-            replay_sites: ReplaySites::new(),
-            k3b_sites: (0, 0.0, 0, 0.0),
-            report: super::heo::phase_report_enabled().then(Box::default),
-            win_peak: 0,
-            avoid_ids: Vec::new(),
-        }
-    }
-    /// Highest live-qubit count seen so far over the whole build (tracked in
-    /// every mode by `note_peak`).
-    pub fn peak_total(&self) -> u32 { self.model_max }
-    /// Ops emitted so far (diagnostic cursor for the B3a probes).
-    pub fn op_count(&self) -> usize { self.ops.len() }
-    /// B3b: peak live count since the previous call (book-keeping only).
-    pub fn take_win_peak(&mut self) -> u32 { let p = self.win_peak.max(self.active_qubits); self.win_peak = self.active_qubits; p }
-    /// B3b: (native, expected) Toffoli so far, when the phase report is on.
-    pub fn report_totals(&self) -> Option<(usize, f64)> { self.report.as_deref().map(|r| (r.total_native, r.total_expected)) }
-    pub(crate) fn i35_cost(&self)->f64{self.model_weighted}
-    /// Running expected (condition-weighted) Toffoli count of the phase report; 0 when the report is off.
-    pub(crate) fn expected_total(&self) -> f64 { self.report.as_deref().map_or(0.0, |r| r.total_expected) }
-    pub fn i13_dims(&self)->(usize,usize){(self.next_qubit as usize,self.next_bit as usize)}
-    pub fn take_ops(&mut self) -> Vec<Op> {
-        if self.model {
-            eprintln!("MODEL_PHASE {} {} {} {}", self.phase, self.peak_qubits,
-                self.model_phase_native, self.model_phase_weighted);
-            eprintln!("MODEL_TOTAL {} {} {}", self.model_max, self.model_total, self.model_weighted);
-        }
-        std::mem::take(&mut self.ops)
-    }
-    /// laneG: one op from a recorded section, as it stands.
-    pub(crate) fn lfg_push_raw(&mut self, op: Op) { self.push_op(op); }
-    fn push_op(&mut self, op: Op) {
-        // Tripwire, live only while tracing: every gate the score counts must
-        // have been attributed by `ccx_census` first. CCX is the only scored
-        // kind emitted today, so this is what a new CCZ path would trip.
-        if self.ccx_census.watching() && CcxCensus::scored(op.kind) {
-            assert!(
-                self.ccx_census.covers(self.ops.len()),
-                "{:?} at op {} reached push_op without CcxCensus::on_gate",
-                op.kind,
-                self.ops.len()
-            );
-        }
-        self.phase_kind_ops[op.kind as usize] += 1;
-        if let Some(r) = self.report.as_deref_mut() {
-            match op.kind {
-                OperationType::PushCondition => r.depth += 1,
-                OperationType::PopCondition => r.depth -= 1,
-                OperationType::CCX | OperationType::CCZ => {
-                    let w = 2.0_f64.powi(-(r.depth as i32));
-                    r.phase_native += 1; r.phase_expected += w;
-                    r.total_native += 1; r.total_expected += w;
-                }
-                _ => {}
-            }
-        }
-        if self.model {
-            match op.kind {
-                OperationType::PushCondition => self.model_depth += 1,
-                OperationType::PopCondition => self.model_depth -= 1,
-                OperationType::CCX | OperationType::CCZ => {
-                    let weight = 2.0_f64.powi(-(self.model_depth as i32));
-                    self.model_total += 1; self.model_weighted += weight;
-                    self.model_phase_native += 1; self.model_phase_weighted += weight;
-                }, _ => {}
-            }
-        } else { self.ops.push(op); }
-    }
-    /// Close the current phase: report its Toffoli count and peak width on
-    /// stdout -- which is what `build_circuit` prints -- and start a new one.
-    pub(crate) fn phase_name(&self) -> &'static str { self.phase }
-    pub fn set_phase(&mut self, p: &'static str) {
-        self.report_phase();
-        if self.model {
-            eprintln!("MODEL_PHASE {} {} {} {}", self.phase, self.peak_qubits,
-                self.model_phase_native, self.model_phase_weighted);
-        }
-        self.model_phase_native = 0; self.model_phase_weighted = 0.0;
-        self.peak_qubits = self.active_qubits;
-        self.phase_kind_ops = [0; OP_KINDS];
-        self.phase = p;
+        let mut b = B { ops: Vec::new(), next_q: 0, free_q: BTreeSet::new(), live: 0, peak: 0, bit: NO_BIT,
+                        rec: Vec::new(), tof: 0, next_bit: 10_000, peak_op: 0,
+                        sect_peak: std::cell::Cell::new(0), cdepth: 0 };
+        b.bit = BitId(0);
+        b
     }
 
-    /// Where the build is, for the recorders in [`record`].
-    fn at(&self) -> At {
-        At {
-            phase: self.phase,
-            op: self.ops.len(),
-            active: self.active_qubits,
-        }
-    }
-    /// Attach build-time context to the next Toffoli emitted; see
-    /// [`CcxCensus::note`].
-    pub fn ccx_note(&mut self, note: u64) {
-        self.ccx_census.note(note);
-    }
-
-    /// Book-keeping only -- emits no ops. Called by both routes that raise
-    /// `active_qubits`: a fresh `alloc_qubit` and a `reacquire` of a parked one.
-    fn note_peak(&mut self) {
-        self.peak_qubits = self.peak_qubits.max(self.active_qubits);
-        self.model_max = self.model_max.max(self.active_qubits);
-        self.win_peak = self.win_peak.max(self.active_qubits);
-        if let Some(r) = self.report.as_deref_mut() {
-            if self.active_qubits > r.peak {
-                r.peak = self.active_qubits;
-                r.peak_op = self.ops.len();
-                r.peak_phase = self.phase;
-            }
-        }
-    }
-
-    /// Print the closing phase's line of the B3a report (no-op when off).
-    fn report_phase(&mut self) {
-        if let Some(r) = self.report.as_deref_mut() {
-            eprintln!("HEO_PHASE {} native={} expected={:.1} peak={} ops={}", self.phase,
-                r.phase_native, r.phase_expected, self.peak_qubits, self.ops.len());
-            r.phase_native = 0; r.phase_expected = 0.0;
-        }
-    }
-
+    // ---------------------------------------------------------------- qubits
     #[track_caller]
-    pub fn alloc_qubit(&mut self) -> QubitId {
-        self.active_qubits += 1;
-        if std::env::var_os("DIRTY_ALLOC_TRACE").is_some() && self.active_qubits as usize > super::pingpong::heo_hooks::cap() {eprintln!("DIRTY_OVER_ALLOC\t{}\t{}\t{}",self.ops.len(),self.active_qubits,std::panic::Location::caller());}
-        self.note_peak();
-        let pick = if self.avoid_ids.is_empty() {
-            self.free_qubits.pop()
+    pub fn alloc(&mut self) -> QubitId {
+        let loc = std::panic::Location::caller();
+        let id = if let Some(&q) = self.free_q.iter().next() {
+            self.free_q.remove(&q);
+            q
         } else {
-            let avoid = &self.avoid_ids;
-            self.free_qubits.iter().rposition(|f| !avoid.contains(f)).map(|pos| self.free_qubits.remove(pos))
+            self.next_q += 1;
+            self.next_q - 1
         };
-        let qid = if let Some(q) = pick {
-            QubitId(q.into())
-        } else {
-            let q = self.next_qubit;
-            self.next_qubit += 1;
-            QubitId(q.into())
-        };
-        if self.peak_census.enabled() {
-            let (at, caller) = (self.at(), std::panic::Location::caller());
-            self.peak_census
-                .on_alloc(at, qid.0, caller.file(), caller.line());
+        self.live += 1;
+        fb_span_up(self.live, self.ops.len());
+        if self.live > self.sect_peak.get() { self.sect_peak.set(self.live); }
+        if self.live as u64 > *PEAK_TRAP { panic!("PEAK_TRAP live {} at op {}", self.live, self.ops.len()); }
+        if self.live > self.peak {
+            self.peak = self.live;
+            self.peak_op = self.ops.len();
         }
-        qid
+        if let Some(c) = *P2_OVER { if self.live > c { p2_over_note(self.live); OVER_LOC.with(|m| { *m.borrow_mut().entry(format!("{}:{} {} s{}", loc.file(), loc.line(), i5::SECT.with(|c| c.get()), super::greedyfrog::p3_cur_slot())).or_insert(0u64) += 1; }); } }
+        i5::on_alloc(id, loc, self.live);
+        if *R10TRK { R10LOC.with(|m| { m.borrow_mut().insert(id, format!("{}:{}", loc.file().rsplit('/').next().unwrap_or(""), loc.line())); }); }
+        if *r8idle::ON { r8idle::IDLE.with(|m| { m.borrow_mut().insert(id, loc); }); }
+        QubitId(id)
+    }
+    /// Schaffhuuserzopf (R14_LA94B): `alloc` that never returns one of the `avoid` ids (lent lanes taken back by id later)
+    #[track_caller]
+    pub fn alloc_avoid(&mut self, avoid: &[QubitId]) -> QubitId {
+        let held: Vec<u64> = avoid.iter().map(|q| q.0).filter(|q| self.free_q.remove(q)).collect();
+        // b793b width guard: where every free id is an avoided one, a fresh id would raise the stream's width above the live peak (the scored
+        // qubit count is the width); take the lowest avoided id instead
+        if !held.is_empty() && self.free_q.is_empty() {
+            let h0 = *held.iter().min().unwrap();
+            for &h in &held { if h != h0 { self.free_q.insert(h); } }
+            let q = self.alloc_exact(h0);
+            return q;
+        }
+        let q = self.alloc();
+        for h in held { self.free_q.insert(h); }
+        q
+    }
+    /// `alloc` of the id `h`, which has been removed from the free pool by the caller
+    #[track_caller]
+    fn alloc_exact(&mut self, h: u64) -> QubitId {
+        self.free_q.insert(h);
+        self.acquire(QubitId(h));
+        QubitId(h)
     }
     #[track_caller]
-    pub fn alloc_qubits(&mut self, n: usize) -> Vec<QubitId> {
-        if self.peak_census.enabled() {
-            let c = std::panic::Location::caller();
-            self.peak_census.batch(Some((c.file(), c.line())));
-            let out = (0..n).map(|_| self.alloc_qubit()).collect();
-            self.peak_census.batch(None);
-            out
-        } else {
-            (0..n).map(|_| self.alloc_qubit()).collect()
-        }
+    pub fn alloc_n(&mut self, n: usize) -> Vec<QubitId> {
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..n { v.push(self.alloc()); }
+        v
     }
-    /// PP_J_SFUSE: set the parked wires fresh allocations must skip.
-    pub fn set_avoid(&mut self, qs: &[QubitId]) {
-        self.avoid_ids = qs.iter().map(|q| q.0.try_into().expect("qubit id fits in u32")).collect();
+    /// Highest live count since the previous call; restarts the count at the current live (profiling only).
+    pub fn take_sect_peak(&self) -> u64 {
+        let p = self.sect_peak.get().max(self.live);
+        self.sect_peak.set(self.live);
+        p
     }
-    pub fn alloc_bit(&mut self) -> BitId {
-        if let Some(b) = self.free_bits.pop() {
-            return BitId(b.into());
-        }
-        let b = self.next_bit;
-        self.next_bit += 1;
-        BitId(b.into())
-    }
-    /// Return a classical bit to the pool.
-    ///
-    /// Unlike [`Builder::free`] for a qubit this emits nothing -- a bit carries no
-    /// state the simulator has to clear, because every allocation site's first
-    /// op on a bit *writes* it (`hmr`'s target, or a `bit_store`), never reads
-    /// it. That is the whole safety condition, and it is what makes reuse
-    /// invisible to the op stream: freeing a bit changes only which id later
-    /// allocations get.
-    ///
-    /// The caller owns the lifetime: free only after the last op that reads the
-    /// bit, and never while it is the live `push_condition`.
-    pub fn free_bit(&mut self, b: BitId) {
-        self.free_bits
-            .push(b.0.try_into().expect("bit id fits in u32"));
-    }
-    pub fn free_bit_vec(&mut self, bs: &[BitId]) {
-        for &b in bs {
-            self.free_bit(b);
-        }
-    }
-    pub fn alloc_bits(&mut self, n: usize) -> Vec<BitId> {
-        (0..n).map(|_| self.alloc_bit()).collect()
-    }
+    /// Release a qubit that is |0> on every shot.
     pub fn free(&mut self, q: QubitId) {
-        self.r(q);
-        self.release_clean(q);
+        assert!(self.rec.is_empty(), "free inside a recording");
+        assert!(self.free_q.insert(q.0), "double free q{}", q.0);
+        self.live -= 1;
+        fb_span_down(self.live, self.ops.len());
+        i5::on_free(q.0);
+        if *R10TRK { R10LOC.with(|m| { m.borrow_mut().remove(&q.0); }); }
+        if *r8idle::ON { r8idle::IDLE.with(|m| { m.borrow_mut().remove(&q.0); }); r8idle::resolve(q.0); }
     }
-    /// Return a qubit that the caller has unitarily restored to |0> without
-    /// emitting a reset. This preserves the measurement stream when a clean
-    /// temporary is parked and reused inside one reversible cell.
-    pub fn release_clean(&mut self, q: QubitId) {
-        self.free_qubits
-            .push(q.0.try_into().expect("qubit id fits in u32"));
-        if self.active_qubits > 0 {
-            self.active_qubits -= 1;
-        }
-        let at = self.at();
-        self.peak_census.on_free(at, q.0);
-    }
-    /// narrow (narrow.rs): the allocator set to a recorded state (free wires in order, free bits in order, next fresh
-    /// bit). Asserted: the same free wires and the same held bits.
-    pub(crate) fn narrow_alloc_set(&mut self, free_q: &[u32], bits: &[u32], next_bit: u32) {
-        let sorted = |v: &[u32]| {
-            let mut v = v.to_vec();
-            v.sort_unstable();
-            v
-        };
-        assert_eq!(sorted(&self.free_qubits), sorted(free_q), "narrow: the recorded free wires are not this build's");
-        let held = |free: &[u32], n: u32| {
-            let f: std::collections::HashSet<u32> = free.iter().copied().collect();
-            (0..n).filter(|b| !f.contains(b)).collect::<Vec<u32>>()
-        };
-        assert_eq!(held(&self.free_bits, self.next_bit), held(bits, next_bit), "narrow: the recorded held bits are not this build's");
-        self.free_qubits = free_q.to_vec();
-        self.free_bits = bits.to_vec();
-        self.next_bit = next_bit;
-    }
-    /// y42-railtop: the allocator's state (free wires and free bits in the order later allocations take them, and the
-    /// next fresh bit).
-    pub(crate) fn y42_alloc_state(&self) -> (Vec<u32>, Vec<u32>, u32) {
-        (self.free_qubits.clone(), self.free_bits.clone(), self.next_bit)
-    }
-    /// y42-railtop: a fingerprint of an allocator state.
-    pub(crate) fn y42_alloc_hash(st: &(Vec<u32>, Vec<u32>, u32)) -> u64 {
-        let mut h = 14695981039346656037u64;
-        for &x in st.0.iter().chain([u32::MAX].iter()).chain(st.1.iter()).chain([u32::MAX, st.2].iter()) {
-            h = (h ^ x as u64).wrapping_mul(1099511628211);
-        }
-        h
-    }
-    /// y42-railtop: after a payload op that ran on another plan than the base's, the allocator set to the state the
-    /// base's op leaves (`free_q`; the free bits `before.1[..bits_keep]` then `bits_tail`; `next_bit`), so that every
-    /// later op gets the base's wires and bits. Asserted: the op gave back every wire and every bit it took, and the
-    /// recorded state holds the same free wires and the same free bits (with the base's fresh ones).
-    pub(crate) fn y42_alloc_set(&mut self, before: &(Vec<u32>, Vec<u32>, u32), free_q: &[u32], bits_keep: usize, bits_tail: &[u32], next_bit: u32) {
-        let sorted = |v: &[u32]| {
-            let mut v = v.to_vec();
-            v.sort_unstable();
-            v
-        };
-        assert_eq!(sorted(&self.free_qubits), sorted(&before.0), "y42: the payload op changed the set of free wires");
-        assert!(self.next_bit >= before.2 && next_bit >= before.2, "y42: bit counter");
-        let mut now = before.1.clone();
-        now.extend(before.2..self.next_bit);
-        assert_eq!(sorted(&self.free_bits), sorted(&now), "y42: the payload op kept a classical bit");
-        assert_eq!(sorted(free_q), sorted(&before.0), "y42: the recorded free wires are not this tick's");
-        let mut bits = before.1[..bits_keep].to_vec();
-        bits.extend_from_slice(bits_tail);
-        let mut base = before.1.clone();
-        base.extend(before.2..next_bit);
-        assert_eq!(sorted(&bits), sorted(&base), "y42: the recorded free bits are not this tick's");
-        self.free_qubits = free_q.to_vec();
-        self.free_bits = bits;
-        self.next_bit = next_bit;
-    }
-    pub fn free_vec(&mut self, qs: &[QubitId]) {
+    pub fn free_n(&mut self, qs: &[QubitId]) {
         for &q in qs {
             self.free(q);
         }
     }
-    /// N2 research patch (sim/patch_n2_sf.py, SL_N2_REACQ): take back the free wire `q` itself, keeping the free list's
-    /// order (unlike [`Builder::reacquire`]); false (nothing done) when `q` is not free.
-    pub fn n2_take(&mut self, q: QubitId) -> bool {
-        let Some(pos) = self.free_qubits.iter().rposition(|&f| u64::from(f) == q.0) else {
-            return false;
-        };
-        self.free_qubits.remove(pos);
-        self.active_qubits += 1;
-        self.note_peak();
-        if self.peak_census.enabled() {
-            let at = self.at();
-            self.peak_census.on_alloc(at, q.0, "reacquire", 0);
-        }
-        true
+    /// b792w4: the n lowest free ids (no change; for lane-id-preserving rewrites)
+    pub fn lowest_free(&self, n: usize) -> Vec<QubitId> {
+        self.free_q.iter().take(n).map(|&q| QubitId(q)).collect()
     }
-    pub fn reacquire(&mut self, q: QubitId) {
-        let pos = self
-            .free_qubits
-            .iter()
-            .position(|&free_q| u64::from(free_q) == q.0)
-            .unwrap_or_else(|| {
-                panic!(
-                    "reacquire qubit {:?} that is not currently free (phase '{}', ops {})",
-                    q,
-                    self.phase,
-                    self.ops.len()
-                )
-            });
-        self.free_qubits.swap_remove(pos);
-        self.active_qubits += 1;
-        self.note_peak();
+    /// b792w4: take a free id out of the pool without making it live (it is not handed out until `unhold_id`)
+    pub fn hold_id(&mut self, q: QubitId) { assert!(self.free_q.remove(&q.0), "hold_id of a busy qubit q{}", q.0); }
+    pub fn unhold_id(&mut self, q: QubitId) { assert!(self.free_q.insert(q.0), "unhold_id of a free qubit q{}", q.0); }
+    /// Whether q is currently released (R5-FIT799 rebind of lent lanes; no gates)
+    pub fn is_free(&self, q: QubitId) -> bool {
+        self.free_q.contains(&q.0)
+    }
+    pub fn width(&self) -> u64 {
+        self.next_q
+    }
+    /// Diagnostic position in the current recording, or in the emitted stream.
+    pub fn mark_pos(&self) -> usize {
+        self.rec.last().map_or(self.ops.len(), Vec::len)
+    }
 
-        if self.peak_census.enabled() {
-            let at = self.at();
-            self.peak_census.on_alloc(at, q.0, "reacquire", 0);
+    // ---------------------------------------------------------------- registers
+    pub fn declare_qubits(&mut self, reg: u64, qs: &[QubitId]) {
+        self.raw(Op { kind: OperationType::Register, r_target: RegisterId(reg), ..Op::empty() });
+        for &q in qs {
+            self.raw(Op { kind: OperationType::AppendToRegister, q_target: q, r_target: RegisterId(reg),
+                          ..Op::empty() });
         }
     }
-    /// Declare a register over `members`, in order.
-    ///
-    /// The op stream tells a qubit member from a bit member only by which target
-    /// field is set, so one routine serves both and the two spellings below just
-    /// tag their elements.
-    fn declare_register(&mut self, members: impl Iterator<Item = QubitOrBit>) {
-        let r = RegisterId(self.next_register.into());
-        self.next_register += 1;
-        for m in members {
-            let mut op = Op::empty();
-            op.kind = OperationType::AppendToRegister;
-            match m {
-                QubitOrBit::Qubit(q) => op.q_target = q,
-                QubitOrBit::Bit(b) => op.c_target = b,
+    pub fn declare_bits(&mut self, reg: u64, n: usize) -> Vec<BitId> {
+        self.raw(Op { kind: OperationType::Register, r_target: RegisterId(reg), ..Op::empty() });
+        let bs: Vec<BitId> = (0..n).map(|i| BitId(1 + reg * 1000 + i as u64)).collect();
+        for &b in &bs {
+            self.raw(Op { kind: OperationType::AppendToRegister, c_target: b, r_target: RegisterId(reg),
+                          ..Op::empty() });
+        }
+        bs
+    }
+
+    // ---------------------------------------------------------------- emission
+    fn raw(&mut self, op: Op) {
+        debug_assert!({ op.validate(); true });
+        // q796jc dev trap (inert unless HMR_TRAP=<n>): backtrace at the n-th R / Hmr op of the stream (0-based)
+        if matches!(op.kind, OperationType::R | OperationType::Hmr) {
+            if let Some(t) = *HMR_TRAP {
+                let n = HMR_CNT.with(|c| { let v = c.get(); c.set(v + 1); v });
+                if n == t {
+                    eprintln!("HMR_TRAP n {n} foreign-local {} ftcall {} op {} q{} slot {} sect {}\n{}", n - FSTART.with(|f| f.get()),
+                              super::ftport::builder::FT_CALLNO.with(|c| c.get()), self.ops.len(), op.q_target.0,
+                              super::greedyfrog::p3_cur_slot(), i5::SECT.with(|c| c.get()),
+                              std::backtrace::Backtrace::force_capture());
+                }
             }
-            op.r_target = r;
-            self.push_op(op);
         }
-        let mut op = Op::empty();
-        op.kind = OperationType::Register;
-        op.r_target = r;
-        self.push_op(op);
-    }
-    pub fn declare_qubit_register(&mut self, qs: &[QubitId]) {
-        self.declare_register(qs.iter().copied().map(QubitOrBit::Qubit));
-    }
-    pub fn declare_bit_register(&mut self, bs: &[BitId]) {
-        self.declare_register(bs.iter().copied().map(QubitOrBit::Bit));
-    }
-    pub fn x(&mut self, q: QubitId) {
-        let mut op = Op::empty();
-        op.kind = OperationType::X;
-        op.q_target = q;
-        self.push_op(op);
-    }
-
-    /// `x(q)`, applied only on the branch where classical bit `c` is set.
-    pub fn x_if_bit(&mut self, q: QubitId, c: BitId) {
-        self.push_condition(c);
-        self.x(q);
-        self.pop_condition();
-    }
-    pub fn cx(&mut self, ctrl: QubitId, tgt: QubitId) {
-        assert_ne!(ctrl, tgt, "invalid CX with aliased control/target {ctrl:?}",);
-        let mut op = Op::empty();
-        op.kind = OperationType::CX;
-        op.q_control1 = ctrl;
-        op.q_target = tgt;
-        self.push_op(op);
-    }
-    #[track_caller]
-    pub fn ccx(&mut self, c1: QubitId, c2: QubitId, tgt: QubitId) {
-        if c1 == c2 {
-            if c1 != tgt {
-                self.cx(c1, tgt);
+        // fable dev check (FABLE_CHK=1, builds too): operand shape (no NO_QUBIT where a qubit is required) and the
+        // R8_FREECHK released-lane check
+        if fable_chk() { op.validate(); }
+        // R8-LANE799 dev check (gate tests only, R8_FREECHK=1): no gate may touch a released lane
+        if (cfg!(test) || fable_chk()) && r8_freechk() {
+            for q in [op.q_target, op.q_control1, op.q_control2] {
+                assert!(q == NO_QUBIT || !self.free_q.contains(&q.0), "R8_FREECHK: op {:?} on released q{} (op {})", op.kind, q.0, self.ops.len());
+                assert!(q == NO_QUBIT || q.0 < super::greedyfrog::R8_POISON, "R8_FREECHK: op {:?} on a released register lane q{} (op {})", op.kind, q.0, self.ops.len());
             }
-            return;
+            let qs = [op.q_target, op.q_control1, op.q_control2];
+            for i in 0..3 { for j in i + 1..3 {
+                assert!(qs[i] == NO_QUBIT || qs[i] != qs[j], "R8_FREECHK: op {:?} repeats q{} (op {})", op.kind, qs[i].0, self.ops.len());
+            } }
         }
-        assert!(
-            c1 != tgt && c2 != tgt,
-            "invalid CCX with target aliased to a control: {c1:?}, {c2:?}, {tgt:?}"
-        );
-        let mut op = Op::empty();
-        op.kind = OperationType::CCX;
-        op.q_control2 = c1;
-        op.q_control1 = c2;
-        op.q_target = tgt;
-
-        // Attribution for the dead-CCX hunt. `ccx` is #[track_caller], so
-        // Location::caller() here is the construction that wanted the Toffoli,
-        // not a helper inside this file.
-        if self.ccx_census.watching() {
-            let at = self.at();
-            self.ccx_census
-                .on_gate(at, OperationType::CCX, std::panic::Location::caller());
-        }
-
-        self.push_op(op);
+        if *r8idle::ON { r8idle::touch(&[op.q_target, op.q_control1, op.q_control2]); }
+        let _ = NO_REG;
+        self.ops.push(op);
     }
-    /// `CZ(a, b)`, degenerating to `Z(a)` when both operands are the same wire --
-    /// which is what `Addend::One` leans on in the constant ladder, where a hard
-    /// one has no wire of its own and collapses onto the other operand. `cond`
-    /// gates the gate on a classical bit; `NO_BIT` means unconditional.
-    pub fn cz_if(&mut self, a: QubitId, b: QubitId, cond: BitId) {
-        let mut op = Op::empty();
-        if a == b {
-            op.kind = OperationType::Z;
-            op.q_target = a;
+    fn emit(&mut self, g: G, inverse: bool) {
+        let e = |kind, t: QubitId, c1: QubitId, c2: QubitId| Op { kind, q_target: t, q_control1: c1, q_control2: c2,
+                                                             ..Op::empty() };
+        match g {
+            G::X(t) => self.raw(e(OperationType::X, t, NO_QUBIT, NO_QUBIT)),
+            G::Cx(c, t) => self.raw(e(OperationType::CX, t, c, NO_QUBIT)),
+            G::Cz(a, b) => self.raw(e(OperationType::CZ, b, a, NO_QUBIT)),
+            G::Swap(a, b) => self.raw(e(OperationType::Swap, b, a, NO_QUBIT)),
+            G::Ccx(a, b, t) => {
+                self.tof += 1;
+                self.raw(e(OperationType::CCX, t, a, b))
+            }
+            G::XIf(t, c) => self.raw(Op { kind: OperationType::X, q_target: t, c_condition: c, ..Op::empty() }),
+            G::ZIf(t, c) => self.raw(Op { kind: OperationType::Z, q_target: t, c_condition: c, ..Op::empty() }),
+            G::AndC(a, b, t) | G::AndU(a, b, t) => {
+                let compute = matches!(g, G::AndC(..)) != inverse;
+                if compute {
+                    self.tof += 1;
+                    self.raw(e(OperationType::CCX, t, a, b));
+                } else {
+                    let m = self.bit;
+                    self.raw(Op { kind: OperationType::Hmr, q_target: t, c_target: m, ..Op::empty() });
+                    self.raw(Op { kind: OperationType::CZ, q_target: b, q_control1: a, c_condition: m,
+                                  ..Op::empty() });
+                }
+            }
+        }
+    }
+    /// Emit one gate (or record it if a recording is open).
+    pub fn g(&mut self, g: G) {
+        if *r8idle::ON {
+            let v: Vec<QubitId> = match g {
+                G::X(a) | G::XIf(a, _) | G::ZIf(a, _) => vec![a],
+                G::Cx(a, b) | G::Cz(a, b) | G::Swap(a, b) => vec![a, b],
+                G::Ccx(a, b, c) | G::AndC(a, b, c) | G::AndU(a, b, c) => vec![a, b, c],
+            };
+            r8idle::touch(&v);
+        }
+        if let Some(r) = self.rec.last_mut() {
+            r.push(g);
         } else {
-            op.kind = OperationType::CZ;
-            op.q_control1 = a;
-            op.q_target = b;
+            self.emit(g, false);
         }
-        op.c_condition = cond;
-        self.push_op(op);
+    }
+    /// R6-ROOM799: a recording is open (gates are not emitted yet)
+    pub fn recording(&self) -> bool {
+        !self.rec.is_empty()
+    }
+    pub fn begin(&mut self) {
+        self.rec.push(Vec::new());
+    }
+    pub fn end(&mut self) -> Vec<G> {
+        self.rec.pop().expect("no recording")
+    }
+    /// Emit a recording forward or as its inverse (into the enclosing recording if one is open).
+    pub fn play(&mut self, r: &[G], inverse: bool) {
+        if inverse {
+            for &g in r.iter().rev() {
+                let gi = match g {
+                    G::AndC(a, b, t) => G::AndU(a, b, t),
+                    G::AndU(a, b, t) => G::AndC(a, b, t),
+                    other => other,
+                };
+                self.g(gi);
+            }
+        } else {
+            for &g in r {
+                self.g(g);
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- gate helpers
+    pub fn x(&mut self, t: QubitId) {
+        self.g(G::X(t));
+    }
+    pub fn cx(&mut self, c: QubitId, t: QubitId) {
+        self.g(G::Cx(c, t));
+    }
+    pub fn ccx(&mut self, a: QubitId, b: QubitId, t: QubitId) {
+        self.g(G::Ccx(a, b, t));
     }
     pub fn cz(&mut self, a: QubitId, b: QubitId) {
-        self.cz_if(a, b, NO_BIT);
-    }
-    #[track_caller]
-    pub fn ccz_if(&mut self, a: QubitId, b: QubitId, t: QubitId, cond: BitId) {
-        assert!(a != b && a != t && b != t, "invalid CCZ with aliased operands");
-        let mut op = Op::empty();
-        op.kind = OperationType::CCZ;
-        op.q_control1 = a;
-        op.q_control2 = b;
-        op.q_target = t;
-        self.push_condition(cond);
-        if self.ccx_census.watching() {
-            let at = self.at();
-            self.ccx_census.on_gate(at, OperationType::CCZ, std::panic::Location::caller());
-        }
-        self.push_op(op);
-        self.pop_condition();
-    }
-    pub fn push_condition(&mut self, cond: BitId) {
-        let mut op = Op::empty();
-        op.kind = OperationType::PushCondition;
-        op.c_condition = cond;
-        self.push_op(op);
-    }
-    pub fn pop_condition(&mut self) {
-        let mut op = Op::empty();
-        op.kind = OperationType::PopCondition;
-        self.push_op(op);
+        self.g(G::Cz(a, b));
     }
     pub fn swap(&mut self, a: QubitId, b: QubitId) {
-        if a == b {
-            return;
+        self.g(G::Swap(a, b));
+    }
+    pub fn and_c(&mut self, a: QubitId, b: QubitId, t: QubitId) {
+        self.g(G::AndC(a, b, t));
+    }
+    pub fn and_u(&mut self, a: QubitId, b: QubitId, t: QubitId) {
+        self.g(G::AndU(a, b, t));
+    }
+    pub fn x_if(&mut self, t: QubitId, c: BitId) {
+        self.g(G::XIf(t, c));
+    }
+    pub fn z_if(&mut self, t: QubitId, c: BitId) {
+        self.g(G::ZIf(t, c));
+    }
+    /// A direct CCZ: phase (-1)^(a b c), one Toffoli-class gate and no ancilla (LEVER-AUDIT OR-CCZ). Emitted only, like
+    /// `z` (no reversible G variant).
+    pub fn ccz(&mut self, a: QubitId, b: QubitId, c: QubitId) {
+        assert!(self.rec.is_empty(), "CCZ in recording needs a reversible G variant");
+        self.tof += 1;
+        self.raw(Op { kind: OperationType::CCZ, q_target: c, q_control1: a, q_control2: b, ..Op::empty() });
+    }
+    /// A direct phase gate for use inside an emitted classical condition block.
+    pub fn z(&mut self, t: QubitId) {
+        assert!(self.rec.is_empty(), "Z in recording needs a reversible G variant");
+        self.raw(Op { kind: OperationType::Z, q_target: t, ..Op::empty() });
+    }
+    /// Condition a contiguous emitted block on one measurement receipt.
+    pub fn push_condition(&mut self, c: BitId) {
+        assert!(self.rec.is_empty(), "condition block inside a recording");
+        assert_ne!(c, NO_BIT);
+        self.cdepth += 1;
+        self.raw(Op { kind: OperationType::PushCondition, c_condition: c, ..Op::empty() });
+    }
+    /// Invert a classical bit (under the open condition blocks); no qubits, no Toffoli.
+    pub fn bit_invert(&mut self, c: BitId) {
+        assert!(self.rec.is_empty(), "bit invert inside a recording");
+        self.raw(Op { kind: OperationType::BitInvert, c_target: c, ..Op::empty() });
+    }
+    pub fn pop_condition(&mut self) {
+        assert!(self.rec.is_empty(), "condition block inside a recording");
+        self.cdepth -= 1;
+        self.raw(Op { kind: OperationType::PopCondition, ..Op::empty() });
+    }
+    /// X-basis measurement of q into classical bit c (q -> |0>). Not invertible; never inside a recording.
+    pub fn hmr_to(&mut self, q: QubitId, c: BitId) {
+        assert!(self.rec.is_empty());
+        self.raw(Op { kind: OperationType::Hmr, q_target: q, c_condition: NO_BIT, c_target: c, ..Op::empty() });
+    }
+    /// Take a specific free qubit back out of the pool.
+    #[track_caller]
+    pub fn acquire(&mut self, q: QubitId) {
+        let loc = std::panic::Location::caller();
+        assert!(self.free_q.remove(&q.0), "acquire of a busy qubit q{}", q.0);
+        self.live += 1;
+        fb_span_up(self.live, self.ops.len());
+        // fable dev probe: acquires that push live above the cap are reported like allocs (OVERLOC ... acq)
+        if let Some(c) = *P2_OVER { if self.live > c { OVER_LOC.with(|m| { *m.borrow_mut().entry(format!("{}:{} acq{} s{}", loc.file(), loc.line(), i5::SECT.with(|c| c.get()), super::greedyfrog::p3_cur_slot())).or_insert(0u64) += 1; }); } }
+        if *R10TRK { R10LOC.with(|m| { m.borrow_mut().insert(q.0, format!("acq {}:{}", loc.file().rsplit('/').next().unwrap_or(""), loc.line())); }); }
+        if self.live > self.sect_peak.get() { self.sect_peak.set(self.live); }
+        if self.live as u64 > *PEAK_TRAP { panic!("PEAK_TRAP live {} at op {}", self.live, self.ops.len()); }
+        if self.live > self.peak {
+            self.peak = self.live;
+            self.peak_op = self.ops.len();
         }
-        let mut op = Op::empty();
-        op.kind = OperationType::Swap;
-        op.q_control1 = a;
-        op.q_target = b;
-        self.push_op(op);
+        i5::on_alloc(q.0, loc, self.live);
     }
-    fn r(&mut self, q: QubitId) {
-        let mut op = Op::empty();
-        op.kind = OperationType::R;
-        op.q_target = q;
-        self.push_op(op);
+    /// s825 adapter: append an already-remapped foreign op stream and its emitted Toffoli count.
+    pub fn push_foreign(&mut self, ops: Vec<Op>, tof: u64) {
+        assert!(self.rec.is_empty(), "foreign ops inside a recording");
+        FSTART.with(|f| f.set(HMR_CNT.with(|c| c.get())));
+        for op in ops {
+            self.raw(op);
+        }
+        self.tof += tof;
     }
-    pub fn hmr(&mut self, q: QubitId, c: BitId) {
-        let mut op = Op::empty();
-        op.kind = OperationType::Hmr;
-        op.q_target = q;
-        op.c_target = c;
-        self.push_op(op);
+    pub fn fresh_bits(&mut self, n: usize) -> Vec<BitId> {
+        let v: Vec<BitId> = (0..n).map(|i| BitId(self.next_bit + i as u64)).collect();
+        self.next_bit += n as u64;
+        v
     }
+    /// Controlled swap (Fredkin), 1 Toffoli.
+    pub fn cswap(&mut self, c: QubitId, a: QubitId, b: QubitId) {
+        self.cx(b, a);
+        self.ccx(c, a, b);
+        self.cx(b, a);
+    }
+}
 
-    /// `Z(q)` under `cond`: the degenerate [`Builder::cz_if`] above.
-    pub fn z_if(&mut self, q: QubitId, cond: BitId) {
-        self.cz_if(q, q, cond);
-    }
+#[cfg(test)]
+mod r10_c6_condition_tests {
+    use super::*;
+    use crate::sim::Simulator;
+    use sha3::digest::{ExtendableOutput, Update};
 
-    pub fn bit_store0(&mut self, dst: BitId) {
-        let mut op = Op::empty();
-        op.kind = OperationType::BitStore0;
-        op.c_target = dst;
-        self.push_op(op);
-    }
-
-    pub fn bit_store1(&mut self, dst: BitId) {
-        let mut op = Op::empty();
-        op.kind = OperationType::BitStore1;
-        op.c_target = dst;
-        self.push_op(op);
-    }
-
-    fn bit_invert(&mut self, dst: BitId) {
-        let mut op = Op::empty();
-        op.kind = OperationType::BitInvert;
-        op.c_target = dst;
-        self.push_op(op);
-    }
-
-    pub fn bit_copy(&mut self, dst: BitId, a: BitId) {
-        self.bit_store0(dst);
-        self.push_condition(a);
-        self.bit_store1(dst);
-        self.pop_condition();
-    }
-
-    pub fn bit_xor_into(&mut self, dst: BitId, a: BitId) {
-        self.push_condition(a);
-        self.bit_invert(dst);
-        self.pop_condition();
-    }
-
-    pub fn bit_and_xor_into(&mut self, dst: BitId, a: BitId, b: BitId) {
-        self.push_condition(a);
-        self.push_condition(b);
-        self.bit_invert(dst);
-        self.pop_condition();
-        self.pop_condition();
-    }
-    /// `X` on every wire in `qs`.
-    pub fn x_all(&mut self, qs: &[QubitId]) {
-        for &q in qs {
-            self.x(q);
+    #[test]
+    fn one_r10_c6_condition_block_forced_bits() {
+        let mut b = B::new();
+        let a = b.alloc();
+        let c = b.alloc();
+        let t = b.alloc();
+        let receipt = b.fresh_bits(1)[0];
+        b.push_condition(receipt);
+        b.ccx(a, c, t);
+        b.z(t);
+        b.pop_condition();
+        assert_eq!(b.tof, 1);
+        for bit in [0, u64::MAX] {
+            let mut h = sha3::Shake256::default();
+            h.update(b"R10-C6-D1-forced-condition");
+            let mut xof = h.finalize_xof();
+            let mut sim = Simulator::new(b.width() as usize, receipt.0 as usize + 1, &mut xof);
+            sim.qubits[a.0 as usize] = u64::MAX;
+            sim.qubits[c.0 as usize] = u64::MAX;
+            sim.bits[receipt.0 as usize] = bit;
+            sim.apply_iter(b.ops.iter());
+            assert_eq!(sim.qubits[t.0 as usize], bit);
+            assert_eq!(sim.phase, bit);
+            assert_eq!(sim.stats.toffoli_gates, bit.count_ones() as u64);
         }
     }
+}
 
-    /// `CX` from one control onto every wire in `qs`.
-    pub fn cx_all(&mut self, ctrl: QubitId, qs: &[QubitId]) {
-        for &q in qs {
-            self.cx(ctrl, q);
+/// I5-LANES owner-ledger probe (diagnostic only; inert unless I5_SNAP=<live threshold> is set): records, per
+/// (profiler section, slot), the allocation sites of every live qubit at the first moment live >= threshold.
+pub mod i5 {
+    use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
+    use std::panic::Location;
+    thread_local! {
+        static ON: Cell<Option<u64>> = Cell::new(std::env::var("I5_SNAP").ok().and_then(|v| v.trim().parse().ok()));
+        static OWN: RefCell<HashMap<u64, &'static Location<'static>>> = RefCell::new(HashMap::new());
+        pub static SECT: Cell<&'static str> = Cell::new("-");
+        pub static SLOT: Cell<i64> = Cell::new(-1);
+        static SEEN: RefCell<HashMap<(&'static str, i64), u64>> = RefCell::new(HashMap::new());
+        /// a1-ledger: register role of a live qubit (set by diagnostic hooks, dropped on free)
+        static ROLE: RefCell<HashMap<u64, &'static str>> = RefCell::new(HashMap::new());
+    }
+    thread_local! {
+        /// q792 diagnostic: ids of the running slot's LA / LB lanes (refreshed at every p3 section hook)
+        static LALB: RefCell<HashMap<u64, &'static str>> = RefCell::new(HashMap::new());
+    }
+    /// q792 diagnostic: record the current LA / LB lane ids (no gates)
+    pub fn set_lalb(la: &[crate::circuit::QubitId], lb: &[crate::circuit::QubitId]) {
+        if ON.with(|c| c.get()).is_none() { return; }
+        LALB.with(|r| { let mut r = r.borrow_mut(); r.clear();
+            for q in la { r.insert(q.0, "LA*"); } for q in lb { r.insert(q.0, "LB*"); } });
+    }
+    /// a1-ledger diagnostic: tag live qubits with a register role (no gates)
+    pub fn set_role(qs: &[crate::circuit::QubitId], role: &'static str) {
+        if ON.with(|c| c.get()).is_none() { return; }
+        ROLE.with(|r| { let mut r = r.borrow_mut(); for q in qs { r.insert(q.0, role); } });
+    }
+    pub fn set_sect(s: &'static str) { SECT.with(|c| c.set(s)); }
+    pub fn set_slot(s: i64) { SLOT.with(|c| c.set(s)); }
+    pub fn on_alloc(q: u64, loc: &'static Location<'static>, live: u64) {
+        let Some(th) = ON.with(|c| c.get()) else { return };
+        OWN.with(|o| { o.borrow_mut().insert(q, loc); });
+        if live < th { return; }
+        let key = (SECT.with(|c| c.get()), SLOT.with(|c| c.get()));
+        let first = if std::env::var_os("I5_ALL").is_some() {
+            // b793a diagnostic: one snapshot per (section, slot, triggering allocation line); inert unless I5_ALL is set
+            thread_local! { static SEEN2: RefCell<std::collections::HashSet<(&'static str, i64, u32)>> = RefCell::new(Default::default()); }
+            SEEN2.with(|s| s.borrow_mut().insert((key.0, key.1, loc.line())))
+        } else { SEEN.with(|s| {
+            let mut s = s.borrow_mut();
+            let e = s.entry(key).or_insert(0);
+            let f = live > *e;
+            if f { *e = live; }
+            f
+        }) };
+        if !first { return; }
+        let mut h: HashMap<String, u64> = HashMap::new();
+        OWN.with(|o| ROLE.with(|r| { let r = r.borrow(); for (q, l) in o.borrow().iter() {
+            let k = match r.get(q) { Some(role) => format!("@{role}"), None => match LALB.with(|m| m.borrow().get(q).copied()) { Some(role) => format!("@{role}{}", l.line()), None => format!("{}:{}", l.file().rsplit('/').next().unwrap_or(""), l.line()) } };
+            *h.entry(k).or_insert(0) += 1;
+        } }));
+        let mut v: Vec<_> = h.into_iter().collect();
+        v.sort();
+        let body: Vec<String> = v.iter().map(|(k, n)| format!("{k}={n}")).collect();
+        eprintln!("I5SNAP sect={} slot={} live={} trig={} {}", key.0, key.1, live, loc.line(), body.join(" "));
+        // b793b diagnostic (inert unless I5_IDS is set): ids per allocation site (ring / LA / LB lanes are not told apart by id here)
+        if std::env::var_os("I5_IDS").is_some() {
+            let mut ids: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
+            OWN.with(|o| for (q, l) in o.borrow().iter() { ids.entry(format!("{}", l.line())).or_default().push(*q); });
+            let s: Vec<String> = ids.iter().filter(|(_, v)| v.len() <= 12).map(|(k, v)| { let mut v = v.clone(); v.sort(); format!("{k}:{v:?}") }).collect();
+            eprintln!("I5IDS sect={} slot={} trig={} {}", key.0, key.1, loc.line(), s.join(" "));
         }
     }
+    pub fn on_free(q: u64) {
+        if ON.with(|c| c.get()).is_none() { return; }
+        OWN.with(|o| { o.borrow_mut().remove(&q); });
+        ROLE.with(|r| { r.borrow_mut().remove(&q); });
+    }
+}
 
-    /// Copy `src` onto `dst`, wire for wire. Self-inverse. Slice the wider side
-    /// at the call site: matching the widths here keeps the zip from quietly
-    /// dropping a tail.
-    pub fn cx_pairs(&mut self, src: &[QubitId], dst: &[QubitId]) {
-        assert_eq!(src.len(), dst.len(), "cx_pairs: width mismatch");
-        for (&s, &d) in src.iter().zip(dst) {
-            self.cx(s, d);
+
+// fable dev probe (inert unless FB_SPAN=<cap>): ops spent with live > cap, per section and slot, and the number of excursions
+pub static FB_SPAN: std::sync::LazyLock<Option<u64>> = std::sync::LazyLock::new(|| std::env::var("FB_SPAN").ok().and_then(|v| v.trim().parse().ok()));
+thread_local! {
+    static FB_UP: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static FB_ACC: std::cell::RefCell<std::collections::BTreeMap<String, (u64, u64, u64)>> = std::cell::RefCell::new(Default::default());
+}
+pub fn fb_span_up(live: u64, op: usize) {
+    if let Some(c) = *FB_SPAN { if live == c + 1 { FB_UP.with(|u| u.set(Some(op))); } }
+}
+pub fn fb_span_down(live: u64, op: usize) {
+    if let Some(c) = *FB_SPAN { if live == c { if let Some(o) = FB_UP.with(|u| u.take()) {
+        let k = format!("{} s{}", i5::SECT.with(|c| c.get()), super::greedyfrog::p3_cur_slot());
+        FB_ACC.with(|m| { let mut m = m.borrow_mut(); let e = m.entry(k).or_insert((0, 0, 0)); e.0 += 1; e.1 += (op - o) as u64; e.2 = e.2.max((op - o) as u64); });
+    } } }
+}
+pub fn fb_span_dump() {
+    FB_ACC.with(|m| for (k, (n, t, mx)) in m.borrow().iter() { eprintln!("FBSPAN {k} n={n} ops={t} max={mx}"); });
+}
+// P2-REBASE dev probe (inert unless P2_OVER=<cap> is set): allocation sites that push live above the cap
+pub static P2_OVER: std::sync::LazyLock<Option<u64>> = std::sync::LazyLock::new(|| std::env::var("P2_OVER").ok().and_then(|v| v.trim().parse().ok()));
+thread_local! { static P2_SITES: std::cell::RefCell<std::collections::BTreeMap<String, (u64, u64, usize, usize)>> = std::cell::RefCell::new(Default::default()); }
+fn p2_over_note(live: u64) {
+    let bt = std::backtrace::Backtrace::force_capture().to_string();
+    let site: Vec<String> = bt.lines().filter(|l| l.contains("at ./src") || l.contains("at src") || l.contains("point_add/")).filter(|l| !l.contains("builder.rs")).take(3).map(|l| l.trim().rsplit('/').next().unwrap_or("").to_string()).collect();
+    let k = site.join(" < ");
+    let sl = super::greedyfrog::p3_cur_slot();
+    P2_SITES.with(|m| { let mut m = m.borrow_mut(); let e = m.entry(k).or_insert((0, 0, usize::MAX, 0)); e.0 += 1; e.1 = e.1.max(live); e.2 = e.2.min(sl); e.3 = e.3.max(sl); });
+}
+pub fn p2_over_dump() {
+    fb_span_dump();
+    OVER_LOC.with(|m| for (k, n) in m.borrow().iter() { eprintln!("OVERLOC {n} {k}"); });
+    P2_SITES.with(|m| for (k, (n, l, a, z)) in m.borrow().iter() { eprintln!("P2_OVER live<={l} n={n} slots {a}-{z} {k}"); });
+}
+
+/// R8-ROOM0 dev instrument (inert unless R8_IDLE is set): live lanes never touched since their allocation (|0>), and a
+/// tally of their allocation sites at the moments a pass is short of clean lanes
+pub mod r8idle {
+    use crate::circuit::QubitId;
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+    use std::panic::Location;
+    pub static ON: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("R8_IDLE").is_some());
+    thread_local! {
+        pub static IDLE: RefCell<BTreeMap<u64, &'static Location<'static>>> = RefCell::new(BTreeMap::new());
+        static TALLY: RefCell<BTreeMap<String, (u64, u64)>> = RefCell::new(BTreeMap::new());
+    }
+    pub fn touch(qs: &[QubitId]) {
+        IDLE.with(|m| { let mut m = m.borrow_mut(); for q in qs { m.remove(&q.0); } });
+    }
+    #[track_caller]
+    pub fn note(tag: &str, short: u64) {
+        if !*ON || short == 0 { return; }
+        let at = Location::caller();
+        IDLE.with(|m| for l in m.borrow().values() {
+            let k = format!("{tag}@{}:{} idle {}:{}", at.file().rsplit('/').next().unwrap(), at.line(), l.file().rsplit('/').next().unwrap(), l.line());
+            TALLY.with(|t| { let mut t = t.borrow_mut(); let e = t.entry(k).or_insert((0, 0)); e.0 += 1; e.1 += short; });
+        });
+    }
+    thread_local! {
+        static PEND: RefCell<Vec<(String, Vec<u64>, Vec<(u64, &'static Location<'static>)>, u64)>> = RefCell::new(vec![]);
+    }
+    /// a short pool: its lanes, the lanes idle now; resolved when the first pool lane is freed (lanes still idle then
+    /// were idle through the pool's whole life)
+    #[track_caller]
+    pub fn pend(tag: &str, pool: &[QubitId], short: u64) {
+        if !*ON || short == 0 || pool.is_empty() { return; }
+        let at = Location::caller();
+        let snap: Vec<(u64, &'static Location<'static>)> = IDLE.with(|m| m.borrow().iter().map(|(k, v)| (*k, *v)).collect());
+        PEND.with(|p| p.borrow_mut().push((format!("{tag}@{}:{}", at.file().rsplit('/').next().unwrap(), at.line()), pool.iter().map(|q| q.0).collect(), snap, short)));
+    }
+    pub fn resolve(q: u64) {
+        let hit: Vec<_> = PEND.with(|p| {
+            let mut p = p.borrow_mut();
+            let (h, k): (Vec<_>, Vec<_>) = std::mem::take(&mut *p).into_iter().partition(|e| e.1.contains(&q));
+            *p = k;
+            h
+        });
+        for (key, _, snap, short) in hit {
+            IDLE.with(|m| { let m = m.borrow(); for (id, l) in snap {
+                if m.get(&id).is_some_and(|x| std::ptr::eq(*x, l)) {
+                    let k = format!("{key} idle-through {}:{}", l.file().rsplit('/').next().unwrap(), l.line());
+                    TALLY.with(|t| { let mut t = t.borrow_mut(); let e = t.entry(k).or_insert((0, 0)); e.0 += 1; e.1 += short; });
+                }
+            }});
         }
     }
-
-    /// Live wires right now. The walk reads it to decide how much ladder it can
-    /// afford against `PP_WALK_MAX_QUBITS`.
-    pub fn active_qubits(&self) -> u32 {
-        self.active_qubits
+    pub fn dump() {
+        TALLY.with(|t| for (k, (n, s)) in t.borrow().iter() { eprintln!("R8IDLE {n} {s} {k}"); });
     }
+}
 
-    /// Record one replay repair site; see [`ReplaySites::record`].
-    pub fn record_replay_site(&mut self, kind: char, round: usize, pos: usize, width: usize) {
-        let at = self.at();
-        let p = 2.0_f64.powi(-(width as i32));
-        if kind == 'B' { if pos != width { self.k3b_sites.0 += 1; self.k3b_sites.1 += p; } } else { self.k3b_sites.2 += 1; self.k3b_sites.3 += p; }
-        self.replay_sites.record(at, kind, round, pos, width);
-    }
+pub static HMR_TRAP: std::sync::LazyLock<Option<u64>> = std::sync::LazyLock::new(|| std::env::var("HMR_TRAP").ok().and_then(|v| v.trim().parse().ok()));
+thread_local! { static HMR_CNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; static FSTART: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }
+pub static PEAK_TRAP: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| std::env::var("PEAK_TRAP").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(u64::MAX));
 
-    /// y33: the end-of-build sweep of [`super::y33_clears`] (Toffoli that only clear a wire before its reset become a
-    /// measurement and phase gates). Called once, by `build_point_add`, just before [`Builder::finalize_records`].
-    pub(crate) fn y33_clears(&mut self) {
-        if !super::y33_clears::Y33_CLEARS || self.model {
-            return;
-        }
-        let (sites, toffoli) = super::y33_clears::sweep(&mut self.ops, &mut self.next_bit);
-        if let Some(r) = self.report.as_deref_mut() {
-            r.total_native -= toffoli;
-            r.total_expected -= toffoli as f64;
-        }
-        eprintln!("Y33_CLEARS sites={sites} toffoli={toffoli}");
-    }
+thread_local! { static OVER_LOC: std::cell::RefCell<std::collections::BTreeMap<String,u64>> = std::cell::RefCell::new(Default::default()); }
 
-    /// Emit all three recorders' output. Called once, at the end of
-    /// `build_point_add`.
-    pub fn finalize_records(&mut self) {
-        self.report_phase();
-        if let Some(r) = self.report.as_deref() {
-            eprintln!("HEO_TOTAL native={} expected={:.1} peak={} peak_op={} peak_phase={} qubits_touched={}",
-                r.total_native, r.total_expected, r.peak, r.peak_op, r.peak_phase, self.next_qubit);
-        }
-        self.peak_census.finalize();
-        self.ccx_census.finalize();
-        self.replay_sites.finalize();
-    }
+pub static R10TRK: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("R10_TRACK").is_some());
+thread_local! { pub static R10LOC: std::cell::RefCell<std::collections::BTreeMap<u64, String>> = std::cell::RefCell::new(Default::default()); }
+/// R10 dev: live lanes allocated after `from` (id order) with their allocation sites
+pub fn r10_dump(tag: &str) {
+    R10LOC.with(|m| { let m = m.borrow(); let mut c: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
+        for (q, l) in m.iter() { c.entry(l.clone()).or_default().push(*q); }
+        for (l, qs) in c { eprintln!("R10LIVE {tag} {l} n={} {:?}", qs.len(), &qs[..qs.len().min(8)]); } });
 }

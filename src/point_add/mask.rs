@@ -1,0 +1,1994 @@
+//! Masked ripple ladders for froghop-double.
+//!
+//! A ladder runs over lanes l = 0..L (carry order) with target T[l] and source S[l]. Most lanes are ordinary
+//! Cuccaro majority cells (carry stored in the source lane). Lanes inside a mask window are "masked cells" that keep
+//! the carry on a running wire and apply the carry transition only where the running mask f = 1 (the shot's own
+//! lane); elsewhere the carry passes through and both lanes are restored untouched. (Mask-the-carry-transition
+//! idea: bulengerk's masked majority cell on gnuchev's packed inversion.)
+//!
+//! The running mask f starts at a known constant before lane 0 and is toggled by "sources": a source flips f when
+//! entering ladder lane l iff its quantum value v equals tv(l) = a + d*l (l in its window). One-hot matches come from
+//! an incrementally updated decoder (~2 Toffoli per lane, n-1 prefix ancillas). After the last lane f is cleaned with
+//! comparators (f_end = f0 ^ sum_s [v_s in the interval its window covers]), so values outside a window are harmless.
+
+use super::builder::{B, G};
+use crate::circuit::{BitId, QubitId};
+
+/// A toggle source: entering ladder lane l (lo <= l < hi) toggles f iff v == a + d*l. `pre` = prefix ancillas
+/// (len v.len()-1 for a retained decoder, or v.len()-2 for a transient
+/// equality per toggle), disjoint from overlapping sources.
+#[derive(Clone)]
+pub struct Src {
+    pub lo: usize,
+    pub hi: usize,
+    pub v: Vec<QubitId>,
+    pub a: isize,
+    pub d: isize,
+    pub pre: Vec<QubitId>,
+    /// late source: at its matching lane, flip T there before the cell and toggle f only after the cell (the lane
+    /// stays in the old mask region, with T's bit inverted)
+    pub late: bool,
+}
+
+impl Src {
+    fn tv(&self, l: usize) -> isize {
+        // d=0 is the pi-parity decoder: a is the known low bit and v=pi>>1.
+        if self.d == 0 {
+            if l & 1 == self.a as usize { (l >> 1) as isize } else { -1 }
+        } else { self.a + self.d * l as isize }
+    }
+    /// interval of matched values over the window: [min, max]
+    fn span(&self) -> (isize, isize) {
+        let mut vals = (self.lo..self.hi).map(|l| self.tv(l)).filter(|&j| j >= 0);
+        if let Some(first) = vals.next() {
+            vals.fold((first, first), |(lo, hi), j| (lo.min(j), hi.max(j)))
+        } else { (0, -1) }
+    }
+}
+
+/// Scratch for masked passes: running mask f, AND temps, comparator chain ancillas (len >= max value bits).
+#[derive(Clone)]
+pub struct Mscr {
+    pub f: QubitId,
+    pub t: QubitId,
+    pub gf: QubitId,
+    pub chain: Vec<QubitId>,
+}
+
+thread_local! {
+    /// R5-FIT799 R5_MROWY: the masked TERM-NC top cell's source is the row's flipped zero source m, held on no lane:
+    /// Some(sign lane) gives m = !sign (Some(NO_LANE): row 0, m = 1); s ^ x is formed on the carry wire x instead
+    pub static TOPM: std::cell::Cell<Option<QubitId>> = const { std::cell::Cell::new(None) };
+}
+/// row 0's marker for TOPM (m = 1, no sign lane)
+pub const NO_LANE: QubitId = QubitId(u64::MAX);
+thread_local! {
+    /// retake799 (r801): decoders with n - 2 prefix lanes keep them RETAINED (levels 0 .. n-3, bits n-1 .. 1) and
+    /// toggle with CCX(prefix, bit-0 literal) instead of rebuilding a transient equality
+    pub static RSHORT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// R10_SH2 (claude-r8): decoders with n - 3 prefix lanes keep them RETAINED (levels 0 .. n-4, bits n-1 .. 2) and
+    /// toggle by the AND of the last level and the bit-1 and bit-0 literals through one borrowed lane (any state,
+    /// restored; 4 Toffoli per toggle)
+    pub static RSHORT2: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// R12_SH3 (fable 796b): decoders with n - 4 prefix lanes keep them RETAINED (levels 0 .. n-5, bits n-1 .. 3) and
+    /// toggle by the AND of the last level and the bit-2, bit-1 and bit-0 literals through two borrowed lanes (any
+    /// state, restored; 8 Toffoli per toggle)
+    pub static RSHORT3: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// R11_LA5 (fable, 797): toggle sources whose matched value tv(l) exceeds this write nothing into their target at
+    /// that lane (the lane stays a masked cell); a retained decoder still moves its prefix to tv(l), so the paired
+    /// down pass finds it where it expects it. Default: no limit.
+    pub static TVMAX: std::cell::Cell<isize> = const { std::cell::Cell::new(isize::MAX) };
+    /// R9_PREFIX (r9 "prefix" worker, dev knob): decoders with n - 5 prefix lanes keep them RETAINED (levels 0 .. n-6,
+    /// bits n-1 .. 4) and form the next level (bit 3) transiently on the ladder's AND temp `sc.t`, which is |0> between
+    /// cells; the toggle is then RSHORT3's 4-input AND (that level, bits 2, 1, 0) through two borrowed lanes and the
+    /// level is uncomputed by measurement: one lane fewer than RSHORT3 for one more Toffoli per toggle
+    pub static RSHORT4T: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// R9_PREFIX: the same transient-level form one level up: n - 4 prefix lanes retained (bits n-1 .. 3), bit 2 formed
+    /// on the AND temp, bits 1 and 0 through one borrowed lane (RSHORT2's toggle): one lane fewer than RSHORT2 for one
+    /// more Toffoli per toggle. Takes precedence over RSHORT3 (same prefix length) while set.
+    pub static RSHORT3T: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// R14 fwd94 "Vollgasbuebe" L: set while a masked ladder whose RSHORT4T form greedyfrog's R14_FWD94 chose is open
+    /// (its decoders toggle by `Dec::xor_ret_tmp_cc`, R9_PREFIX's RSHORT4T sites keep `xor_ret_tmp`)
+    pub static R14L: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// R14 läckBobby-b F (fotl765 R14 pfx94): decoders with n - 3 prefix lanes keep them RETAINED (bits n-1 .. 2) and form
+    /// the bit-1 level transiently on the ladder's AND temp `sc.t` (|0> between cells; uncomputed by measurement); the
+    /// toggle is then one CCX with the bit-0 literal: one lane fewer than RSHORT for one more Toffoli per toggle (and three
+    /// fewer than RSHORT2's borrowed-lane toggle). Takes precedence over RSHORT2 (same prefix length) while set.
+    pub static RSHORT2T: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// R14 läckBobby-b U: 6-bit decoders with NO retained level: bits 5 and 4 are ANDed onto the AND temp `sc.t` at each
+    /// toggle and the toggle is the 5-input AND (that temp, bits 3 .. 0) through three borrowed lanes (Barenco, 12 CCX):
+    /// one lane fewer than RSHORT4T for four more Toffoli per toggle
+    pub static RSHORT5T: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// H793 "Heieiei" (Q793 Hoppla spike, Vollgasbuebe's second level): set while a masked ladder whose h - 5 form
+    /// greedyfrog's H793_L2 chose is open: its decoders keep n - 6 retained levels (bits n-1 .. 5), form a = o & lit(4) on
+    /// the clean AND temp and toggle on a's two literal lanes (`Dec::xor_ret_tmp_cc5`, borrow-free, 9 Toffoli)
+    pub static R14L2: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// B792_P1 (worker B792-W1): one level below Heieiei: set while a masked ladder whose h - 6 form is open: its decoders keep
+    /// n - 8 retained levels (at least one), form a = o & lit(5) on the clean AND temp and toggle on a & lit(4..0) through
+    /// four borrowed dirty lanes (`Dec::xor_ret_tmp_d6`, 1 AND + 16 CCX)
+    pub static R792L3: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// H793 Heieiei negative controls (dev only, inert unless H793_BRK is set): `mid` drops the second target CCX
+/// B792_P1 negative controls (dev only, inert unless B792_BRK is set): `lvl` forms the transient level without its literal, `lit` drops lit(0) from the AND
+pub(crate) fn b792_brk(s: &str) -> bool {
+    static E: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| std::env::var("B792_BRK").unwrap_or_default());
+    !E.is_empty() && E.trim() == s
+}
+pub(crate) fn h793_brk(s: &str) -> bool {
+    static E: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| std::env::var("H793_BRK").unwrap_or_default());
+    !E.is_empty() && E.trim() == s
+}
+/// R14 läckBobby: negative controls (dev, inert unless R14P_BRK is set): `f` forms the transient bit-1 level without its
+/// literal, `u` drops the bit-4 literal from the transient level
+pub(crate) fn pfx94_brk(s: &str) -> bool {
+    static E: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| std::env::var("R14P_BRK").unwrap_or_default());
+    !E.is_empty() && E.trim() == s
+}
+/// R14 fwd94 negative controls (dev only, inert unless set; read in release builds so the fixed-input A/B can run them,
+/// the official environment is empty): `R14_FWD94_BRK=lvl` forms the R14 ladders' transient level without its literal,
+/// `cc` leaves the toggle's CCX chain on the literal lane lit(3) un-undone
+pub(crate) fn r14_brk(s: &str) -> bool {
+    static E: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| std::env::var("R14_FWD94_BRK").unwrap_or_default());
+    !E.is_empty() && E.trim() == s
+}
+/// R9_PREFIX: negative control (dev only, inert unless R9_BRK is set): R9_BRK=lvl forms the transient level without
+/// its literal (a = o instead of o & lit), so the toggle fires on the wrong values
+pub(crate) fn r9_brk(s: &str) -> bool {
+    static E: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| std::env::var("R9_BRK").unwrap_or_default());
+    !E.is_empty() && E.trim() == s
+}
+/// One-hot decoder: pre[i] = AND of literal matches for value bits n-1 .. n-2-i at the current j.
+struct Dec<'a> {
+    v: &'a [QubitId],
+    pre: &'a [QubitId],
+    cur: Option<usize>,
+}
+
+impl<'a> Dec<'a> {
+    fn n(&self) -> usize {
+        self.v.len()
+    }
+    /// retake799 (r801): a retained prefix one level short (see RSHORT)
+    fn short(&self) -> bool {
+        RSHORT.with(|c| c.get()) && self.pre.len() + 2 == self.n()
+    }
+    fn short2(&self) -> bool {
+        RSHORT2.with(|c| c.get()) && self.n() >= 4 && self.pre.len() + 3 == self.n()
+    }
+    fn short3(&self) -> bool {
+        RSHORT3.with(|c| c.get()) && self.n() >= 5 && self.pre.len() + 4 == self.n()
+    }
+    /// R9_PREFIX: retained levels 0 .. n-6 plus a transient level on the AND temp (see RSHORT4T)
+    fn short4t(&self) -> bool {
+        RSHORT4T.with(|c| c.get()) && self.n() >= 6 && self.pre.len() + 5 == self.n()
+    }
+    /// R9_PREFIX: retained levels 0 .. n-5 plus a transient level on the AND temp (see RSHORT3T)
+    fn short3t(&self) -> bool {
+        RSHORT3T.with(|c| c.get()) && self.n() >= 5 && self.pre.len() + 4 == self.n()
+    }
+    /// R14 läckBobby-b F: retained levels 0 .. n-4 plus a transient bit-1 level on the AND temp (see RSHORT2T)
+    fn short2t(&self) -> bool {
+        RSHORT2T.with(|c| c.get()) && self.n() >= 4 && self.pre.len() + 3 == self.n()
+    }
+    /// H793 Heieiei: retained levels 0 .. n-7 (at least one) plus a transient bit-4 level on the AND temp (see R14L2)
+    fn short5l(&self) -> bool {
+        R14L2.with(|c| c.get()) && self.n() >= 7 && self.pre.len() + 6 == self.n()
+    }
+    /// B792_P1: retained levels 0 .. n-8 (at least one) plus a transient bit-5 level on the AND temp (see R792L3)
+    fn short6l(&self) -> bool {
+        R792L3.with(|c| c.get()) && self.n() >= 7 && self.pre.len() + 7 == self.n()
+    }
+    /// R14 läckBobby-b U: no retained level (6-bit decoders only, see RSHORT5T)
+    fn short5t(&self) -> bool {
+        RSHORT5T.with(|c| c.get()) && self.n() == 6 && self.pre.is_empty()
+    }
+    /// R14 läckBobby-b U: target ^= [v == j] with no retained level: tmp = lit5 & lit4 on the clean AND temp (|0> before
+    /// and after: uncomputed by measurement), then target ^= tmp & lit3 & lit2 & lit1 & lit0 through three borrowed lanes
+    /// (any state, restored; Barenco et al. 1995 Lemma 7.2, 12 CCX)
+    fn xor_t0(&mut self, b: &mut B, j: usize, target: QubitId, tmp: QubitId) {
+        assert!(self.n() == 6 && self.pre.is_empty());
+        let l: Vec<(QubitId, bool)> = (0..6).map(|k| self.lit(k, j)).collect();
+        assert!(tmp != target && !self.v.contains(&tmp) && !self.v.contains(&target),
+                "R14 U: the AND temp collides with the decoder");
+        let ds: Vec<QubitId> = borrowed().into_iter().filter(|&q| q != tmp && q != target && !self.v.contains(&q)).take(3).collect();
+        assert!(ds.len() == 3, "R14 U: three borrowed lanes");
+        let (a1, a2, a3) = (ds[0], ds[1], ds[2]);
+        for &(q, ng) in &l { if ng { b.x(q); } }
+        if pfx94_brk("u") { b.cx(l[5].0, tmp); } else { b.and_c(l[5].0, l[4].0, tmp); }
+        let (c1, c2, c3, c4, c5) = (tmp, l[3].0, l[2].0, l[1].0, l[0].0);
+        for _ in 0..2 {
+            b.ccx(c5, a3, target);
+            b.ccx(c4, a2, a3);
+            b.ccx(c3, a1, a2);
+            b.ccx(c1, c2, a1);
+            b.ccx(c3, a1, a2);
+            b.ccx(c4, a2, a3);
+        }
+        if pfx94_brk("u") { b.cx(l[5].0, tmp); } else { b.and_u(l[5].0, l[4].0, tmp); }
+        for &(q, ng) in &l { if ng { b.x(q); } }
+    }
+    /// b793b F6 (U without the AND temp): target ^= [v == j] for a 6-bit decoder with no retained level: the 6-literal AND through
+    /// borrowed lanes (4 (n - 2) = 16 Toffoli, any state, restored)
+    fn xor_nt5(&mut self, b: &mut B, j: usize, target: QubitId) {
+        assert!(self.n() == 6 && self.pre.is_empty());
+        let mut l: Vec<(QubitId, bool)> = (0..6).map(|k| self.lit(k, j)).collect();
+        if f6_break("f65") { l.pop(); } // negative control (gate tests only): the AND without its last literal
+        assert!(!self.v.contains(&target), "b793 F6: target is a decoder lane");
+        let ds: Vec<QubitId> = borrowed().into_iter().filter(|&q| q != target && !self.v.contains(&q)).collect();
+        assert!(ds.len() >= 4, "b793 F6: four borrowed lanes");
+        super::arith::and_dirty(b, &l, target, &ds);
+    }
+    /// R9_PREFIX: target ^= [v == j] with the last retained level o, the transient level a = o & lit(k) on the clean
+    /// AND temp `tmp` (|0> before, |0> after: uncomputed by measurement), and the remaining literals k-1 .. 0 through
+    /// k - 1 borrowed lanes (k = 3: RSHORT3's 8-CCX toggle on a; k = 2: RSHORT2's 4-CCX toggle on a)
+    fn xor_ret_tmp(&mut self, b: &mut B, j: usize, target: QubitId, tmp: QubitId, k: usize) {
+        let o = self.goto_impl(b, j, true);
+        let (qk, nk) = self.lit(k, j);
+        assert!(tmp != o && tmp != qk && tmp != target && !self.pre.contains(&tmp) && !self.v.contains(&tmp),
+                "R9_PREFIX: the AND temp collides with the decoder");
+        if nk { b.x(qk); }
+        if r9_brk("lvl") || (k == 1 && pfx94_brk("f")) { b.cx(o, tmp); } else { b.and_c(o, qk, tmp); }
+        if k == 1 {
+            // R14 läckBobby-b F: RSHORT's toggle with the transient level a = tmp in place of the retained level
+            let (q0, n0) = self.lit(0, j);
+            if n0 { b.x(q0); }
+            b.ccx(tmp, q0, target);
+            if n0 { b.x(q0); }
+        } else if k == 3 {
+            let (q2, n2) = self.lit(2, j);
+            let (q1, n1) = self.lit(1, j);
+            let (q0, n0) = self.lit(0, j);
+            let ds: Vec<QubitId> = borrowed().into_iter()
+                .filter(|&q| q != o && q != tmp && q != qk && q != q2 && q != q1 && q != q0 && q != target && !self.pre.contains(&q))
+                .take(2).collect();
+            assert!(ds.len() == 2, "R9_PREFIX: two borrowed lanes");
+            let (d1, d2) = (ds[0], ds[1]);
+            if n2 { b.x(q2); }
+            if n1 { b.x(q1); }
+            if n0 { b.x(q0); }
+            // xor_ret_short3's sequence with the transient level a = tmp in place of the retained level o
+            b.ccx(q0, d2, target);
+            b.ccx(q1, d1, d2);
+            b.ccx(tmp, q2, d1);
+            b.ccx(q1, d1, d2);
+            b.ccx(q0, d2, target);
+            b.ccx(q1, d1, d2);
+            b.ccx(tmp, q2, d1);
+            b.ccx(q1, d1, d2);
+            if n0 { b.x(q0); }
+            if n1 { b.x(q1); }
+            if n2 { b.x(q2); }
+        } else {
+            assert_eq!(k, 2);
+            let (q1, n1) = self.lit(1, j);
+            let (q0, n0) = self.lit(0, j);
+            let d = borrowed().into_iter()
+                .find(|&q| q != o && q != tmp && q != qk && q != q1 && q != q0 && q != target && !self.pre.contains(&q))
+                .expect("R9_PREFIX: a borrowed lane");
+            if n1 { b.x(q1); }
+            if n0 { b.x(q0); }
+            // xor_ret_short2's sequence with a = tmp in place of o
+            b.ccx(q0, d, target);
+            b.ccx(tmp, q1, d);
+            b.ccx(q0, d, target);
+            b.ccx(tmp, q1, d);
+            if n0 { b.x(q0); }
+            if n1 { b.x(q1); }
+        }
+        if r9_brk("lvl") || (k == 1 && pfx94_brk("f")) { b.cx(o, tmp); } else { b.and_u(o, qk, tmp); }
+        if nk { b.x(qk); }
+    }
+    /// R14 fwd94 "Vollgasbuebe" L: `xor_ret_tmp`'s k = 3 toggle (target ^= [v == j] with the last retained level o and
+    /// the transient level a = o & lit(3) on the clean AND temp `tmp`) with the remaining literals 2, 1, 0 on the two
+    /// literal lanes of a instead of two borrowed lanes (R8_CC's conditionally clean lanes): where a = 1 both o and
+    /// lit(3) are 1, so after an X each is |0> and carries the CCX chain o' = lit(2) lit(1), l3' = o' lit(0); the target
+    /// takes a & l3', which is 0 where a = 0 whatever the chain left there; the chain is then undone by the same CCX
+    /// (exact on every shot) and the X, and a is uncomputed by measurement. 6 Toffoli per toggle (RSHORT3's: 8).
+    fn xor_ret_tmp_cc(&mut self, b: &mut B, j: usize, target: QubitId, tmp: QubitId) {
+        let o = self.goto_impl(b, j, true);
+        let (q3, n3) = self.lit(3, j);
+        let (q2, n2) = self.lit(2, j);
+        let (q1, n1) = self.lit(1, j);
+        let (q0, n0) = self.lit(0, j);
+        let ls = [o, q3, q2, q1, q0, target, tmp];
+        assert!((0..ls.len()).all(|i| (i + 1..ls.len()).all(|k| ls[i] != ls[k])) && !self.pre.contains(&tmp)
+                && !self.v.contains(&tmp) && !self.pre.contains(&target) && !self.v.contains(&target),
+                "R14_FWD94: the toggle's lanes collide");
+        let brk = r14_brk("lvl");
+        if n3 { b.x(q3); }
+        if n2 { b.x(q2); }
+        if n1 { b.x(q1); }
+        if n0 { b.x(q0); }
+        if brk { b.cx(o, tmp); } else { b.and_c(o, q3, tmp); }
+        b.x(o);
+        b.x(q3);
+        b.ccx(q2, q1, o);
+        b.ccx(o, q0, q3);
+        b.ccx(tmp, q3, target);
+        if !r14_brk("cc") { b.ccx(o, q0, q3); }
+        b.ccx(q2, q1, o);
+        b.x(q3);
+        b.x(o);
+        if brk { b.cx(o, tmp); } else { b.and_u(o, q3, tmp); }
+        if n0 { b.x(q0); }
+        if n1 { b.x(q1); }
+        if n2 { b.x(q2); }
+        if n3 { b.x(q3); }
+    }
+    /// H793 "Heieiei": `xor_ret_tmp_cc`'s idea one level further down. o is the last retained level (bits n-1 .. 5), a =
+    /// o & lit(4) is formed on the clean AND temp `tmp`; where a = 1, o and lit(4) both read 1, so after an X each is |0>
+    /// and carries the chain o' = l3 l2, q4' = o' l1; the target takes a o' (= a l3 l2), then o' ^= q4' l0 (o' = l3 l2 ^
+    /// l3 l2 l1 l0) and the target takes a o' again: net target ^= a l3 l2 l1 l0. Where a = 0 both target CCX are off;
+    /// the chain is undone by the same CCX (exact on every shot), X back, a uncomputed by measurement. Borrow-free, 9
+    /// Toffoli per toggle (1 AND + 8 CCX); brute-forced over all 128 states (lanes/r14/h793/scripts/l2check.py).
+    fn xor_ret_tmp_cc5(&mut self, b: &mut B, j: usize, target: QubitId, tmp: QubitId) {
+        let o = self.goto_impl(b, j, true);
+        let (q4, n4) = self.lit(4, j);
+        let (q3, n3) = self.lit(3, j);
+        let (q2, n2) = self.lit(2, j);
+        let (q1, n1) = self.lit(1, j);
+        let (q0, n0) = self.lit(0, j);
+        let ls = [o, q4, q3, q2, q1, q0, target, tmp];
+        assert!((0..ls.len()).all(|i| (i + 1..ls.len()).all(|k| ls[i] != ls[k])) && !self.pre.contains(&tmp)
+                && !self.v.contains(&tmp) && !self.pre.contains(&target) && !self.v.contains(&target),
+                "H793 Heieiei: the toggle's lanes collide");
+        let lits = [(q4, n4), (q3, n3), (q2, n2), (q1, n1), (q0, n0)];
+        for &(q, ng) in &lits { if ng { b.x(q); } }
+        b.and_c(o, q4, tmp);
+        b.x(o);
+        b.x(q4);
+        b.ccx(q3, q2, o);
+        b.ccx(o, q1, q4);
+        b.ccx(tmp, o, target);
+        b.ccx(q4, q0, o);
+        if !h793_brk("mid") { b.ccx(tmp, o, target); }
+        b.ccx(q4, q0, o);
+        b.ccx(o, q1, q4);
+        b.ccx(q3, q2, o);
+        b.x(q4);
+        b.x(o);
+        b.and_u(o, q4, tmp);
+        for &(q, ng) in lits.iter().rev() { if ng { b.x(q); } }
+    }
+    /// B792_P1: target ^= [v == j] with the last retained level o (bits n-1 .. 6), the transient level a = o & lit(5) on the
+    /// clean AND temp `tmp` (|0> before and after, uncomputed by measurement), and the six-literal AND (a, lit 4 .. 0) into
+    /// the target through four borrowed dirty lanes (`and_dirty`: Barenco Lemma 7.2, any state, restored). 17 Toffoli.
+    fn xor_ret_tmp_d6(&mut self, b: &mut B, j: usize, target: QubitId, tmp: QubitId) {
+        // no retained level (n = 7): the first level is the top literal itself
+        let (o, no) = if self.pre.is_empty() { self.lit(self.n() - 1, j) } else { (self.goto_impl(b, j, true), false) };
+        let (q5, n5) = self.lit(5, j);
+        assert!(tmp != o && tmp != q5 && tmp != target && !self.pre.contains(&tmp) && !self.v.contains(&tmp)
+                && !self.pre.contains(&target) && !self.v.contains(&target), "B792_P1: the toggle's lanes collide");
+        let mut lits: Vec<(QubitId, bool)> = vec![(tmp, false)];
+        lits.extend((0..5).rev().map(|k| self.lit(k, j)));
+        let ds: Vec<QubitId> = borrowed().into_iter()
+            .filter(|&q| q != o && q != tmp && q != target && !self.pre.contains(&q) && !self.v.contains(&q)).take(4).collect();
+        assert!(ds.len() == 4, "B792_P1: four borrowed lanes");
+        if n5 { b.x(q5); }
+        if no { b.x(o); }
+        if b792_brk("lvl") { b.cx(o, tmp); } else { b.and_c(o, q5, tmp); }
+        if b792_brk("lit") { lits.pop(); }
+        super::arith::and_dirty(b, &lits, target, &ds);
+        if b792_brk("lvl") { b.cx(o, tmp); } else { b.and_u(o, q5, tmp); }
+        if no { b.x(o); }
+        if n5 { b.x(q5); }
+    }
+    fn xor_ret_short3(&mut self, b: &mut B, j: usize, target: QubitId) {
+        let o = self.goto_impl(b, j, true);
+        let (q2, n2) = self.lit(2, j);
+        let (q1, n1) = self.lit(1, j);
+        let (q0, n0) = self.lit(0, j);
+        let ds: Vec<QubitId> = borrowed().into_iter()
+            .filter(|&q| q != o && q != q2 && q != q1 && q != q0 && q != target && !self.pre.contains(&q))
+            .take(2).collect();
+        assert!(ds.len() == 2, "R12_SH3: two borrowed lanes");
+        let (d1, d2) = (ds[0], ds[1]);
+        if n2 { b.x(q2); }
+        if n1 { b.x(q1); }
+        if n0 { b.x(q0); }
+        // target ^= q0 d2; d2 ^= q1 d1; d1 ^= o q2; d2 ^= q1 d1; target ^= q0 d2; d2 ^= q1 d1; d1 ^= o q2; d2 ^= q1 d1
+        // => target ^= q0 q1 q2 o, d1 and d2 restored
+        b.ccx(q0, d2, target);
+        b.ccx(q1, d1, d2);
+        b.ccx(o, q2, d1);
+        b.ccx(q1, d1, d2);
+        // negative control for the gate tests only: R12_BRK=sh3 drops the second target CCX (target ^= q0 d2_0 instead
+        // of q0 q1 q2 o: the toggle writes garbage), R12_BRK=sh3d leaves the second borrowed lane unrestored
+        let brk = cfg!(test).then(|| std::env::var("R12_BRK").unwrap_or_default()).unwrap_or_default();
+        if brk != "sh3" { b.ccx(q0, d2, target); }
+        b.ccx(q1, d1, d2);
+        b.ccx(o, q2, d1);
+        if brk != "sh3d" { b.ccx(q1, d1, d2); }
+        if n0 { b.x(q0); }
+        if n1 { b.x(q1); }
+        if n2 { b.x(q2); }
+    }
+    fn xor_ret_short2(&mut self, b: &mut B, j: usize, target: QubitId) {
+        let o = self.goto_impl(b, j, true);
+        let (q1, n1) = self.lit(1, j);
+        let (q0, n0) = self.lit(0, j);
+        let d = borrowed().into_iter().find(|&q| q != o && q != q1 && q != q0 && q != target && !self.pre.contains(&q))
+            .expect("R10_SH2: a borrowed lane");
+        if n1 { b.x(q1); }
+        if n0 { b.x(q0); }
+        // target ^= q0 d; d ^= o q1; target ^= q0 d; d ^= o q1  =>  target ^= q0 o q1, d restored
+        b.ccx(q0, d, target);
+        b.ccx(o, q1, d);
+        b.ccx(q0, d, target);
+        b.ccx(o, q1, d);
+        if n0 { b.x(q0); }
+        if n1 { b.x(q1); }
+    }
+    fn xor_ret_short(&mut self, b: &mut B, j: usize, target: QubitId) {
+        let o = self.goto_impl(b, j, true);
+        let (q0, neg) = self.lit(0, j);
+        if neg { b.x(q0); }
+        b.ccx(o, q0, target);
+        if neg { b.x(q0); }
+    }
+    fn lit(&self, k: usize, j: usize) -> (QubitId, bool) {
+        (self.v[k], (j >> k) & 1 == 0)
+    }
+    fn comp(&self, b: &mut B, i: usize, j: usize, undo: bool) {
+        let n = self.n();
+        let (q2, neg2) = self.lit(n - 2 - i, j);
+        let (q1, neg1) = if i == 0 { self.lit(n - 1, j) } else { (self.pre[i - 1], false) };
+        if neg1 {
+            b.x(q1);
+        }
+        if neg2 {
+            b.x(q2);
+        }
+        if undo { b.and_u(q1, q2, self.pre[i]) } else { b.and_c(q1, q2, self.pre[i]) }
+        if neg2 {
+            b.x(q2);
+        }
+        if neg1 {
+            b.x(q1);
+        }
+    }
+    /// prefixes live for j; returns the qubit holding [v == j]
+    fn goto(&mut self, b: &mut B, j: usize) -> QubitId {
+        assert_eq!(self.pre.len(), self.n() - 1, "goto needs a retained prefix");
+        self.goto_impl(b, j, true)
+    }
+    /// Toggle a target by the exact equality without retaining the final
+    /// prefix. The n-2 prefix lanes are zero again after each toggle.
+    fn xor_into(&self, b: &mut B, j: usize, target: QubitId) {
+        let n = self.n();
+        assert!(n >= 3 && self.pre.len() == n - 2);
+        b.begin();
+        for i in 0..n - 2 {
+            let (lhs, n1) = if i == 0 { self.lit(n - 1, j) } else { (self.pre[i - 1], false) };
+            let (rhs, n2) = self.lit(n - 2 - i, j);
+            if n1 { b.x(lhs); }
+            if n2 { b.x(rhs); }
+            b.and_c(lhs, rhs, self.pre[i]);
+            if n2 { b.x(rhs); }
+            if n1 { b.x(lhs); }
+        }
+        let r = b.end();
+        b.play(&r, false);
+        let (last, neg) = self.lit(0, j);
+        if neg { b.x(last); }
+        b.ccx(self.pre[n - 3], last, target);
+        if neg { b.x(last); }
+        b.play(&r, true);
+    }
+    fn goto_impl(&mut self, b: &mut B, j: usize, fast: bool) -> QubitId {
+        let n = self.n();
+        let levels = self.pre.len();
+        let keep = match self.cur {
+            None => 0,
+            Some(c) => {
+                let mut kp = 0;
+                while kp < levels && ((c ^ j) >> (n - 2 - kp)) == 0 {
+                    kp += 1;
+                }
+                kp
+            }
+        };
+        if fast {
+            if let Some(c) = self.cur {
+                if keep < levels && ((c ^ j) >> (n - 1)) == 0 {
+                    // At the first changed bit, the parent equality is the
+                    // same for c and j, while that bit's literal flips.
+                    // Toggle its prefix with CNOT, then rebuild only below it.
+                    for i in ((keep + 1)..levels).rev() {
+                        self.comp(b, i, c, true);
+                    }
+                    let (parent, negative) = if keep == 0 {
+                        self.lit(n - 1, j)
+                    } else {
+                        (self.pre[keep - 1], false)
+                    };
+                    if negative { b.x(parent); }
+                    b.cx(parent, self.pre[keep]);
+                    if negative { b.x(parent); }
+                    for i in (keep + 1)..levels {
+                        self.comp(b, i, j, false);
+                    }
+                    self.cur = Some(j);
+                    return self.pre[levels - 1];
+                }
+            }
+        }
+        if let Some(c) = self.cur {
+            for i in (keep..levels).rev() {
+                self.comp(b, i, c, true);
+            }
+        }
+        for i in keep..levels {
+            self.comp(b, i, j, false);
+        }
+        self.cur = Some(j);
+        self.pre[levels - 1]
+    }
+    fn clear(&mut self, b: &mut B) {
+        if self.pre.len() == self.n() - 2 && !self.short() {
+            assert!(self.cur.is_none());
+            return;
+        }
+        if let Some(c) = self.cur {
+            for i in (0..self.pre.len()).rev() {
+                self.comp(b, i, c, true);
+            }
+        }
+        self.cur = None;
+    }
+}
+
+/// t ^= [v >= k] for a classical k (v little-endian, n bits), using `chain` ancillas (len >= n). All ANDs are
+/// measurement-uncomputed, so the cost is <= n - 1 Toffoli.
+pub fn ge_const(b: &mut B, v: &[QubitId], k: isize, t: QubitId, chain: &[QubitId]) {
+    let n = v.len();
+    if k <= 0 {
+        b.x(t);
+        return;
+    }
+    if k >= (1isize << n) {
+        return;
+    }
+    let kk = k as usize;
+    // v >= k  <=>  carry out of v + (2^n - k).  c_0 = 0; addend bits a_i = bit i of (2^n - k).
+    // carry: c_{i+1} = a_i ? (v_i | c_i) : (v_i & c_i). Track c as Const(bool) or Q(qubit, negated).
+    #[derive(Clone, Copy)]
+    enum C {
+        K(bool),
+        Q(QubitId, bool),
+    }
+    let addend = (1usize << n) - kk;
+    b.begin();
+    let mut c = C::K(false);
+    let mut used = 0usize;
+    for i in 0..n {
+        let a = (addend >> i) & 1 == 1;
+        let vi = C::Q(v[i], false);
+        c = match (a, c) {
+            (true, C::K(true)) => C::K(true),
+            (true, C::K(false)) => vi,
+            (false, C::K(true)) => vi,
+            (false, C::K(false)) => C::K(false),
+            (_, C::Q(q, ng)) => {
+                // AND: v_i & c ; OR: !( !v_i & !c )
+                let out = chain[used];
+                used += 1;
+                let (nv, nc) = if a { (true, !ng) } else { (false, ng) };
+                if nv {
+                    b.x(v[i]);
+                }
+                if nc {
+                    b.x(q);
+                }
+                b.and_c(v[i], q, out);
+                if nc {
+                    b.x(q);
+                }
+                if nv {
+                    b.x(v[i]);
+                }
+                C::Q(out, a) // OR result is the negation of the AND of negations
+            }
+        };
+    }
+    let rec = b.end();
+    b.play(&rec, false);
+    match c {
+        C::K(true) => b.x(t),
+        C::K(false) => {}
+        C::Q(q, ng) => {
+            b.cx(q, t);
+            if ng {
+                b.x(t);
+            }
+        }
+    }
+    b.play(&rec, true);
+}
+
+/// The phase (-1)^[v >= k] (ge_const with a phase in place of the XOR), for a measured erase.
+pub fn ge_const_phase(b: &mut B, v: &[QubitId], k: isize, chain: &[QubitId]) {
+    let n = v.len();
+    if k <= 0 {
+        neg_one(b);
+        return;
+    }
+    if k >= (1isize << n) {
+        return;
+    }
+    let kk = k as usize;
+    // v >= k  <=>  carry out of v + (2^n - k).  c_0 = 0; addend bits a_i = bit i of (2^n - k).
+    // carry: c_{i+1} = a_i ? (v_i | c_i) : (v_i & c_i). Track c as Const(bool) or Q(qubit, negated).
+    #[derive(Clone, Copy)]
+    enum C {
+        K(bool),
+        Q(QubitId, bool),
+    }
+    let addend = (1usize << n) - kk;
+    b.begin();
+    let mut c = C::K(false);
+    let mut used = 0usize;
+    for i in 0..n {
+        let a = (addend >> i) & 1 == 1;
+        let vi = C::Q(v[i], false);
+        c = match (a, c) {
+            (true, C::K(true)) => C::K(true),
+            (true, C::K(false)) => vi,
+            (false, C::K(true)) => vi,
+            (false, C::K(false)) => C::K(false),
+            (_, C::Q(q, ng)) => {
+                // AND: v_i & c ; OR: !( !v_i & !c )
+                let out = chain[used];
+                used += 1;
+                let (nv, nc) = if a { (true, !ng) } else { (false, ng) };
+                if nv {
+                    b.x(v[i]);
+                }
+                if nc {
+                    b.x(q);
+                }
+                b.and_c(v[i], q, out);
+                if nc {
+                    b.x(q);
+                }
+                if nv {
+                    b.x(v[i]);
+                }
+                C::Q(out, a) // OR result is the negation of the AND of negations
+            }
+        };
+    }
+    let rec = b.end();
+    b.play(&rec, false);
+    match c {
+        C::K(true) => neg_one(b),
+        C::K(false) => {}
+        C::Q(q, ng) => {
+            if ng {
+                b.x(q);
+            }
+            b.z(q);
+            if ng {
+                b.x(q);
+            }
+        }
+    }
+    b.play(&rec, true);
+}
+
+/// R6-ROOM799 (R6_GEC): ge_const / ge_const_phase whose last carry step goes straight to the target (a Toffoli onto
+/// t, or a CZ-form phase), so the chain needs one lane fewer: `ge_const_lanes(n, k)` lanes. Same Toffoli count as
+/// ge_const (the last AND becomes one CCX); the phase form saves the last AND's Toffoli. Exact.
+pub fn ge_const_lanes(n: usize, k: isize) -> usize {
+    if k <= 0 || k >= (1isize << n) { return 0; }
+    let addend = (1usize << n) - k as usize;
+    let (mut q, mut used, mut last) = (false, 0usize, false);
+    let mut kc = false;
+    for i in 0..n {
+        let a = (addend >> i) & 1 == 1;
+        last = false;
+        if q { used += 1; last = true; } else if a != kc { q = true; } // a=1,K(false) -> v_i ; a=0,K(true) -> v_i
+        else if a { kc = true; }
+    }
+    if last { used - 1 } else { used }
+}
+fn ge_lean(b: &mut B, v: &[QubitId], k: isize, chain: &[QubitId], fin: &mut dyn FnMut(&mut B, Option<(QubitId, bool, QubitId, bool, bool)>, Option<(QubitId, bool)>, bool)) {
+    let n = v.len();
+    let addend = (1usize << n) - k as usize;
+    #[derive(Clone, Copy)]
+    enum C { K(bool), Q(QubitId, bool) }
+    b.begin();
+    let mut c = C::K(false);
+    let mut used = 0usize;
+    let mut tail = None;
+    for i in 0..n {
+        let a = (addend >> i) & 1 == 1;
+        let vi = C::Q(v[i], false);
+        c = match (a, c) {
+            (true, C::K(true)) => C::K(true),
+            (true, C::K(false)) => vi,
+            (false, C::K(true)) => vi,
+            (false, C::K(false)) => C::K(false),
+            (_, C::Q(q, ng)) => {
+                let (nv, nc) = if a { (true, !ng) } else { (false, ng) };
+                if i == n - 1 { tail = Some((v[i], nv, q, nc, a)); break; }
+                let out = chain[used];
+                used += 1;
+                if nv { b.x(v[i]); }
+                if nc { b.x(q); }
+                b.and_c(v[i], q, out);
+                if nc { b.x(q); }
+                if nv { b.x(v[i]); }
+                C::Q(out, a)
+            }
+        };
+    }
+    let rec = b.end();
+    b.play(&rec, false);
+    match (tail, c) {
+        (Some(_), _) => fin(b, tail, None, false),
+        (None, C::K(kb)) => fin(b, None, None, kb),
+        (None, C::Q(q, ng)) => fin(b, None, Some((q, ng)), false),
+    }
+    b.play(&rec, true);
+}
+/// t ^= [v >= k] on a chain of ge_const_lanes(v.len(), k) clean lanes.
+pub fn ge_const_lean(b: &mut B, v: &[QubitId], k: isize, t: QubitId, chain: &[QubitId]) {
+    if k <= 0 { b.x(t); return; }
+    if k >= (1isize << v.len()) { return; }
+    ge_lean(b, v, k, chain, &mut |b, tail, q, kb| {
+        if let Some((vi, nv, q, nc, neg)) = tail {
+            // t ^= (vi^nv) & (q^nc), negated when the step is an OR
+            if nv { b.x(vi); }
+            if nc { b.x(q); }
+            b.ccx(vi, q, t);
+            if nc { b.x(q); }
+            if nv { b.x(vi); }
+            if neg { b.x(t); }
+        } else if let Some((q, ng)) = q {
+            b.cx(q, t);
+            if ng { b.x(t); }
+        } else if kb { b.x(t); }
+    });
+}
+/// The phase (-1)^[v >= k] on a chain of ge_const_lanes(v.len(), k) clean lanes; the last step is Toffoli-free.
+pub fn ge_const_phase_lean(b: &mut B, v: &[QubitId], k: isize, chain: &[QubitId]) {
+    if k <= 0 { neg_one(b); return; }
+    if k >= (1isize << v.len()) { return; }
+    ge_lean(b, v, k, chain, &mut |b, tail, q, kb| {
+        if let Some((vi, nv, q, nc, neg)) = tail {
+            // AND step: (-1)^(l1 l2) = CZ on the literals. OR step: value = !(l1 & l2) with l = negated literals, i.e.
+            // (-1)^(x | y) for x = !l1, y = !l2: Z(x) Z(y) CZ(x, y)
+            let (lv, lq) = if neg { (!nv, !nc) } else { (nv, nc) };
+            if lv { b.x(vi); }
+            if lq { b.x(q); }
+            b.cz(vi, q);
+            if neg { b.z(vi); b.z(q); }
+            if lq { b.x(q); }
+            if lv { b.x(vi); }
+        } else if let Some((q, ng)) = q {
+            if ng { b.x(q); }
+            b.z(q);
+            if ng { b.x(q); }
+        } else if kb { neg_one(b); }
+    });
+}
+
+/// A phase of -1 on every shot that reaches it (through a |0> lane flipped to |1>).
+fn neg_one(b: &mut B) {
+    let a = b.alloc();
+    b.x(a);
+    b.z(a);
+    b.x(a);
+    b.free(a);
+}
+
+thread_local! {
+    /// Lanes in an unknown state that comparators may borrow when a pass carries no clean chain (set by greedyfrog
+    /// for its slots; froghop passes always carry a chain).
+    static BORROWED: std::cell::RefCell<Vec<QubitId>> = std::cell::RefCell::new(vec![]);
+}
+
+/// P2-REBASE: the current borrowed lanes.
+pub fn borrowed() -> Vec<QubitId> {
+    BORROWED.with(|v| v.borrow().clone())
+}
+/// Set the borrowed lanes for passes whose scratch has an empty `chain`.
+pub fn set_borrowed(lanes: &[QubitId]) {
+    BORROWED.with(|v| *v.borrow_mut() = lanes.to_vec());
+}
+
+thread_local! {
+    /// b793b F6 (B793_F6): the masked ladders run without their AND temp (`Mscr.t` is NOQ): three-control cells on one borrowed dirty lane
+    /// (4 CCX, the lane restored), the U decoder as a 6-control AND on borrowed lanes, the forward decoder as RSHORT2 (no transient level)
+    pub static NOTEMP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+pub fn notemp() -> bool { NOTEMP.with(|c| c.get()) }
+/// b793b F6: target ^= c1 & c2 & c3 through one borrowed dirty lane d (any state, restored): d ^= c1 c2; target ^= c3 d; d ^= c1 c2; target ^= c3 d
+/// gives target ^= c3 (d ^ c1 c2) ^ c3 d = c1 c2 c3.
+pub fn ccc_dirty(b: &mut B, c1: QubitId, c2: QubitId, c3: QubitId, target: QubitId) {
+    let d = borrowed().into_iter().find(|&q| q != c1 && q != c2 && q != c3 && q != target).expect("b793 F6: a borrowed lane");
+    b.ccx(c1, c2, d);
+    b.ccx(c3, d, target);
+    // negative controls for the gate tests only (B793_BREAK): f61 leaves the borrowed lane holding d ^ c1 c2, f62 drops the last write
+    if !f6_break("f61") { b.ccx(c1, c2, d); }
+    if !f6_break("f62") { b.ccx(c3, d, target); }
+}
+/// b793b F6=3: the NOTEMP down cell with an ALWAYS write gate in 4 CCX (x ^= f s t, then t ^= f s, through one borrowed lane d; the independent review's form):
+/// t ^= d; d ^= f s; t ^= d; X t; x ^= d t; d ^= f s; x ^= d t; X t
+pub fn down4_dirty(b: &mut B, f: QubitId, s: QubitId, t: QubitId, x: QubitId) {
+    let d = borrowed().into_iter().find(|&q| q != f && q != s && q != t && q != x).expect("b793 F6: a borrowed lane");
+    b.cx(d, t);
+    b.ccx(f, s, d);
+    b.cx(d, t);
+    b.x(t);
+    b.ccx(d, t, x);
+    b.ccx(f, s, d);
+    if !f6_break("f66") { b.ccx(d, t, x); }
+    b.x(t);
+}
+pub(crate) fn f6c() -> bool { static E: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var("B793_F6").map_or(false, |v| v.trim() == "3")); *E }
+pub(crate) fn f6_break(tag: &str) -> bool { cfg!(test) && std::env::var("B793_BREAK").map_or(false, |v| v.trim() == tag) }
+/// b793b F6: the phase (-1)^(c1 c2 c3) through one borrowed dirty lane: Z on c1 (d ^ c2 c3) and on c1 d cancel to c1 c2 c3
+pub fn phase_ccc_dirty(b: &mut B, c1: QubitId, c2: QubitId, c3: QubitId) {
+    let d = borrowed().into_iter().find(|&q| q != c1 && q != c2 && q != c3).expect("b793 F6: a borrowed lane");
+    b.ccx(c2, c3, d);
+    b.cz(c1, d);
+    b.ccx(c2, c3, d);
+    b.cz(c1, d);
+}
+
+/// t ^= [v >= k] for a classical k with borrowed lanes in any state (restored): the cubes "v agrees with k above bit i,
+/// v_i = 1 where k_i = 0" and "v == k" are disjoint, so their ANDs add up to the comparison.
+pub fn ge_const_dirty(b: &mut B, v: &[QubitId], k: isize, t: QubitId, dirty: &[QubitId]) {
+    ge_const_dirty_gated(b, v, k, t, &[], dirty);
+}
+
+/// t ^= AND(gate literals) & [v >= k], the gate literals joining every cube of `ge_const_dirty`.
+pub fn ge_const_dirty_gated(b: &mut B, v: &[QubitId], k: isize, t: QubitId, gate: &[(QubitId, bool)], dirty: &[QubitId]) {
+    let n = v.len();
+    if k >= (1isize << n) {
+        return;
+    }
+    if k <= 0 {
+        if gate.is_empty() {
+            b.x(t);
+        } else {
+            super::arith::and_dirty(b, gate, t, dirty);
+        }
+        return;
+    }
+    let kk = k as usize;
+    let eq = |j: usize| (v[j], (kk >> j) & 1 == 0);
+    for i in (0..n).rev() {
+        if (kk >> i) & 1 == 0 {
+            let mut lits: Vec<(QubitId, bool)> = gate.to_vec();
+            lits.extend((i + 1..n).map(eq));
+            lits.push((v[i], false));
+            super::arith::and_dirty(b, &lits, t, dirty);
+        }
+    }
+    let mut lits: Vec<(QubitId, bool)> = gate.to_vec();
+    lits.extend((0..n).map(eq));
+    super::arith::and_dirty(b, &lits, t, dirty);
+}
+
+/// t ^= [v in [lo, hi]] (inclusive interval, classical bounds)
+fn in_range(b: &mut B, v: &[QubitId], lo: isize, hi: isize, t: QubitId, chain: &[QubitId]) {
+    if chain.is_empty() {
+        let d = BORROWED.with(|v| v.borrow().clone());
+        ge_const_dirty(b, v, lo, t, &d);
+        ge_const_dirty(b, v, hi + 1, t, &d);
+        return;
+    }
+    ge_const(b, v, lo, t, chain);
+    ge_const(b, v, hi + 1, t, chain);
+}
+
+/// Ladder pass description.
+pub struct Lad<'a> {
+    pub t: &'a [QubitId],
+    pub s: &'a [QubitId],
+    pub c0: QubitId,
+    pub srcs: &'a [Src],
+    /// value of f before lane 0 (same for every shot)
+    pub f0: bool,
+    pub cmpl: bool,
+    pub sc: &'a Mscr,
+    /// clean qubits (|0> before and after a pass pair): the first g.len() ordinary lanes keep their carry there as
+    /// a logical AND (uncomputed by measurement on the return pass) instead of in the source lane
+    pub g: &'a [QubitId],
+}
+
+fn masked(ld: &Lad, l: usize) -> bool {
+    ld.srcs.iter().any(|s| l >= s.lo && l < s.hi)
+}
+
+/// The pi-parity source marks lane zero masked even when pi is known odd.
+/// No cell acts there: f starts at zero, c0 is zero, and no other source covers it.
+fn skip_zero_pi_lane(ld: &Lad, l: usize) -> bool {
+    l == 0 && !ld.f0
+        && ld.srcs.iter().any(|s| s.d == 0 && s.a == 1 && s.lo == 0 && s.hi > 0)
+        && ld.srcs.iter().all(|s| s.lo > 0 || (s.d == 0 && s.a == 1))
+}
+
+/// Pair two pi-only masked lanes whose one-hot source toggles f at the first lane.
+fn pi_pair(ld: &Lad, l: usize) -> bool {
+    if ld.f0 || ld.srcs.is_empty() || ld.sc.chain.len() < 2 { return false; }
+    let pi = &ld.srcs[0];
+    if pi.d != 0 || pi.lo != 0 || pi.a < 0 || pi.a > 1 { return false; }
+    let next = ld.srcs.iter().skip(1).map(|s| s.lo).min().unwrap_or(ld.t.len());
+    l % 2 == pi.a as usize && l + 1 < pi.hi.min(next).min(ld.t.len())
+}
+
+fn masked_pair_up(b: &mut B, ld: &Lad, l: usize, x: QubitId) {
+    let (ta, sa, tb, sb) = (ld.t[l], ld.s[l], ld.t[l + 1], ld.s[l + 1]);
+    assert!(!notemp(), "b793 F6: pi pairs need the AND temp");
+    let (a, c) = (ld.sc.t, ld.sc.chain[0]);
+    b.cx(x, ta); b.cx(x, sa); b.and_c(ta, sa, a);
+    b.cx(x, tb); b.cx(a, tb); b.cx(x, sb); b.cx(a, sb);
+    b.and_c(tb, sb, c); b.cx(c, a); b.ccx(ld.sc.f, a, x);
+    b.cx(c, a); b.and_u(tb, sb, c); b.and_u(ta, sa, a);
+}
+
+fn masked_pair_down(b: &mut B, ld: &Lad, l: usize, x: QubitId, g: QubitId) {
+    let (ta, sa, tb, sb) = (ld.t[l], ld.s[l], ld.t[l + 1], ld.s[l + 1]);
+    assert!(!notemp(), "b793 F6: pi pairs need the AND temp");
+    let (a, c, fg) = (ld.sc.t, ld.sc.chain[0], ld.sc.chain[1]);
+    b.and_c(ta, sa, a); b.and_c(tb, sb, c); b.cx(c, a);
+    b.ccx(ld.sc.f, a, x); b.cx(c, a); b.and_u(tb, sb, c);
+    b.and_c(ld.sc.f, g, fg); b.ccx(fg, sb, tb);
+    b.cx(x, tb); b.cx(a, tb); b.cx(x, sb); b.cx(a, sb);
+    b.and_u(ta, sa, a); b.ccx(fg, sa, ta);
+    b.cx(x, ta); b.cx(x, sa); b.and_u(ld.sc.f, g, fg);
+}
+
+/// Pool index of ordinary lane l if it takes a logical-AND carry.
+fn gidx(ld: &Lad, l: usize) -> Option<usize> {
+    if masked(ld, l) || ld.g.is_empty() {
+        return None;
+    }
+    let k = (0..l).filter(|&m| !masked(ld, m)).count();
+    (k < ld.g.len()).then_some(k)
+}
+
+/// Wire holding c_l (carry into ladder lane l).
+fn carry_wire(ld: &Lad, l: usize) -> QubitId {
+    let mut w = ld.c0;
+    let mut k = 0;
+    for m in 0..l {
+        if !masked(ld, m) {
+            w = if k < ld.g.len() { ld.g[k] } else { ld.s[m] };
+            k += 1;
+        }
+    }
+    w
+}
+
+/// Wire holding the carry out of the last lane after `mup`.
+pub fn top_carry(ld: &Lad) -> QubitId {
+    carry_wire(ld, ld.t.len())
+}
+
+/// f ^= f0 ^ sum_s [v_s in span_s]  (the value f has after the last lane)
+fn f_end(b: &mut B, ld: &Lad) {
+    if ld.f0 {
+        b.x(ld.sc.f);
+    }
+    for s in ld.srcs {
+        let (lo, hi) = s.span();
+        in_range(b, &s.v, lo, hi, ld.sc.f, &ld.sc.chain);
+    }
+}
+
+/// Per-lane source actions. `pre`: before lane l's cell (up pass) / after it (down pass): early sources toggle f,
+/// late sources flip T[l]. Otherwise (`pre` false): after the cell (up) / before it (down): late sources toggle f.
+fn toggles(b: &mut B, ld: &Lad, decs: &mut [Dec], l: usize, pre: bool) {
+    for (si, s) in ld.srcs.iter().enumerate() {
+        if l >= s.lo && l < s.hi {
+            if !pre && !s.late {
+                continue;
+            }
+            let j = s.tv(l);
+            if j >= 0 && (j as usize) < (1usize << s.v.len()) {
+                let target = if s.late && pre { ld.t[l] } else { ld.sc.f };
+                if j > TVMAX.with(|c| c.get()) {
+                    // R11_LA5: no write; a retained prefix (full, RSHORT or RSHORT2) still moves to j
+                    if decs[si].short6l() && decs[si].pre.is_empty() { continue; }
+                    if decs[si].short6l() || decs[si].short5l() || decs[si].short4t() || decs[si].short3t() || decs[si].short3() || decs[si].short2t() || decs[si].short2()
+                        || decs[si].short() || decs[si].pre.len() + 1 == decs[si].n() {
+                        decs[si].goto_impl(b, j as usize, true);
+                    }
+                    continue;
+                }
+                if notemp() {
+                    // b793b F6: no AND temp: the U decoder as a 6-control AND on borrowed lanes, the forward decoder as RSHORT2
+                    if decs[si].short5t() {
+                        decs[si].xor_nt5(b, j as usize, target);
+                    } else if decs[si].short2t() || decs[si].short2() {
+                        decs[si].xor_ret_short2(b, j as usize, target);
+                    } else if decs[si].short3() {
+                        decs[si].xor_ret_short3(b, j as usize, target);
+                    } else if decs[si].short() {
+                        decs[si].xor_ret_short(b, j as usize, target);
+                    } else if decs[si].pre.len() == decs[si].n() - 2 {
+                        decs[si].xor_into(b, j as usize, target);
+                    } else {
+                        panic!("b793 F6: decoder form without the AND temp is not supported (pre {} n {})", decs[si].pre.len(), decs[si].n());
+                    }
+                } else if decs[si].short6l() {
+                    decs[si].xor_ret_tmp_d6(b, j as usize, target, ld.sc.t);
+                } else if decs[si].short5l() {
+                    decs[si].xor_ret_tmp_cc5(b, j as usize, target, ld.sc.t);
+                } else if decs[si].short4t() && R14L.with(|c| c.get()) {
+                    decs[si].xor_ret_tmp_cc(b, j as usize, target, ld.sc.t);
+                } else if decs[si].short5t() {
+                    decs[si].xor_t0(b, j as usize, target, ld.sc.t);
+                } else if decs[si].short2t() {
+                    decs[si].xor_ret_tmp(b, j as usize, target, ld.sc.t, 1);
+                } else if decs[si].short4t() {
+                    decs[si].xor_ret_tmp(b, j as usize, target, ld.sc.t, 3);
+                } else if decs[si].short3t() {
+                    decs[si].xor_ret_tmp(b, j as usize, target, ld.sc.t, 2);
+                } else if decs[si].short3() {
+                    decs[si].xor_ret_short3(b, j as usize, target);
+                } else if decs[si].short2() {
+                    decs[si].xor_ret_short2(b, j as usize, target);
+                } else if decs[si].short() {
+                    decs[si].xor_ret_short(b, j as usize, target);
+                } else if decs[si].pre.len() == decs[si].n() - 2 {
+                    decs[si].xor_into(b, j as usize, target);
+                } else {
+                    let o = decs[si].goto(b, j as usize);
+                    b.cx(o, target);
+                }
+            }
+        }
+    }
+}
+
+fn clear_ended(b: &mut B, ld: &Lad, decs: &mut [Dec], l: usize, up: bool) {
+    for (si, s) in ld.srcs.iter().enumerate() {
+        let end = if up { l + 1 == s.hi } else { l == s.lo };
+        if end {
+            decs[si].clear(b);
+        }
+    }
+}
+
+/// Masked majority ladder (up pass). With `cmpl` the target is complemented first (subtract/compare form).
+pub fn mup(b: &mut B, ld: &Lad) -> Vec<G> {
+    mup_impl(b, ld, false, None, false, None, &[])
+}
+
+/// Paired ladder form: leave the end mask and final decoder prefix live across
+/// a middle region that does not read either scratch object.
+pub fn mup_mid(b: &mut B, ld: &Lad) -> Vec<G> {
+    mup_impl(b, ld, true, None, false, None, &[])
+}
+
+/// In a paired inverse, the ordinary MAJ writes the exact carry measured by
+/// the forward rolling chain. Put the phase repair on that regenerated wire.
+pub fn mup_mid_repair(b: &mut B, ld: &Lad, carry_receipts: &[BitId]) -> Vec<G> {
+    mup_impl(b, ld, true, None, false, Some(carry_receipts), &[])
+}
+
+pub fn mup_mid_from(b: &mut B, ld: &Lad, start: usize) -> Vec<G> {
+    assert_eq!(ld.srcs.len(), 1);
+    mup_impl(b, ld, true, Some(start), false, None, &[])
+}
+
+pub fn mup_mid_from_repair(b: &mut B, ld: &Lad, start: usize, carry_receipts: &[BitId]) -> Vec<G> {
+    assert_eq!(ld.srcs.len(), 1);
+    mup_impl(b, ld, true, Some(start), false, Some(carry_receipts), &[])
+}
+
+pub fn mup_mid_spare_masked_from(b: &mut B, ld: &Lad, start: Option<usize>) -> Vec<G> {
+    assert_eq!(ld.srcs.len(), 1);
+    mup_impl(b, ld, true, start, true, None, &[])
+}
+
+/// K1 banked masked carries (S3-001, after SnehalRaj 29f13bac): the paired form whose masked cells keep f & s' on
+/// `bank` (one clean lane per masked cell, in lane order; a short bank covers the lowest cells) until the return
+/// pass, which then spends one Toffoli per banked cell instead of two. The bank is |0> again after the return pass
+/// (`mdown_mid_bank`, or the inverted recording).
+pub fn mup_mid_bank(b: &mut B, ld: &Lad, bank: &[QubitId]) -> Vec<G> {
+    mup_impl(b, ld, true, None, false, None, bank)
+}
+
+pub fn mdown_mid_bank(b: &mut B, ld: &Lad, g: Option<QubitId>, bank: &[QubitId]) -> Vec<G> {
+    mdown_impl(b, ld, g, g, true, None, bank)
+}
+
+/// `mdown_mid2` with a K1 bank.
+pub fn mdown_mid2_bank(b: &mut B, ld: &Lad, g_masked: Option<QubitId>, g_ord: Option<QubitId>, bank: &[QubitId]) -> Vec<G> {
+    mdown_impl(b, ld, g_ord, g_masked, true, None, bank)
+}
+
+/// K1: bank index of masked lane l (masked cells before l), if it has a bank lane.
+fn fs_idx(ld: &Lad, l: usize, bank: &[QubitId]) -> Option<usize> {
+    if bank.is_empty() { return None; }
+    let k = (0..l).filter(|&m| masked(ld, m) && !skip_zero_pi_lane(ld, m)).count();
+    (k < bank.len()).then_some(k)
+}
+
+pub fn clear_onehot_dec(b: &mut B, v: &[QubitId], pre: &[QubitId], start: usize) {
+    let mut dec = Dec { v, pre, cur: Some(start) };
+    dec.clear(b);
+}
+
+/// TERMINAL-CARRY SKIP (B-CRUMBS): mid passes whose caller never reads the top carry (a write follows and the carry out
+/// of the last lane is discarded: division rows, cofactor chains). The last lane's carry cell is not built on the way up
+/// and its down cell only writes the sum t ^= g & f & (s ^ c) (`mdown_*_nc`), so its carry Toffoli(s) go.
+pub fn mup_mid_nc(b: &mut B, ld: &Lad) -> Vec<G> {
+    mup_impl_nc(b, ld, true, None, false, None, true, &[], None)
+}
+pub fn mdown_mid_nc(b: &mut B, ld: &Lad, g: Option<QubitId>) -> Vec<G> {
+    assert!(g.is_some());
+    mdown_impl_nc(b, ld, g, g, true, None, true, &[], None)
+}
+/// TERM-NC with a K1 bank (B-PORT3 K2 on the cofactor passes): the top lane's sum-only cell uses no bank lane.
+pub fn mup_mid_nc_bank(b: &mut B, ld: &Lad, bank: &[QubitId]) -> Vec<G> {
+    mup_impl_nc(b, ld, true, None, false, None, true, bank, None)
+}
+pub fn mdown_mid_nc_bank(b: &mut B, ld: &Lad, g: Option<QubitId>, bank: &[QubitId]) -> Vec<G> {
+    assert!(g.is_some());
+    mdown_impl_nc(b, ld, g, g, true, None, true, bank, None)
+}
+pub fn mdown_mid2_nc_bank(b: &mut B, ld: &Lad, g_masked: Option<QubitId>, g_ord: Option<QubitId>, bank: &[QubitId]) -> Vec<G> {
+    assert!(g_ord.is_some());
+    mdown_impl_nc(b, ld, g_ord, g_masked, true, None, true, bank, None)
+}
+pub fn mdown_mid2_nc(b: &mut B, ld: &Lad, g_masked: Option<QubitId>, g_ord: Option<QubitId>) -> Vec<G> {
+    assert!(g_ord.is_some());
+    mdown_impl_nc(b, ld, g_ord, g_masked, true, None, true, &[], None)
+}
+
+/// ROLL-ROWS: the mid down pass of a ladder whose forward twin was rolled (`roll_fwd`) and which is played INVERTED as
+/// that twin's inverse: z_if on the carry wire of lane l + 1 right before lane l's cell, i.e. right after the inverted
+/// cell regenerates c_(l+1).
+pub fn mdown_mid_roll(b: &mut B, ld: &Lad, g: Option<QubitId>, rec: &RollRec) -> Vec<G> {
+    mdown_impl_nc(b, ld, g, g, true, None, false, &[], Some(rec))
+}
+/// `mdown_mid_roll` with the TERMINAL-CARRY SKIP.
+pub fn mdown_mid_nc_roll(b: &mut B, ld: &Lad, g: Option<QubitId>, rec: &RollRec) -> Vec<G> {
+    assert!(g.is_some());
+    mdown_impl_nc(b, ld, g, g, true, None, true, &[], Some(rec))
+}
+
+/// TC-PHASE (MICRO-WALK M-011): the phase (-1)^(carry out of the top lane) of a mid compare, with no top carry cell.
+/// The up pass runs without the last lane's cell (`mup_impl_nc`); with c the carry into that lane and t, s its lanes,
+/// carry out = c ^ (t ^ c)(s ^ c) (ordinary) or c ^ f (t ^ c)(s ^ c) (masked), so the phase is Z(c) CZ(t ^ c, s ^ c)
+/// or Z(c) CCZ(f, t ^ c, s ^ c) (one AND on the mask's temp lane). Returns false (nothing emitted) where the last
+/// lane is in a pi pair or the zero pi lane; the caller then runs the ordinary pass.
+pub fn mid_phase_top(b: &mut B, ld: &Lad, bank: &[QubitId], brk: bool) -> bool {
+    let l_n = ld.t.len();
+    if !nc_top(ld, true) {
+        return false;
+    }
+    let l = l_n - 1;
+    if masked(ld, l) && (ld.sc.t == ld.sc.f || ld.t.contains(&ld.sc.t) || ld.s.contains(&ld.sc.t)) {
+        return false;
+    }
+    // a late source at the top lane toggles f after the cell: not handled
+    if ld.srcs.iter().any(|s| s.late && l >= s.lo && l < s.hi) {
+        return false;
+    }
+    // K1 bank (B-PORT3): the masked cells below the top keep f & s' on the bank; replaying the recording inverted
+    // uncomputes them (1 Toffoli per banked cell, as `mdown_mid_bank`). The top lane takes no bank lane.
+    if bank.contains(&ld.sc.t) {
+        return false;
+    }
+    let ru = mup_impl_nc(b, ld, true, None, false, None, true, bank, None);
+    b.play(&ru, false);
+    let x = carry_wire(ld, l);
+    let (t, s) = (ld.t[l], ld.s[l]);
+    b.cx(x, t);
+    b.cx(x, s);
+    if !brk {
+        b.z(x);
+    }
+    if masked(ld, l) && notemp() {
+        phase_ccc_dirty(b, ld.sc.f, t, s);
+    } else if masked(ld, l) {
+        b.and_c(t, s, ld.sc.t);
+        b.cz(ld.sc.f, ld.sc.t);
+        b.and_u(t, s, ld.sc.t);
+    } else {
+        b.cz(t, s);
+    }
+    b.cx(x, s);
+    b.cx(x, t);
+    b.play(&ru, true);
+    true
+}
+
+/// Whether the TERMINAL-CARRY SKIP applies to the last lane (handled alone, not in a pi pair or the zero pi lane).
+fn nc_top(ld: &Lad, nc: bool) -> bool {
+    let l_n = ld.t.len();
+    nc && l_n >= 2 && !pi_pair(ld, l_n - 2) && !skip_zero_pi_lane(ld, l_n - 1)
+}
+
+fn mup_impl(b: &mut B, ld: &Lad, mid: bool, start: Option<usize>, bank_masked: bool,
+            repair: Option<&[BitId]>, bank: &[QubitId]) -> Vec<G> {
+    mup_impl_nc(b, ld, mid, start, bank_masked, repair, false, bank, None)
+}
+
+/// ROLL-FWD inverse side: the mid up pass with the rolled forward's phase repairs (`roll_fwd`): z_if on every carry
+/// wire the up pass regenerates (Cuccaro source lane, pooled AND lane, masked running wire, each right after its cell)
+/// and on the running mask's end value.
+pub fn mup_mid_roll(b: &mut B, ld: &Lad, rec: &RollRec) -> Vec<G> {
+    mup_impl_nc(b, ld, true, None, false, None, false, &[], Some(rec))
+}
+/// `mup_mid_roll` with the TERMINAL-CARRY SKIP (`mup_mid_nc`).
+pub fn mup_mid_nc_roll(b: &mut B, ld: &Lad, rec: &RollRec) -> Vec<G> {
+    mup_impl_nc(b, ld, true, None, false, None, true, &[], Some(rec))
+}
+
+/// K2 bank x ROLL-FWD (INTEGRATOR): the inverse passes' up pass with both the K1 bank on the masked cells and the
+/// rolled forward's phase repairs (a banked cell regenerates the same carry on the same running wire, so the repair
+/// sits where it does without the bank).
+pub fn mup_mid_bank_roll(b: &mut B, ld: &Lad, bank: &[QubitId], roll: Option<&RollRec>) -> Vec<G> {
+    mup_impl_nc(b, ld, true, None, false, None, false, bank, roll)
+}
+pub fn mup_mid_nc_bank_roll(b: &mut B, ld: &Lad, bank: &[QubitId], roll: Option<&RollRec>) -> Vec<G> {
+    mup_impl_nc(b, ld, true, None, false, None, true, bank, roll)
+}
+
+/// Negative controls for the ROLL-FWD gate tests only (ROLL_BREAK=k): 1 drops the repair of the middle ordinary lane's
+/// carry, 2 the middle masked lane's, 3 the running mask's end value, 4 the top carry's; 5 (ROLL-ROWS) the middle lane's
+/// repair in the inverted rows pass.
+pub(crate) fn roll_break(k: u32) -> bool {
+    cfg!(test) && std::env::var("ROLL_BREAK").map_or(false, |v| v.trim() == k.to_string())
+}
+
+fn mup_impl_nc(b: &mut B, ld: &Lad, mid: bool, start: Option<usize>, bank_masked: bool,
+            repair: Option<&[BitId]>, nc: bool, bank: &[QubitId], roll: Option<&RollRec>) -> Vec<G> {
+    let l_n = ld.t.len();
+    let nc = nc_top(ld, nc) && !bank_masked && repair.is_none();
+    assert!(bank.is_empty() || (!bank_masked && ld.srcs.iter().all(|s| s.d != 0 && !s.late)),
+            "K1 bank: no pi pairs, late sources or masked carry bank");
+    assert_eq!(ld.s.len(), l_n);
+    if let Some(bits) = repair { assert!(bits.len() <= l_n); }
+    b.begin();
+    if ld.cmpl {
+        for &q in ld.t {
+            b.x(q);
+        }
+    }
+    let mut decs: Vec<Dec> = ld.srcs.iter().map(|s| Dec { v: &s.v, pre: &s.pre, cur: start }).collect();
+    if ld.f0 {
+        b.x(ld.sc.f);
+    }
+    let ordinary_total = if bank_masked { (0..l_n).filter(|&i| !masked(ld, i)).count() } else { 0 };
+    let mut masked_seen = 0usize;
+    let mut l = 0;
+    while l < l_n {
+        let x = carry_wire(ld, l);
+        toggles(b, ld, &mut decs, l, true);
+        if pi_pair(ld, l) {
+            masked_pair_up(b, ld, l, x);
+            toggles(b, ld, &mut decs, l, false);
+            clear_ended(b, ld, &mut decs, l, true);
+            toggles(b, ld, &mut decs, l + 1, true);
+            toggles(b, ld, &mut decs, l + 1, false);
+            if !(mid && l + 2 == l_n) { clear_ended(b, ld, &mut decs, l + 1, true); }
+            l += 2;
+            continue;
+        }
+        if skip_zero_pi_lane(ld, l) {
+            // Both the masked cell and its return are identity on this lane.
+        } else if nc && l + 1 == l_n {
+            // TERMINAL-CARRY SKIP: no carry out of the last lane
+        } else if masked(ld, l) {
+            let bank_idx = ordinary_total + masked_seen;
+            masked_seen += 1;
+            if bank_masked && bank_idx < ld.g.len() {
+                let (t, s) = (ld.t[l], ld.s[l]);
+                b.cx(x, t);
+                b.cx(x, s);
+                b.and_c(t, s, ld.g[bank_idx]);
+                b.ccx(ld.sc.f, ld.g[bank_idx], x);
+            } else if let Some(k) = fs_idx(ld, l, bank) {
+                // K1: carry x ^= f & (t ^ x)(s ^ x) with f & s' kept on the bank lane for the return pass
+                let (t, s) = (ld.t[l], ld.s[l]);
+                b.cx(x, t);
+                b.cx(x, s);
+                b.and_c(ld.sc.f, s, bank[k]);
+                // negative control for the gate tests only: P3_BREAK=1 takes the carry's t literal from s
+                let tl = if cfg!(test) && std::env::var("P3_BREAK").map_or(false, |v| v.trim() == "1") { s } else { t };
+                b.ccx(bank[k], tl, x);
+            } else { masked_up_cell(b, ld, l, x); }
+        } else if let Some(k) = gidx(ld, l) {
+            // carry MAJ(x, t, s) = x ^ (t ^ x)(s ^ x) on a fresh qubit
+            let gq = ld.g[k];
+            b.cx(x, ld.t[l]);
+            b.cx(x, ld.s[l]);
+            b.and_c(ld.t[l], ld.s[l], gq);
+            b.cx(x, gq);
+        } else {
+            b.cx(ld.s[l], ld.t[l]);
+            b.cx(ld.s[l], x);
+            b.ccx(x, ld.t[l], ld.s[l]);
+        }
+        if let Some(bits) = repair {
+            if l < bits.len() {
+                assert!(!masked(ld, l) && gidx(ld, l).is_none(), "repair requires ordinary MAJ");
+                b.z_if(ld.s[l], bits[l]);
+            }
+        }
+        if let Some(r) = roll {
+            if let Some(Some(bit)) = r.rc.get(l) {
+                let m_n = (0..l_n).take_while(|&i| masked(ld, i)).count();
+                let drop = (roll_break(1) && l == (m_n + l_n) / 2) || (roll_break(2) && l == m_n / 2)
+                    || (roll_break(4) && l + 1 == l_n);
+                if !drop { b.z_if(carry_wire(ld, l + 1), *bit); }
+            }
+        }
+        toggles(b, ld, &mut decs, l, false);
+        if !(mid && l + 1 == l_n) {
+            clear_ended(b, ld, &mut decs, l, true);
+        }
+        l += 1;
+    }
+    if !mid { f_end(b, ld); }
+    if let Some(fb) = roll.and_then(|r| r.fb) {
+        if !roll_break(3) { b.z_if(ld.sc.f, fb); }
+    }
+    b.end()
+}
+
+/// Forward-ghost S5 ordinary prefix. Two clean lanes carry c_l and c_(l+1)
+/// alternately. Each spent carry is measured after its last consumer. The
+/// source lanes stay intact and the conditional sum write costs one T/lane.
+/// If a masked suffix exists, the boundary carry is moved to the usual source
+/// lane while ld.c0 temporarily holds that lane's original value.
+pub fn s5_rolling_prefix(b: &mut B, ld: &Lad, gate: QubitId,
+                         partner: QubitId, receipts: &[BitId]) {
+    let ordinary = ld.srcs.iter().map(|s| s.lo).min().unwrap_or(ld.t.len());
+    assert_eq!(ordinary, receipts.len());
+    assert!(ordinary > 0 && ld.f0 && ld.cmpl && ld.g.is_empty());
+    assert!(ld.srcs.iter().all(|s| s.lo == ordinary && s.hi == ld.t.len() && !s.late));
+    let mut cur = ld.c0;
+    let mut next = partner;
+    for l in 0..ordinary {
+        let (t, s) = (ld.t[l], ld.s[l]);
+        // The forward path is mdown_mid^{-1} then mup_mid^{-1}: its gated
+        // write comes before MAJ, so the carry uses the updated target.
+        b.x(t);
+        b.cx(s, cur);
+        b.ccx(gate, cur, t);
+        b.cx(s, cur);
+        b.cx(cur, t);
+        b.cx(cur, s);
+        b.and_c(t, s, next);
+        b.cx(cur, next);
+        b.cx(cur, s);
+        b.cx(cur, t);
+        b.x(t);
+        if l > 0 { b.hmr_to(cur, receipts[l - 1]); }
+        std::mem::swap(&mut cur, &mut next);
+    }
+    if ordinary == ld.t.len() {
+        b.hmr_to(cur, receipts[ordinary - 1]);
+    } else {
+        let boundary = ld.s[ordinary - 1];
+        b.swap(cur, boundary);
+        if cur != ld.c0 { b.swap(cur, ld.c0); }
+    }
+}
+
+/// Finish the masked suffix after its down/up pair has restored the window.
+pub fn s5_rolling_finish(b: &mut B, ld: &Lad, receipts: &[BitId]) {
+    let ordinary = receipts.len();
+    assert!(ordinary > 0 && ordinary < ld.t.len());
+    let boundary = ld.s[ordinary - 1];
+    b.hmr_to(boundary, receipts[ordinary - 1]);
+    b.swap(boundary, ld.c0);
+}
+
+/// ROLL-FWD receipts of one rolled forward ladder: `rc[l]` = the X-measurement record of the carry formed at lane l
+/// (c_(l+1)), None where nothing was measured; `fb` = the record of the running mask's end value.
+#[derive(Clone, Debug, Default)]
+pub struct RollRec {
+    pub rc: Vec<Option<BitId>>,
+    pub fb: Option<BitId>,
+}
+
+/// ROLL-FWD (R-028; the froghop S5 rolling prefix generalised to masked-prefix ladders and masked cells): run a forward
+/// ladder as the exact inverse of its matching inverse ladder `ld` (the I-ladder's own description: lanes, sources, c0,
+/// cmpl; its pool `g` is not read) in ONE upward traversal. Per lane l, with c = c_l on `cur`: write first,
+/// t ^= g f (s ^ c) (f = 1 on ordinary lanes; gates `g_ord` / `g_masked`, ALWAYS for none), then form the I-ladder's
+/// next carry on the UPDATED target in a clean lane, c_(l+1) = c ^ f (s ^ c)(t' ^ c) (in the I-ladder's frame: t
+/// complemented iff `ld.cmpl`), and X-measure the spent c_l into a receipt. The I-ladder's up pass regenerates every
+/// c_(l+1) on an addressable wire and repays the phase there (`mup_mid_roll`); the running mask's end value is measured
+/// and repaid the same way. Ordinary lane: 1 gated CCX + 1 AND (ALWAYS: 1 AND); masked cell: 2 AND + one decoder
+/// traversal (the up+down pair: 2 AND + 2 CCX + two traversals).
+/// `roll_masked` false (stage 1): the masked prefix runs its usual up pass in the forward's frame, the ordinary suffix
+/// rolls from the prefix's carry out (held on c0, never measured), then the masked down pass writes.
+/// `nc` (TERMINAL-CARRY SKIP, as the I-ladder's): the last lane only writes. `top` = Some((gate or ALWAYS, target)):
+/// target ^= gate & c_L before c_L is measured. `lanes`: clean lanes, 1 (`roll_masked`) or 2.
+pub fn roll_fwd(b: &mut B, ld: &Lad, g_ord: QubitId, g_masked: QubitId, roll_masked: bool, nc: bool,
+                lanes: &[QubitId], top: Option<(QubitId, QubitId)>) -> RollRec {
+    let l_n = ld.t.len();
+    assert_eq!(ld.s.len(), l_n);
+    assert!(l_n >= 1 && !ld.f0 && ld.srcs.len() <= 1 && (ld.srcs.len() == 1 || !roll_masked));
+    assert!(ld.srcs.iter().all(|s| !s.late && s.d != 0 && s.lo == 0), "ROLL-FWD: one early non-pi source at lane 0");
+    let m = (0..l_n).take_while(|&l| masked(ld, l)).count();
+    assert!((m..l_n).all(|l| !masked(ld, l)), "ROLL-FWD: masked lanes must form a prefix");
+    let nc = nc_top(ld, nc);
+    assert!(!(nc && top.is_some()));
+    assert_eq!(lanes.len(), if roll_masked { 1 } else { 2 });
+    let mut rec = RollRec { rc: vec![None; l_n], fb: None };
+    let mut decs: Vec<Dec> = ld.srcs.iter().map(|s| Dec { v: &s.v, pre: &s.pre, cur: None }).collect();
+    let start = if roll_masked { 0 } else { m };
+    if !roll_masked {
+        // stage 1: the masked prefix's up pass in the forward's frame (the complement of the I-ladder's)
+        if !ld.cmpl { for &q in &ld.t[..m] { b.x(q); } }
+        for l in 0..m {
+            toggles(b, ld, &mut decs, l, true);
+            masked_up_cell(b, ld, l, ld.c0);
+            toggles(b, ld, &mut decs, l, false);
+            if l + 1 < m { clear_ended(b, ld, &mut decs, l, true); }
+        }
+    }
+    if ld.cmpl { for &q in &ld.t[start..] { b.x(q); } }
+    // c_start lives on c0 (c_0 = 0, or the masked prefix's carry out): never measured here
+    let mut cur = ld.c0;
+    let mut held = true;
+    let mut free: Vec<QubitId> = lanes.to_vec();
+    assert!(!notemp(), "b793 F6: the rolled forward ladder needs the AND temp");
+    let (f, tmp) = (ld.sc.f, ld.sc.t);
+    for l in start..l_n {
+        let (t, s) = (ld.t[l], ld.s[l]);
+        let last_nc = nc && l + 1 == l_n;
+        toggles(b, ld, &mut decs, l, true);
+        let nxt = if last_nc { None } else { Some(free.pop().expect("ROLL-FWD lane")) };
+        if masked(ld, l) {
+            // tmp = f (s ^ c); t ^= g tmp; next = c ^ tmp (t' ^ c)
+            b.cx(cur, s);
+            b.and_c(f, s, tmp);
+            b.cx(cur, s);
+            if g_masked == ALWAYS { b.cx(tmp, t); } else { b.ccx(g_masked, tmp, t); }
+            if let Some(n) = nxt {
+                b.cx(cur, t);
+                b.and_c(tmp, t, n);
+                b.cx(cur, t);
+                b.cx(cur, n);
+            }
+            b.cx(cur, s);
+            b.and_u(f, s, tmp);
+            b.cx(cur, s);
+        } else {
+            // t ^= g (s ^ c); next = c ^ (t' ^ c)(s ^ c)
+            b.cx(cur, s);
+            if g_ord == ALWAYS { b.cx(s, t); } else { b.ccx(g_ord, s, t); }
+            if let Some(n) = nxt {
+                b.cx(cur, t);
+                b.and_c(t, s, n);
+                b.cx(cur, t);
+            }
+            b.cx(cur, s);
+            if let Some(n) = nxt { b.cx(cur, n); }
+        }
+        toggles(b, ld, &mut decs, l, false);
+        if roll_masked || l + 1 != m { clear_ended(b, ld, &mut decs, l, true); }
+        // c_l is spent (formed at lane l - 1)
+        if !held {
+            let bit = b.fresh_bits(1)[0];
+            b.hmr_to(cur, bit);
+            rec.rc[l - 1] = Some(bit);
+            free.push(cur);
+        } else if roll_masked {
+            free.push(cur); // c_0 = 0: clean
+        }
+        if let Some(n) = nxt { cur = n; held = false; }
+    }
+    if !nc {
+        // cur = c_L
+        if let Some((g, tgt)) = top {
+            if g == ALWAYS { b.cx(cur, tgt); } else { b.ccx(g, cur, tgt); }
+        }
+        if !held {
+            let bit = b.fresh_bits(1)[0];
+            b.hmr_to(cur, bit);
+            rec.rc[l_n - 1] = Some(bit);
+        }
+    }
+    if ld.cmpl { for &q in &ld.t[start..] { b.x(q); } }
+    if roll_masked {
+        for d in decs.iter_mut() { d.clear(b); }
+        let bit = b.fresh_bits(1)[0];
+        b.hmr_to(f, bit);
+        rec.fb = Some(bit);
+    } else {
+        // stage 1: the masked prefix's down pass (writes), its carry out c_m back on c0
+        for l in (0..m).rev() {
+            toggles(b, ld, &mut decs, l, false);
+            masked_down_cell(b, ld, l, ld.c0, Some(g_masked));
+            toggles(b, ld, &mut decs, l, true);
+            clear_ended(b, ld, &mut decs, l, false);
+        }
+        if !ld.cmpl { for &q in &ld.t[..m] { b.x(q); } }
+    }
+    rec
+}
+
+/// Write gate meaning "always": `mdown(.., Some(ALWAYS))` writes the masked sum on every shot (no gate qubit, one
+/// Toffoli less per lane).
+pub const ALWAYS: QubitId = QubitId(u64::MAX - 1);
+
+/// Return pass. `g = Some(q)`: write the (masked) sum where q = 1, restore elsewhere; None: exact inverse of `mup`.
+pub fn mdown(b: &mut B, ld: &Lad, g: Option<QubitId>) -> Vec<G> {
+    mdown_impl(b, ld, g, g, false, None, &[])
+}
+
+pub fn mdown_mid(b: &mut B, ld: &Lad, g: Option<QubitId>) -> Vec<G> {
+    mdown_impl(b, ld, g, g, true, None, &[])
+}
+
+/// `mdown_mid` with separate write gates for the masked cells (`g_masked`, e.g. `ALWAYS` where the caller has made the
+/// running mask zero on every shot that must not be written) and the ordinary lanes (`g_ord`). WK19 route (c2).
+pub fn mdown_mid2(b: &mut B, ld: &Lad, g_masked: Option<QubitId>, g_ord: Option<QubitId>) -> Vec<G> {
+    mdown_impl(b, ld, g_ord, g_masked, true, None, &[])
+}
+
+pub fn mdown_mid_probe(b: &mut B, ld: &Lad, g: Option<QubitId>, ta: QubitId, dl: QubitId,
+                       pb0: usize, pb1: usize) -> Vec<G> {
+    mdown_impl(b, ld, g, g, true, Some((ta, dl, pb0, pb1)), &[])
+}
+
+fn mdown_impl(b: &mut B, ld: &Lad, g: Option<QubitId>, gm: Option<QubitId>, mid: bool,
+              probe: Option<(QubitId, QubitId, usize, usize)>, bank: &[QubitId]) -> Vec<G> {
+    mdown_impl_nc(b, ld, g, gm, mid, probe, false, bank, None)
+}
+
+fn mdown_impl_nc(b: &mut B, ld: &Lad, g: Option<QubitId>, gm: Option<QubitId>, mid: bool,
+              probe: Option<(QubitId, QubitId, usize, usize)>, nc: bool, bank: &[QubitId],
+              roll: Option<&RollRec>) -> Vec<G> {
+    assert_eq!(g.is_some(), gm.is_some());
+    let l_n = ld.t.len();
+    let nc = nc_top(ld, nc) && probe.is_none() && g.is_some();
+    assert!(bank.is_empty() || (probe.is_none() && ld.srcs.iter().all(|s| s.d != 0 && !s.late)),
+            "K1 bank: no pi pairs, late sources or probes");
+    assert!(g.is_none() || ld.srcs.iter().all(|s| !s.late), "late sources only in compare passes");
+    b.begin();
+    let mut decs: Vec<Dec> = ld.srcs.iter().map(|s| {
+        let cur = if mid && s.hi == l_n {
+            (s.lo..s.hi).rev().map(|l| s.tv(l))
+                .find(|&j| j >= 0 && (j as usize) < (1usize << s.v.len()))
+                .map(|j| j as usize)
+        } else { None };
+        Dec { v: &s.v, pre: &s.pre,
+              cur: if s.pre.len() == s.v.len() - 2 && !RSHORT.with(|c| c.get()) { None } else { cur } }
+    }).collect();
+    if !mid { f_end(b, ld); } // f = value after the last lane
+    let mut l = l_n;
+    while l > 0 {
+        l -= 1;
+        if l > 0 && pi_pair(ld, l - 1) {
+            let lo = l - 1;
+            let x = carry_wire(ld, lo);
+            toggles(b, ld, &mut decs, l, false);
+            toggles(b, ld, &mut decs, lo, false);
+            assert_eq!(g, gm, "pi pair: one write gate");
+            masked_pair_down(b, ld, lo, x, g.expect("pi pair needs S2 write gate"));
+            toggles(b, ld, &mut decs, l, true);
+            clear_ended(b, ld, &mut decs, l, false);
+            toggles(b, ld, &mut decs, lo, true);
+            clear_ended(b, ld, &mut decs, lo, false);
+            l = lo;
+            continue;
+        }
+        let x = carry_wire(ld, l);
+        // undo lane l's late toggles so that f = the mask lane l's cell saw
+        toggles(b, ld, &mut decs, l, false);
+        if let Some(r) = roll {
+            if let Some(Some(bit)) = r.rc.get(l) {
+                assert!(!masked(ld, l), "ROLL-ROWS repairs ordinary lanes only");
+                if !(roll_break(5) && l == l_n / 2) { b.z_if(carry_wire(ld, l + 1), *bit); }
+            }
+        }
+        if skip_zero_pi_lane(ld, l) {
+            // No arithmetic on the classically inactive lane.
+        } else if nc && l + 1 == l_n {
+            // TERMINAL-CARRY SKIP: the up pass left lane l untouched; write t ^= g & f & (s ^ x)
+            let (t, s) = (ld.t[l], ld.s[l]);
+            if masked(ld, l) && TOPM.with(|c| c.get()).is_some() {
+                // R5_MROWY: t ^= f & (m ^ x), m ^ x formed on x and restored
+                let gq = gm.expect("nc write gate");
+                let sg = TOPM.with(|c| c.get()).unwrap();
+                if sg != NO_LANE { b.cx(sg, x); }
+                b.x(x);
+                if notemp() {
+                    if gq == ALWAYS { b.ccx(ld.sc.f, x, t); } else { ccc_dirty(b, ld.sc.f, x, gq, t); }
+                } else {
+                b.and_c(ld.sc.f, x, ld.sc.t);
+                if gq == ALWAYS { b.cx(ld.sc.t, t); } else { b.ccx(ld.sc.t, gq, t); }
+                b.and_u(ld.sc.f, x, ld.sc.t);
+                }
+                b.x(x);
+                if sg != NO_LANE { b.cx(sg, x); }
+            } else if masked(ld, l) {
+                let gq = gm.expect("nc write gate");
+                b.cx(x, s);
+                if notemp() {
+                    if gq == ALWAYS { b.ccx(ld.sc.f, s, t); } else { ccc_dirty(b, ld.sc.f, s, gq, t); }
+                } else {
+                b.and_c(ld.sc.f, s, ld.sc.t);
+                if gq == ALWAYS { b.cx(ld.sc.t, t); } else { b.ccx(ld.sc.t, gq, t); }
+                b.and_u(ld.sc.f, s, ld.sc.t);
+                }
+                b.cx(x, s);
+            } else {
+                let gq = g.expect("nc write gate");
+                // negative control for the gate tests only (CR_BREAK=5: the carry-in is dropped from the sum)
+                let brk = cfg!(test) && std::env::var("CR_BREAK").map_or(false, |v| v.trim() == "5");
+                if !brk { b.cx(x, s); }
+                if gq == ALWAYS { b.cx(s, t); } else { b.ccx(gq, s, t); }
+                if !brk { b.cx(x, s); }
+            }
+        } else if masked(ld, l) {
+            match fs_idx(ld, l, bank) {
+                Some(k) => masked_down_cell_bank(b, ld, l, x, gm, bank[k]),
+                None => masked_down_cell(b, ld, l, x, gm),
+            }
+        } else if let Some(k) = gidx(ld, l) {
+            let gq = ld.g[k];
+            b.cx(x, gq);
+            b.and_u(ld.t[l], ld.s[l], gq);
+            b.cx(x, ld.t[l]);
+            b.cx(x, ld.s[l]);
+            if let Some(gc) = g {
+                b.cx(x, ld.s[l]);
+                if gc == ALWAYS { b.cx(ld.s[l], ld.t[l]); } else { b.ccx(gc, ld.s[l], ld.t[l]); }
+                b.cx(x, ld.s[l]);
+            }
+        } else {
+            b.ccx(x, ld.t[l], ld.s[l]);
+            b.cx(ld.s[l], x);
+            b.cx(ld.s[l], ld.t[l]);
+            if let Some(gq) = g {
+                b.cx(ld.s[l], x);
+                if gq == ALWAYS { b.cx(x, ld.t[l]); } else { b.ccx(gq, x, ld.t[l]); }
+                b.cx(ld.s[l], x);
+            }
+        }
+        if let Some((ta, dl, pb0, pb1)) = probe {
+            if l >= pb0 && l < pb1 && ld.srcs.len() > 1 {
+                let src = &ld.srcs[1];
+                if l + 1 >= src.lo && l + 1 < src.hi {
+                    let j = src.tv(l + 1);
+                    if j >= 0 && (j as usize) < (1usize << src.v.len()) {
+                        let o = decs[1].goto(b, j as usize);
+                        assert!(!notemp(), "b793 F6: the probe path needs the AND temp");
+                        let tmp = ld.sc.t;
+                        b.and_c(ta, o, tmp);
+                        b.x(ld.s[l]);
+                        b.ccx(tmp, ld.s[l], dl);
+                        b.x(ld.s[l]);
+                        b.and_u(ta, o, tmp);
+                    }
+                }
+            }
+        }
+        toggles(b, ld, &mut decs, l, true); // leave lane l downward: f becomes mask(l-1), late T flips undone
+        clear_ended(b, ld, &mut decs, l, false);
+    }
+    if ld.f0 {
+        b.x(ld.sc.f);
+    }
+    if ld.cmpl {
+        for &q in ld.t {
+            b.x(q);
+        }
+    }
+    b.end()
+}
+
+fn masked_up_cell(b: &mut B, ld: &Lad, l: usize, x: QubitId) {
+    let (t, s) = (ld.t[l], ld.s[l]);
+    b.cx(x, t);
+    b.cx(x, s);
+    if notemp() {
+        ccc_dirty(b, ld.sc.f, t, s, x);
+        return;
+    }
+    b.and_c(t, s, ld.sc.t);
+    b.ccx(ld.sc.f, ld.sc.t, x);
+    b.and_u(t, s, ld.sc.t);
+}
+
+/// K1: `masked_down_cell` with a = f & s' already on the bank lane from the up pass (no recompute).
+fn masked_down_cell_bank(b: &mut B, ld: &Lad, l: usize, x: QubitId, g: Option<QubitId>, a: QubitId) {
+    let (t, s) = (ld.t[l], ld.s[l]);
+    // negative control for the gate tests only: P3_BREAK=2 drops the banked carry restore
+    if !(cfg!(test) && std::env::var("P3_BREAK").map_or(false, |v| v.trim() == "2")) {
+        b.ccx(a, t, x);
+    }
+    if let Some(gq) = g {
+        if gq == ALWAYS { b.cx(a, t); } else { b.ccx(a, gq, t); }
+    }
+    b.and_u(ld.sc.f, s, a);
+    b.cx(x, t);
+    b.cx(x, s);
+}
+
+fn masked_down_cell(b: &mut B, ld: &Lad, l: usize, x: QubitId, g: Option<QubitId>) {
+    let (t, s) = (ld.t[l], ld.s[l]);
+    if notemp() {
+        // b793b F6: no AND temp. x ^= f s t, then t ^= f s g (f s alone where the gate is ALWAYS)
+        match g {
+            Some(gq) if gq == ALWAYS && f6c() => down4_dirty(b, ld.sc.f, s, t, x),
+            Some(gq) => {
+                ccc_dirty(b, ld.sc.f, s, t, x);
+                if gq == ALWAYS { b.ccx(ld.sc.f, s, t); } else { ccc_dirty(b, ld.sc.f, s, gq, t); }
+            }
+            None => ccc_dirty(b, ld.sc.f, t, s, x),
+        }
+    } else if let Some(gq) = g {
+        // One temporary f&s drives both the carry undo and the sum bit.
+        // Neither f nor s changes before the measurement uncompute.
+        b.and_c(ld.sc.f, s, ld.sc.t);
+        b.ccx(ld.sc.t, t, x);
+        if gq == ALWAYS { b.cx(ld.sc.t, t); } else { b.ccx(ld.sc.t, gq, t); }
+        b.and_u(ld.sc.f, s, ld.sc.t);
+    } else {
+        b.and_c(t, s, ld.sc.t);
+        b.ccx(ld.sc.f, ld.sc.t, x);
+        b.and_u(t, s, ld.sc.t);
+    }
+    b.cx(x, t);
+    b.cx(x, s);
+}
+
+/// M3 REPARK-X0 (M-008): for each j of `ls` (any order), call `per(b, j, o, q0, one)` with o = [v[1..] == (j + off) >> 1]
+/// live on the retained prefix `pre` (v.len() - 2 lanes); the caller completes the equality with the bit-0 literal
+/// (q0, positive iff `one`), e.g. by a CCX into its flag. One lane fewer than `onehot_scan`.
+pub fn onehot_scan_hi(b: &mut B, v: &[QubitId], pre: &[QubitId], ls: &[usize], off: isize,
+                      mut per: impl FnMut(&mut B, usize, QubitId, QubitId, bool)) {
+    let mut dec = Dec { v: &v[1..], pre, cur: None };
+    for &j in ls {
+        let val = j as isize + off;
+        if val < 0 || val as usize >= (1usize << v.len()) {
+            continue;
+        }
+        let o = dec.goto(b, val as usize >> 1);
+        per(b, j, o, v[0], val & 1 == 1);
+    }
+    dec.clear(b);
+}
+
+/// For j in lanes [lo, hi): call `per(b, j, o_j)` with o_j = [v == j + off] live.
+pub fn onehot_scan(b: &mut B, v: &[QubitId], pre: &[QubitId], lo: usize, hi: usize, off: isize,
+                   mut per: impl FnMut(&mut B, usize, QubitId)) {
+    let mut dec = Dec { v, pre, cur: None };
+    for j in lo..hi {
+        let val = j as isize + off;
+        if val < 0 || val as usize >= (1usize << v.len()) {
+            continue;
+        }
+        let o = dec.goto(b, val as usize);
+        per(b, j, o);
+    }
+    dec.clear(b);
+}
+
+#[cfg(test)]
+pub(crate) fn onehot_scan_old(b: &mut B, v: &[QubitId], pre: &[QubitId], lo: usize, hi: usize, off: isize,
+                              mut per: impl FnMut(&mut B, usize, QubitId)) {
+    let mut dec = Dec { v, pre, cur: None };
+    for j in lo..hi {
+        let val = j as isize + off;
+        if val < 0 || val as usize >= (1usize << v.len()) { continue; }
+        let o = dec.goto_impl(b, val as usize, false);
+        per(b, j, o);
+    }
+    dec.clear(b);
+}
+
+#[cfg(test)]
+mod b793_f6_tests {
+    use super::*;
+    use crate::sim::Simulator;
+    use sha3::digest::{ExtendableOutput, Update};
+
+    /// b793b F6: ccc_dirty / phase_ccc_dirty / the 6-literal AND on borrowed lanes, exhaustively over every state of the wires
+    /// (control, target and borrowed lanes in any state): the target gets the exact AND, every other lane comes back, the phase is exact.
+    #[test]
+    fn b793_ccc_dirty_exhaustive() {
+        // (c1, c2, c3, target, d1, d2, d3, d4): 8 wires = 256 states, 64 shots per word => 4 batches
+        for batch in 0..4u64 {
+            let mut b = B::new();
+            let q: Vec<QubitId> = (0..8).map(|_| b.alloc()).collect();
+            set_borrowed(&q[4..]);
+            ccc_dirty(&mut b, q[0], q[1], q[2], q[3]);
+            let mut b2 = B::new();
+            let q2: Vec<QubitId> = (0..8).map(|_| b2.alloc()).collect();
+            set_borrowed(&q2[4..]);
+            phase_ccc_dirty(&mut b2, q2[0], q2[1], q2[2]);
+            let mut b3 = B::new();
+            let q3: Vec<QubitId> = (0..12).map(|_| b3.alloc()).collect();
+            set_borrowed(&q3[8..]);
+            // the 6-control AND (Barenco) as the U decoder's xor_nt5 uses it: and_dirty on six literals, target q3[6], dirty q3[8..12]
+            let lits: Vec<(QubitId, bool)> = (0..6).map(|i| (q3[i], i % 2 == 0)).collect();
+            super::super::arith::and_dirty(&mut b3, &lits, q3[6], &q3[8..12]);
+            let mut b4 = B::new();
+            let q4: Vec<QubitId> = (0..8).map(|_| b4.alloc()).collect();
+            set_borrowed(&q4[4..]);
+            down4_dirty(&mut b4, q4[0], q4[1], q4[2], q4[3]);
+            for (bb, qq, kind) in [(&b, &q, 0), (&b2, &q2, 1), (&b3, &q3, 2), (&b4, &q4, 3)] {
+                let mut h = sha3::Shake256::default();
+                h.update(b"b793-f6-ccc");
+                let mut xof = h.finalize_xof();
+                let mut sim = Simulator::new(bb.width() as usize, 1, &mut xof);
+                let n = qq.len();
+                // shot s of this batch encodes the state of the wires: bit i of (batch*64 + s)
+                let mut start = vec![0u64; n];
+                for s in 0..64u64 {
+                    let st = batch * 64 + s;
+                    for i in 0..n.min(8) { if (st >> i) & 1 == 1 { start[i] |= 1 << s; } }
+                }
+                if kind == 2 {
+                    // 12 wires: spread the 8 state bits over wires 0..8 and give wires 8..12 their own pattern from the batch index
+                    for i in 8..12 { start[i] = 0xF0F0_F0F0_F0F0_F0F0u64.rotate_left((i as u32 * 7 + batch as u32 * 3) % 64); }
+                }
+                for i in 0..n { sim.qubits[qq[i].0 as usize] = start[i]; }
+                sim.apply_iter(bb.ops.iter());
+                let end: Vec<u64> = (0..n).map(|i| sim.qubits[qq[i].0 as usize]).collect();
+                match kind {
+                    0 => {
+                        // target ^= c1 c2 c3; everything else unchanged
+                        assert_eq!(end[3], start[3] ^ (start[0] & start[1] & start[2]), "ccc_dirty target");
+                        for i in [0, 1, 2, 4, 5, 6, 7] { assert_eq!(end[i], start[i], "ccc_dirty lane {i} not restored"); }
+                        assert_eq!(sim.phase, 0);
+                    }
+                    1 => {
+                        for i in 0..8 { assert_eq!(end[i], start[i], "phase_ccc_dirty lane {i} not restored"); }
+                        assert_eq!(sim.phase, start[0] & start[1] & start[2], "phase_ccc_dirty phase");
+                    }
+                    3 => {
+                        // (f, s, t, x, d..): x ^= f s t (old t), t ^= f s, every other lane unchanged
+                        assert_eq!(end[3], start[3] ^ (start[0] & start[1] & start[2]), "down4 x");
+                        assert_eq!(end[2], start[2] ^ (start[0] & start[1]), "down4 t");
+                        for i in [0, 1, 4, 5, 6, 7] { assert_eq!(end[i], start[i], "down4 lane {i} not restored"); }
+                        assert_eq!(sim.phase, 0);
+                    }
+                    _ => {
+                        let mut and = !0u64;
+                        for i in 0..6 { let w = start[i]; and &= if i % 2 == 0 { !w } else { w }; }
+                        assert_eq!(end[6], start[6] ^ and, "6-literal AND target");
+                        for i in (0..6).chain(7..12) { assert_eq!(end[i], start[i], "6-literal AND lane {i} not restored"); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// B792-CZERO kernel test: ONE masked row (every lane masked, one one-hot source, mup_mid + mdown_mid(ALWAYS), as the rows run it)
+/// with the carry wire x = c0 holding an arbitrary value, NO repair. Exhaustive over (T, S, v, big, x0, borrowed d).
+#[cfg(test)]
+mod b792cz_kernel {
+    use super::*;
+    use crate::sim::Simulator;
+    use sha3::digest::{ExtendableOutput, Update};
+    const N: usize = 5;
+    const VB: usize = 3;
+    /// classical model: (t_final) for carry-in x0, per the derivation t ^= f (s ^ x_l); x_{l+1} = x_l ^ f (t^x_l)(s^x_l)
+    fn model(t: usize, s: usize, v: usize, big: usize, a: isize, x0: usize) -> (usize, Vec<usize>) {
+        let mut x = x0; let mut tf = 0usize; let mut fl = vec![];
+        for l in 0..N {
+            let hit = (v as isize) >= a && (v as isize) <= a + l as isize;
+            let f = big ^ hit as usize;
+            fl.push(f);
+            let (tb, sb) = ((t >> l) & 1, (s >> l) & 1);
+            tf |= (tb ^ (f & (sb ^ x))) << l;
+            x ^= f & (tb ^ x) & (sb ^ x);
+        }
+        (tf, fl)
+    }
+    /// returns (bad_restore, bad_model, results per state [state-> t_final]) ; brk: 0 real, 1 drops the first masked cell's x update in the down pass
+    fn run(nt: bool, a: isize, brk: usize) -> (usize, usize, Vec<usize>) {
+        NOTEMP.with(|c| c.set(nt));
+        let mut b = B::new();
+        let t = b.alloc_n(N); let s = b.alloc_n(N); let v = b.alloc_n(VB);
+        let f = b.alloc(); let x = b.alloc(); let dd = b.alloc();
+        let pre = b.alloc_n(VB - 1); let tmp = b.alloc();
+        set_borrowed(&[dd]);
+        let srcs = [Src { lo: 0, hi: N, v: v.clone(), a, d: 1, pre: pre.clone(), late: false }];
+        let sc = Mscr { f, t: if nt { NOQ_T } else { tmp }, gf: tmp, chain: vec![] };
+        let ld = Lad { t: &t, s: &s, c0: x, srcs: &srcs, f0: false, cmpl: false, sc: &sc, g: &[] };
+        let ru = mup_mid(&mut b, &ld);
+        b.play(&ru, false);
+        let rd = mdown_mid(&mut b, &ld, Some(ALWAYS));
+        b.play(&rd, false);
+        if brk == 1 { b.cx(x, t[0]); } // control: a stray gate on the carry wire
+        let nq = b.width() as usize;
+        // state bits: t N, s N, v VB, big 1, x0 1, d 1
+        let nb = 2 * N + VB + 3;
+        let total = 1usize << nb;
+        let (mut bad_restore, mut bad_model) = (0, 0);
+        let mut out = vec![0usize; total];
+        for batch in 0..(total + 63) / 64 {
+            let mut h = sha3::Shake256::default(); h.update(b"b792cz"); let mut xof = h.finalize_xof();
+            let mut sim = Simulator::new(nq, 8, &mut xof);
+            for sh in 0..64usize {
+                let st = batch * 64 + sh; if st >= total { break; }
+                let bit = |i: usize| (st >> i) & 1;
+                for i in 0..N { if bit(i) == 1 { sim.qubits[t[i].0 as usize] |= 1 << sh; } if bit(N + i) == 1 { sim.qubits[s[i].0 as usize] |= 1 << sh; } }
+                for i in 0..VB { if bit(2 * N + i) == 1 { sim.qubits[v[i].0 as usize] |= 1 << sh; } }
+                if bit(2 * N + VB) == 1 { sim.qubits[f.0 as usize] |= 1 << sh; }
+                if bit(2 * N + VB + 1) == 1 { sim.qubits[x.0 as usize] |= 1 << sh; }
+                if bit(2 * N + VB + 2) == 1 { sim.qubits[dd.0 as usize] |= 1 << sh; }
+            }
+            let start = sim.qubits.clone();
+            sim.apply_iter(b.ops.iter());
+            for sh in 0..64usize {
+                let st = batch * 64 + sh; if st >= total { break; }
+                let g = |q: QubitId, w: &Vec<u64>| ((w[q.0 as usize] >> sh) & 1) as usize;
+                let tv: usize = (0..N).map(|i| g(t[i], &sim.qubits) << i).sum();
+                let sv: usize = (0..N).map(|i| g(s[i], &start) << i).sum();
+                let t0: usize = (0..N).map(|i| g(t[i], &start) << i).sum();
+                let vv: usize = (0..VB).map(|i| g(v[i], &start) << i).sum();
+                let (big, x0) = (g(f, &start), g(x, &start));
+                let mut restored = sim.phase >> sh & 1 == 0;
+                for i in 0..N { restored &= g(s[i], &sim.qubits) == g(s[i], &start); }
+                for q in v.iter().chain([&f, &x, &dd]) { restored &= g(*q, &sim.qubits) == g(*q, &start); }
+                for q in pre.iter().chain([&tmp]) { restored &= g(*q, &sim.qubits) == 0; }
+                if !restored { bad_restore += 1; }
+                let (m, _) = model(t0, sv, vv, big, a, x0);
+                if m != tv { bad_model += 1; }
+                out[st] = tv;
+            }
+        }
+        (bad_restore, bad_model, out)
+    }
+    const NOQ_T: QubitId = QubitId(u64::MAX - 5);
+    fn report(nt: bool, a: isize) {
+        let (br, bm, out) = run(nt, a, 0);
+        println!("KERNEL notemp={nt} a={a}: states {} bad_restore {br} bad_model(harness) {bm}", out.len());
+        let nb = 2 * N + VB + 3;
+        let mask = (1usize << (2 * N + VB + 1)) - 1; // key without x0,d
+        // compare against the clean reference x0 = cin for cin in {0,1}: the construction ignores cin, so a dirty x0 = d works iff
+        // result(x0 = d) == result(x0 = cin)
+        let mut fail_any_window = 0; let mut fail_empty_window = 0; let mut pat_2lo = 0; let mut pat_other = 0; let mut ex = vec![];
+        let mut windows_empty = 0;
+        for key in 0..=mask {
+            let k0 = key; let k1 = key | (1 << (2 * N + VB + 1));
+            let (t0v, t1v) = (out[k0] , out[k1]);
+            let (tin, sv, vv, big) = (key & 31, (key >> N) & 31, (key >> (2 * N)) & 7, (key >> (2 * N + VB)) & 1);
+            let (_, fl) = model(tin, sv, vv, big, a, 0);
+            let lo = fl.iter().position(|&q| q == 1);
+            if t0v != t1v {
+                match lo {
+                    None => fail_empty_window += 1,
+                    Some(lo) => {
+                        fail_any_window += 1;
+                        // diff on lanes lo..: (t1 - t0) mod 2^N, restricted to lanes >= lo
+                        let hi = fl.iter().rposition(|&q| q == 1).unwrap() + 1;
+                        let w = (1usize << (hi - lo)) - 1;
+                        let d = (((t1v >> lo) & w) + (1 << (hi - lo)) - ((t0v >> lo) & w)) & w;
+                        let lower_same = (t0v & ((1 << lo) - 1)) == (t1v & ((1 << lo) - 1));
+                        if d == 1 && lower_same { pat_2lo += 1 } else { pat_other += 1; if ex.len() < 3 { ex.push((key, lo, hi, t0v, t1v)); } }
+                    }
+                }
+            } else if lo.is_none() { windows_empty += 1; }
+        }
+        println!("KERNEL  x0=0 vs x0=1 differ: nonempty window {fail_any_window} (of which = +2^lo(f) on the window {pat_2lo}, other {pat_other}); EMPTY window {fail_empty_window}; empty windows that agree {windows_empty}");
+        if !ex.is_empty() { println!("KERNEL  other-pattern examples (key,lo,hi,t0,t1): {:?}", ex); }
+        let _ = nb;
+        assert_eq!(br, 0, "restore/phase/ancilla"); assert_eq!(bm, 0, "model mismatch: harness wrong");
+    }
+    #[test]
+    fn b792cz_dirty_x_no_repair() {
+        for nt in [false] { for a in [1isize, 0, -1] { report(nt, a); } }
+    }
+    /// control: a stray gate must make the SAME checker report restore failures
+    #[test]
+    fn b792cz_dirty_x_control_bites() {
+        let (br, bm, _) = run(false, 1, 1);
+        println!("KERNEL control: bad_restore {br} bad_model {bm}");
+        assert!(bm > 0);
+    }
+}
