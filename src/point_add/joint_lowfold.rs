@@ -87,7 +87,6 @@ pub(super) fn try_replay(circ:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId
         circ.active_qubits(),p.bounds.last().unwrap().1-p.bounds.last().unwrap().0,p.prefix,p.guard,p.saving);
     if env_flag("PP_COMPOSE_TRACE"){eprintln!("COMPOSE_MUL {} {} {} {} {} {:?}",round,circ.active_qubits(),fw,p.bits,REPLAY_SIGN_LOANS.with(|s|s.get()),p.bounds);}
     if p.exact {eprintln!("EXACT_RETAINED_FOLD mul {} {}",round,fw);}
-    super::super::leapfrog::y17_log(circ,||format!("joint(r={round},room={},fw={fw},bits={},prefix={},exact={},dropped={},loans={},bridge={},bounds={:?})",walk_max_qubits().saturating_sub(circ.active_qubits()as usize),p.bits,p.prefix,p.exact,p.dropped,REPLAY_SIGN_LOANS.with(|s|s.get()),super::super::bridge::budget(),p.bounds.iter().map(|&(a,b)|b-a).collect::<Vec<_>>()));
     let mut incoming=None;
     let mut previous=None;
     // EXP PP_PREBIAS_DOUBLE: bit 0 leaves the main add. z0 = s^a0 by CX, and the
@@ -122,7 +121,6 @@ pub(super) fn try_replay(circ:&mut Builder,sign:QubitId,a:&[QubitId],b:&[QubitId
         }else{let at=if pre&&lo==0{1}else{lo};ripple_add(circ,&a[at..hi],&b[at..hi],incoming,Some(next));}
         if let Some((q,plo,phi))=previous {
             let(k,seeded)=if p.dropped&&plo==0 {drop_lead_first_compare(round,multiply,phi)}else{boundary_repair_spec(round,multiply,plo,phi)};let k=if seeded&&plo>0{e_badj(round,multiply,k,phi,if hi==N{fw}else{1})}else{k};
-            let k=if super::super::leapfrog::C35_CMP_FX.with(|x|x.get()){k.min(2)}else{k};
             circ.record_replay_site('B',round,phi,k);
             // A full first-chunk compare must skip bit 0, which the add no longer covers.
             let from=if pre&&plo==0&&phi==k{1}else{phi-k};
