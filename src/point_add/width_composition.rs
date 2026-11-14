@@ -57,7 +57,16 @@ fn erase_release(c:&mut Builder,q:QubitId,a:&[QubitId],b:&[QubitId],incoming:Opt
     c.pop_condition();c.free_bit(m);
 }
 
-fn inplace(c:&mut Builder,a:&[QubitId],b:&[QubitId],incoming:Option<QubitId>,out:QubitId){
+// C60: exact mixed last chunk. Keep the existing planner and all its guards;
+// use spare lower carry lanes, then MAJ/UMA above. The final carry is computed
+// directly into the owned output instead of copied out of a mutated source.
+fn inplace(c:&mut Builder,a:&[QubitId],b:&[QubitId],incoming:Option<QubitId>,out:QubitId,room:usize){
+    if a.len()>=3 {
+        let clean=room.min(a.len()-1);
+        assert!(incoming.is_some() || clean>0);
+        super::bridge::raw_add(c,a,b,incoming,Some(out),a.len()-1-clean);
+        return;
+    }
     let seed=incoming.unwrap_or_else(||c.alloc_qubit());
     for i in 0..a.len(){let p=if i==0{seed}else{a[i-1]};c.cx(a[i],b[i]);c.cx(a[i],p);c.ccx(p,b[i],a[i]);}
     c.cx(a[a.len()-1],out);
@@ -78,7 +87,7 @@ pub(crate) fn add_with_carry(c:&mut Builder,a:&[QubitId],b:&[QubitId],initial:Op
     let base=c.active_qubits();let mut at=0;let mut incoming=initial;let mut flags=Vec::new();
     for (j,&w) in p.sizes.iter().enumerate(){
         let out=c.alloc_qubit();let end=at+w;
-        if p.slow && j+1==p.sizes.len(){inplace(c,&a[at..end],&b[at..end],incoming,out);}
+        if p.slow && j+1==p.sizes.len(){inplace(c,&a[at..end],&b[at..end],incoming,out,p.peak-j-1);}
         else {modular::ripple_add(c,&a[at..end],&b[at..end],incoming,Some(out));}
         if j+1<p.sizes.len(){flags.push((at,end,incoming,out));}
         incoming=Some(out);at=end;
@@ -122,7 +131,20 @@ pub(crate) fn mapped_add(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incomin
     for q in buffer{c.release_clean(q);}assert_eq!(c.active_qubits(),base);
 }
 
+/// SQ_SOFT: when no plan fits `room`, log the shortfall and return the plan at the smallest room that fits
+/// (the build then overflows the cap at this site instead of panicking). Off = identical behaviour.
+#[track_caller]
 pub(crate) fn direct_plan(n:usize,room:usize)->Option<Plan>{
+    let p=direct_plan_inner(n,room);
+    if p.is_none() && std::env::var_os("SQ_SOFT").is_some() {
+        let loc=std::panic::Location::caller();
+        let (r,q)=(room+1..room+4*n+8).find_map(|r|direct_plan_inner(n,r).map(|q|(r,q))).expect("SQ_SOFT: no plan at any room");
+        eprintln!("SQ_SOFT site={}:{} kind=direct_plan n={n} room={room} need={r} short={}",loc.file(),loc.line(),r-room);
+        return Some(q);
+    }
+    p
+}
+pub(crate) fn direct_plan_inner(n:usize,room:usize)->Option<Plan>{
     let mut best:Option<Plan>=None;
     for k in 1..=n.min(room+1){
         let mut caps:Vec<_>=(0..k-1).map(|j|room-j).collect();caps.push(room-(k-1)+2);
@@ -137,7 +159,7 @@ pub(crate) fn direct_plan(n:usize,room:usize)->Option<Plan>{
     }best
 }
 
-fn mapped_compare(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId){
+pub(crate) fn mapped_compare(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],incoming:QubitId){
     let _dirty_trace=super::dirty_boundary_probe::Trace::new(c,"mapped_compare",b.len());
 
     use super::pingpong::{fold_step,with_selector_xor};
@@ -198,7 +220,7 @@ pub(crate) fn direct_add_phase_transport(c:&mut Builder,map:&[Vec<QubitId>],b:&[
     assert!(recover.iter().all(|(hi,_)|stages.iter().any(|(_,end,_,_)|hi==end)));
     let mut pending=Vec::new();
     for(lo,hi,cin,q)in stages.into_iter().rev(){let m=c.alloc_bit();c.hmr(q,m);c.release_clean(q);
-        if defer{pending.push((hi,m));}else{c.push_condition(m);if !super::leapfrog::C35_SQ_FX.with(|x|x.get()){mapped_compare(c,&map[lo..hi],&b[lo..hi],cin);}c.pop_condition();c.free_bit(m);}
+        if defer{pending.push((hi,m));}else{c.push_condition(m);mapped_compare(c,&map[lo..hi],&b[lo..hi],cin);c.pop_condition();c.free_bit(m);}
     }
     assert_eq!(c.active_qubits(),base);
     pending
@@ -207,7 +229,7 @@ pub(crate) fn direct_add_phase_transport(c:&mut Builder,map:&[Vec<QubitId>],b:&[
 /// One chunk of the direct ripple, as in [`direct_add_phase_transport`]:
 /// carries chained from `prev`; a non-final chunk XORs its carry-out into
 /// `out`; the sum bits are finished in `b` and the ladder is unwound.
-fn direct_chunk(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],at:usize,w:usize,prev:QubitId,out:Option<QubitId>){
+pub(crate) fn direct_chunk(c:&mut Builder,map:&[Vec<QubitId>],b:&[QubitId],at:usize,w:usize,prev:QubitId,out:Option<QubitId>){
     use super::pingpong::{fold_step,unwind_fold_step};
     let end=at+w;
     let work=c.alloc_qubits(if out.is_none(){w.saturating_sub(2)}else{w-1});
