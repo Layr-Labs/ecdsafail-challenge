@@ -326,22 +326,52 @@ pub(crate) fn simplify_products(ops: Vec<Op>) -> Vec<Op> {
 mod product;
 
 fn simplify_with_products(ops: Vec<Op>, use_products: bool) -> Vec<Op> {
-    let mut affine = AffineSupport::new(&ops);
-    let mut quadratic = QuadraticSupport::new(&ops);
-    let mut truth = Support::new(&ops);
-    let mut products = use_products.then(|| product::Index::new(&truth, &ops));
+    let (affine_v, quad_v, (truth_v, hits)) = std::thread::scope(|sc| {
+        let ops = &ops;
+        let h_aff = sc.spawn(move || {
+            let mut state = AffineSupport::new(ops);
+            let mut v: Vec<(usize, Rewrite)> = Vec::new();
+            for (i, op) in ops.iter().enumerate() {
+                let r = state.step(op);
+                if !matches!(r, Rewrite::Keep) { v.push((i, r)); }
+            }
+            v
+        });
+        let h_quad = sc.spawn(move || {
+            let mut state = QuadraticSupport::new(ops);
+            let mut v: Vec<(usize, Rewrite)> = Vec::new();
+            for (i, op) in ops.iter().enumerate() {
+                let r = state.step(op);
+                if !matches!(r, Rewrite::Keep) { v.push((i, r)); }
+            }
+            v
+        });
+        let h_truth = sc.spawn(move || {
+            let mut truth = Support::new(ops);
+            let mut products = use_products.then(|| product::Index::new(&truth, ops));
+            let mut v: Vec<(usize, Rewrite)> = Vec::new();
+            let mut hits: Vec<(usize, product::Hit)> = Vec::new();
+            for (i, op) in ops.iter().enumerate() {
+                // Query the pre-op state; remove old keys before truth mutates it.
+                if let Some(hit) = products.as_mut().and_then(|index| index.before(&truth, op)) { hits.push((i, hit)); }
+                let r = truth.step(op);
+                if let Some(index) = &mut products { index.after(&truth, op); }
+                if !matches!(r, Rewrite::Keep) { v.push((i, r)); }
+            }
+            (v, hits)
+        });
+        (h_aff.join().unwrap(), h_quad.join().unwrap(), h_truth.join().unwrap())
+    });
+    let mut affine_it = affine_v.into_iter().peekable();
+    let mut quad_it = quad_v.into_iter().peekable();
+    let mut truth_it = truth_v.into_iter().peekable();
+    let mut hit_it = hits.into_iter().peekable();
     let mut result = Vec::with_capacity(ops.len());
-    for op in ops {
-        // Query the pre-op state; remove old keys before truth mutates it.
-        let product_hit = products
-            .as_mut()
-            .and_then(|index| index.before(&truth, &op));
-        let affine_rewrite = affine.step(&op);
-        let quadratic_rewrite = quadratic.step(&op);
-        let truth_rewrite = truth.step(&op);
-        if let Some(index) = &mut products {
-            index.after(&truth, &op);
-        }
+    for (i, op) in ops.into_iter().enumerate() {
+        let affine_rewrite = if affine_it.peek().is_some_and(|x| x.0 == i) { affine_it.next().unwrap().1 } else { Rewrite::Keep };
+        let quadratic_rewrite = if quad_it.peek().is_some_and(|x| x.0 == i) { quad_it.next().unwrap().1 } else { Rewrite::Keep };
+        let truth_rewrite = if truth_it.peek().is_some_and(|x| x.0 == i) { truth_it.next().unwrap().1 } else { Rewrite::Keep };
+        let product_hit = if hit_it.peek().is_some_and(|x| x.0 == i) { Some(hit_it.next().unwrap().1) } else { None };
         let rewrite = match (affine_rewrite, quadratic_rewrite) {
             (Rewrite::Keep, Rewrite::Keep) => truth_rewrite,
             (Rewrite::Keep, quadratic_proof) => quadratic_proof,
