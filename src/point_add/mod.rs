@@ -1,6 +1,4 @@
 mod hold_pass;
-mod gate_fold;
-mod named_controls;
 mod seed_mult;
 mod product_eraser;
 mod last_veto;
@@ -69,7 +67,7 @@ fn env_raw(name: &str) -> Option<String> {
         "I50_SPLIT_BRIDGE" => "1",
         "I35_CELLS" => "0",
         "I35_TRACE" => "0",
-        "I35_BUDGET" => "1",
+        "I35_BUDGET" => "0",
         "PP_WALK_EXTRA_ROUNDS" => "683:4:1",
         "SQ_ASM_TAIL" => "24",
         "SQ_ROW1_INVERSE_CARRIES" => "1",
@@ -163,7 +161,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "22100961039021",
+        "TAIL_NONCE" => "3000000000002",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -592,7 +590,32 @@ fn frozen_env_restore() {
     std::env::set_var("CONTRACT69_PAIR_COMMIT", "1");
 }
 pub fn build() -> Vec<Op> {
-    build_generated()
+    // Captured before clear_process_env wipes the host environment.
+    // FAST_PLAIN=1: textbook adder, no leapfrog. It builds in seconds on this
+    // machine but the current head flags are not correct without the later
+    // stream edits, so the eval fails.
+    // FAST_EMIT=1: frozen leapfrog emitter only, no simplify chain and no
+    // raw-stream dump. That chain is the 15 GB / ~hour part.
+    let fast_plain = std::env::var("FAST_PLAIN").ok().as_deref() == Some("1");
+    let fast_emit = std::env::var("FAST_EMIT").ok().as_deref() == Some("1");
+    if fast_plain {
+        return build_plain();
+    }
+    build_generated(fast_emit)
+}
+
+/// Textbook point addition: HEO and leapfrog off, no post-passes.
+fn build_plain() -> Vec<Op> {
+    for name in ["LEAPFROG", "HEO_WALK", "HEO_RESEARCH", "HEO_EMIT_ONLY"] {
+        std::env::remove_var(name);
+    }
+    let mut ops = build_point_add();
+    let nonce: u64 = required_env("TAIL_NONCE");
+    let mut x = Op::empty();
+    x.kind = OperationType::X;
+    x.q_target = QubitId(0);
+    ops.extend(std::iter::repeat_n(x, 96));
+    apply_tail_nonce(ops, nonce)
 }
 
 /// laneW: the final policies with no stream binding. Exact and proof-based only; the stream-bound narrowing tables are out.
@@ -602,19 +625,6 @@ fn lane_generic_policy(ops: Vec<Op>) -> Vec<Op> {
     // laneG: laneL's terminal veto (LFG_VETO=1): the last tick's [a > 4b] compare gone, Y4 = 0; the filter has the key last_veto
     let ops = if std::env::var("LFG_VETO").is_ok_and(|v| v == "1") { last_veto::run(ops, 3) } else { ops };
     let ops = hold_pass::hold_pass(ops);
-    let mut ops = if std::env::var("A2R_GENERIC_PASSES").ok().as_deref() == Some("0") {
-        ops
-    } else {
-        let ops = gate_fold::finish_rounds(gate_fold::apply(ops));
-        let mut named_ops = ops;
-        let named = named_controls::apply_in_place(&mut named_ops);
-        eprintln!("NAMED_CONTROLS {named:?}");
-        named_ops
-    };
-    // Q1228 shelf diagnostic: emit the exact pre-edit stream first, then
-    // rebind the parent's certified source-edit tables by sequence identity.
-    const A2R_NO_SOURCE_EDITS: bool = true;
-    if A2R_NO_SOURCE_EDITS { return ops; }
     let ops=source_edits::run(ops,include_str!("bind81_followup.txt"));
     if std::env::var("QSTEP87_LATE_OFF").ok().as_deref()==Some("1"){return ops;}
     let ops=source_edits::run(ops,include_str!("qstep87_later.txt"));
@@ -623,7 +633,7 @@ fn lane_generic_policy(ops: Vec<Op>) -> Vec<Op> {
 }
 
 /// Original structural generator, retained for audit and regeneration.
-pub fn build_generated() -> Vec<Op> {
+pub fn build_generated(fast_emit: bool) -> Vec<Op> {
     // W124 (Codex) width composition, ported onto 6602a4e8: the effective selection pinned in source.
     // trace=true reproduces W124's logs only (stderr); it does not change gates.
     let w113_trace = true;
@@ -669,6 +679,14 @@ pub fn build_generated() -> Vec<Op> {
     for line in recipe.lines(){if let Some((k,v))=line.split_once('='){std::env::set_var(k,v);}}
     eprintln!("BIND81_RECIPE {}",recipe.replace('\n',";"));
     let mut ops = build_point_add();
+    if fast_emit {
+        let nonce: u64 = required_env("TAIL_NONCE");
+        let mut x = Op::empty();
+        x.kind = OperationType::X;
+        x.q_target = QubitId(0);
+        ops.extend(std::iter::repeat_n(x, 96));
+        return apply_tail_nonce(ops, nonce);
+    }
     {use std::io::Write;let mut f=std::io::BufWriter::new(std::fs::File::create("bind81-builder.raw").unwrap());
      for o in &ops {for v in [o.kind as u64,o.q_control2.0,o.q_control1.0,o.q_target.0,o.c_target.0,o.c_condition.0,o.r_target.0]{f.write_all(&v.to_le_bytes()).unwrap();}}f.flush().unwrap();}
     if std::env::var("BIND81_RAW").ok().as_deref()==Some("1"){
@@ -739,33 +757,7 @@ pub fn build_generated() -> Vec<Op> {
     x.kind = OperationType::X;
     x.q_target = QubitId(0);
     ops.extend(std::iter::repeat_n(x, 96));
-    let ops = apply_tail_nonce(ops, nonce);
-    // Robust 340-operation subset: each gate is dead in 64 real-RNG nonce
-    // corpora (577,536 shots), on all 16 fixed measurement corpora, and lies
-    // outside conditional execution. This is an empirical support cut, not a
-    // universal deadness claim.
-    if std::env::var("Q27_DEAD_OFF").ok().as_deref()==Some("1"){
-        let mut ops2 = source_edits::run_positions(ops,include_str!("q27_later.txt"));
-        if std::env::var("HP2").ok().as_deref()==Some("1"){ ops2 = hold_pass::hold_pass_holds_only(ops2); }
-        if std::env::var("HP3").ok().as_deref()==Some("1"){ ops2 = hold_pass::exact_final_pass(ops2); }
-        return ops2;
-    }
-    let dead_rows: Vec<usize> = include_str!("dead-direct64-q1228.idx")
-        .lines()
-        .filter(|line| !line.is_empty() && *line != "idx")
-        .map(|line| line.split('\t').next().unwrap().parse().unwrap())
-        .collect();
-    assert_eq!(dead_rows.len(), 340, "dead index must contain 340 rows");
-    let dead: std::collections::BTreeSet<usize> = dead_rows.into_iter().collect();
-    assert_eq!(dead.len(), 340, "dead index rows must be unique");
-    let before = ops.len();
-    let ops: Vec<Op> = ops
-        .into_iter()
-        .enumerate()
-        .filter_map(|(i, op)| (!dead.contains(&i)).then_some(op))
-        .collect();
-    assert_eq!(before - ops.len(), 340, "dead index must remove 340 ops");
-    ops
+    apply_tail_nonce(ops, nonce)
 }
 
 
