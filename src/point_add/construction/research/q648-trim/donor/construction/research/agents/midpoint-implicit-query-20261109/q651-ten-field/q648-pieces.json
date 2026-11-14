@@ -1,0 +1,37 @@
+{
+  "_comment": "hole (q648): LANDED q648 pieces. env = pins applied by construction/q648/point.cjs in every profile except stock '649'; modules = stage-config module overrides applied by q648-configs.cjs to stage-config-649p/-648/-649t-*. Bans stay off until a whole stage is on 7 helpers.",
+  "env": {
+    "Q648_MUL": "1",
+    "Q648_REGEN": "1kr",
+    "Q648_WALK": "1",
+    "Q648_MULBAN": "1",
+    "Q648_WALKK": "1",
+    "Q648_PROBE": "1",
+    "Q648_DIV": "outer,inner,rek,ra,c2n,c2a,c2g,c2ca,c2up,c2u2,c2w,c2t",
+    "Q648_AFFINE": "1,r112p,ltrial,flag,u7,r113",
+    "Q648_UNIT": "1",
+    "Q648_F113": "1"
+  },
+  "modules": {
+    "historyModule": "../q648w/r648-history.cjs"
+  },
+  "_landed": {
+    "multiply non-walk (papers 43ef270)": "Q648_MUL=1",
+    "multiply walk TstRelayD(5) at 7 sites (ledger q648w 1e6557a, papers 5d2cca8)": "Q648_WALK=1; stage-wide ban Q648_MULBAN=1",
+    "multiply walk TstRelayK (papers 53b87af, ledger walkt1.cjs c3bafc1)": "Q648_WALKK=1 (with Q648_WALK=1)",
+    "upper sign probes rows 0..112 fwd + retire without 647 (papers 8552b0c)": "Q648_PROBE=1 (u-upper-649.cjs applies p648-probe4 BEFORE their sink); upper NOT tight yet",
+    "regen on 7 sites, mode 1kr (ledger 0c8d491: TstRelayK + up to 6 relayed bits on the divisor's zero low bits)": "Q648_REGEN=1kr + historyModule q648w/r648-history.cjs",
+    "divide walks at 7 sites (evict c1b3245 on ledger walks): outer tag2->Q121, inner TstRelay1E maxRelay 5, reverse TstRelayKRE(2) maxRelay 4": "Q648_DIV=outer,inner,rek,ra (pure saving; divide NOT tight: logical 643 still carries c2 outside the walks)",
+    "upper affine + trial96 (ringhole 2e446ac) + probes 48d4740 + unit (papers 7f183ea)": "Q648_AFFINE=1 Q648_PROBE=1 Q648_UNIT=1; ringhole h649 round few 32 + stress 832 exact (fwd 290,126,045 / rev 328,342,689 pre-sink, +31.8M whole vs U15); NOT upper-tight (647 left: trial/witness 0..63, rows 112..)",
+    "upper ledger p648-trial (q648w ac6a7ab) + ringhole p648-u7/p648-r113 (2891940)": "Q648_AFFINE=1,ltrial,u7,r113 (R113_DV1 unset: dv[1] stays 647 in the flag probes); hole h649 round few 32 = ringhole: fwd 289,646,434 / rev 327,639,206 pre-sink (+29.4M vs U15)",
+    "upper 647-free (ringhole 07b1021 trial96 row 112 + r113 swap-skip; papers d55425b probe4/unit/flag)": "Q648_AFFINE=1,ltrial,flag,u7,r113 Q648_PROBE=1 Q648_UNIT=1 Q648_F113=1; hole h649 round few ban=650,651,647 = ringhole: fwd 291,982,412 / rev 329,972,142 sig 2aaf2719; upper now in tight",
+    "divide c2 hosted (evict d1a2902 + ledger c2w)": "Q648_DIV=outer,inner,rek,ra,c2n,c2a,c2g,c2ca,c2up,c2u2,c2w,c2t; divide never emits 643; evict: 124,334,116/call (-30.10M/call vs D14); divide now tight",
+    "upper row 112 2-pass of the original trial (ringhole 75e49f6 p648-r112p; trial96 short-packing row 112 OFF)": "Q648_AFFINE=1,r112p,ltrial,flag,u7,r113; hole h649 round few ban=650,651,647: fwd 292,304,047 / rev 330,616,494 sig 80c1c606; ringhole: 6596 fwd, stress 832, 4,096 random, folds PASS; 1875/2399 gated by hole forced-shot in cand648 v2"
+  },
+  "tight": [
+    "multiply",
+    "history",
+    "upper",
+    "divide"
+  ]
+}
