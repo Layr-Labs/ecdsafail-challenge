@@ -1,7 +1,3 @@
-thread_local! {static FRAME_FWD_K3:std::cell::Cell<Option<QubitId>>=const{std::cell::Cell::new(None)};}
-pub(super)fn frame_fwd_take()->QubitId{FRAME_FWD_K3.with(|v|v.take().expect("delayed k3 missing"))}
-thread_local! {static FRAME_FWD_K2:std::cell::Cell<Option<QubitId>>=const{std::cell::Cell::new(None)};}
-pub(super)fn frame_k2_take()->QubitId{FRAME_FWD_K2.with(|v|v.take().expect("delayed k2 missing"))}
 // ======================================================================================================================
 // round17 a2-build (lever A end to end on fold-core's IPK fold). Piece M2: the 8-way payload rotation, the round6 B1
 // parity-split network (axes 0, -4, -2, -6, -7; 508 Fredkins on n = 256), every half-stage controlled by a linear form
@@ -120,7 +116,7 @@ pub(super) fn rot8_phase(c: &mut Builder, k: [QubitId; 3], v: &[QubitId], bits: 
 // inverse tick, fold^-1 before the subtractions).
 // ======================================================================================================================
 /// LFA2_EXT: extra window bits of the reverse tick's value compares over the forward's erase compares (default 2 = v3w).
-fn a2_ext(t:usize,kind:usize) -> usize {compare_window_knob("EXT",true,t,kind,a_env("LFA2_EXT").unwrap_or(2))}
+fn a2_ext() -> usize { a_env("LFA2_EXT").unwrap_or(2) }
 /// LFA2_TICK=1: the builder's forward A ticks (LFA_FOLD=1) run [`a2_fwd_tick`] (rot8 and the IPK fold).
 pub(super) fn a2_tick_test() -> bool { std::env::var("LFA2_TICK").is_ok_and(|v| v == "1") }
 /// LFA2_REV=1: the builder's reverse one-fold ticks t in [1, LFA_TO) run [`a2_rev_tick`] (M6).
@@ -133,63 +129,34 @@ pub(super) fn a2_fwd_tick(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitI
     let (_, proxy) = proxy_fold(w, false);
     let (tg, b) = (p[ti].clone(), p[si].clone());
     let shift = cmp_shift_at(t);
-    let frame_delayed=k[2]==crate::circuit::NO_QUBIT;
     a_set(Some((k[2], emax)));
-    cells::with_tie(None, || cells::with_cmp_shift((shift.0 + Y15_CMP_EXTRA + super::n2_cmpx() + super::ll_band("LL_CMPF", t), shift.1), || cells::with_bridge(proxy, false, || body_capped(c, t, s, k[0], k[1], &b, &tg, proxy, false))));
-    if KPAGE_LATE.with(|x| x.replace(false)) {
-        let (nk3, nk2) = super::a2_code_read(c, t);
-        FRAME_FWD_K2.with(|v| v.set(Some(nk2)));
-        a_set(Some((nk3, emax)));
-    }
-    let actual_k3=a_tick().expect("A tick context").0;
-    let k=[k[0],if frame_delayed&&super::a2_code(){FRAME_FWD_K2.with(|v|v.get()).expect("delayed k2")}else{k[1]},actual_k3];
-    if frame_delayed{FRAME_FWD_K3.with(|v|{assert!(v.get().is_none());v.set(Some(actual_k3));});}
+    cells::with_tie(None, || cells::with_cmp_shift((shift.0 + Y15_CMP_EXTRA + super::n2_cmpx(), shift.1), || cells::with_bridge(proxy, false, || body_capped(c, t, s, k[0], k[1], &b, &tg, proxy, false))));
     a_set(None);
     for _ in 0..3 {
         rot1(c, &tg, true);
     }
     if !SKIP_ROT4.with(|x| x.get()) {
-        pay_rot(c, k, &tg, false);
+        rot8(c, k, &tg, false);
     }
-}
-/// laneQ: the "k3" of a tail e <= 3 tick: no wire; only the emax 3 fold and rot4 see it, and they do not read it.
-pub(super) const Q_E3_GHOST: QubitId = QubitId(u64::MAX - 7);
-/// laneW: the payload rotation: round 61's six-letter word where the walk is capped at e <= 5.
-fn pay_rot(c: &mut Builder, k: [QubitId; 3], t: &[QubitId], inverse: bool) {
-    if k[2] == Q_E3_GHOST { return rot4(c, k[0], k[1], t, inverse); }
-    if super::a2_s6() { super::super::rail_s6::rot_s6(c, k, t, inverse) } else { rot8(c, k, t, inverse) }
 }
 /// The reverse A payload tick, the exact inverse of [`a2_fwd_tick`]: rotation up by 3 + e, then [`body_inv`].
 pub(super) fn a2_rev_tick(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: usize, p: &mut [Vec<QubitId>; 2]) {
-    a2_rev_tick_k3_owner(c, t, s, k, emax, p, false);
-}
-/// Payload-only consumer owns a freshly decoded record k3. Retire it at its
-/// last fold use; borrowed/fused callers continue through a2_rev_tick unchanged.
-pub(super) fn a2_rev_tick_owned_k3(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: usize, p: &mut [Vec<QubitId>; 2]) {
-    let owned=!(t+2==super::rounds()&&std::env::var("RAIL_OPT_ALIAS").as_deref()==Ok("1"));
-    a2_rev_tick_k3_owner(c,t,s,k,emax,p,owned);
-}
-fn a2_rev_tick_k3_owner(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: usize, p: &mut [Vec<QubitId>; 2], owns_k3: bool) {
     let [w, ..] = steps()[t];
     let (ti, si) = (t % 2, 1 - t % 2);
     let (_, proxy) = proxy_fold(w, true);
     let (tg, b) = (p[ti].clone(), p[si].clone());
     let (e0, a0) = (c.expected_total(), c.active_qubits());
-    pay_rot(c, k, &tg, true);
+    rot8(c, k, &tg, true);
     for _ in 0..3 {
         rot1(c, &tg, false);
     }
     let shift = cmp_shift_at(t);
     cells::with_tie(None, || cells::with_cmp_shift((shift.0 + Y15_CMP_EXTRA, shift.1), || cells::with_bridge(proxy, true, || {
-        let ((), peak) = c.r3_peak(|c| body_inv(c, t, s, k, emax, &b, &tg, proxy, owns_k3));
+        let ((), peak) = c.r3_peak(|c| body_inv(c, t, s, k, emax, &b, &tg, proxy));
         if room_trace() {
             eprintln!("A2_PEAK rev t={t} peak={peak} cap={}", cells::cap());
         }
-        if std::env::var("W118_DIAG_PEAK").ok().as_deref() == Some("1") {
-            eprintln!("W118_DIAG_PEAK reverse_A2 t={t} actual={peak} plan_cap={}", cells::cap());
-        } else {
-            assert!(peak as usize <= cells::cap(), "a2: the reverse A tick t={t} peaks at {peak}, over the walk cap {}", cells::cap());
-        }
+        assert!(peak as usize <= cells::cap(), "a2: the reverse A tick t={t} peaks at {peak}, over the walk cap {}", cells::cap());
     })));
     if room_trace() {
         eprintln!("A2_TICK rev t={t} active={a0} cost={:.1}", c.expected_total() - e0);
@@ -267,36 +234,15 @@ fn a2_lt_into(c: &mut Builder, u: &[QubitId], v: &[QubitId], borrow_in: Option<Q
 /// guarantees acc >= addend, so the carry out is always 0 (released) and the top wire ends 0 (the caller releases it).
 fn a2_sub_top(c: &mut Builder, addend: &[QubitId], acc: &[QubitId], proxy: usize) {
     assert_eq!(acc.len(), addend.len() + 1);
-    if A2_SUB_PADTOP && A2_SUB_NOCOUT && A2_SUB_KNOWN_TOP {
-        // v2: no zero wire for the addend's top bit (one wire of room more for every chunk of the subtraction)
-        c.x_all(acc);
-        cells::chunked_add_nocout_padtop(c, addend, acc, proxy, true, Some(true));
-        c.x_all(acc);
-        return;
-    }
     let z = c.alloc_qubit();
     let mut add = addend.to_vec();
     add.push(z);
     c.x_all(acc);
-    if A2_SUB_NOCOUT {
-        // the top bit of ~acc + addend is 1 (the result's top bit is 0)
-        cells::chunked_add_nocout(c, &add, acc, proxy, true, A2_SUB_KNOWN_TOP.then_some(true));
-    } else {
-        let cout = cells::chunked_add(c, &add, acc, proxy, true);
-        c.release_clean(cout);
-    }
+    let cout = cells::chunked_add(c, &add, acc, proxy, true);
+    c.release_clean(cout);
     c.release_clean(z);
     c.x_all(acc);
 }
-/// The subtraction's carry-out (0 whenever acc >= addend, which the caller guarantees) is not computed: one Toffoli
-/// less per subtraction, three per reverse tick. false = the parent's gate list.
-const A2_SUB_NOCOUT: bool = true;
-/// The subtraction's top wire (the held carry, cleared by the carry into it) is erased by an X measurement while the
-/// last chunk's carries are live (its value is their terminal carry: Clifford repair) in place of the terminal
-/// Toffoli that wrote that carry onto it (needs A2_SUB_NOCOUT).
-const A2_SUB_KNOWN_TOP: bool = true;
-/// v2 PADTOP: the subtraction allocates no zero wire for its addend's top bit; false = the parent's gate list.
-const A2_SUB_PADTOP: bool = true;
 
 /// The reverse A tick's body (M6): the exact inverse of the forward one-fold body in its A configuration (direct cuts,
 /// add 1 to the top, add 2's top ripple open, no closed ripple, no deep shed) with [`fold_inv_f`] in place of the fold.
@@ -312,23 +258,10 @@ const A2_SUB_PADTOP: bool = true;
 /// Its value compares read `a2_ext` more bits than the forward's erase compares (a wrong value is a wrong result, not
 /// a phase), so sp2 sits that much lower. Sheds: a block of the open ripple (1 Toffoli each) and fin <= 2 of the fold.
 #[allow(clippy::too_many_arguments)]
-/// L2-M2M0 switch (lane 2): shed m2 at m0's step when the open-ripple pool alone is short.
-const L2_M2_AT_M0: bool = true;
-/// L2-HB switch (lane 2): erase the m0 chain's top AND before m0's compare.
-const L2_HB_EARLY: bool = true;
-/// L2-S1 / L2-CR switches (lane 2): m0's step without the 2 unused slack wires; chain release before m2 shed.
-const L2_S1_TIGHT: bool = true;
-const L2_CHAIN_RELEASE: bool = true;
-fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: usize, b: &[QubitId], tg: &[QubitId], proxy: usize, owns_k3: bool) {
-    if t==48&&false{c.z_if(tg[0],NO_BIT);}
-    // laneR: A2R_SPEC picks the reverse tick's top end per tick
-    let a2r=a2r_mode(t);
-    if a2r==1 { return body_inv_direct(c,t,s,k,emax,b,tg,proxy,owns_k3); }
-    let lean=a2r==2;
-
+fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: usize, b: &[QubitId], tg: &[QubitId], proxy: usize) {
     let (e_start, a_start) = (c.expected_total(), c.active_qubits());
     let rev = true;
-    let ext = a2_ext(t,0); let ext2 = a2_ext(t,2);
+    let ext = a2_ext();
     let (k0, seed0) = cells::y15_split_spec(proxy, rev, N);
     let (kk1, _) = cells::y15_split_spec(proxy, rev, N - 1);
     let k0x = k0 + ext;
@@ -336,7 +269,7 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
     let kwin = k0x.max(kk1);
     let sp2 = N - 2 - kwin;
     let (kk2, seed2) = cells::y15_split_spec(proxy, rev, sp2);
-    let kk2x = kk2 + ext2;
+    let kk2x = kk2 + ext;
     let seed2x = seed2.map(|_| sp2 - kk2x - 1);
     let mw = fold_window(t, true);
     assert!(mw + 8 < sp2 - kk2x, "a2: the reverse tick's windows overlap the fold");
@@ -362,52 +295,21 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
         c.cx(b[i], acc2[i]);
     }
     let e_open = c.expected_total();
-    // laneR lean: X1 is on the window now and the lower ripple carries are read by nothing but their own erase; they
-    // leave top down with live parents (0 T). cq(N - 3) stays as the parent of I7's cq2; it is erased at the end by a
-    // measurement whose phase fix rebuilds the chain under the outcome (N - 3 - sp2 ANDs at 1/2).
-    if lean {
-        for i in ((sp2 + 1)..=(N - 4)).rev() {
-            m_carry_erase(c, cc[i - sp2], acc2[i - 1], &l(b[i - 1]), cc[i - 1 - sp2]);
-        }
-    }
     // room, m0's step: its chain and compare (2 k0x wires) with s1 carries of the open ripple shed (cq(sp2) = m2 stays;
     // cq(N - 3) and the rest are built again before I7, 1 Toffoli each)
-    let frame_host=std::env::var("RAIL_OPT_M0").as_deref()==Ok("1");
     let room_m = cells::cap().saturating_sub(c.active_qubits() as usize + 2);
-    // L2-HB: the chain's top AND (h1) leaves right after it is copied into m0, so the compare runs beside k0x - 1
-    // chain wires.
-    let need_m=k0x+(k0x-1)+if frame_host{0}else{1-usize::from(L2_HB_EARLY)};
-    let s1 = if lean { 0 } else { need_m.saturating_sub(room_m + if L2_S1_TIGHT { 2 } else { 0 }).max(a_env("LFA2_FS1").unwrap_or(0)).min(N - 3 - sp2) };
+    let need_m = k0x + (k0x - 1) + 1;
+    let s1 = need_m.saturating_sub(room_m).max(a_env("LFA2_FS1").unwrap_or(0)).min(N - 3 - sp2);
     assert!(s1 <= N - 3 - sp2, "a2: the reverse tick t={t} does not fit m0's step: short {s1}, pool {}", N - 3 - sp2);
     for i in ((N - 2 - s1)..=(N - 3)).rev() {
         m_carry_erase(c, cc[i - sp2], acc2[i - 1], &l(b[i - 1]), cc[i - 1 - sp2]);
-    }
-    // L2-M2M0 (exact): when m0's step is short by more than the whole ripple pool, m2 (= cc[0], the carry into sp2)
-    // leaves as well, erased by its own window compare (the fold's m2-shed path), and is built again by the same
-    // value compare once m0 and m1 are done, before the shed ripple carries are rebuilt.
-    let m2_win_m = (sp2 - kk2x, seed2x);
-    // room_m keeps 2 wires of slack (m0, m1): m0's step really overflows only when short by more than pool + 2.
-    // L2-CR: wires still missing after the ripple pool are first taken from the chain (k0x - 3 at most).
-    let cr_need = need_m.saturating_sub(s1 + room_m + 2);
-    let cr_max = if L2_CHAIN_RELEASE { k0x - 3 } else { 0 };
-    let cr = cr_need.min(cr_max);
-    let m2_shed_m = L2_M2_AT_M0 && cr_need > cr_max;
-    if m2_shed_m {
-        let (w0, sd) = m2_win_m;
-        cells::y15_erase_cmp(c, cc[0], &acc2[w0..sp2], &b[w0..sp2], sd.map(|i| b[i]));
-        c.free(cc[0]);
-        if room_trace() { eprintln!("L2_M2M0 shed t={t} need={need_m} room={room_m} pool={}", N - 3 - sp2); }
     }
     // I8: m0 = g0 ^ h1, then m1 = x257, then m0 = X1[256]
     let lo = N - k0x;
     let i0 = lo - 1;
     assert!(sp2 + 2 <= i0 + 1 && i0 >= 1);
-    let frame_old_m0=(!frame_host).then(||c.alloc_qubit());
-    // laneR: where m0's step has a wire to spare h1 stays through the compare and x257 = MAJ(g0, h1, S'1[255]) is one
-    // AND (g0 = m0 ^ h1) in place of the G6' identity's two.
-    let keep_hb = a2r_hb(t) && !frame_host && L2_HB_EARLY && cr == 0 && room_m >= 2 * k0x + 2;
-    let mut m1_early: Option<QubitId> = None;
-    let m0={
+    let m0 = c.alloc_qubit();
+    {
         let mut r: Vec<Lin> = vec![s1f(i0 - 1)];
         let mut rr: Vec<(QubitId, Lin, Lin, Lin)> = Vec::new();
         for i in i0..N - 1 {
@@ -419,30 +321,10 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
             r.push(l(q));
         }
         let hb = rr.last().expect("a2: the chain is not empty").0; // C1[N - 1] = h1
-        let m0=frame_old_m0.unwrap_or(hb);
-        if !frame_host{c.cx(hb,m0);}
-        if frame_host&&std::env::var("FRAME_M0_FAULT").as_deref()==Ok("1"){c.x(m0);}
-        if L2_HB_EARLY&&!frame_host&&!keep_hb {
-            // L2-HB (exact): h1 is read only by m0 (the chain's XOR into tg stops at r[N - 2 - i0]); its erase forms
-            // (ci, s1f(N - 2), tg[N - 1]) are untouched until here, so the existing erase moves ahead of the compare.
-            let (q, fa, fb, ci) = rr.pop().expect("a2: the chain is not empty");
-            lin_xor_into(c, &ci, q);
-            lin_and_erase(c, q, &fa, &fb);
-        }
+        c.cx(hb, m0);
         for j in lo..N {
             lin_xor_into(c, &s1f(j - 1).x(&r[j - 1 - i0]), tg[j]);
         }
-        // L2-CR (exact): tg[i + 1] now holds tg[i + 1] ^ s1f(i) ^ ci, so the AND's second form is tg[i + 1] ^ ci; the top
-        // `cr` chain ANDs leave (measured, top down, each above a live ci) and are built again after the compare.
-        let nrr=rr.len()-usize::from(frame_host);
-        assert!(cr < nrr, "a2: chain release larger than the chain");
-        for idx in (nrr - cr..nrr).rev() {
-            let (q, fa, _fb, ci) = rr[idx].clone();
-            let fbn = l(tg[i0 + idx + 1]).x(&ci);
-            lin_xor_into(c, &ci, q);
-            lin_and_erase(c, q, &fa, &fbn);
-        }
-        if cr > 0 && room_trace() { eprintln!("L2_CR t={t} cr={cr} need={need_m} room={room_m} s1={s1}"); }
         let blo = seed0x.map_or(lo, |sd| sd.min(lo));
         for i in blo..N {
             c.cx(s[2], b[i]);
@@ -453,34 +335,16 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
             c.cx(s[0], b[i]);
             c.cx(s[2], b[i]);
         }
-        if keep_hb {
-            let st = s1f(N - 1);
-            let (fa, fb) = (l(m0).x(&l(hb)).x(&st), l(hb).x(&st));
-            let q = lin_and(c, &fa, &fb);
-            lin_xor_into(c, &st, q);
-            m1_early = Some(q);
-        }
-        for idx in nrr - cr..nrr {
-            let i = i0 + idx;
-            let ci = r[idx].clone();
-            let fa = s1f(i).x(&ci);
-            let q = lin_and(c, &fa, &l(tg[i + 1]).x(&ci));
-            lin_xor_into(c, &ci, q);
-            rr[idx] = (q, fa, l(tg[i + 1]).x(&s1f(i)), ci);
-            r[idx + 1] = l(q);
-        }
         for j in (lo..N).rev() {
             lin_xor_into(c, &s1f(j - 1).x(&r[j - 1 - i0]), tg[j]);
         }
         while let Some((q, fa, fb, ci)) = rr.pop() {
-            if frame_host&&q==m0{continue;}
             lin_xor_into(c, &ci, q);
             lin_and_erase(c, q, &fa, &fb);
         }
-        m0
-    };
-    let m1 = if let Some(q) = m1_early { q } else {
-        let m1 = c.alloc_qubit();
+    }
+    let m1 = c.alloc_qubit();
+    {
         // G6' identity: x257 = q ^ u (q ^ S'1[255]), q = MAJ(S'0[255], S'1[254], ~X1[255]), u = m0
         let (fx, fy) = (s0f(N - 1), s1f(N - 2));
         let fc = l(tg[N - 1]).x(&Lin::k(true));
@@ -488,16 +352,9 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
         lin_and_into(c, m1, &l(m0), &l(q).x(&s1f(N - 1)));
         c.cx(q, m1);
         maj_wire_erase(c, q, &fx, &fy, &fc);
-        m1
-    };
+    }
     lin_xor_into(c, &s1f(N - 1), m0);
     let e_m01 = c.expected_total();
-    if m2_shed_m {
-        let (w0, sd) = m2_win_m;
-        let q = c.alloc_qubit();
-        a2_lt_into(c, &acc2[w0..sp2], &b[w0..sp2], sd.map(|i| b[i]), q);
-        cc[0] = q;
-    }
 
     for i in (N - 2 - s1)..=(N - 3) {
         cc[i - sp2] = m_carry(c, acc2[i - 1], &l(b[i - 1]), cc[i - 1 - sp2]);
@@ -518,27 +375,17 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
     // room, the fold: fin <= 2, then s2 carries cq(N - 1), cq(N - 2), cq(N - 3), ... shed top down (built again after
     // fold^-1, 1 Toffoli each); x258, m0, m1 (its inputs) and m2 stay. cq(N - 1)'s forms: X1[256] = m0 ^ S'2[254] ^ cq2.
     let nbits = mw - 3 - emax;
-    // W110 may retire five continued-Q owners inside an emax=7 fold before
-    // its final ladder plan. The outer reverse shed must use the same
-    // eligibility when deciding whether fin/ripple/m2 have enough capacity;
-    // fold_inv_f still checks the actual post-page physical budget.
-    let fold_need = a_fixed(emax) - f_own_sheds(emax) + a_min_budget(nbits) - f_page5_room_credit(emax);
+    let fold_need = a_fixed(emax) - f_own_sheds(emax) + a_min_budget(nbits);
     let short_f0 = fold_need.saturating_sub(cells::cap().saturating_sub(c.active_qubits() as usize));
     // fin <= 3 (c2, c1, the AND k1 k2), then the open ripple (s2 <= N - 1 - sp2), then m2 itself (erased by its
     // compare under the outcome, built again by its value compare after fold^-1: about k2x + k2x/2 Toffoli)
     // (fin 3 only once fin 2 + the whole ripple pool is short: the cap-1242 stream stays the measured v3's)
-    let pool = if lean { 2 } else { N - 1 - sp2 };
-    // laneQ: past fin 3 + pool, (k3, k2) of a payload-only tick leave for the fields and the ladder (3.5 T, 2 wires), then
-    // kept carries drop (2 to 16 T); only then m2 (about 34 T for one wire).
-    let kp_on = owns_k3 && super::a2_code() && lfq_kpage() && short_f0 > 3 + pool;
-    let short_f0 = short_f0 - if kp_on { 2 } else { 0 };
-    let short_f0 = if lfq_drops() { short_f0 - short_f0.saturating_sub(3 + pool).min(a_min_budget(nbits) - f_min_budget(nbits)) } else { short_f0 };
-    if kp_on { KPAGE_AT.with(|x| x.set(Some(t))); }
+    let pool = N - 1 - sp2;
     let fin = (if short_f0 > 2 + pool { short_f0.min(3) } else { short_f0.min(2) }).max(a_env("LFA2_FFIN").unwrap_or(0));
     let s2 = (short_f0 - short_f0.min(fin)).max(a_env("LFA2_FS2").unwrap_or(0)).min(pool);
     let m2_shed = short_f0 > fin + pool || a_env("LFA2_FM2").is_some_and(|v| v == 1);
     assert!(short_f0 <= fin + pool + usize::from(m2_shed), "a2: the reverse tick t={t} does not fit fold^-1: short {short_f0}, fin 3 + pool {pool} + m2");
-    assert!(s2 <= pool, "a2: the reverse tick t={t} does not fit fold^-1: short {short_f0} (fin {fin}), pool {pool}");
+    assert!(s2 <= N - 1 - sp2, "a2: the reverse tick t={t} does not fit fold^-1: short {short_f0} (fin {fin}), pool {}", N - 1 - sp2);
     let cq1_forms = (Lin::of(&[m0, b[N - 2]]), Lin::of(&[b[N - 2], cq2]));
     for j in 1..=s2 {
         let i = N - j;
@@ -559,16 +406,7 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
     }
     let a_fold = c.active_qubits();
     // I5
-    if std::env::var("W118_FINE_TRACE").ok().as_deref() == Some("1") {
-        eprintln!("A2_FOLD_START rev t={t} active={a_fold}");
-    }
-    A2R_SERIAL_HOLD.with(|x| x.set(a2r_serial(t)));
-    let (plan, fold_peak) = c.r3_peak(|c| fold_inv_f(c, &tg[..mw], [m0, m1, x258], s, k[0], k[1], k[2], emax, fin));
-    A2R_SERIAL_HOLD.with(|x| x.set(false));
-    if std::env::var("W118_FINE_TRACE").ok().as_deref() == Some("1") {
-        eprintln!("A2_FOLD_END rev t={t} peak={fold_peak} active={}", c.active_qubits());
-    }
-    if room_trace() { eprintln!("A2_FOLD_PEAK rev t={t} peak={fold_peak} cap={}", cells::cap()); }
+    let plan = fold_inv_f(c, &tg[..mw], [m0, m1, x258], s, k[0], k[1], k[2], emax, fin);
     let e_fold = c.expected_total();
     if m2_shed {
         let (w0, sd) = m2_win;
@@ -589,21 +427,6 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
         }
     }
     let (cq2, cq1) = (cc[N - 2 - sp2], cc[N - 1 - sp2]);
-    // The fold and its restore were the final k3 reads. Payload-only k3 is
-    // decoded from an external immutable record: move its existing HMR/phase,
-    // without a rebuild, ahead of the subtraction scratch frontier.
-    if owns_k3 {
-        let before_k3 = c.active_qubits();
-        if super::a2_code() {
-            let (k3e, k2e) = KPAGE_RET.with(|x| x.take()).unwrap_or((k[2], k[1]));
-            super::a2_code_read_erase(c, t, k3e, k2e);
-            assert_eq!(c.active_qubits() + 2, before_k3, "a2: owned letters retire two owners");
-        } else {
-        super::a2_k3_erase_rec(c, t, k[2]);
-        assert_eq!(c.active_qubits() + 1, before_k3, "a2: owned k3 retires exactly one owner");
-        }
-        eprintln!("W133_OWNED_K3 t={t} before={before_k3} after={}", c.active_qubits());
-    }
     // I4
     c.cx(cq1, m1);
     c.cx(b[N - 1], m1);
@@ -611,30 +434,8 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
     c.cx(b[N - 2], m0);
     // I3': add 2's top ripple measured away, top down (acc2[N - 2] = m0, acc2[N - 1] = m1)
     let a2at = |i: usize| if i == N - 2 { m0 } else if i == N - 1 { m1 } else { acc2[i] };
-    let stop = if lean { N - 3 } else { sp2 };
-    for i in (stop..N).rev() {
+    for i in (sp2..N).rev() {
         m_carry_erase(c, cc[i - sp2 + 1], a2at(i), &l(b[i]), cc[i - sp2]);
-    }
-    if lean {
-        // cq(N - 3): measured; under the outcome the chain from m2 is built again on X1, Z on its top, erased
-        let q = cc[N - 3 - sp2];
-        let mb = c.alloc_bit();
-        c.hmr(q, mb);
-        c.release_clean(q);
-        c.push_condition(mb);
-        let mut chain: Vec<(QubitId, usize, QubitId)> = Vec::new();
-        let mut r = cc[0];
-        for i in (sp2 + 1)..=(N - 3) {
-            let w = m_carry(c, acc2[i - 1], &l(b[i - 1]), r);
-            chain.push((w, i - 1, r));
-            r = w;
-        }
-        c.cz(r, r);
-        while let Some((w, j, ci)) = chain.pop() {
-            m_carry_erase(c, w, acc2[j], &l(b[j]), ci);
-        }
-        c.pop_condition();
-        c.free_bit(mb);
     }
     let e_ripple = c.expected_total();
     // I3: (m2, tg[2..2 + sp2)) -= S'2[0..sp2)
@@ -662,7 +463,7 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
     c.release_clean(m0);
     c.cx_all(s[0], b);
     let e_end = c.expected_total();
-    assert_eq!(c.active_qubits(), a_start - u32::from(owns_k3) * (1 + u32::from(super::a2_code())), "a2: the reverse A tick violated its k3 ownership return");
+    assert_eq!(c.active_qubits(), a_start, "a2: the reverse A tick left a wire");
     if room_trace() {
         eprintln!(
             "A2_INV t={t} active={a_start} room={} at_fold={a_fold} sp2={sp2} k0x={k0x} kk2x={kk2x} s1={s1} s2={s2} fin={fin} m2shed={} plan={plan:?} m2={:.1} open={:.1} m01={:.1} tops={:.1} fold={:.1} ripple={:.1} sub2={:.1} sub1={:.1} sub0={:.1} body={:.1}",
@@ -679,162 +480,6 @@ fn body_inv(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: u
             e_end - e_sub1,
             e_end - e_start
         );
-    }
-}
-
-/// laneR: the environment (the tick check) or, for the builder (which clears its environment), <crate>/a2r_cfg.txt.
-fn a2r_cfg(key: &str) -> String {
-    std::env::var(key).unwrap_or_default()
-}
-/// laneR: A2R_HB = "lo-hi,lo-hi": ticks whose m1 is one MAJ with h1 kept through m0's compare.
-fn a2r_hb(t: usize) -> bool {
-    a2r_cfg("A2R_HB").split(',').filter(|x| !x.is_empty()).any(|r| {
-        let (lo, hi) = r.split_once('-').expect("A2R_HB range");
-        (lo.parse::<usize>().unwrap()..=hi.parse::<usize>().unwrap()).contains(&t)
-    })
-}
-/// laneR: A2R_SERIAL = "lo-hi,lo-hi": ticks whose reverse fold holds the kept seed's chain.
-fn a2r_serial(t: usize) -> bool {
-    let spec = a2r_cfg("A2R_SERIAL");
-    spec.split(',').filter(|x| !x.is_empty()).any(|r| {
-        let (lo, hi) = r.split_once('-').expect("A2R_SERIAL range");
-        (lo.parse::<usize>().unwrap()..=hi.parse::<usize>().unwrap()).contains(&t)
-    })
-}
-/// laneR: per-tick choice of the reverse top end. A2R_SPEC = "lo-hi:direct,lo-hi:lean,..." (unset or no match: the base).
-fn a2r_mode(t: usize) -> u8 {
-    let spec = a2r_cfg("A2R_SPEC");
-    let mut out = 0;
-    for row in spec.split(',').filter(|x| !x.is_empty()) {
-        let (r, m) = row.split_once(':').expect("A2R_SPEC row");
-        let (lo, hi) = r.split_once('-').expect("A2R_SPEC range");
-        if (lo.parse::<usize>().unwrap()..=hi.parse::<usize>().unwrap()).contains(&t) {
-            out = match m { "direct" => 1, "lean" => 2, "base" => 0, _ => panic!("A2R_SPEC mode") };
-        }
-    }
-    out
-}
-/// laneR: E = X >> 256 from X's top window alone, with no open ripple and nothing written on the register. With
-/// D = S'0 + 2 S'1 + 4 S'2 and T < 2^256: E = (D >> 256) + [X mod 2^256 < D mod 2^256], read on the top k columns.
-/// Row A: carries of S'0 + 2 S'1; row B: carries of that + 4 S'2 (the top of D as forms); row C: carries of ~X + D.
-/// Each row is seeded with one operand's next lower bit. 3k + 3 ANDs, 3k + 3 wires at the top, everything but the three
-/// E wires measured away with live parents (0 T).
-fn a2r_direct_e(c: &mut Builder, tg: &[QubitId], b: &[QubitId], s: [QubitId; 3], k: usize) -> [QubitId; 3] {
-    let lo = N - k;
-    let sp = |i: usize, j: usize| Lin::of(&[b[j], s[i]]);
-    let mut recs: Vec<(QubitId, Lin, Lin, Lin)> = Vec::new();
-    fn maj(c: &mut Builder, recs: &mut Vec<(QubitId, Lin, Lin, Lin)>, x: Lin, y: Lin, ci: Lin) -> Lin {
-        let (fa, fb) = (x.x(&ci), y.x(&ci));
-        let q = lin_and(c, &fa, &fb);
-        lin_xor_into(c, &ci, q);
-        recs.push((q, fa, fb, ci));
-        l(q)
-    }
-    // row A: a[j - lo] = the carry into column j of S'0 + 2 S'1; u[j - lo] = its sum bit, columns lo..=255
-    let mut a: Vec<Lin> = vec![sp(0, lo - 1)];
-    for j in lo..N {
-        let q = maj(c, &mut recs, sp(0, j), sp(1, j - 1), a[j - lo].clone());
-        a.push(q);
-    }
-    let u: Vec<Lin> = (lo..N).map(|j| sp(0, j).x(&sp(1, j - 1)).x(&a[j - lo])).collect();
-    // row B: v[j - lo] = the bit of D at column j, columns lo..=255; bb ends as the carry into column 256
-    let mut bb: Lin = sp(2, lo - 3);
-    let mut v: Vec<Lin> = Vec::new();
-    for j in lo..N {
-        v.push(u[j - lo].x(&sp(2, j - 2)).x(&bb));
-        bb = maj(c, &mut recs, u[j - lo].clone(), sp(2, j - 2), bb);
-    }
-    // row C: [X mod 2^256 < D mod 2^256], the carries of ~X + D on the window
-    let mut cr: Lin = l(tg[lo - 1]).x(&Lin::k(true));
-    for j in lo..N {
-        cr = maj(c, &mut recs, l(tg[j]).x(&Lin::k(true)), v[j - lo].clone(), cr);
-    }
-    // E = S'1[255] + S'2[254] + a256 + bb256 + cr + 2 S'2[255]: two full adders on the weight-1 bits, one on the
-    // weight-2 bits (3 ANDs). E0 goes on the compare's top wire, E1 on the second carry's, E2 is the last carry.
-    let e0 = recs.pop().expect("a2r: row C").0;
-    let (x1, x2, x3) = (sp(1, N - 1), sp(2, N - 2), a[N - lo].clone());
-    let (fa1, fb1) = (x1.x(&x3), x2.x(&x3));
-    let c1 = lin_and(c, &fa1, &fb1);
-    lin_xor_into(c, &x3, c1);
-    let s1 = x1.x(&x2).x(&x3);
-    let (x4, x5) = (bb.clone(), l(e0));
-    let (fa2, fb2) = (s1.x(&x5), x4.x(&x5));
-    let c2 = lin_and(c, &fa2, &fb2);
-    lin_xor_into(c, &x5, c2);
-    let y = sp(2, N - 1);
-    let (fa3, fb3) = (l(c1).x(&y), l(c2).x(&y));
-    let e2 = lin_and(c, &fa3, &fb3);
-    lin_xor_into(c, &y, e2);
-    lin_xor_into(c, &l(c1).x(&y), c2);
-    let e1 = c2;
-    lin_xor_into(c, &s1.x(&x4), e0);
-    lin_xor_into(c, &x3, c1);
-    lin_and_erase(c, c1, &fa1, &fb1);
-    let e = [e0, e1, e2];
-    while let Some((q, fa, fb, ci)) = recs.pop() {
-        lin_xor_into(c, &ci, q);
-        lin_and_erase(c, q, &fa, &fb);
-    }
-    e
-}
-/// laneR: the reverse tick with E read directly: E (no open ripple through the fold), fold^-1, three whole subtractions.
-fn body_inv_direct(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: usize, b: &[QubitId], tg: &[QubitId], proxy: usize, owns_k3: bool) {
-    let (e_start, a_start) = (c.expected_total(), c.active_qubits());
-    let (k0, _) = cells::y15_split_spec(proxy, true, N);
-    // Q1228 shelf: reverse tick 92 is the sole 1229 binder. One column off
-    // the direct-E carry triangle retires its three top scratch wires.
-    let shelf_mode = std::env::var("A2R_Q1228_SHELF").ok();
-    let shelf = usize::from(
-        t == 92
-            && (shelf_mode.as_deref() == Some("force")
-                || (shelf_mode.as_deref() != Some("0") && cells::cap() == 1228)),
-    );
-    let kw = k0 + a2_ext(t, 0) - shelf;
-    let mw = fold_window(t, true);
-    assert!(mw + 8 < N - kw, "a2r: the window overlaps the fold");
-    let e = a2r_direct_e(c, tg, b, s, kw);
-    let e_e = c.expected_total();
-    let nbits = mw - 3 - emax;
-    let fold_need = a_fixed(emax) - f_own_sheds(emax) + a_min_budget(nbits) - f_page5_room_credit(emax);
-    let short_f0 = fold_need.saturating_sub(cells::cap().saturating_sub(c.active_qubits() as usize));
-    let fin = short_f0.min(3);
-    assert!(short_f0 <= fin, "a2r: the direct tick t={t} does not fit fold^-1: short {short_f0}");
-    let a_fold = c.active_qubits();
-    A2R_SERIAL_HOLD.with(|x| x.set(a2r_serial(t)));
-    let (plan, _) = c.r3_peak(|c| fold_inv_f(c, &tg[..mw], e, s, k[0], k[1], k[2], emax, fin));
-    A2R_SERIAL_HOLD.with(|x| x.set(false));
-    let e_fold = c.expected_total();
-    if owns_k3 {
-        let before_k3 = c.active_qubits();
-        super::a2_k3_erase_rec(c, t, k[2]);
-        assert_eq!(c.active_qubits() + 1, before_k3, "a2: owned k3 retires exactly one owner");
-    }
-    c.cx_all(s[2], b);
-    let mut acc: Vec<QubitId> = tg[2..].to_vec();
-    acc.extend_from_slice(&e);
-    a2_sub_top(c, b, &acc, proxy);
-    c.release_clean(e[2]);
-    c.cx_all(s[2], b);
-    let e_sub2 = c.expected_total();
-    c.cx_all(s[1], b);
-    let mut acc: Vec<QubitId> = tg[1..].to_vec();
-    acc.push(e[0]);
-    acc.push(e[1]);
-    a2_sub_top(c, b, &acc, proxy);
-    c.release_clean(e[1]);
-    c.cx_all(s[1], b);
-    let e_sub1 = c.expected_total();
-    c.cx_all(s[0], b);
-    let mut acc: Vec<QubitId> = tg.to_vec();
-    acc.push(e[0]);
-    a2_sub_top(c, b, &acc, proxy);
-    c.release_clean(e[0]);
-    c.cx_all(s[0], b);
-    let e_end = c.expected_total();
-    assert_eq!(c.active_qubits(), a_start - u32::from(owns_k3), "a2r: the direct tick violated its k3 ownership return");
-    if room_trace() {
-        eprintln!("A2R_DIRECT t={t} active={a_start} room={} at_fold={a_fold} kw={kw} fin={fin} plan={plan:?} E={:.1} fold={:.1} sub2={:.1} sub1={:.1} sub0={:.1} body={:.1}",
-            cells::cap().saturating_sub(a_start as usize), e_e - e_start, e_fold - e_e, e_sub2 - e_fold, e_sub1 - e_sub2, e_end - e_sub1, e_end - e_start);
     }
 }
 
@@ -887,7 +532,7 @@ fn r8_data_ok(w: usize, stages: &[(Vec<(usize, usize)>, u8)], emax: usize) -> bo
 fn r8_solve(w: usize, stages: &[(Vec<(usize, usize)>, u8)], emax: usize, kinds: &[u8], konst: bool, no0_after: Option<usize>) -> Option<Vec<(usize, usize, u8)>> {
     let ns = stages.len();
     // odd widths need fills spread over the register (the k1-only sign fill); even widths stay near the ends
-    let nr = a_env("LFA2_R8NEAR").unwrap_or(if true { w } else if w % 2 == 1 { w } else { 24 });
+    let nr = a_env("LFA2_R8NEAR").unwrap_or(if w % 2 == 1 { w } else { 24 });
     let near: Vec<usize> = (0..w).filter(|&q| q < nr || q + nr >= w || (q + 12 >= w / 2 && q < w / 2 + 12)).collect();
     let vars: Vec<(usize, usize, u8)> = (0..=ns)
         .flat_map(|b| near.iter().flat_map(move |&q| kinds.iter().map(move |&f| (b, q, f))))
@@ -1005,16 +650,11 @@ pub(super) fn rail8_plan(w: usize) -> Rail8 {
     }
     assert!(w >= 3, "a2: an 8-way rail barrel needs 3 wires");
     let emax = 7.min(w - 2);
-    let frame_narrow=[6,8].contains(&w)&&std::env::var("RAIL_OPT_NARROW").as_deref()==Ok("1");
-    let parked = w>=9||frame_narrow;
-    let domain = if parked { w - 1 } else { w };
     let masks: [u8; 4] = [1, 3, 6, 4];
     let refl = |x: isize| -> Vec<(usize, usize)> {
-        (0..domain).filter_map(|i| { let j = (x - i as isize).rem_euclid(domain as isize) as usize; (i < j).then_some((i, j)) }).collect()
+        (0..w).filter_map(|i| { let j = (x - i as isize).rem_euclid(w as isize) as usize; (i < j).then_some((i, j)) }).collect()
     };
-    let frame_shift=std::env::var("FRAME_SHIFT").as_deref()==Ok("1") && parked && w%2==0;
-    let ax0 = if frame_narrow||frame_shift {[3,2,0,-4]} else if parked && w%2==1 {[2,1,-1,-5]} else {[1,0,-2,-6]};
-    let mut cands: Vec<[isize; 4]> = vec![ax0];
+    let mut cands: Vec<[isize; 4]> = vec![[1, 0, -2, -6]];
     for a in -8..=8 { for b in -8..=8 { for c in -8..=8 { for d in -8..=8 { cands.push([a, b, c, d]); } } } }
     let mut best: Option<Rail8> = None;
     for ax in cands {
@@ -1022,8 +662,8 @@ pub(super) fn rail8_plan(w: usize) -> Rail8 {
         if !r8_data_ok(w, &base, emax) { continue; }
         // stage 3 without (w-5, w-1), (w-4, w-2) where that still routes (round14's greedy removal at every width)
         let mut trial = base.clone();
-        if (parked || w >= 10) && ax == ax0 {
-            if parked { if w % 2 == 0 { if frame_narrow||frame_shift {trial[3].0.retain(|&p|p!=(0,w-5)&&p!=(w-4,w-2));}else{trial[3].0.retain(|&p|p!=(w-5,w-3));} } else { trial[3].0.retain(|&p| p != (w - 4, w - 3) && p != (w - 5, w - 2)); } } else { trial[3].0.retain(|&p| p != (w - 5, w - 1) && p != (w - 4, w - 2)); }
+        if w >= 10 && ax == [1, 0, -2, -6] {
+            trial[3].0.retain(|&p| p != (w - 5, w - 1) && p != (w - 4, w - 2));
             if !r8_data_ok(w, &trial, emax) { trial = base.clone(); }
         }
         for (st, no0) in [(trial.clone(), true), (trial, false), (base.clone(), true), (base, false)] {
@@ -1067,25 +707,6 @@ pub(super) fn rail8_plan(w: usize) -> Rail8 {
 /// The 8-way rail barrel on `t` (sign t[w-1]; promise: t = 2^e * odd, e = k1 + 2 k2 + 4 k3 <= min(7, w - 2)):
 /// forward = arithmetic shift right by e, inverse = shift left. `drop0` (forward only): wire 0 ends as the constant 1
 /// and is released inside (returns true; the caller forgets it).
-
-thread_local! { pub(super) static RAIL_OPT_DROP_KEEP: std::cell::Cell<usize> = const {std::cell::Cell::new(usize::MAX)}; }
-fn rail_opt_on(k:&str)->bool {std::env::var(k).ok().as_deref()==Some("1")}
-// Replace a Fredkin with its known-output instrument. K is the value of d
-// after this Fredkin; all subsequent fills into d must be XORed into K.
-fn rail_opt_drop_fredkin(c:&mut Builder,h:QubitId,others:&[QubitId],d:QubitId,p:QubitId,known:&Lin){
-    assert!(!known.w.contains(&d) && !known.w.contains(&p));
-    c.cx(d,p);
-    for &o in others.iter().rev(){c.cx(o,h);}
-    lin_xor_into(c,known,d);
-    for &o in others{c.cx(o,h);}
-    let m=c.alloc_bit();c.hmr(d,m);
-    if !false{c.cz_if(h,p,m);}
-    for &o in others.iter().rev(){c.cx(o,h);}
-    lin_xor_into(c,known,d);
-    for &o in others{c.cx(o,h);}
-    c.free_bit(m);c.cx(d,p);
-}
-
 pub(super) fn rail8_barrel(c: &mut Builder, k: [QubitId; 3], t: &[QubitId], inverse: bool, drop0: bool) -> bool {
     let w = t.len();
     let pl = rail8_plan(w);
@@ -1121,21 +742,14 @@ pub(super) fn rail8_barrel(c: &mut Builder, k: [QubitId; 3], t: &[QubitId], inve
                 c.x(t[0]); // t0 = h & !t[pr]
                 let m = c.alloc_bit();
                 c.hmr(t[0], m);
-                let phase_fault=false&&w>=9&&w%2==0;
-                if !phase_fault{c.x(t[pr]);}
-                if !([6,8].contains(&w)&&std::env::var("RAIL_OPT_NARROW").as_deref()==Ok("1")&&false){c.cz_if(h,t[pr],m);}
-                if !phase_fault{c.x(t[pr]);}
+                c.x(t[pr]);
+                c.cz_if(h, t[pr], m);
+                c.x(t[pr]);
                 c.free_bit(m);
                 c.release_clean(t[0]);
                 dropped = true;
-            } else if !inverse && [a,b].iter().any(|&d| d>=RAIL_OPT_DROP_KEEP.with(|x|x.get()) && d<w-1 && !(si+1..pl.stages.len()).any(|j|pl.stages[j].0.iter().any(|p|p.0==d||p.1==d))) {
-                let d=if a>=RAIL_OPT_DROP_KEEP.with(|x|x.get()) && a<w-1 {a}else{b};
-                let p=if d==a {b}else{a};
-                let mut known=l(sg);
-                for &(_,q,f) in pl.fills.iter().filter(|x|x.1==d && x.0>si){let _=q;known=known.x(&match f {0=>l(scopy.unwrap()),1..=3=>l(prod[f as usize-1].unwrap()),4=>Lin::k(true),_=>l(k[f as usize-5])});}
-                rail_opt_drop_fredkin(c,h,&others,t[d],t[p],&known);
             } else {
-                if !(w>=9&&w%2==0&&std::env::var("FRAME_SHIFT").as_deref()==Ok("1")&&false&&si==0&&pairs.first()==Some(&(a,b))){fredkin(c,h,t[a],t[b]);}
+                fredkin(c, h, t[a], t[b]);
             }
         }
         for &o in others.iter().rev() { c.cx(o, h); }
@@ -1227,49 +841,6 @@ mod a2_rot_tests {
             assert!((0..n).all(|i| m[i] == (i + e) % n), "a2: rot8_map");
         }
         cost
-    }
-    #[test]
-    fn rot_s6_exact() {
-        use crate::circuit::OperationType as K;
-        for n in [16usize, 64, 256] {
-            for inverse in [false, true] {
-                let mut c = Builder::new();
-                let k = c.alloc_qubits(3);
-                let t = c.alloc_qubits(n);
-                let k3 = [k[0], k[1], k[2]];
-                super::super::super::rail_s6::rot_s6(&mut c, k3, &t, inverse);
-                let new = c.take_ops();
-                let mut d = Builder::new();
-                let k = d.alloc_qubits(3);
-                let t = d.alloc_qubits(n);
-                let k3 = [k[0], k[1], k[2]];
-                rot8(&mut d, k3, &t, inverse);
-                let old = d.take_ops();
-                let nq = n + 3;
-                let (mut bad, mut ccx) = (0usize, 0usize);
-                for o in &new { if o.kind == K::CCX { ccx += 1; } }
-                let (mut cxn, mut oth) = (0usize, 0usize);
-                for o in &new { if o.kind == K::CX { cxn += 1; } else if o.kind != K::CCX { oth += 1; } }
-                let run = |ops: &[crate::circuit::Op], e: usize, basis: usize| -> Vec<bool> {
-                    let mut v = vec![false; nq];
-                    for j in 0..3 { v[j] = e >> j & 1 == 1; }
-                    if basis < n { v[3 + basis] = true; }
-                    for o in ops {
-                        match o.kind {
-                            K::CX => { let s = v[o.q_control1.0 as usize]; v[o.q_target.0 as usize] ^= s; }
-                            K::CCX => { let s = v[o.q_control1.0 as usize] && v[o.q_control2.0 as usize]; v[o.q_target.0 as usize] ^= s; }
-                            _ => panic!("rot_s6: unexpected op"),
-                        }
-                    }
-                    v
-                };
-                for e in 0..6 { for basis in 0..=n {
-                    if run(&new, e, basis) != run(&old, e, basis) { bad += 1; }
-                } }
-                eprintln!("ROT_S6_CHECK n={n} inverse={inverse} ccx={ccx} cx={cxn} other={oth} letters=6 inputs={} bad={bad}", n + 1);
-                assert_eq!(bad, 0);
-            }
-        }
     }
     #[test]
     fn a2_rot8_exact() {
@@ -1532,14 +1103,3 @@ mod a2_rail8_tests {
     }
 }
 include!("y15_a2r1.rs");
-
-fn compare_window_knob(name:&str,rev:bool,t:usize,kind:usize,default:usize)->usize {
- let t=super::late_t(t);
- let spec=match name {"EXT"=>EXT_WINDOWS,"FOLD"=>"",_=>unreachable!()};let mut out=default;
- for row in spec.split(',').filter(|s|!s.is_empty()) {
-  let a:Vec<&str>=row.split(':').collect();assert_eq!(a.len(),4);
-  if (a[0]=="*"||a[0]==if rev{"R"}else{"F"})&&(a[1]=="*"||a[1].parse::<usize>().unwrap()==t)&&(a[2]=="*"||a[2].parse::<usize>().unwrap()==kind){out=a[3].parse().unwrap();}
- }assert!(out<=128);out
-}
-const EXT_WINDOWS:&str="R:120:0:0,R:119:0:0,R:118:0:0,R:117:0:0,R:116:0:0,R:115:0:0,R:114:0:0,R:113:0:0,R:68:0:0,R:67:0:0,R:66:0:0,R:65:0:0,R:64:0:0,R:63:0:0,R:62:0:0,R:61:0:0,R:60:0:0,R:59:0:0,R:58:0:0,R:57:0:0,R:56:0:0,R:55:0:0,R:54:0:0,R:53:0:0,R:52:0:0,R:51:0:0,R:50:0:0,R:49:0:0,R:48:0:0,R:47:0:0,R:46:0:0,R:45:0:0,R:44:0:0,R:43:0:0,R:42:0:0,R:41:0:0,R:40:0:0,R:39:0:0,R:38:0:0,R:37:0:0,R:36:0:0,R:35:0:0,R:34:0:0,R:33:0:0,R:32:0:0,R:31:0:0,R:30:0:0,R:29:0:0,R:28:0:0,R:27:0:0,R:26:0:0,R:25:0:0,R:24:0:0,R:23:0:0,R:22:0:0,R:21:0:0,R:20:0:0,R:19:0:0,R:18:0:0,R:17:0:0,R:16:0:0,R:15:0:0,R:14:0:0,R:13:0:0,R:12:0:0,R:11:0:0,R:10:0:0,R:9:0:0,R:8:0:0,R:7:0:0,R:6:0:0,R:5:0:0,R:4:0:0,R:3:0:0,R:2:0:0,R:1:0:0,R:105:0:0,R:104:0:0,R:103:0:0,R:102:0:0,R:101:0:0,R:100:0:0,R:99:0:0,R:98:0:0,R:97:0:0,R:96:0:0,R:95:0:0,R:94:0:0,R:93:0:0,R:92:0:0,R:91:0:0,R:90:0:0,R:89:0:0,R:88:0:0,R:87:0:0,R:86:0:0,R:85:0:0,R:84:0:0,R:83:0:0,R:82:0:0,R:81:0:0,R:80:0:0,R:79:0:0,R:78:0:0,R:77:0:0,R:76:0:0,R:75:0:0,R:74:0:0,R:73:0:0,R:72:0:0,R:71:0:0,R:70:0:0,R:69:0:0,R:120:2:1,R:119:2:1,R:118:2:1,R:117:2:1,R:116:2:1,R:115:2:1,R:114:2:1,R:113:2:1,R:68:2:0,R:67:2:0,R:66:2:0,R:65:2:0,R:64:2:0,R:63:2:0,R:62:2:0,R:61:2:0,R:60:2:0,R:59:2:0,R:58:2:0,R:57:2:0,R:56:2:0,R:55:2:0,R:54:2:0,R:53:2:0,R:52:2:0,R:51:2:0,R:50:2:0,R:49:2:0,R:48:2:0,R:47:2:0,R:46:2:0,R:45:2:0,R:44:2:0,R:43:2:0,R:42:2:0,R:41:2:0,R:40:2:0,R:39:2:0,R:38:2:0,R:37:2:0,R:36:2:0,R:35:2:0,R:34:2:0,R:33:2:0,R:32:2:0,R:31:2:0,R:30:2:0,R:29:2:0,R:28:2:0,R:27:2:0,R:26:2:0,R:25:2:0,R:24:2:0,R:23:2:0,R:22:2:0,R:21:2:0,R:20:2:0,R:19:2:0,R:18:2:0,R:17:2:0,R:16:2:0,R:15:2:0,R:14:2:0,R:13:2:0,R:12:2:0,R:11:2:0,R:10:2:0,R:9:2:0,R:8:2:0,R:7:2:0,R:6:2:0,R:5:2:0,R:4:2:0,R:3:2:0,R:2:2:0,R:1:2:0,R:105:2:0,R:104:2:0,R:103:2:0,R:102:2:0,R:101:2:0,R:100:2:0,R:99:2:0,R:98:2:0,R:97:2:0,R:96:2:0,R:95:2:0,R:94:2:0,R:93:2:0,R:92:2:0,R:91:2:0,R:90:2:0,R:89:2:0,R:88:2:0,R:87:2:0,R:86:2:0,R:85:2:0,R:84:2:0,R:83:2:0,R:82:2:0,R:81:2:0,R:80:2:0,R:79:2:0,R:78:2:0,R:77:2:0,R:76:2:0,R:75:2:0,R:74:2:0,R:73:2:0,R:72:2:0,R:71:2:0,R:70:2:0,R:69:2:0";
-
