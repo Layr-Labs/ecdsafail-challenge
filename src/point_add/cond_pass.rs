@@ -56,7 +56,10 @@ fn op(kind: u8, c1: u32, t: u32, cc: u32) -> L { L { kind, c2: NQ, c1, t, ct: NQ
 const ZERO: u32 = 0; const ONE: u32 = 1;
 const T_OPQ: u8 = 2; const T_AND: u8 = 3; const T_COND: u8 = 5; const T_SET: u8 = 6;
 const XSET_CAP: usize = 96;
-struct Vals { node: Vec<(u8, u32, u32)>, h: HashMap<(u8, u32, u32), u32>, store: Vec<Vec<u32>>, hs: HashMap<Vec<u32>, u32> }
+struct Vals { node: Vec<(u8, u32, u32)>, h: HashMap<(u8, u32, u32), u32>, store: Vec<Vec<u32>>, hs: HashMap<u64, Vec<u32>> }
+// shadow: `hs` maps a set's hash to the node ids with that hash; the set itself lives once, in `store` (memory only:
+// lookups compare the stored sets, so the interning is exactly the same).
+fn set_hash(r: &[u32]) -> u64 { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); r.hash(&mut h); h.finish() }
 impl Vals {
     fn new() -> Self { Vals { node: vec![(0, 0, 0), (1, 0, 0)], h: HashMap::new(), store: Vec::new(), hs: HashMap::new() } }
     fn opq(&mut self) -> u32 { let i = self.node.len() as u32; self.node.push((T_OPQ, i, 0)); i }
@@ -85,9 +88,12 @@ impl Vals {
             1 => r[0],
             l if l > XSET_CAP => self.opq(),
             _ => {
-                if let Some(&id) = self.hs.get(&r) { return id; }
-                let si = self.store.len() as u32; self.store.push(r.clone());
-                let id = self.node.len() as u32; self.node.push((T_SET, si, 0)); self.hs.insert(r, id); id
+                let hk = set_hash(&r);
+                if let Some(ids) = self.hs.get(&hk) {
+                    for &id in ids { if self.store[self.node[id as usize].1 as usize] == r { return id; } }
+                }
+                let si = self.store.len() as u32; r.shrink_to_fit(); self.store.push(r);
+                let id = self.node.len() as u32; self.node.push((T_SET, si, 0)); self.hs.entry(hk).or_default().push(id); id
             }
         }
     }
