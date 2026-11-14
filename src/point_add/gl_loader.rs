@@ -1,0 +1,416 @@
+//! Gate-list loader for S-D' (P5_CHECKLIST.md s3 item 2): replays a flat X / CX / CCX list made by the Python
+//! models (`gl/gldump.py`) at a fixed point of F's gate stream, through the builder's own `B::t`, so the gates are
+//! counted, emitted, MAC-passed and graded like F's native gates. Lanes are F-local (the frame lane map of
+//! `f_circuit` / MAP765), in the tree's G(a, b, c) order with NONE padding.
+//! File (.glz) = zstd of: b"GLV1" | u32 n_gates | u32 n_lanes | u32 n_ccx | per gate u8 op (0 x, 1 cx, 2 ccx) +
+//! that many u16 LE lanes. Every splice is checked on load: SHA3-256 of the file, n_gates, n_ccx, exact length.
+use super::{B, G, GL, NONE};
+use sha3::{Digest, Sha3_256};
+
+/// Where a list is replayed inside `f_circuit`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum At {
+    /// After the lane allocation and page_alloc, before `Machine::init`.
+    FBegin,
+    /// Just before `Machine::tick(t)`.
+    BeforeTick(i32),
+    /// After the last tick, before the MAC pass.
+    FEnd,
+    /// Replaces the gates of Machine::init and of every tick t >= START_CUT (the frame's start region): the list
+    /// runs from F's input to the frame's state at boundary START_CUT - 1. The native code still runs (its software
+    /// state, e.g. ring-Y relabels and allocations, is kept); only its gates are dropped.
+    Start,
+    /// Replaces the gates of ticks TAIL_CUT .. 3 (see TAIL_CUT).
+    Tail,
+}
+
+/// The start region a Start splice replaces: ticks 511 .. START_CUT.
+pub(super) const START_CUT: i32 = super::CUT_S;   // op-p5b: follows the start cut (was 448 = P0 / stage 2)
+/// The tail region a Tail splice replaces: ticks TAIL_CUT .. 3 (the list runs boundary TAIL_CUT -> the state after
+/// the last tick). Its lanes follow the frame's INITIAL labels (logical ring order, as trace2048): ring-Y lanes are
+/// remapped onto the labels the frame holds at tick TAIL_CUT.
+pub(super) const TAIL_CUT: i32 = super::CUT_T - 1;   // op-p5b: follows the tail cut (was 63)
+
+/// Splice switches (op-p5, q765-v5-p5): a registered list is replayed only when its switch is on.
+/// SPLICE_START: op-start's unpaged 773 start module (stage 2, graded 845 x 28,981,964 on 07fdc6b). false = native start.
+pub(super) const SPLICE_START: bool = false;
+/// SPLICE_TAIL: op-p5's unpaged 773 tail module at tier cap QM 29 (stage 3b, graded 859 x 28,810,112 on a69186a).
+pub(super) const SPLICE_TAIL: bool = false;
+/// op-p5b in-stream factor builds (COUNT ONLY, the stream is not correct): FAC_START 0 off, 1 empty, 2 M2a@432 (op-start3 s765_432
+/// Fa 108), 3 M2b + M2c (handover432); FAC_TAIL 0 off, 1 empty, 2 tail-N stream + restore Z (s2coreZ 40/52 K16 L0 1), 3 + restore Lg.
+pub(super) const FAC_START: u8 = 0;
+/// SPLICE_START765 (op-p5b, SPLICE765.md): op-start3's full start hand-over at cut 432 on MAP765_v2 PHYSICAL lanes (commit 3089b7c,
+/// list 0d54815): x0 on WALK508 -> the paged D16 frame at label 1431. Replayed through mod.rs start765 (physical -> label table and the
+/// re-point of the frame's labels); needs ASM_START_PAGED.
+pub(super) const SPLICE_START765: bool = true;
+/// which start765 list: false = 300e503 (op-start3 40c6330, LT window [20, 51], op-check2 PASS; for the full 765 stream), true = 0d54815 (graded start-alone)
+pub(super) const START765_OLD: bool = false;
+/// wire762 (metalane, 13 Nov 2026): WIDTH WIRING below 765.  WIRE_W = 0: off, this tree builds its parent's stream byte for byte.
+/// WIRE_W = 763 | 762 | 761 | 760: the stream must print exactly WIRE_W qubits (k = 765 - WIRE_W of the five spare lanes are dropped).
+///  (1) the start list is the registered list `start_wire` (gl_data/start_wire.glz, pin WIRE_START_SHA3), not start765_300e503;
+///  (2) WIRE_TOP = true ("top convention", lane startR): the list touches only lanes 0..WIRE_W-1; in front of the start table its
+///      lanes 763-k and 764-k are swapped with 763 (ZB) and 764 (F), so the k lanes it never touches land on the frame's idle spares,
+///      physical lanes 763-k..762.  WIRE_TOP = false ("frame convention"): the list itself never touches 763-k..762, no swap.
+///      Either way the list must hand over the lanes 757..764 (W4, spares, ZB, F in its own numbering) at zero;
+///  (3) asserts (mod.rs, all inert at WIRE_W = 0): the frame leaves those spares idle ((PAGE_DI - PAGE_D) + ZB_EXTRA + k <= 5); no start-list gate
+///      on a forbidden lane; no tail-list gate on an idle spare; the tail table names the same labels; no gate of F on an idle spare label;
+///      the compaction lands on fc.next == WIRE_W; the fd2 builder's width (max qubit id + 1 over walks AND product stage) == WIRE_W.
+/// To install a real list: replace gl_data/start_wire.glz, set WIRE_START_SHA3 to its sha3-256, set WIRE_W.  WIRING.md has the label lists.
+pub(super) const WIRE_W: u32 = 763;
+pub(super) const WIRE_TOP: bool = true;
+pub(super) const WIRE_START_SHA3: &str = "865051a5d8468e9a70a91a4528f005f4661c06566eedf9ef222a3b720a023857";
+/// sha3 of the NON-FUNCTIONAL placeholder (stock start list minus every gate on its spare lanes, top convention): width proof only.
+pub(super) const WIRE_DUMMY_SHA3: &str = "2f108d6c00670e23439ee38fe638ba98b57b97c319935e7b7c4d7901e96519c2";
+pub(super) const FAC_TAIL: u8 = 0;
+
+pub(super) fn has(at: At) -> bool {
+    SPLICES.iter().any(|s| s.on && s.at == at)
+}
+
+pub(super) struct Splice {
+    pub at: At,
+    pub name: &'static str,
+    pub data: &'static [u8],
+    pub sha3: &'static str,
+    pub on: bool,
+}
+
+/// The splice table. P0 form: one EMPTY list at FBegin (the stream must stay byte-identical to P0).
+/// SD_BUILD stage 2: op-start's unpaged start module (team40/p2/join.py, narrow machine + gm-hand's v2 hand-over,
+/// multiply tail 52) in place of the native slots 511..448.
+pub(super) static SPLICES: &[Splice] = &[
+    Splice {
+        at: At::FBegin,
+        name: "empty",
+        data: include_bytes!("gl_data/empty.glz"),
+        sha3: "2f07b74488ecb86b0e205cd9944a3e7636232d94fe2882f05a6a9b60790c7ebf",
+        on: true,
+    },
+    Splice {
+        at: At::Start,
+        name: "start773_t52",
+        data: include_bytes!("gl_data/start773_t52.glz"),
+        sha3: "0654c89baf0eb1bb5051a502a376d1f4fd5f3528b4c81d3d3d2d5526bc63d834",
+        on: SPLICE_START,
+    },
+    Splice {
+        at: At::Tail,
+        name: "tail773_q29",
+        data: include_bytes!("gl_data/tail773_q29.glz"),
+        sha3: "2e26949d4fbbfaf7d4ec7af5180ccd294e98f25da0a5edf49230af252424cb91",
+        on: SPLICE_TAIL,
+    },
+    Splice {
+        at: At::Start,
+        name: "fac_empty_s",
+        data: include_bytes!("gl_data/empty.glz"),
+        sha3: "2f07b74488ecb86b0e205cd9944a3e7636232d94fe2882f05a6a9b60790c7ebf",
+        on: FAC_START == 1,
+    },
+    Splice {
+        at: At::Start,
+        name: "fac_m2a",
+        data: include_bytes!("gl_data/fac_m2a.glz"),
+        sha3: "fc955118b7627c1c387e8b51e4e0f1c5f3f07bfdeb6056547a0f6c8f6fd8cc9a",
+        on: FAC_START == 2,
+    },
+    Splice {
+        at: At::Start,
+        name: "fac_hand",
+        data: include_bytes!("gl_data/fac_hand.glz"),
+        sha3: "a0269c058a2d7ae757769aec249f688b52196af153264be5a3fc54f0906bd21a",
+        on: FAC_START == 3,
+    },
+    Splice {
+        at: At::Tail,
+        name: "fac_empty_t",
+        data: include_bytes!("gl_data/empty.glz"),
+        sha3: "2f07b74488ecb86b0e205cd9944a3e7636232d94fe2882f05a6a9b60790c7ebf",
+        on: FAC_TAIL == 1,
+    },
+    Splice {
+        at: At::Tail,
+        name: "fac_tz",
+        data: include_bytes!("gl_data/fac_tz.glz"),
+        sha3: "e1a7f706d7f82485f973ad2cfe8c9927849a4ff8d076a4b9ff5c2533050acfc6",
+        on: FAC_TAIL == 2,
+    },
+    Splice {
+        at: At::Tail,
+        name: "fac_tlg",
+        data: include_bytes!("gl_data/fac_tlg.glz"),
+        sha3: "e9b749746e5286a39ce32516c4433ec611313491132d69c2ed8fc5dd30359c91",
+        on: FAC_TAIL == 3,
+    },
+    Splice {
+        at: At::Start,
+        name: "start765_0d54815",
+        data: include_bytes!("gl_data/start765_0d54815.glz"),
+        sha3: "dc09ee7dc2a37be1052e6591bfd35e1b7392f161941121d0669a8efb37a86af8",
+        on: SPLICE_START765 && START765_OLD,
+    },
+    Splice {
+        at: At::Start,
+        name: "start765_300e503",
+        data: include_bytes!("gl_data/start765_300e503.glz"),
+        sha3: "01666e318e75709830d67d08a96c60606f9a77403e055985433ec65fcbedd4cc",
+        on: SPLICE_START765 && !START765_OLD && WIRE_W == 0,
+    },
+    Splice {
+        at: At::Start,
+        name: "start_wire",
+        data: include_bytes!("gl_data/start_wire.glz"),
+        sha3: WIRE_START_SHA3,
+        on: SPLICE_START765 && !START765_OLD && WIRE_W != 0,
+    },
+];
+
+pub(super) struct GlFile {
+    pub gates: GL,
+    pub n_lanes: u32,
+    pub n_ccx: u64,
+}
+
+/// adfb marker port (after c664c89c's gl_loader.rs:68-79): AND marker flags on a gate's target field.
+pub(super) const ANDC: u32 = 1 << 30;
+pub(super) const ANDU: u32 = 1 << 29;
+pub(super) const AFLAGS: u32 = ANDC | ANDU;
+/// The lane of a target field (flags stripped); NONE stays NONE.
+pub(super) fn lane_of(q: u32) -> u32 { if q == NONE { NONE } else { q & !AFLAGS } }
+/// The AND flag of a target field (0 = plain).
+pub(super) fn flag_of(q: u32) -> u32 { if q == NONE { 0 } else { q & AFLAGS } }
+
+pub(super) fn sha3_hex(z: &[u8]) -> String {
+    let d = Sha3_256::digest(z);
+    d.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+pub(super) fn decode(z: &[u8]) -> GlFile {
+    let raw = zstd::stream::decode_all(z).expect("gl_loader: zstd decode");
+    assert!(raw.len() >= 16 && &raw[0..4] == b"GLV1", "gl_loader: bad magic");
+    let r32 = |o: usize| u32::from_le_bytes([raw[o], raw[o + 1], raw[o + 2], raw[o + 3]]);
+    let r16 = |o: usize| u16::from_le_bytes([raw[o], raw[o + 1]]) as u32;
+    let (n, nl, nccx) = (r32(4) as usize, r32(8), r32(12) as u64);
+    let mut g: GL = Vec::with_capacity(n);
+    let (mut o, mut c, mut top) = (16usize, 0u64, 0u32);
+    for _ in 0..n {
+        let op = raw[o];
+        o += 1;
+        let gate = match op {
+            0 => G(r16(o), NONE, NONE),
+            1 => G(r16(o), r16(o + 2), NONE),
+            2 => {
+                c += 1;
+                G(r16(o), r16(o + 2), r16(o + 4))
+            }
+            // adfb marker port: GLV1 op 3 = AND compute (CCX onto a clean |0> target), op 4 = AND uncompute (CCX whose target
+            // equals the AND of its controls); carried as a flag on the target field (ANDC / ANDU), stripped by lane_of.
+            3 | 4 => {
+                c += 1;
+                G(r16(o), r16(o + 2), r16(o + 4) | if op == 3 { ANDC } else { ANDU })
+            }
+            _ => panic!("gl_loader: bad op {op}"),
+        };
+        o += 2 * (op.min(2) as usize + 1);
+        for q in [gate.0, gate.1, gate.2] {
+            if q != NONE {
+                top = top.max(lane_of(q) + 1);
+            }
+        }
+        g.push(gate);
+    }
+    assert_eq!(o, raw.len(), "gl_loader: trailing bytes");
+    assert_eq!(c, nccx, "gl_loader: CCX count");
+    assert!(top <= nl, "gl_loader: lane beyond n_lanes");
+    GlFile { gates: g, n_lanes: nl, n_ccx: c }
+}
+
+/// GLV1 encoder (inverse of `decode`): X / CX / CCX gates on u16 lanes, zstd level 19.
+pub(super) fn encode(g: &[G], n_lanes: u32) -> Vec<u8> {
+    let mut raw: Vec<u8> = b"GLV1".to_vec();
+    let nccx = g.iter().filter(|x| x.2 != NONE).count() as u32;
+    for v in [g.len() as u32, n_lanes, nccx] { raw.extend_from_slice(&v.to_le_bytes()); }
+    for x in g {
+        let (op, ls): (u8, Vec<u32>) = if x.2 != NONE { (2, vec![x.0, x.1, x.2]) } else if x.1 != NONE { (1, vec![x.0, x.1]) } else { (0, vec![x.0]) };
+        raw.push(op);
+        for q in ls { assert!(q < 65536, "gl_loader: lane beyond u16"); raw.extend_from_slice(&(q as u16).to_le_bytes()); }
+    }
+    zstd::stream::encode_all(&raw[..], 19).expect("gl_loader: zstd encode")
+}
+
+/// wire762: sampled hand-over check of the wired start list. Replays it on 256 pseudo-random inputs (x on lanes 0..254 and 512,
+/// passenger on 256..511, every other lane 0) and returns (shots, shots with a nonzero lane among 757..764, shots with a changed
+/// passenger lane). 757..764 are W4, the five spares, ZB and F in the list's numbering: the frame takes all of them as clean.
+pub(super) fn wire_start_selfcheck() -> (usize, usize, usize) {
+    let s = SPLICES.iter().find(|s| s.name == "start_wire").unwrap();
+    let f = decode(s.data);
+    let nw = 4usize;
+    let mut z = 0x9e37_79b9_7f4a_7c15u64;
+    let mut rnd = || { z = z.wrapping_add(0x9e37_79b9_7f4a_7c15); let mut v = z; v = (v ^ (v >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9); v = (v ^ (v >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb); v ^ (v >> 31) };
+    let mut st: Vec<Vec<u64>> = (0..765usize).map(|l| if l <= 254 || l == 512 || (256..512).contains(&l) { (0..nw).map(|_| rnd()).collect() } else { vec![0u64; nw] }).collect();
+    let pas0: Vec<Vec<u64>> = st[256..512].to_vec();
+    for g in &f.gates {
+        let G(a, b0, c) = *g;
+        for w in 0..nw {
+            if b0 == NONE { st[a as usize][w] = !st[a as usize][w]; }
+            else if c == NONE { let v = st[a as usize][w]; st[b0 as usize][w] ^= v; }
+            else { let v = st[a as usize][w] & st[b0 as usize][w]; st[c as usize][w] ^= v; }
+        }
+    }
+    let (mut dirty, mut pch) = (vec![0u64; nw], vec![0u64; nw]);
+    for l in 757..765 { for w in 0..nw { dirty[w] |= st[l][w]; } }
+    for l in 256..512 { for w in 0..nw { pch[w] |= st[l][w] ^ pas0[l - 256][w]; } }
+    (64 * nw, dirty.iter().map(|w| w.count_ones() as usize).sum(), pch.iter().map(|w| w.count_ones() as usize).sum())
+}
+
+/// Replay every list registered at `at`, with every lane passed through `map`.
+pub(super) fn splice_mapped(at: At, b: &mut B, map: &dyn Fn(u32) -> u32) {
+    for s in SPLICES.iter().filter(|s| s.on && s.at == at) {
+        assert_eq!(sha3_hex(s.data), s.sha3, "gl_loader: sha3 of splice '{}' changed", s.name);
+        let f = decode(s.data);
+        if f.n_lanes > b.next {
+            b.next = f.n_lanes;
+        }
+        let m = |q: u32| if q == NONE { NONE } else { map(q) };
+        let g: GL = f.gates.iter().map(|g| G(m(g.0), m(g.1), m(g.2))).collect();
+        b.t(&g);
+        eprintln!("gl_loader: splice '{}' at {:?} (lane map): {} gates, {} CCX, lanes {}", s.name, at, g.len(), f.n_ccx, f.n_lanes);
+    }
+}
+
+/// Replay every list registered at `at` into the builder. Lanes the list uses beyond the builder's allocation
+/// raise `b.next`, so the peak counts them.
+pub(super) fn splice(at: At, b: &mut B) {
+    for s in SPLICES.iter().filter(|s| s.on && s.at == at) {
+        let h = sha3_hex(s.data);
+        assert_eq!(h, s.sha3, "gl_loader: sha3 of splice '{}' changed", s.name);
+        let f = decode(s.data);
+        if f.n_lanes > b.next {
+            b.next = f.n_lanes;
+        }
+        b.t(&f.gates);
+        eprintln!("gl_loader: splice '{}' at {:?}: {} gates, {} CCX, lanes {}", s.name, at, f.gates.len(), f.n_ccx, f.n_lanes);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sim(g: &[G], st: &mut [Vec<u64>]) {
+        let nw = st[0].len();
+        for gate in g {
+            let G(a, b0, c) = *gate;
+            for w in 0..nw {
+                if b0 == NONE {
+                    st[a as usize][w] = !st[a as usize][w];
+                } else if c == NONE {
+                    let v = st[a as usize][w];
+                    st[b0 as usize][w] ^= v;
+                } else {
+                    let v = st[a as usize][w] & st[b0 as usize][w];
+                    st[c as usize][w] ^= v;
+                }
+            }
+        }
+    }
+
+    fn vectors(z: &[u8]) -> (Vec<Vec<u64>>, Vec<Vec<u64>>) {
+        let raw = zstd::stream::decode_all(z).unwrap();
+        assert_eq!(&raw[0..4], b"GLT1");
+        let r32 = |o: usize| u32::from_le_bytes([raw[o], raw[o + 1], raw[o + 2], raw[o + 3]]) as usize;
+        let (nl, nw) = (r32(4), r32(8));
+        let rd = |base: usize| -> Vec<Vec<u64>> {
+            (0..nl)
+                .map(|l| (0..nw).map(|w| {
+                    let o = base + 8 * (l * nw + w);
+                    u64::from_le_bytes(raw[o..o + 8].try_into().unwrap())
+                }).collect())
+                .collect()
+        };
+        let a = rd(12);
+        let b = rd(12 + 8 * nl * nw);
+        assert_eq!(raw.len(), 12 + 16 * nl * nw);
+        (a, b)
+    }
+
+    #[test]
+    fn empty_splice_is_empty() {
+        let f = decode(include_bytes!("gl_data/empty.glz"));
+        assert_eq!((f.gates.len(), f.n_lanes, f.n_ccx), (0, 0, 0));
+        assert_eq!(sha3_hex(include_bytes!("gl_data/empty.glz")), SPLICES[0].sha3);
+    }
+
+    /// The stage-2 start module (773 layout, 845 lanes) replayed on 256 random inputs in the frame's input form:
+    /// every lane equal to the Python simulation (gl/gldump.py start773).
+    #[test]
+    fn start773_replay_matches_python() {
+        let z: &[u8] = include_bytes!("gl_data/start773_t52.glz");
+        assert_eq!(sha3_hex(z), SPLICES[1].sha3);
+        let f = decode(z);
+        assert_eq!((f.gates.len(), f.n_lanes, f.n_ccx), (2_756_012, 845, 905_494));
+        let (mut st, exp) = vectors(include_bytes!("gl_data/start773_t52.vec.zst"));
+        assert_eq!(st.len(), 845);
+        sim(&f.gates, &mut st);
+        let bad: usize = (0..845).map(|l| (0..st[l].len()).map(|w| (st[l][w] ^ exp[l][w]).count_ones() as usize).sum::<usize>()).sum();
+        eprintln!("start773 replay: {} gates, {} CCX, 845 lanes x {} shots, differing bits {}", f.gates.len(), f.n_ccx, 64 * st[0].len(), bad);
+        assert_eq!(bad, 0);
+    }
+
+    /// op-start's M2a + M2b0 list (765 layout) replayed in Rust on 256 random inputs: every lane equal, bit for bit,
+    /// to the Python simulation that wrote the vectors (gl/gldump.py m2a).
+    #[test]
+    fn m2a_765_replay_matches_python() {
+        let z: &[u8] = include_bytes!("gl_data/m2a_765.glz");
+        assert_eq!(sha3_hex(z), "799470726f31e7cd44aed3d45c98da889ca4f571514a51c8fb1dbb786979d794");
+        let f = decode(z);
+        assert_eq!((f.gates.len(), f.n_lanes, f.n_ccx), (1_948_143, 765, 595_983));
+        let (mut st, exp) = vectors(include_bytes!("gl_data/m2a_765.vec.zst"));
+        assert_eq!(st.len(), 765);
+        sim(&f.gates, &mut st);
+        let mut bad = 0usize;
+        for l in 0..765 {
+            for w in 0..st[l].len() {
+                bad += (st[l][w] ^ exp[l][w]).count_ones() as usize;
+            }
+        }
+        eprintln!("m2a_765 replay: {} gates, {} CCX, 765 lanes x {} shots, differing bits {}", f.gates.len(), f.n_ccx, 64 * st[0].len(), bad);
+        assert_eq!(bad, 0);
+    }
+    #[test]
+    fn start765_replay_matches_python() {
+        let z: &[u8] = include_bytes!("gl_data/start765_0d54815.glz");
+        assert_eq!(sha3_hex(z), "dc09ee7dc2a37be1052e6591bfd35e1b7392f161941121d0669a8efb37a86af8");
+        let f = decode(z);
+        assert_eq!((f.gates.len(), f.n_ccx), (5_257_119, 1_884_887));
+        let (mut st, exp) = vectors(include_bytes!("gl_data/start765_0d54815.vec.zst"));
+        assert_eq!(st.len(), 765);
+        sim(&f.gates, &mut st);
+        let mut bad = 0usize;
+        for l in 0..765 {
+            for w in 0..st[l].len() {
+                bad += (st[l][w] ^ exp[l][w]).count_ones() as usize;
+            }
+        }
+        eprintln!("start765 replay: {} gates, {} CCX, lanes {}, {} shots, differing bits {}", f.gates.len(), f.n_ccx, f.n_lanes, 64 * st[0].len(), bad);
+        assert_eq!(bad, 0);
+    }
+    #[test]
+    fn start765b_replay_matches_python() {
+        let z: &[u8] = include_bytes!("gl_data/start765_300e503.glz");
+        assert_eq!(sha3_hex(z), "01666e318e75709830d67d08a96c60606f9a77403e055985433ec65fcbedd4cc");
+        let f = decode(z);
+        assert_eq!((f.gates.len(), f.n_ccx), (5_259_024, 1_886_393));
+        let (mut st, exp) = vectors(include_bytes!("gl_data/start765_300e503.vec.zst"));
+        assert_eq!(st.len(), 765);
+        sim(&f.gates, &mut st);
+        let mut bad = 0usize;
+        for l in 0..765 {
+            for w in 0..st[l].len() {
+                bad += (st[l][w] ^ exp[l][w]).count_ones() as usize;
+            }
+        }
+        eprintln!("start765b replay: {} gates, {} CCX, lanes {}, {} shots, differing bits {}", f.gates.len(), f.n_ccx, f.n_lanes, 64 * st[0].len(), bad);
+        assert_eq!(bad, 0);
+    }
+}
