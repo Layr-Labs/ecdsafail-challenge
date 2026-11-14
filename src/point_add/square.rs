@@ -790,7 +790,7 @@ fn square_half_inv(circ: &mut Builder, x: &[QubitId], product: &[QubitId], retai
 /// be split -- a split leaves its input modified until the inverse.
 ///
 /// Every primitive here is an exact full-width add or subtract, so this adds no
-/// truncated comparison, windowed fold or measured chunk boundary — the
+/// truncated comparison, windowed fold or measured chunk boundary. The
 /// per-shot failure site count is unchanged in both channels by construction.
 fn tri_square_k2r(circ: &mut Builder, x: &[QubitId], product: &[QubitId]) -> K2Retained {
     tri_square_k2r_inner(circ, x, product, false)
