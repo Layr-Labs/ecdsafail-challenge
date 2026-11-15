@@ -14,7 +14,7 @@ use crate::circuit::QubitId;
 /// `borrow_in` is the borrow entering bit 0, for a caller that has already
 /// accounted for the bits below by other means. With `None` the comparison
 /// starts clean, and after the first CX `u[0]` already holds what a clean
-/// carry-in wire would have held — so it serves as the first nonlinear control
+/// carry-in wire would have held , so it serves as the first nonlinear control
 /// and no wire is needed either way.
 #[track_caller]
 pub(crate) fn cmp_lt_phase(circ: &mut Builder, u: &[QubitId], v: &[QubitId], borrow_in: Option<QubitId>) {
