@@ -9,6 +9,23 @@
 //!
 //! Values are affine forms over atoms (inputs, measurement outcomes, products of affine forms), stored as a 128-bit
 //! random linear hash plus a constant bit; equal forms are equal functions.
+//! swarm-post C1 (wired into post_folds behind DEV_HP2, default OFF): this module's flat-product + late-copy hold
+//! engine runs as a SECOND hold pass after hold_idle::apply_reloc, plus a "direct" rule this family did not have:
+//! a CCX whose exact product value (or its complement) is already present on another live wire becomes one CX from
+//! that wire (no hold, no width). Break control 1: DEV_HP2_BREAK1=1 drops the direct rule's complement fix
+//! (wrong on purpose; the proof suite's directed case must catch it).
+//! DEV_HP2_BREAK1 (numbered break control 1, inert in an empty environment): the direct rule skips the complement X.
+const DEV_HP2_BREAK1: bool = match option_env!("DEV_HP2_BREAK1") { Some(v) => !matches!(v.as_bytes(), b"0"), None => false };
+/// DEV_HP2_NODIRECT (None => false): with the pass running (DEV_HP2), turn the direct-CX rule off (attribution).
+const DEV_HP2_NODIRECT: bool = match option_env!("DEV_HP2_NODIRECT") { Some(v) => !matches!(v.as_bytes(), b"0"), None => false };
+/// DEV_HP2_BREAK2 (numbered break control 2, inert in an empty environment): the pre-fix polarity bug — the
+/// non-late copy path drops the stored parity (comp forced to false). The regression cases R1/R2 must catch it.
+const DEV_HP2_BREAK2: bool = match option_env!("DEV_HP2_BREAK2") { Some(v) => !matches!(v.as_bytes(), b"0"), None => false };
+/// DEV_HP2_PERHOLD (None => false): per-hold fail-closed relocation — a hold whose nomad cannot be placed is
+/// dropped alone (its CCX kept) instead of sinking every hold. Lets the flat+late holds be measured without the
+/// direct rule (hp2_nodirect with relocation succeeding) and stacked on top of it.
+const DEV_HP2_PERHOLD: bool = match option_env!("DEV_HP2_PERHOLD") { Some(v) => !matches!(v.as_bytes(), b"0"), None => false };
+
 use crate::circuit::{BitId, Op, OperationType as K, QubitId, NO_BIT, NO_QUBIT};
 use std::collections::HashMap;
 
@@ -205,8 +222,9 @@ fn push(b: u64) -> Op { let mut o = mk(K::PushCondition, NONE, NONE); o.c_condit
 /// Map a logical stream whose wires >= `cap` are nomads onto physical wires 0 .. cap - 1. A nomad lives in a slot whose
 /// own wire is provably 0 and is moved by SWAP (outside condition blocks, or between a pop and re-push of clean
 /// levels) when that wire is touched. Returns None if some op finds no free slot.
-pub fn relocate(ops: &[Op], cap: usize) -> Option<Vec<Op>> { relocate_mode(ops, cap, false) }
-fn relocate_mode(ops: &[Op], cap: usize, flat: bool) -> Option<Vec<Op>> {
+pub fn relocate(ops: &[Op], cap: usize) -> Option<Vec<Op>> { relocate_mode(ops, cap, false).0 }
+/// swarm-post DEV_HP2_PERHOLD: also returns the nomad wire ids whose placement failed (for per-hold dropping).
+fn relocate_mode(ops: &[Op], cap: usize, flat: bool) -> (Option<Vec<Op>>, Vec<usize>) {
     let (nq, nb) = dims(ops);
     let regs = registers(ops);
     let mut sym = Sym::new_mode(nq, nb, &regs, flat);
@@ -219,6 +237,7 @@ fn relocate_mode(ops: &[Op], cap: usize, flat: bool) -> Option<Vec<Op>> {
     let mut out = Vec::with_capacity(ops.len() + 1024);
     let mut ch = vec![];
     let (mut moves, mut fails) = (0usize, 0usize);
+    let mut failed_noms: Vec<usize> = vec![];
     let pick = |sym: &Sym, hosted: &Vec<Option<usize>>, avoid: &[usize], at: usize| -> Option<usize> {
         let mut best: Option<(usize, usize)> = None;
         for p in 0..cap {
@@ -234,9 +253,11 @@ fn relocate_mode(ops: &[Op], cap: usize, flat: bool) -> Option<Vec<Op>> {
         for &w in tws {
             if w >= cap { continue; }
             if let Some(nm) = hosted[w] {
-                let Some(h2) = pick(&sym, &hosted, tws, i) else { fails += 1; continue };
+                let Some(h2) = pick(&sym, &hosted, tws, i) else { fails += 1; failed_noms.push(nm); continue };
                 let bits = cs.bits();
-                if !bits.is_empty() && !cs.clean() { fails += 1; }
+                // swarm-post FIX: a hop inside a dirty condition block fails the placement WITHOUT emitting
+                // the pop/swap/push (the old code emitted it into the doomed stream first).
+                if !bits.is_empty() && !cs.clean() { fails += 1; failed_noms.push(nm); continue; }
                 for _ in 0..bits.len() { out.push(pop()); }
                 out.push(mk(K::Swap, w, h2));
                 for &b in &bits { out.push(push(b)); }
@@ -245,11 +266,16 @@ fn relocate_mode(ops: &[Op], cap: usize, flat: bool) -> Option<Vec<Op>> {
         }
         for &w in tws {
             if w >= cap && !host.contains_key(&w) {
-                assert!(sym.q[w] == ZV, "relocate: nomad {w} live without a slot at {i}");
-                let Some(h) = pick(&sym, &hosted, tws, i) else { fails += 1; continue };
+                // swarm-post C1: fail closed instead of panicking (a live unhosted nomad means the pass
+                // bookkeeping is off on this stream; the whole hold step is then a no-op).
+                if sym.q[w] != ZV { fails += 1; failed_noms.push(w); continue; }
+                let Some(h) = pick(&sym, &hosted, tws, i) else { fails += 1; failed_noms.push(w); continue };
                 host.insert(w, h); hosted[h] = Some(w);
             }
         }
+        // swarm-post FIX: once a failure is recorded the placement is dead (None below); emit nothing further,
+        // so the tr fallback (unhosted nomad) can never reach the output even transiently.
+        if fails > 0 { break; }
         let mut p = *o;
         if o.kind != K::AppendToRegister {
             let tr = |q: QubitId| if q != NO_QUBIT && q.0 as usize >= cap { QubitId(*host.get(&(q.0 as usize)).unwrap_or(&cap) as u64) } else { q };
@@ -260,8 +286,8 @@ fn relocate_mode(ops: &[Op], cap: usize, flat: bool) -> Option<Vec<Op>> {
         for &w in tws { if w >= cap && sym.q[w] == ZV { if let Some(h) = host.remove(&w) { hosted[h] = None; } } }
     }
     eprintln!("relocate: {moves} moves, {fails} failures");
-    if fails > 0 { return None; }
-    Some(out)
+    if fails > 0 { return (None, failed_noms); }
+    (Some(out), failed_noms)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -435,6 +461,7 @@ pub fn hold_pass_flat(ops: Vec<Op>, late: bool) -> (Vec<Op>, usize) {
 }
 
 fn holds_impl(ops: Vec<Op>, cap: usize, flat: bool, late: bool) -> (Vec<Op>, usize) {
+    let direct_on = !DEV_HP2_NODIRECT;
     let ops_in = ops.clone();
     let (nq, nb) = dims(&ops);
     let cap = cap as i64;
@@ -444,30 +471,51 @@ fn holds_impl(ops: Vec<Op>, cap: usize, flat: bool, late: bool) -> (Vec<Op>, usi
     let mut live = vec![0i32; ops.len()];
     for (i, o) in ops.iter().enumerate() { sym.step(o, &mut ch); ch.clear(); live[i] = sym.live as i32; }
     let mut sym = Sym::new_mode(nq, nb, &regs, flat);
-    let mut lastp: HashMap<u128, (usize, usize)> = HashMap::new(); // atom -> (op, target)
+    // atom -> (op, target, parity of the product as built). The parity travels: a build of !p may source a
+    // rebuild of p only with the complement X on the copy (the reviews' polarity bug; regression R1/R2).
+    let mut lastp: HashMap<u128, (usize, usize, bool)> = HashMap::new();
     // value hash -> (op that removed its last holder, that holder, the holder's constant bit, condition stack empty before that op)
     let mut gone: HashMap<u128, (usize, usize, bool, bool)> = HashMap::new();
     // (j, tj, i, ti, s, src, comp): the copy CX(src -> hold) (+ X if comp) goes right after op s
     let mut cands: Vec<(usize, usize, usize, usize, usize, usize, bool)> = vec![];
     let mut held_at_rebuild = 0usize;
+    // swarm-post C1 direct rule: (op, witness wire, needs complement fix). A CCX whose exact product value is
+    // already held by another live wire becomes CX(witness -> target) (+ X(target) if complemented): t ^= a.b with
+    // q[u] == a.b is t ^= u. No zero-target requirement, valid under a condition (the CX carries it), no width used.
+    let mut direct: Vec<(usize, usize, bool)> = vec![];
     for (i, o) in ops.iter().enumerate() {
-        if o.kind == K::CCX && o.c_condition == NO_BIT && sym.stack.is_empty() {
+        let mut took_direct = false;
+        if o.kind == K::CCX && (direct_on || (o.c_condition == NO_BIT && sym.stack.is_empty())) {
             let (t, c1, c2) = (o.q_target.0 as usize, o.q_control1.0 as usize, o.q_control2.0 as usize);
-            if sym.q[t] == ZV {
-                let mut f = sym.gate(o); f.push(sym.q[c1]); f.push(sym.q[c2]);
-                let p = sym.prod(&mut f);
-                if p.l != 0 {
-                    if let Some(&(j, tj)) = lastp.get(&p.l) {
-                        let mut c = (j, tj, i, t, j, tj, false);
-                        if late {
-                            if sym.members.contains_key(&p.l) { held_at_rebuild += 1; }
-                            else if let Some(&(e, u, uc, se)) = gone.get(&p.l) {
-                                if e > j && e <= i && se { c.4 = e - 1; c.5 = u; c.6 = uc != p.c; }
-                            }
-                        }
-                        cands.push(c);
+            let mut f = sym.gate(o); f.push(sym.q[c1]); f.push(sym.q[c2]);
+            let p = sym.prod(&mut f);
+            if p.l != 0 {
+                // a copy source for a later hold must be an unconditional, stack-free build into a zero target;
+                // a direct hit on a conditioned or nonzero-target site is NOT one (it leaves t holding t_old ^ p).
+                let buildable = o.c_condition == NO_BIT && sym.stack.is_empty() && sym.q[t] == ZV;
+                if direct_on {
+                    if let Some(u) = sym.source(p, t) {
+                        let comp = sym.q[u].c != p.c;
+                        // break control 1: drop the complement fix (WRONG on purpose; the proof must catch it)
+                        direct.push((i, u, comp && !DEV_HP2_BREAK1));
+                        took_direct = true;
                     }
-                    lastp.insert(p.l, (i, t));
+                }
+                if buildable {
+                    if !took_direct {
+                        if let Some(&(j, tj, jc)) = lastp.get(&p.l) {
+                            // the copy sources tj as BUILT (parity jc); the rebuild needs parity p.c
+                            let mut c = (j, tj, i, t, j, tj, (jc != p.c) && !DEV_HP2_BREAK2);
+                            if late {
+                                if sym.members.contains_key(&p.l) { held_at_rebuild += 1; }
+                                else if let Some(&(e, u, uc, se)) = gone.get(&p.l) {
+                                    if e > j && e <= i && se { c.4 = e - 1; c.5 = u; c.6 = uc != p.c; }
+                                }
+                            }
+                            cands.push(c);
+                        }
+                    }
+                    lastp.insert(p.l, (i, t, p.c));
                 }
             }
         }
@@ -496,13 +544,24 @@ fn holds_impl(ops: Vec<Op>, cap: usize, flat: bool, late: bool) -> (Vec<Op>, usi
         chosen.push((j, tj, i, ti, s, src, comp, nq + chosen.len()));
     }
     if late {
-        eprintln!("hold_pass: {} candidates ({} late copies, {} held at rebuild), {} holds placed ({} late)", cands.len(),
-            cands.iter().filter(|c| c.4 != c.0).count(), held_at_rebuild, chosen.len(), chosen.iter().filter(|c| c.4 != c.0).count());
+        eprintln!("hold_pass: {} candidates ({} late copies, {} held at rebuild), {} holds placed ({} late), {} direct CX ({} complemented)", cands.len(),
+            cands.iter().filter(|c| c.4 != c.0).count(), held_at_rebuild, chosen.len(), chosen.iter().filter(|c| c.4 != c.0).count(),
+            direct.len(), direct.iter().filter(|d| d.2).count());
     } else {
         eprintln!("hold_pass: {} candidates, {} holds placed", cands.len(), chosen.len());
     }
     let mut after: HashMap<usize, Vec<Op>> = HashMap::new();
     let mut replace: HashMap<usize, Vec<Op>> = HashMap::new();
+    // swarm-post C1: direct rewrites live in their own map: they survive a relocation failure (no nomad wires).
+    let mut direct_replace: HashMap<usize, Vec<Op>> = HashMap::new();
+    for &(i, u, fix) in &direct {
+        let t = ops[i].q_target.0 as usize;
+        let mut c = mk(K::CX, u, t);
+        c.c_condition = ops[i].c_condition;
+        let mut v = vec![c];
+        if fix { let mut x = mk(K::X, NONE, t); x.c_condition = ops[i].c_condition; v.push(x); }
+        direct_replace.insert(i, v);
+    }
     for &(j, _tj, i, ti, s, src, comp, h) in &chosen {
         let mut c = mk(K::CX, src, h); c.c_condition = if s == j { ops[j].c_condition } else { NO_BIT };
         after.entry(s).or_default().push(c);
@@ -511,11 +570,73 @@ fn holds_impl(ops: Vec<Op>, cap: usize, flat: bool, late: bool) -> (Vec<Op>, usi
         let mut b = mk(K::CX, ti, h); b.c_condition = ops[i].c_condition;
         replace.insert(i, vec![a, b]);
     }
-    let mut out = Vec::with_capacity(ops.len() + 3 * chosen.len());
+    let mut out = Vec::with_capacity(ops.len() + 3 * chosen.len() + direct.len());
     for (i, o) in ops.into_iter().enumerate() {
-        if let Some(r) = replace.get(&i) { out.extend(r.iter().copied()); } else { out.push(o); }
+        if let Some(r) = replace.get(&i) { out.extend(r.iter().copied()); }
+        else if let Some(r) = direct_replace.get(&i) { out.extend(r.iter().copied()); }
+        else { out.push(o); }
         if let Some(a) = after.get(&i) { out.extend(a.iter().copied()); }
     }
     let n = chosen.len();
-    match relocate_mode(&out, nq, flat) { Some(r) => (r, n), None => { eprintln!("hold_pass: relocation failed, stream unchanged"); (ops_in, 0) } }
+    // swarm-post DEV_HP2_PERHOLD (default OFF): per-hold fail-closed relocation — drop only the holds whose
+    // nomad failed to place (hold_idle's dead[] discipline), retrying after each batch. A dropped hold keeps its
+    // original CCX, so every attempt is exact by construction. The default below stays all-or-nothing.
+    if DEV_HP2_PERHOLD && n > 0 {
+        let mut banned: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut attempt = 0usize;
+        loop {
+            attempt += 1;
+            let mut after2: HashMap<usize, Vec<Op>> = HashMap::new();
+            let mut replace2: HashMap<usize, Vec<Op>> = HashMap::new();
+            let mut kept = 0usize;
+            for &(j, _tj, i, ti, s, src, comp, h) in &chosen {
+                if banned.contains(&h) { continue; }
+                kept += 1;
+                let mut c = mk(K::CX, src, h); c.c_condition = if s == j { ops_in[j].c_condition } else { NO_BIT };
+                after2.entry(s).or_default().push(c);
+                if comp { after2.entry(s).or_default().push(mk(K::X, NONE, h)); }
+                let mut a = mk(K::CX, h, ti); a.c_condition = ops_in[i].c_condition;
+                let mut b = mk(K::CX, ti, h); b.c_condition = ops_in[i].c_condition;
+                replace2.insert(i, vec![a, b]);
+            }
+            let mut out2 = Vec::with_capacity(ops_in.len() + 3 * kept + direct.len());
+            for (i, o) in ops_in.iter().enumerate() {
+                if let Some(r) = replace2.get(&i) { out2.extend(r.iter().copied()); }
+                else if let Some(r) = direct_replace.get(&i) { out2.extend(r.iter().copied()); }
+                else { out2.push(*o); }
+                if let Some(a) = after2.get(&i) { out2.extend(a.iter().copied()); }
+            }
+            let (r, failed) = relocate_mode(&out2, nq, flat);
+            match r {
+                Some(rr) => {
+                    eprintln!("hold_pass PERHOLD: attempt {attempt}: placed {kept} holds, dropped {}", banned.len());
+                    return (rr, kept);
+                }
+                None => {
+                    let fresh: Vec<usize> = failed.into_iter().filter(|h| !banned.contains(h)).collect();
+                    if fresh.is_empty() || attempt >= 64 {
+                        eprintln!("hold_pass PERHOLD: still failing after {attempt} attempts; direct-only fallback");
+                        break;
+                    }
+                    for h in fresh { banned.insert(h); }
+                }
+            }
+        }
+        if direct_replace.is_empty() { return (ops_in, 0); }
+        let mut out2 = Vec::with_capacity(ops_in.len() + direct.len());
+        for (i, o) in ops_in.into_iter().enumerate() {
+            if let Some(r) = direct_replace.get(&i) { out2.extend(r.iter().copied()); } else { out2.push(o); }
+        }
+        return (out2, 0);
+    }
+    match relocate_mode(&out, nq, flat) { (Some(r), _) => (r, n), (None, _) => {
+        // swarm-post C1: the direct CX rewrites use no width, so they survive a relocation failure.
+        eprintln!("hold_pass: relocation failed, {} holds dropped, {} direct CX kept", n, direct.len());
+        if direct_replace.is_empty() { return (ops_in, 0); }
+        let mut out2 = Vec::with_capacity(ops_in.len() + direct.len());
+        for (i, o) in ops_in.into_iter().enumerate() {
+            if let Some(r) = direct_replace.get(&i) { out2.extend(r.iter().copied()); } else { out2.push(o); }
+        }
+        (out2, 0)
+    } }
 }
