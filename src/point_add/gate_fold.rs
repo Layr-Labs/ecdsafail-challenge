@@ -266,42 +266,9 @@ pub(super) fn apply(ops: Vec<Op>) -> Vec<Op> {
     apply_mapped(ops, len, 0, |op, block| block.push(op))
 }
 
-/// The first pass follows the certified source-index replay. Each succeeding
-/// pass starts at index zero in its own input operation sequence.
-pub(super) fn finish_rounds(mut ops: Vec<Op>) -> Vec<Op> {
-    for _ in 2..=5 {
-        ops = apply(ops);
-    }
-    ops
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn q660_fold_five_passes_keep_their_own_boundaries() {
-        let pattern = [
-            ccx(0, 1, 3),
-            ccx(0, 2, 3),
-            cx(QubitId(1), QubitId(2)),
-            ccx(2, 0, 3),
-            ccx(0, 1, 3),
-            ccx(0, 2, 4),
-        ];
-        let raw: Vec<_> = pattern.into_iter().cycle().take(2 * BLOCK + 53).collect();
-        let once = apply(raw);
-        let mut reference = once.clone();
-        for _ in 0..4 {
-            let mut emitted = Vec::new();
-            for chunk in reference.chunks(BLOCK) {
-                lower(chunk, |op| emitted.push(op), &mut Counts::default());
-            }
-            reference = emitted;
-        }
-        assert!(reference.len() < once.len());
-        assert_eq!(finish_rounds(once), reference);
-    }
 
     #[test]
     fn q660_fold_replay_drops_expansions_and_boundaries_match_separate_output() {
