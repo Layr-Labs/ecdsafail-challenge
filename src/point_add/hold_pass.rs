@@ -41,28 +41,16 @@ struct Sym {
     members: HashMap<u128, Vec<u32>>,
     live: i64,
     atoms: u64,
-    /// hp3: flat products. A factor that is exactly a product atom is replaced by that atom's factors, so a product
-    /// has one canonical atom however it was nested ((a.b).c = a.(b.c) = a.b.c, a.(a.b) = a.b). Off = original model.
-    flat: bool,
-    pfac: HashMap<u128, Vec<Val>>,
 }
 impl Sym {
-    fn new(nq: usize, nb: usize, regs: &[Vec<usize>; 4]) -> Self { Self::new_mode(nq, nb, regs, false) }
-    fn new_mode(nq: usize, nb: usize, regs: &[Vec<usize>; 4], flat: bool) -> Self {
-        let mut s = Sym { q: vec![ZV; nq], b: vec![ZV; nb], stack: vec![], members: HashMap::new(), live: 0, atoms: 0, flat, pfac: HashMap::new() };
+    fn new(nq: usize, nb: usize, regs: &[Vec<usize>; 4]) -> Self {
+        let mut s = Sym { q: vec![ZV; nq], b: vec![ZV; nb], stack: vec![], members: HashMap::new(), live: 0, atoms: 0 };
         for &w in regs[0].iter().chain(regs[1].iter()) { let a = s.fresh(); s.set_q(w, a); }
         for &x in regs[2].iter().chain(regs[3].iter()) { s.b[x] = s.fresh(); }
         s
     }
     fn fresh(&mut self) -> Val { self.atoms += 1; Val { l: mix128(self.atoms, &[0xA70]), c: false } }
     fn prod(&mut self, f: &mut Vec<Val>) -> Val {
-        if self.flat && f.iter().any(|v| !v.c && self.pfac.contains_key(&v.l)) {
-            let mut g = Vec::with_capacity(f.len() + 4);
-            for &v in f.iter() {
-                match if v.c { None } else { self.pfac.get(&v.l) } { Some(fs) => g.extend_from_slice(fs), None => g.push(v) }
-            }
-            *f = g;
-        }
         f.retain(|&v| v != ONE);
         if f.iter().any(|&v| v == ZV) { return ZV; }
         f.sort(); f.dedup();
@@ -74,7 +62,6 @@ impl Sym {
                 let mut words = Vec::with_capacity(3 * f.len());
                 for v in f.iter() { words.push(v.l as u64); words.push((v.l >> 64) as u64); words.push(v.c as u64); }
                 let p = Val { l: mix128(0xB0D, &words), c: false };
-                if self.flat { self.pfac.entry(p.l).or_insert_with(|| f.clone()); }
                 p
             }
         }
@@ -205,11 +192,10 @@ fn push(b: u64) -> Op { let mut o = mk(K::PushCondition, NONE, NONE); o.c_condit
 /// Map a logical stream whose wires >= `cap` are nomads onto physical wires 0 .. cap - 1. A nomad lives in a slot whose
 /// own wire is provably 0 and is moved by SWAP (outside condition blocks, or between a pop and re-push of clean
 /// levels) when that wire is touched. Returns None if some op finds no free slot.
-pub fn relocate(ops: &[Op], cap: usize) -> Option<Vec<Op>> { relocate_mode(ops, cap, false) }
-fn relocate_mode(ops: &[Op], cap: usize, flat: bool) -> Option<Vec<Op>> {
+pub fn relocate(ops: &[Op], cap: usize) -> Option<Vec<Op>> {
     let (nq, nb) = dims(ops);
     let regs = registers(ops);
-    let mut sym = Sym::new_mode(nq, nb, &regs, flat);
+    let mut sym = Sym::new(nq, nb, &regs);
     let mut touches: Vec<Vec<u32>> = vec![vec![]; cap];
     for (i, o) in ops.iter().enumerate() { let (tw, n) = touched(o); for &w in &tw[..n] { if w < cap { touches[w].push(i as u32); } } }
     let next = |w: usize, i: usize| -> usize { let v = &touches[w]; let p = v.partition_point(|&x| (x as usize) < i); if p < v.len() { v[p] as usize } else { usize::MAX } };
@@ -262,6 +248,58 @@ fn relocate_mode(ops: &[Op], cap: usize, flat: bool) -> Option<Vec<Op>> {
     eprintln!("relocate: {moves} moves, {fails} failures");
     if fails > 0 { return None; }
     Some(out)
+}
+
+// Default-OFF diagnostic admission. Final output still uses the unchanged
+// relocate() validator, never this conflict shadow.
+fn relocation_conflicts(ops: &[Op], cap: usize) -> std::collections::HashSet<usize> {
+    let (nq, nb) = dims(ops);
+    let regs = registers(ops);
+    let mut sym = Sym::new(nq, nb, &regs);
+    let mut touches: Vec<Vec<u32>> = vec![vec![]; cap];
+    for (i, o) in ops.iter().enumerate() { let (tw, n) = touched(o); for &w in &tw[..n] { if w < cap { touches[w].push(i as u32); } } }
+    let next = |w: usize, i: usize| -> usize { let v = &touches[w]; let p = v.partition_point(|&x| (x as usize) < i); if p < v.len() { v[p] as usize } else { usize::MAX } };
+    let mut host: HashMap<usize, usize> = HashMap::new(); // nomad -> slot
+    let mut hosted: Vec<Option<usize>> = vec![None; cap]; // slot -> nomad
+    let mut cs = CondStack { v: vec![] };
+    let mut ch = vec![];
+    let mut rejected = std::collections::HashSet::new();
+    let pick = |sym: &Sym, hosted: &Vec<Option<usize>>, avoid: &[usize], at: usize| -> Option<usize> {
+        let mut best: Option<(usize, usize)> = None;
+        for p in 0..cap {
+            if sym.q[p] != ZV || hosted[p].is_some() || avoid.contains(&p) { continue; }
+            let nx = next(p, at);
+            if best.map_or(true, |b| nx > b.0) { best = Some((nx, p)); }
+        }
+        best.map(|b| b.1)
+    };
+    for (i, o) in ops.iter().enumerate() {
+        let (tw, n) = touched(o);
+        let tws = &tw[..n];
+        for &w in tws {
+            if w >= cap { continue; }
+            if let Some(nm) = hosted[w] {
+                // Removing this hold restores the original wire's value. Continue
+                // only the logical shadow: never return partially relocated gates.
+                let h2 = if cs.clean() { pick(&sym, &hosted, tws, i) } else { None };
+                if let Some(h2) = h2 {
+                    hosted[w] = None; hosted[h2] = Some(nm); host.insert(nm, h2);
+                } else {
+                    rejected.insert(nm); hosted[w] = None; host.remove(&nm);
+                }
+            }
+        }
+        for &w in tws {
+            if w >= cap && !rejected.contains(&w) && !host.contains_key(&w) {
+                if sym.q[w] != ZV { rejected.insert(w); continue; }
+                let Some(h) = pick(&sym, &hosted, tws, i) else { rejected.insert(w); continue };
+                host.insert(w, h); hosted[h] = Some(w);
+            }
+        }
+        sym.step(o, &mut ch); ch.clear(); cs.step(o);
+        for &w in tws { if w >= cap && sym.q[w] == ZV { if let Some(h) = host.remove(&w) { hosted[h] = None; } } }
+    }
+    rejected
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -353,56 +391,6 @@ fn insert_loans(ops: &[Op], loans: &[Loan]) -> Result<Vec<Op>, Vec<Loan>> {
 
 /// Dup loans (longest first, one window per wire at a time, failing ones dropped), then holds under the stream's own
 /// width.
-pub fn hold_pass_holds_only(ops: Vec<Op>) -> Vec<Op> {
-    let (nq, _nb) = dims(&ops);
-    holds(ops, nq)
-}
-
-/// Control peephole: an unconditional CCX (empty condition stack, no c_condition) whose controls are degenerate in the
-/// exact affine-form model: a control provably 0, or controls complementary (c AND NOT c = 0) -> the CCX is the identity
-/// and is dropped; a control provably 1 -> CX from the other control (X if both are 1); controls equal (c AND c = c) -> CX.
-/// Every wire, bit, the phase and the R/Hmr draw schedule are unchanged; only Toffolis disappear.
-/// Returns the stream and the counts (zero, complementary, one, equal).
-pub fn ctrl_peephole(ops: Vec<Op>) -> (Vec<Op>, [usize; 4]) {
-    let (nq, nb) = dims(&ops);
-    let regs = registers(&ops);
-    let mut sym = Sym::new(nq, nb, &regs);
-    let mut ch = vec![];
-    let mut out = Vec::with_capacity(ops.len());
-    let mut n = [0usize; 4];
-    for o in ops.iter() {
-        let mut rep: Option<Option<Op>> = None; // Some(None) = drop, Some(Some(op)) = replace
-        if o.kind == K::CCX && o.c_condition == NO_BIT && sym.stack.is_empty() {
-            let (c1, c2, t) = (o.q_control1.0 as usize, o.q_control2.0 as usize, o.q_target.0 as usize);
-            let (a, b) = (sym.q[c1], sym.q[c2]);
-            if a == ZV || b == ZV { rep = Some(None); n[0] += 1; }
-            else if a.l == b.l && a.c != b.c { rep = Some(None); n[1] += 1; }
-            else if a == ONE && b == ONE { rep = Some(Some(mk(K::X, NONE, t))); n[2] += 1; }
-            else if a == ONE { rep = Some(Some(mk(K::CX, c2, t))); n[2] += 1; }
-            else if b == ONE { rep = Some(Some(mk(K::CX, c1, t))); n[2] += 1; }
-            else if a == b { rep = Some(Some(mk(K::CX, c1, t))); n[3] += 1; }
-        }
-        match rep {
-            Some(Some(p)) => { p.validate(); out.push(p); }
-            Some(None) => {}
-            None => out.push(*o),
-        }
-        sym.step(o, &mut ch); ch.clear();
-    }
-    eprintln!("hold_pass: control peephole: {} zero, {} complementary, {} one, {} equal", n[0], n[1], n[2], n[3]);
-    (out, n)
-}
-
-/// Exact final pass (lane E-EXACT; the hp3 machinery as a general pass): the control peephole, then product holds under
-/// the flat-product model with late copies at the stream's own width. Clifford-only, no measurement added, every wire
-/// value, bit, phase and R/Hmr draw kept. A relocation failure makes the hold step a no-op (fail closed).
-pub fn exact_final_pass(ops: Vec<Op>) -> Vec<Op> {
-    let (ops, n) = ctrl_peephole(ops);
-    let (ops, nh) = hold_pass_flat(ops, true);
-    eprintln!("exact_final_pass: {} Toffoli removed by the control peephole, {nh} flat late-copy holds", n.iter().sum::<usize>());
-    ops
-}
-
 pub fn hold_pass(ops: Vec<Op>) -> Vec<Op> {
     let (nq, nb) = dims(&ops);
     let regs = registers(&ops);
@@ -423,33 +411,35 @@ pub fn hold_pass(ops: Vec<Op>) -> Vec<Op> {
     match s1 { Some(s) => holds(s, nq), None => holds(ops, nq) }
 }
 
-fn holds(ops: Vec<Op>, cap: usize) -> Vec<Op> { holds_impl(ops, cap, false, false).0 }
-
-/// hp3: holds under the flat-product model (`flat`), optionally with a late copy (`late`): when no wire holds the
-/// product at the rebuild, the copy is taken from the last holder just before the op that destroys it (outside any
-/// condition) instead of right after the first build, so the hold occupies a wire only over [copy, rebuild].
-/// Returns the stream and the number of holds placed (0 and the input stream if relocation fails).
-pub fn hold_pass_flat(ops: Vec<Op>, late: bool) -> (Vec<Op>, usize) {
-    let (nq, _nb) = dims(&ops);
-    holds_impl(ops, nq, true, late)
+#[cfg(test)]
+thread_local! { static TEST_KNOBS: std::cell::Cell<(usize, bool)> = const { std::cell::Cell::new((8, false)) }; }
+/// bounded selective retries (8); test-only override to force exhaustion
+fn max_attempts() -> usize {
+    #[cfg(test)]
+    return TEST_KNOBS.with(|c| c.get().0);
+    #[cfg(not(test))]
+    8
+}
+/// test-only source mutant: drop each retained hold's clearing CX
+fn omit_clear() -> bool {
+    #[cfg(test)]
+    return TEST_KNOBS.with(|c| c.get().1);
+    #[cfg(not(test))]
+    false
 }
 
-fn holds_impl(ops: Vec<Op>, cap: usize, flat: bool, late: bool) -> (Vec<Op>, usize) {
+fn holds(ops: Vec<Op>, cap: usize) -> Vec<Op> {
     let ops_in = ops.clone();
     let (nq, nb) = dims(&ops);
     let cap = cap as i64;
     let regs = registers(&ops);
-    let mut sym = Sym::new_mode(nq, nb, &regs, flat);
+    let mut sym = Sym::new(nq, nb, &regs);
     let mut ch = vec![];
     let mut live = vec![0i32; ops.len()];
     for (i, o) in ops.iter().enumerate() { sym.step(o, &mut ch); ch.clear(); live[i] = sym.live as i32; }
-    let mut sym = Sym::new_mode(nq, nb, &regs, flat);
+    let mut sym = Sym::new(nq, nb, &regs);
     let mut lastp: HashMap<u128, (usize, usize)> = HashMap::new(); // atom -> (op, target)
-    // value hash -> (op that removed its last holder, that holder, the holder's constant bit, condition stack empty before that op)
-    let mut gone: HashMap<u128, (usize, usize, bool, bool)> = HashMap::new();
-    // (j, tj, i, ti, s, src, comp): the copy CX(src -> hold) (+ X if comp) goes right after op s
-    let mut cands: Vec<(usize, usize, usize, usize, usize, usize, bool)> = vec![];
-    let mut held_at_rebuild = 0usize;
+    let mut cands: Vec<(usize, usize, usize, usize)> = vec![]; // (j, tj, i, ti)
     for (i, o) in ops.iter().enumerate() {
         if o.kind == K::CCX && o.c_condition == NO_BIT && sym.stack.is_empty() {
             let (t, c1, c2) = (o.q_target.0 as usize, o.q_control1.0 as usize, o.q_control2.0 as usize);
@@ -457,65 +447,184 @@ fn holds_impl(ops: Vec<Op>, cap: usize, flat: bool, late: bool) -> (Vec<Op>, usi
                 let mut f = sym.gate(o); f.push(sym.q[c1]); f.push(sym.q[c2]);
                 let p = sym.prod(&mut f);
                 if p.l != 0 {
-                    if let Some(&(j, tj)) = lastp.get(&p.l) {
-                        let mut c = (j, tj, i, t, j, tj, false);
-                        if late {
-                            if sym.members.contains_key(&p.l) { held_at_rebuild += 1; }
-                            else if let Some(&(e, u, uc, se)) = gone.get(&p.l) {
-                                if e > j && e <= i && se { c.4 = e - 1; c.5 = u; c.6 = uc != p.c; }
-                            }
-                        }
-                        cands.push(c);
-                    }
+                    if let Some(&(j, tj)) = lastp.get(&p.l) { cands.push((j, tj, i, t)); }
                     lastp.insert(p.l, (i, t));
                 }
             }
         }
-        if late {
-            let (tw, n) = touched(o);
-            let mut olds = [(0usize, ZV); 3];
-            for k in 0..n { olds[k] = (tw[k], sym.q[tw[k]]); }
-            let se = sym.stack.is_empty();
-            sym.step(o, &mut ch); ch.clear();
-            for &(w, v) in &olds[..n] {
-                if v.l != 0 && sym.q[w] != v && !sym.members.contains_key(&v.l) { gone.insert(v.l, (i, w, v.c, se)); }
-            }
-        } else {
-            sym.step(o, &mut ch); ch.clear();
-        }
+        sym.step(o, &mut ch); ch.clear();
     }
     let mut extra = vec![0i32; ops.len() + 1];
     let mut order: Vec<usize> = (0..cands.len()).collect();
-    order.sort_by_key(|&k| cands[k].2 - cands[k].4);
-    let mut chosen: Vec<(usize, usize, usize, usize, usize, usize, bool, usize)> = vec![];
+    order.sort_by_key(|&k| cands[k].2 - cands[k].0);
+    let mut chosen: Vec<(usize, usize, usize, usize, usize)> = vec![];
     for k in order {
-        let (j, tj, i, ti, s, src, comp) = cands[k];
-        if i - s > 2_000_000 { continue; }
-        if !(s..=i).all(|x| live[x] + extra[x] + 1 <= cap as i32) { continue; }
-        for x in s..=i { extra[x] += 1; }
-        chosen.push((j, tj, i, ti, s, src, comp, nq + chosen.len()));
+        let (j, tj, i, ti) = cands[k];
+        if i - j > 2_000_000 { continue; }
+        if !(j..=i).all(|x| live[x] + extra[x] + 1 <= cap as i32) { continue; }
+        for x in j..=i { extra[x] += 1; }
+        chosen.push((j, tj, i, ti, nq + chosen.len()));
     }
-    if late {
-        eprintln!("hold_pass: {} candidates ({} late copies, {} held at rebuild), {} holds placed ({} late)", cands.len(),
-            cands.iter().filter(|c| c.4 != c.0).count(), held_at_rebuild, chosen.len(), chosen.iter().filter(|c| c.4 != c.0).count());
-    } else {
-        eprintln!("hold_pass: {} candidates, {} holds placed", cands.len(), chosen.len());
+    eprintln!("hold_pass: {} candidates, {} holds placed", cands.len(), chosen.len());
+    let selective = std::env::var("WL_HOLD_SELECTIVE").map_or(true, |v| v == "1");
+    let mut banned = std::collections::HashSet::new();
+    // Eight bounded shadow passes; failures always fall back to the original
+    // loan-modified input. Reject identities, never just the failing operation.
+    for attempt in 0..if selective { max_attempts() } else { 1 } {
+        let mut after: HashMap<usize, Vec<Op>> = HashMap::new();
+        let mut replace: HashMap<usize, Vec<Op>> = HashMap::new();
+        let mut retained = 0usize;
+        for &(j, tj, i, ti, h) in &chosen {
+            if banned.contains(&h) { continue; }
+            retained += 1;
+            let mut c = mk(K::CX, tj, h); c.c_condition = ops[j].c_condition;
+            after.entry(j).or_default().push(c);
+            let mut a = mk(K::CX, h, ti); a.c_condition = ops[i].c_condition;
+            let mut b = mk(K::CX, ti, h); b.c_condition = ops[i].c_condition;
+            replace.insert(i, if omit_clear() { vec![a] } else { vec![a, b] });
+        }
+        if selective && retained == 0 { return ops_in; }
+        let mut out = Vec::with_capacity(ops.len() + 3 * retained);
+        for (i, o) in ops.iter().enumerate() {
+            if let Some(r) = replace.get(&i) { out.extend(r.iter().copied()); } else { out.push(*o); }
+            if let Some(a) = after.get(&i) { out.extend(a.iter().copied()); }
+        }
+        if selective {
+            let rejected = relocation_conflicts(&out, nq);
+            if !rejected.is_empty() {
+                let previous = banned.len();
+                for h in rejected {
+                    if h < nq || h - nq >= chosen.len() || chosen[h - nq].4 != h { return ops_in; }
+                    banned.insert(h);
+                }
+                eprintln!("hold_selective: pass {attempt} retained {retained}, rejected total {}", banned.len());
+                if banned.len() == previous { return ops_in; }
+                continue;
+            }
+        }
+        drop(ops); // Keep the original peak-memory lifetime once retries are done.
+        return match relocate(&out, nq) {
+            Some(r) => r,
+            None => { eprintln!("hold_pass: relocation failed, stream unchanged"); ops_in }
+        };
     }
-    let mut after: HashMap<usize, Vec<Op>> = HashMap::new();
-    let mut replace: HashMap<usize, Vec<Op>> = HashMap::new();
-    for &(j, _tj, i, ti, s, src, comp, h) in &chosen {
-        let mut c = mk(K::CX, src, h); c.c_condition = if s == j { ops[j].c_condition } else { NO_BIT };
-        after.entry(s).or_default().push(c);
-        if comp { after.entry(s).or_default().push(mk(K::X, NONE, h)); }
-        let mut a = mk(K::CX, h, ti); a.c_condition = ops[i].c_condition;
-        let mut b = mk(K::CX, ti, h); b.c_condition = ops[i].c_condition;
-        replace.insert(i, vec![a, b]);
+    eprintln!("hold_selective: bounded retries exhausted, stream unchanged");
+    ops_in
+}
+
+#[cfg(test)]
+mod hold_selective_tests {
+    //! zfor-transfer native tests for the selective hold rollback (root patch 91579eca): obstruction (no clean slot),
+    //! dirty condition, a chained hold, a disjoint retained hold, OFF fallback, and a removed-copy mutant.
+    use super::*;
+    use crate::circuit::RegisterId;
+    use crate::sim::Simulator;
+    struct Coins(u64);
+    impl sha3::digest::XofReader for Coins {
+        fn read(&mut self, out: &mut [u8]) { for c in out.chunks_mut(8) { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; let w = self.0.to_le_bytes(); c.copy_from_slice(&w[..c.len()]); } }
     }
-    let mut out = Vec::with_capacity(ops.len() + 3 * chosen.len());
-    for (i, o) in ops.into_iter().enumerate() {
-        if let Some(r) = replace.get(&i) { out.extend(r.iter().copied()); } else { out.push(o); }
-        if let Some(a) = after.get(&i) { out.extend(a.iter().copied()); }
+    fn ccx(a: usize, b: usize, t: usize) -> Op { let mut o = mk(K::CCX, a, t); o.q_control2 = QubitId(b as u64); o }
+    fn cx(c: usize, t: usize) -> Op { mk(K::CX, c, t) }
+    fn bit(kind: K, b: u64) -> Op { let mut o = mk(kind, NONE, NONE); o.c_target = BitId(b); o }
+    fn inputs() -> Vec<Op> {
+        (0..4).map(|w| { let mut o = Op::empty(); o.kind = K::AppendToRegister; o.q_target = QubitId(w); o.r_target = RegisterId(0); o }).collect()
     }
-    let n = chosen.len();
-    match relocate_mode(&out, nq, flat) { Some(r) => (r, n), None => { eprintln!("hold_pass: relocation failed, stream unchanged"); (ops_in, 0) } }
+    fn hold(p: (usize, usize), j: usize, i: usize, mid: Vec<Op>) -> Vec<Op> {
+        let mut v = vec![ccx(p.0, p.1, j), ccx(p.0, p.1, j)];
+        v.extend(mid);
+        v.extend([ccx(p.0, p.1, i), ccx(p.0, p.1, i)]);
+        v
+    }
+    /// two zero controls into a nonzero target while only two wires are clean: the hosted hold has no free slot
+    fn obstruct() -> Vec<Op> { vec![cx(0, 6), cx(1, 7), ccx(4, 5, 6), cx(1, 7), cx(0, 6)] }
+    /// every clean wire touched inside a condition level whose bit was rewritten after the push
+    fn dirty() -> Vec<Op> {
+        vec![bit(K::BitStore1, 0), push(0), bit(K::BitInvert, 0), cx(4, 0), cx(5, 0), cx(6, 0), cx(7, 0), pop()]
+    }
+    fn sim(ops: &[Op], nq: usize, seed: u64) -> (Vec<u64>, u64) {
+        let mut coins = Coins(seed | 1);
+        let mut s = Simulator::new(nq.max(dims(ops).0), 8, &mut coins);
+        let mut r = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+        for w in 0..4 { r ^= r << 13; r ^= r >> 7; r ^= r << 17; s.qubits[w] = r; }
+        s.apply_iter(ops.iter());
+        (s.qubits[..nq].to_vec(), s.phase)
+    }
+    fn mk_hmr(q: usize, b: u64) -> Op { let mut o = mk(K::Hmr, NONE, q); o.c_target = BitId(b); o }
+    fn mk_cz(a: usize, t: usize) -> Op { mk(K::CZ, a, t) }
+    fn nccx(ops: &[Op]) -> usize { ops.iter().filter(|o| o.kind == K::CCX).count() }
+    fn same(a: &[Op], b: &[Op], nq: usize) -> bool { (1..=16u64).all(|s| sim(a, nq, s) == sim(b, nq, s)) }
+    fn run(ops: &[Op], selective: bool) -> Vec<Op> {
+        std::env::set_var("WL_HOLD_SELECTIVE", if selective { "1" } else { "0" });
+        let nq = dims(ops).0;
+        let out = holds(ops.to_vec(), nq);
+        std::env::remove_var("WL_HOLD_SELECTIVE");
+        out
+    }
+
+    #[test]
+    fn hold_selective_obstruction_dirty_chain() {
+        for (name, mid) in [("no-slot", obstruct()), ("dirty-condition", dirty())] {
+            let mut ops = inputs();
+            ops.extend(hold((0, 1), 4, 5, mid));
+            ops.extend(hold((2, 3), 6, 7, vec![]));
+            let nq = dims(&ops).0;
+            let off = run(&ops, false);
+            assert_eq!(off, ops, "{name}: OFF must fall back to the unchanged input when relocation fails");
+            let on = run(&ops, true);
+            assert!(dims(&on).0 <= nq, "{name}: width grew");
+            assert_eq!(nccx(&on), nccx(&ops) - 1, "{name}: exactly the disjoint hold must survive");
+            assert!(same(&ops, &on, nq), "{name}: value/phase differs after selective rollback");
+            // mutant: drop the surviving hold's creation copy (CX from its producer wire 6)
+            let k = on.iter().rposition(|o| o.kind == K::CX && o.q_control1 == QubitId(6)).expect("creation copy");
+            let mut m = on.clone(); m.remove(k);
+            assert!(!same(&ops, &m, nq), "{name}: removed-copy mutant escaped");
+            eprintln!("HOLD_SELECTIVE {name}: OFF unchanged; ON keeps 1 of 2 holds, value/phase equal on 16x64 shots; mutant caught");
+        }
+        // chain A -> B -> C on the same product: obstruct only A's interval; B (whose producer is A's consumer) survives
+        let mut ops = inputs();
+        ops.extend([ccx(0, 1, 4), ccx(0, 1, 4)]);
+        ops.extend(obstruct());
+        ops.extend([ccx(0, 1, 5), ccx(0, 1, 5), ccx(0, 1, 6), ccx(0, 1, 6)]);
+        let nq = dims(&ops).0;
+        assert_eq!(run(&ops, false), ops, "chain: OFF must fall back");
+        let on = run(&ops, true);
+        assert_eq!(nccx(&on), nccx(&ops) - 1, "chain: B must survive with A rejected");
+        assert!(dims(&on).0 <= nq && same(&ops, &on, nq), "chain: value/phase differs");
+        eprintln!("HOLD_SELECTIVE chain: A rejected, B retained from restored producer, value/phase equal");
+        // only obstructed holds: ON returns the input exactly
+        let mut ops = inputs();
+        ops.extend(hold((0, 1), 4, 5, obstruct()));
+        assert_eq!(run(&ops, true), ops, "all-rejected: ON must return the input exactly");
+        eprintln!("HOLD_SELECTIVE all-rejected: input returned exactly");
+        // retry exhaustion: one allowed pass that still rejects -> the input is returned exactly (no partial stream)
+        let mut ops = inputs();
+        ops.extend(hold((0, 1), 4, 5, obstruct()));
+        ops.extend(hold((2, 3), 6, 7, vec![]));
+        TEST_KNOBS.with(|c| c.set((1, false)));
+        let ex = run(&ops, true);
+        TEST_KNOBS.with(|c| c.set((8, false)));
+        assert_eq!(ex, ops, "retry exhaustion must return the input exactly");
+        eprintln!("HOLD_SELECTIVE retry exhaustion: input returned exactly");
+        // omit-one-clear source mutant must fail (mismatch or rejected/panicking relocation)
+        TEST_KNOBS.with(|c| c.set((8, true)));
+        let caught = match std::panic::catch_unwind(|| run(&ops, true)) {
+            Err(_) => true,
+            Ok(m) => m == ops || !same(&ops, &m, dims(&ops).0),
+        };
+        TEST_KNOBS.with(|c| c.set((8, false)));
+        std::env::remove_var("WL_HOLD_SELECTIVE");
+        assert!(caught, "omit-clear mutant escaped");
+        eprintln!("HOLD_SELECTIVE omit-clear mutant: caught");
+        // measurement inside a hold interval: an MBU (CCX, HMR, conditioned CZ) on other wires between the hold's
+        // producer and consumer; 16 independent coin tapes, value and phase equal, phase zero
+        let mut ops = inputs();
+        let mbu = vec![ccx(2, 3, 8), mk_hmr(8, 1), push(1), mk_cz(2, 3), pop()];
+        ops.extend(hold((0, 1), 4, 5, mbu));
+        let nq = dims(&ops).0;
+        let on = run(&ops, true);
+        assert_eq!(nccx(&on), nccx(&ops) - 1, "MBU-interval hold must be retained");
+        assert!(same(&ops, &on, nq), "MBU-interval hold: value/phase differs");
+        assert!((1..=16u64).all(|s| sim(&on, nq, s).1 == 0), "MBU-interval hold: phase garbage");
+        eprintln!("HOLD_SELECTIVE measurement inside hold: retained, value/phase equal and zero on 16 tapes");
+    }
 }
