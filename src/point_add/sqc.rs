@@ -119,75 +119,11 @@ pub(super) fn emit(c: &mut Builder, recs: &[Rec], inverse: bool) -> usize {
         if r.ocomp { if let Some(o) = o { c.x(o); } }
         if r.neg { c.x(r.x); } if let Some(k)=r.frame {c.cx(k,r.x);} delta(c, recs, tw, i);
     };
-    let fuse = if !inverse && n>=2 {
-        let i=n-2; let j=n-1; let r=&recs[i]; let z=&recs[j];
-        let uses:Vec<usize>=recs.iter().enumerate().flat_map(|(k,r)|[r.o,r.ci].into_iter().filter_map(move|w|matches!(w,Some(W::T(v))if v==i).then_some(k))).collect();
-        r.carry && !z.carry && matches!(z.ci,Some(W::T(v))if v==i) && uses==vec![j]
-          && recs[..j].iter().all(|r|r.col!=z.col) && r.x!=z.x
-          && !matches!(r.o,Some(W::Q(q))if q==z.x) && !matches!(r.ci,Some(W::Q(q))if q==z.x)
-          && r.frame!=Some(z.x) && !r.flips.contains(&z.x) && !z.flips.contains(&z.x)
-          && !matches!(z.o,Some(W::T(v))if v==i) && !matches!(z.o,Some(W::Q(q))if q==z.x)
-    }else{false};
-    let carries=recs.iter().filter(|r|r.carry&&(r.o.is_some()||r.ci.is_some())).count();
-    let need=if !inverse { (c.active_qubits()as usize+carries).saturating_sub(fuse as usize).saturating_sub(super::pingpong::walk_max_qubits()) }else{0};
-    let enabled=std::env::var("BIND81_SHED").ok().as_deref()==Some("1");
-    let mut sheds:Vec<(usize,usize)>=Vec::new();
-    if enabled && !inverse && need>0 && c.current_phase()=="square" {
-      for j in 0..n.saturating_sub(3) {
-        if sheds.len() >= need { break; }
-        let r=&recs[j];
-        if !r.carry||(r.o.is_none()&&r.ci.is_none())||!r.flips.is_empty(){continue;}
-        let uses:Vec<usize>=recs.iter().enumerate().filter_map(|(k,z)|[z.o,z.ci].into_iter().any(|w|matches!(w,Some(W::T(v))if v==j)).then_some(k)).collect();
-        let Some(&last)=uses.last() else { continue };
-        if last>=n-2||uses.iter().any(|&k|!recs[k].flips.is_empty()){continue;}
-        // Independent sheds must not feed one another and must not rebuild
-        // through a carry erased by an earlier selected shed.
-        let independent = sheds.iter().all(|&(a,last_a)| {
-          let ar=&recs[a];
-          let a_uses:Vec<usize>=recs.iter().enumerate().filter_map(|(k,z)|
-            [z.o,z.ci].into_iter().any(|w|matches!(w,Some(W::T(v))if v==a)).then_some(k)).collect();
-          !matches!(r.o,Some(W::T(v)) if v==a)
-            && !matches!(r.ci,Some(W::T(v)) if v==a)
-            && !matches!(ar.o,Some(W::T(v)) if v==j)
-            && !matches!(ar.ci,Some(W::T(v)) if v==j)
-            && !uses.contains(&a)
-            && !a_uses.contains(&j)
-            && (last != last_a)
-        });
-        if independent { sheds.push((j,last)); }
-      }
-    }
-    for &(j,last) in &sheds {eprintln!("BIND81_SHED_PLAN phase={} op={} active={} n={} carry={} last={} need={}",c.current_phase(),c.op_count(),c.active_qubits(),n,j,last,need);}
     if !inverse {
-        for i in 0..n {
-          if fuse && i==n-1 {continue;}
-          if fuse && i==n-2 {
-            let r=&recs[i];let z=&recs[i+1];let (o,ci)=(rw(r.o,&tw),rw(r.ci,&tw));
-            assert!(!rail_opt_complement(o,ci));assert!(o.is_some()||ci.is_some());
-            assert!(o!=Some(z.x)&&ci!=Some(z.x));
-            if r.neg{c.x(r.x);}if let Some(f)=r.frame{c.cx(f,r.x);}
-            if r.ocomp{if let Some(o)=o{c.x(o);}}
-            if let Some(ci)=ci{for &f in &r.flips{c.cx(f,ci);}}
-            match(o,ci){
-              (Some(o),Some(ci))=>{c.cx(ci,r.x);c.cx(ci,o);c.ccx(r.x,o,z.x);c.cx(ci,z.x);c.cx(ci,o);c.cx(o,r.x);},
-              (Some(o),None)=>{c.ccx(r.x,o,z.x);c.cx(o,r.x);},
-              (None,Some(ci))=>{c.ccx(r.x,ci,z.x);c.cx(ci,r.x);},
-              _=>unreachable!(),
-            }
-            if r.ocomp{if let Some(o)=o{c.x(o);}}
-            if r.neg{c.x(r.x);}if let Some(f)=r.frame{c.cx(f,r.x);}
-            if let Some(o)=rw(z.o,&tw){c.cx(o,z.x);if z.ocomp{c.x(z.x);}}
-            for &f in &z.flips{c.cx(f,z.x);}
-            ands+=1;eprintln!("CAP67_TAIL_FUSED phase={} op={} active={} n={}",c.current_phase(),c.op_count(),c.active_qubits(),n);
-          }else{fa(c,&recs[i],&mut tw,i,true);if tw[i].is_some(){ands+=1;}
-            for &(j,last) in &sheds {if i==last{let before=c.op_count();let q=tw[j].unwrap();hold(c,&recs[..i+1],&mut tw,j,false);assert!(tw[j].is_none());eprintln!("BIND81_SHED_ERASE j={} last={} q={} lo={} hi={} active={}",j,last,q.0,before,c.op_count(),c.active_qubits());}}
-          }
-        }
+        for i in 0..n { fa(c, &recs[i], &mut tw, i, true); if tw[i].is_some() { ands += 1; } }
         for i in (0..n).rev() {
-            for &(j,last) in &sheds {if i==last{assert!(tw[j].is_none());let before=c.op_count();hold(c,recs,&mut tw,j,true);assert!(tw[j].is_some());eprintln!("BIND81_SHED_REBUILD j={} last={} q={} lo={} hi={} active={}",j,last,tw[j].unwrap().0,before,c.op_count(),c.active_qubits());}}
-            if fuse && i==n-1{continue;}
-            if !(fuse && i==n-2){hold(c,recs,&mut tw,i,false);}
-            if let Some(q)=rw(recs[i].ci,&tw){for &f in recs[i].flips.iter().rev(){c.cx(f,q);}}
+            hold(c, recs, &mut tw, i, false);
+            if let Some(q) = rw(recs[i].ci, &tw) { for &f in recs[i].flips.iter().rev() { c.cx(f, q); } }
         }
     } else {
         for i in 0..n {
