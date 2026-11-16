@@ -1,0 +1,231 @@
+//! Frozen source schedule binding. Generated from the 203 C lines only.
+use super::ColPar;
+#[derive(Clone,Copy)]
+struct Row { sz:(usize,usize), xw:usize, dlr:usize, flags:[bool;7] }
+#[derive(Clone,Copy)]
+pub(crate) struct ColumnPlan { column:usize, row:Row }
+impl ColumnPlan {
+    pub(crate) fn bind(cp:&ColPar)->Self {
+        assert!(cp.col<ROWS.len());let row=ROWS[cp.col];
+        assert_eq!((cp.n,cp.nq,cp.h,cp.l0),(257,128,0,128));assert!(!cp.nomap);
+        assert_eq!((cp.sz,cp.xw,cp.dlr),(row.sz,row.xw,row.dlr));
+        assert_eq!([cp.hr,cp.ht,cp.sw,cp.dl,cp.dq,cp.psw,cp.pht],row.flags);
+        assert!(!cp.dl||cp.sw);assert!(!cp.dq||cp.psw);
+        Self {column:cp.col,row}
+    }
+    pub(crate) fn column(&self)->usize {self.column}
+    pub(crate) fn incoming_c(&self)->bool {self.row.flags[5]}
+    pub(crate) fn stage1_bits(&self)->(usize,usize) {(self.row.sz.0-1,self.row.sz.1)}
+    pub(crate) fn output_bits(&self)->(usize,usize) {
+        let r=self.row;let dl=r.flags[3];
+        (r.sz.0.min(if dl{r.dlr}else{r.sz.0}).saturating_sub(1),r.sz.1.max(if dl{r.xw}else{r.sz.1}).min(257))
+    }
+    pub(crate) fn reprobe(&self)->Option<(usize,usize)> {
+        if self.row.flags[3] {Some((self.row.dlr.saturating_sub(1),self.row.xw))}else{None}
+    }
+}
+const ROWS:[Row;203]=[
+    Row {sz:(218,256),xw:39,dlr:999,flags:[true,false,false,false,false,false,false]}, // c0
+    Row {sz:(217,255),xw:40,dlr:999,flags:[true,false,false,false,false,false,false]}, // c1
+    Row {sz:(212,255),xw:45,dlr:999,flags:[true,false,false,false,false,false,false]}, // c2
+    Row {sz:(209,255),xw:48,dlr:999,flags:[true,false,false,false,false,false,false]}, // c3
+    Row {sz:(205,255),xw:52,dlr:999,flags:[true,false,false,false,false,false,false]}, // c4
+    Row {sz:(204,255),xw:52,dlr:999,flags:[true,false,false,false,false,false,false]}, // c5
+    Row {sz:(200,255),xw:57,dlr:999,flags:[true,false,false,false,false,false,false]}, // c6
+    Row {sz:(198,255),xw:59,dlr:999,flags:[true,false,false,false,false,false,false]}, // c7
+    Row {sz:(194,255),xw:63,dlr:999,flags:[true,false,false,false,false,false,false]}, // c8
+    Row {sz:(192,255),xw:65,dlr:999,flags:[true,false,false,false,false,false,false]}, // c9
+    Row {sz:(189,255),xw:68,dlr:999,flags:[true,false,false,false,false,false,false]}, // c10
+    Row {sz:(189,255),xw:68,dlr:999,flags:[true,false,false,false,false,false,false]}, // c11
+    Row {sz:(186,255),xw:71,dlr:999,flags:[true,false,false,false,false,false,false]}, // c12
+    Row {sz:(181,254),xw:76,dlr:999,flags:[true,false,false,false,false,false,false]}, // c13
+    Row {sz:(179,253),xw:78,dlr:999,flags:[true,false,false,false,false,false,false]}, // c14
+    Row {sz:(178,253),xw:78,dlr:999,flags:[true,false,false,false,false,false,false]}, // c15
+    Row {sz:(177,252),xw:80,dlr:999,flags:[true,false,false,false,false,false,false]}, // c16
+    Row {sz:(175,251),xw:82,dlr:999,flags:[true,false,false,false,false,false,false]}, // c17
+    Row {sz:(174,251),xw:83,dlr:999,flags:[true,false,false,false,false,false,false]}, // c18
+    Row {sz:(172,249),xw:85,dlr:999,flags:[true,false,false,false,false,false,false]}, // c19
+    Row {sz:(169,248),xw:88,dlr:999,flags:[true,false,false,false,false,false,false]}, // c20
+    Row {sz:(166,247),xw:91,dlr:999,flags:[true,false,false,false,false,false,false]}, // c21
+    Row {sz:(166,246),xw:91,dlr:999,flags:[true,false,false,false,false,false,false]}, // c22
+    Row {sz:(162,245),xw:95,dlr:999,flags:[true,false,false,false,false,false,false]}, // c23
+    Row {sz:(161,244),xw:96,dlr:999,flags:[true,false,false,false,false,false,false]}, // c24
+    Row {sz:(158,244),xw:99,dlr:999,flags:[true,false,false,false,false,false,false]}, // c25
+    Row {sz:(155,241),xw:102,dlr:999,flags:[true,false,false,false,false,false,false]}, // c26
+    Row {sz:(151,241),xw:106,dlr:999,flags:[true,false,false,false,false,false,false]}, // c27
+    Row {sz:(147,240),xw:110,dlr:999,flags:[true,false,false,false,false,false,false]}, // c28
+    Row {sz:(147,239),xw:110,dlr:999,flags:[true,false,false,false,false,false,false]}, // c29
+    Row {sz:(143,237),xw:114,dlr:999,flags:[true,false,false,false,false,false,false]}, // c30
+    Row {sz:(136,236),xw:121,dlr:999,flags:[true,false,false,false,false,false,false]}, // c31
+    Row {sz:(132,235),xw:125,dlr:999,flags:[true,false,false,false,false,false,false]}, // c32
+    Row {sz:(132,234),xw:125,dlr:999,flags:[true,false,false,false,false,false,false]}, // c33
+    Row {sz:(130,234),xw:127,dlr:999,flags:[true,false,false,false,false,false,false]}, // c34
+    Row {sz:(129,232),xw:128,dlr:999,flags:[true,false,false,false,false,false,false]}, // c35
+    Row {sz:(123,232),xw:134,dlr:123,flags:[true,false,true,true,false,false,false]}, // c36
+    Row {sz:(116,230),xw:135,dlr:123,flags:[true,true,true,true,true,true,false]}, // c37
+    Row {sz:(116,229),xw:135,dlr:123,flags:[true,true,true,true,true,true,true]}, // c38
+    Row {sz:(116,227),xw:135,dlr:123,flags:[true,true,true,true,true,true,true]}, // c39
+    Row {sz:(116,225),xw:135,dlr:123,flags:[true,true,true,true,true,true,true]}, // c40
+    Row {sz:(116,224),xw:135,dlr:123,flags:[true,true,true,true,true,true,true]}, // c41
+    Row {sz:(116,222),xw:135,dlr:123,flags:[true,true,true,true,true,true,true]}, // c42
+    Row {sz:(116,221),xw:135,dlr:122,flags:[true,true,true,true,true,true,true]}, // c43
+    Row {sz:(116,220),xw:135,dlr:122,flags:[true,true,true,true,true,true,true]}, // c44
+    Row {sz:(116,219),xw:135,dlr:122,flags:[true,true,true,true,true,true,true]}, // c45
+    Row {sz:(115,218),xw:136,dlr:121,flags:[true,true,true,true,true,true,true]}, // c46
+    Row {sz:(114,216),xw:139,dlr:121,flags:[true,true,true,true,true,true,true]}, // c47
+    Row {sz:(114,216),xw:139,dlr:121,flags:[true,true,true,true,true,true,true]}, // c48
+    Row {sz:(112,214),xw:139,dlr:119,flags:[true,true,true,true,true,true,true]}, // c49
+    Row {sz:(110,213),xw:139,dlr:119,flags:[true,true,true,true,true,true,true]}, // c50
+    Row {sz:(110,212),xw:139,dlr:119,flags:[true,true,true,true,true,true,true]}, // c51
+    Row {sz:(107,212),xw:139,dlr:118,flags:[true,true,true,true,true,true,true]}, // c52
+    Row {sz:(107,208),xw:139,dlr:118,flags:[true,true,true,true,true,true,true]}, // c53
+    Row {sz:(107,208),xw:140,dlr:117,flags:[true,true,true,true,true,true,true]}, // c54
+    Row {sz:(107,207),xw:140,dlr:117,flags:[true,true,true,true,true,true,true]}, // c55
+    Row {sz:(106,206),xw:140,dlr:117,flags:[true,true,true,true,true,true,true]}, // c56
+    Row {sz:(105,206),xw:140,dlr:117,flags:[true,true,true,true,true,true,true]}, // c57
+    Row {sz:(105,202),xw:144,dlr:113,flags:[true,true,true,true,true,true,true]}, // c58
+    Row {sz:(103,201),xw:144,dlr:113,flags:[true,true,true,true,true,true,true]}, // c59
+    Row {sz:(103,200),xw:144,dlr:113,flags:[true,true,true,true,true,true,true]}, // c60
+    Row {sz:(103,199),xw:144,dlr:113,flags:[true,true,true,true,true,true,true]}, // c61
+    Row {sz:(103,198),xw:144,dlr:113,flags:[true,true,true,true,true,true,true]}, // c62
+    Row {sz:(103,196),xw:144,dlr:113,flags:[true,true,true,true,true,true,true]}, // c63
+    Row {sz:(103,194),xw:144,dlr:113,flags:[true,true,true,true,true,true,true]}, // c64
+    Row {sz:(103,193),xw:144,dlr:113,flags:[true,true,true,true,true,true,true]}, // c65
+    Row {sz:(103,192),xw:144,dlr:113,flags:[true,true,true,true,true,true,true]}, // c66
+    Row {sz:(103,193),xw:142,dlr:115,flags:[true,true,true,true,true,true,true]}, // c67
+    Row {sz:(101,195),xw:142,dlr:115,flags:[true,true,true,true,true,true,true]}, // c68
+    Row {sz:(101,196),xw:142,dlr:115,flags:[true,true,true,true,true,true,true]}, // c69
+    Row {sz:(101,203),xw:142,dlr:115,flags:[true,true,true,true,true,true,true]}, // c70
+    Row {sz:(101,204),xw:142,dlr:115,flags:[true,true,true,true,true,true,true]}, // c71
+    Row {sz:(101,205),xw:142,dlr:115,flags:[true,true,true,true,true,true,true]}, // c72
+    Row {sz:(101,205),xw:141,dlr:116,flags:[true,true,true,true,true,true,true]}, // c73
+    Row {sz:(101,210),xw:141,dlr:116,flags:[true,true,true,true,true,true,true]}, // c74
+    Row {sz:(101,210),xw:141,dlr:116,flags:[true,true,true,true,true,true,true]}, // c75
+    Row {sz:(101,211),xw:141,dlr:116,flags:[true,true,true,true,true,true,true]}, // c76
+    Row {sz:(104,213),xw:141,dlr:116,flags:[true,true,true,true,true,true,true]}, // c77
+    Row {sz:(104,215),xw:141,dlr:116,flags:[true,true,true,true,true,true,true]}, // c78
+    Row {sz:(104,215),xw:141,dlr:116,flags:[true,true,true,true,true,true,true]}, // c79
+    Row {sz:(104,221),xw:141,dlr:117,flags:[true,true,true,true,true,true,true]}, // c80
+    Row {sz:(106,223),xw:141,dlr:117,flags:[true,true,true,true,true,true,true]}, // c81
+    Row {sz:(106,223),xw:142,dlr:117,flags:[true,true,true,true,true,true,true]}, // c82
+    Row {sz:(106,224),xw:142,dlr:117,flags:[true,true,true,true,true,true,true]}, // c83
+    Row {sz:(106,226),xw:142,dlr:117,flags:[true,true,true,true,true,true,true]}, // c84
+    Row {sz:(106,234),xw:142,dlr:117,flags:[true,true,true,true,true,true,true]}, // c85
+    Row {sz:(106,234),xw:142,dlr:117,flags:[true,true,true,true,true,true,true]}, // c86
+    Row {sz:(109,235),xw:142,dlr:118,flags:[true,true,true,true,true,true,true]}, // c87
+    Row {sz:(109,237),xw:142,dlr:118,flags:[true,true,true,true,true,true,true]}, // c88
+    Row {sz:(110,240),xw:142,dlr:118,flags:[true,true,true,true,true,true,true]}, // c89
+    Row {sz:(110,241),xw:142,dlr:118,flags:[true,true,true,true,true,true,true]}, // c90
+    Row {sz:(110,244),xw:140,dlr:118,flags:[true,true,true,true,true,true,true]}, // c91
+    Row {sz:(110,244),xw:140,dlr:118,flags:[true,true,true,true,true,true,true]}, // c92
+    Row {sz:(110,246),xw:140,dlr:119,flags:[true,true,true,true,true,true,true]}, // c93
+    Row {sz:(110,251),xw:140,dlr:119,flags:[true,true,true,true,true,true,true]}, // c94
+    Row {sz:(110,251),xw:139,dlr:119,flags:[true,true,true,true,true,true,true]}, // c95
+    Row {sz:(112,254),xw:139,dlr:121,flags:[true,true,true,true,true,true,true]}, // c96
+    Row {sz:(112,255),xw:139,dlr:121,flags:[true,true,true,true,true,true,true]}, // c97
+    Row {sz:(112,255),xw:138,dlr:121,flags:[true,true,true,true,true,true,true]}, // c98
+    Row {sz:(112,255),xw:138,dlr:122,flags:[true,true,true,true,true,true,true]}, // c99
+    Row {sz:(112,255),xw:138,dlr:122,flags:[true,true,true,true,true,true,true]}, // c100
+    Row {sz:(112,255),xw:138,dlr:122,flags:[true,true,true,true,true,true,true]}, // c101
+    Row {sz:(116,255),xw:136,dlr:122,flags:[true,true,true,true,true,true,true]}, // c102
+    Row {sz:(116,255),xw:136,dlr:123,flags:[true,true,true,true,true,true,true]}, // c103
+    Row {sz:(116,255),xw:136,dlr:123,flags:[true,true,true,true,true,true,true]}, // c104
+    Row {sz:(116,255),xw:135,dlr:123,flags:[true,true,true,true,true,true,true]}, // c105
+    Row {sz:(119,255),xw:135,dlr:123,flags:[true,true,true,true,true,true,true]}, // c106
+    Row {sz:(119,255),xw:135,dlr:123,flags:[true,true,true,true,true,true,true]}, // c107
+    Row {sz:(119,255),xw:134,dlr:123,flags:[true,true,true,true,true,true,true]}, // c108
+    Row {sz:(119,255),xw:134,dlr:123,flags:[true,true,true,true,true,true,true]}, // c109
+    Row {sz:(119,255),xw:134,dlr:123,flags:[true,true,true,true,true,true,true]}, // c110
+    Row {sz:(119,255),xw:133,dlr:999,flags:[true,true,true,false,true,true,true]}, // c111
+    Row {sz:(119,255),xw:133,dlr:999,flags:[true,true,true,false,false,true,true]}, // c112
+    Row {sz:(119,255),xw:132,dlr:999,flags:[false,true,true,false,false,true,true]}, // c113
+    Row {sz:(127,255),xw:130,dlr:999,flags:[false,true,false,false,false,true,true]}, // c114
+    Row {sz:(128,255),xw:129,dlr:999,flags:[false,true,false,false,false,false,true]}, // c115
+    Row {sz:(129,255),xw:128,dlr:999,flags:[false,true,false,false,false,false,true]}, // c116
+    Row {sz:(131,255),xw:126,dlr:999,flags:[false,true,false,false,false,false,true]}, // c117
+    Row {sz:(131,255),xw:125,dlr:999,flags:[false,true,false,false,false,false,true]}, // c118
+    Row {sz:(133,255),xw:124,dlr:999,flags:[false,true,false,false,false,false,true]}, // c119
+    Row {sz:(134,255),xw:122,dlr:999,flags:[false,true,false,false,false,false,true]}, // c120
+    Row {sz:(136,255),xw:121,dlr:999,flags:[false,true,false,false,false,false,true]}, // c121
+    Row {sz:(136,255),xw:121,dlr:999,flags:[false,true,false,false,false,false,true]}, // c122
+    Row {sz:(140,255),xw:117,dlr:999,flags:[false,true,false,false,false,false,true]}, // c123
+    Row {sz:(140,255),xw:116,dlr:999,flags:[false,true,false,false,false,false,true]}, // c124
+    Row {sz:(142,255),xw:115,dlr:999,flags:[false,true,false,false,false,false,true]}, // c125
+    Row {sz:(142,255),xw:114,dlr:999,flags:[false,true,false,false,false,false,true]}, // c126
+    Row {sz:(143,255),xw:114,dlr:999,flags:[false,true,false,false,false,false,true]}, // c127
+    Row {sz:(144,255),xw:112,dlr:999,flags:[false,true,false,false,false,false,true]}, // c128
+    Row {sz:(145,255),xw:112,dlr:999,flags:[false,true,false,false,false,false,true]}, // c129
+    Row {sz:(148,255),xw:109,dlr:999,flags:[false,true,false,false,false,false,true]}, // c130
+    Row {sz:(148,255),xw:109,dlr:999,flags:[false,true,false,false,false,false,true]}, // c131
+    Row {sz:(150,255),xw:107,dlr:999,flags:[false,true,false,false,false,false,true]}, // c132
+    Row {sz:(152,255),xw:105,dlr:999,flags:[false,true,false,false,false,false,true]}, // c133
+    Row {sz:(152,255),xw:104,dlr:999,flags:[false,true,false,false,false,false,true]}, // c134
+    Row {sz:(154,255),xw:102,dlr:999,flags:[false,true,false,false,false,false,true]}, // c135
+    Row {sz:(155,255),xw:101,dlr:999,flags:[false,true,false,false,false,false,true]}, // c136
+    Row {sz:(156,255),xw:101,dlr:999,flags:[false,true,false,false,false,false,true]}, // c137
+    Row {sz:(158,255),xw:99,dlr:999,flags:[false,true,false,false,false,false,true]}, // c138
+    Row {sz:(160,255),xw:97,dlr:999,flags:[false,true,false,false,false,false,true]}, // c139
+    Row {sz:(161,255),xw:96,dlr:999,flags:[false,true,false,false,false,false,true]}, // c140
+    Row {sz:(163,255),xw:94,dlr:999,flags:[false,true,false,false,false,false,true]}, // c141
+    Row {sz:(165,255),xw:92,dlr:999,flags:[false,true,false,false,false,false,true]}, // c142
+    Row {sz:(165,255),xw:92,dlr:999,flags:[false,true,false,false,false,false,true]}, // c143
+    Row {sz:(167,255),xw:90,dlr:999,flags:[false,true,false,false,false,false,true]}, // c144
+    Row {sz:(169,255),xw:87,dlr:999,flags:[false,true,false,false,false,false,true]}, // c145
+    Row {sz:(170,255),xw:87,dlr:999,flags:[false,true,false,false,false,false,true]}, // c146
+    Row {sz:(170,255),xw:86,dlr:999,flags:[false,true,false,false,false,false,true]}, // c147
+    Row {sz:(171,255),xw:86,dlr:999,flags:[false,true,false,false,false,false,true]}, // c148
+    Row {sz:(177,255),xw:80,dlr:999,flags:[false,true,false,false,false,false,true]}, // c149
+    Row {sz:(177,255),xw:80,dlr:999,flags:[false,true,false,false,false,false,true]}, // c150
+    Row {sz:(178,255),xw:79,dlr:999,flags:[false,true,false,false,false,false,true]}, // c151
+    Row {sz:(181,255),xw:76,dlr:999,flags:[false,true,false,false,false,false,true]}, // c152
+    Row {sz:(182,255),xw:75,dlr:999,flags:[false,true,false,false,false,false,true]}, // c153
+    Row {sz:(184,255),xw:72,dlr:999,flags:[false,true,false,false,false,false,true]}, // c154
+    Row {sz:(185,255),xw:72,dlr:999,flags:[false,true,false,false,false,false,true]}, // c155
+    Row {sz:(185,255),xw:71,dlr:999,flags:[false,true,false,false,false,false,true]}, // c156
+    Row {sz:(186,255),xw:71,dlr:999,flags:[false,true,false,false,false,false,true]}, // c157
+    Row {sz:(188,255),xw:69,dlr:999,flags:[false,true,false,false,false,false,true]}, // c158
+    Row {sz:(190,255),xw:67,dlr:999,flags:[false,true,false,false,false,false,true]}, // c159
+    Row {sz:(191,255),xw:66,dlr:999,flags:[false,true,false,false,false,false,true]}, // c160
+    Row {sz:(192,255),xw:65,dlr:999,flags:[false,true,false,false,false,false,true]}, // c161
+    Row {sz:(192,255),xw:64,dlr:999,flags:[false,true,false,false,false,false,true]}, // c162
+    Row {sz:(195,255),xw:62,dlr:999,flags:[false,true,false,false,false,false,true]}, // c163
+    Row {sz:(197,255),xw:60,dlr:999,flags:[false,true,false,false,false,false,true]}, // c164
+    Row {sz:(198,255),xw:59,dlr:999,flags:[false,true,false,false,false,false,true]}, // c165
+    Row {sz:(199,255),xw:58,dlr:999,flags:[false,true,false,false,false,false,true]}, // c166
+    Row {sz:(200,255),xw:57,dlr:999,flags:[false,true,false,false,false,false,true]}, // c167
+    Row {sz:(204,255),xw:53,dlr:999,flags:[false,true,false,false,false,false,true]}, // c168
+    Row {sz:(207,255),xw:50,dlr:999,flags:[false,true,false,false,false,false,true]}, // c169
+    Row {sz:(207,255),xw:50,dlr:999,flags:[false,true,false,false,false,false,true]}, // c170
+    Row {sz:(209,255),xw:48,dlr:999,flags:[false,true,false,false,false,false,true]}, // c171
+    Row {sz:(211,255),xw:46,dlr:999,flags:[false,true,false,false,false,false,true]}, // c172
+    Row {sz:(213,255),xw:44,dlr:999,flags:[false,true,false,false,false,false,true]}, // c173
+    Row {sz:(214,255),xw:43,dlr:999,flags:[false,true,false,false,false,false,true]}, // c174
+    Row {sz:(214,255),xw:42,dlr:999,flags:[false,true,false,false,false,false,true]}, // c175
+    Row {sz:(216,255),xw:41,dlr:999,flags:[false,true,false,false,false,false,true]}, // c176
+    Row {sz:(217,255),xw:40,dlr:999,flags:[false,true,false,false,false,false,true]}, // c177
+    Row {sz:(218,255),xw:39,dlr:999,flags:[false,true,false,false,false,false,true]}, // c178
+    Row {sz:(219,255),xw:38,dlr:999,flags:[false,true,false,false,false,false,true]}, // c179
+    Row {sz:(222,255),xw:34,dlr:999,flags:[false,true,false,false,false,false,true]}, // c180
+    Row {sz:(223,255),xw:34,dlr:999,flags:[false,true,false,false,false,false,true]}, // c181
+    Row {sz:(225,255),xw:32,dlr:999,flags:[false,true,false,false,false,false,true]}, // c182
+    Row {sz:(227,255),xw:30,dlr:999,flags:[false,true,false,false,false,false,true]}, // c183
+    Row {sz:(227,255),xw:29,dlr:999,flags:[false,true,false,false,false,false,true]}, // c184
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c185
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c186
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c187
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c188
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c189
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c190
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c191
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c192
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c193
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c194
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c195
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c196
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c197
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c198
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c199
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c200
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c201
+    Row {sz:(227,255),xw:28,dlr:999,flags:[false,true,false,false,false,false,true]}, // c202
+];
