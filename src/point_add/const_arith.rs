@@ -219,6 +219,21 @@ pub fn cadd_const_trunc(
 ) {
     let n = acc.len();
     assert!(n >= 2, "the ladder needs at least two positions");
+    // Closed square adapter: retain the caller's entire finite-word support
+    // and fit an exact mapped carry plan under the phase cap. This changes
+    // workspace only; it does not shorten the constant-fold window.
+    if std::env::var_os("PORT_SQ_LOWROOM").is_some() && !first_carry_is_zero {
+        let room = super::pingpong::walk_max_qubits().saturating_sub(circ.active_qubits() as usize);
+        if n.saturating_sub(1) > room {
+            let zero = circ.alloc_qubit();
+            let map: Vec<Vec<QubitId>> = (0..n).map(|i| c.bit(i).then_some(ctrl).into_iter().collect()).collect();
+            let plan = super::width_composition::direct_plan(n, room.saturating_sub(1))
+                .expect("square constant fold must fit its remaining room");
+            super::width_composition::direct_add(circ, &map, acc, zero, &plan);
+            circ.free(zero);
+            return;
+        }
+    }
     let last = n - 2;
     let dead = dead_low_carry_run(|i| c.bit(i), last, first_carry_is_zero);
     carry_ladder(
