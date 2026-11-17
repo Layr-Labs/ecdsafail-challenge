@@ -41,7 +41,6 @@ pub(super) fn mapped_zero(c:&mut Builder,acc:&[QubitId],map:&[Vec<QubitId>]) {
 /// Add J=(k*f-g)/2 to the upper word, k=s+p*(2o-1), g=s XOR p.
 /// Original p,s,o survive; two selector ANDs replace the old three.
 pub(super) fn half_fold(c:&mut Builder,upper:&[QubitId],p:QubitId,s:QubitId,o:QubitId) {
-    super::y17_fold_true_cap();
     c.cx(s,o);c.x(o);let q=and_clean(c,p,o);c.x(o);c.cx(s,o);
     c.x(s);let minus=and_clean(c,q,s);c.x(s);
     c.cx(minus,q); // q hosts plus_2f
