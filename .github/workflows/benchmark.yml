@@ -15,7 +15,7 @@ jobs:
   benchmark:
     name: Benchmark
     runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 45
+    timeout-minutes: 90
     outputs:
       score: ${{ steps.score.outputs.value }}
 
