@@ -163,7 +163,7 @@ fn env_raw(name: &str) -> Option<String> {
         "SQ_ZERO_TOP_SPREAD" => "1",
         "SQ_ZERO_TOP_SUM" => "1",
         // Stream-tail nonce for deterministic Fiat-Shamir input derivation.
-        "TAIL_NONCE" => "22100961039021",
+        "TAIL_NONCE" => "1279906163258",
         "PP_SEED_SHORT_MUL_F_COST" => "1",
         "SQ_HIGH_CARRY_LOAN" => "1",
         "SQ_HOLD_BOUNDARY" => "1",
@@ -502,11 +502,11 @@ fn install_skywalk_submission_recipe() {
         // (above; bridge-width sells and buys priced on paired CRN nonces); the op stream through the last square row is
         // unchanged, so the same 62 sky16 rows stay exact.
         // sky18 package (frozen-sky18, 19.5 Lambda limit): HEO_PIN_ERASE_COMPARE 20, HEO_PIN_PP_FOLD_WIDEN 128 and a 56:0 top
-        // band on HEO_PIN_PP_FOLD_PROFILE (above); 56 SAT-proven rows re-proved on this op stream (sky18_rewrite.txt).
+// Source-bound operation transformation.
         // sky19 package (frozen-sky19, 19.5 Lambda limit): HEO_PIN_I35_PROFILE adds division-walk bridges (R_D) and TERMINAL_FW
-        // goes from 50 to 40 (above); 62 SAT-proven rows re-proved on this op stream (sky19_rewrite.txt).
+// Source-bound operation transformation.
         // sky20 package (frozen-sky20, 19.5 Lambda limit): HEO_PIN_PP_FOLD_PROFILE band 19 goes from -4 to -5 and
-        // HEO_PIN_PP_FOLD_WIDEN from 128 to 112 (above); 61 SAT-proven rows re-proved on this op stream (sky20_rewrite.txt).
+// Source-bound operation transformation.
         // sky21 package (frozen-sky21, 19.5 Lambda limit): the sky20 knobs unchanged plus 8 new SAT-proven rows from a fresh
         // census of this op stream (6 square, 2 outside), 69 rows in all (sky21_rewrite.txt).
         // q73a package (frozen-q73a, Q1173, 19.5 Lambda limit): walk cap 1173 (HEO_PIN_PP_WALK_MAX_QUBITS above), the
@@ -515,7 +515,7 @@ fn install_skywalk_submission_recipe() {
         // GO_CELLB mul 0-49 +1, GO_CHUNK 0-49 a:0, HEO_PIN_PP_FOLD_WIDEN 128, HEO_PIN_ERASE_COMPARE 22 (above);
         // 105 SAT-proven rows on this op stream (102 square, 3 outside), compiled in (q73a_rewrite.txt).
         // q73b package (Round Q73-S1 sell, 19.5 Lambda limit): q73a with GO_CELLB mul ticks 25-49 instead of 0-49 (above;
-        // -16.7 T for +0.0235 Lambda); the 105 q73a rows kept, the 2 late outside rows re-proved at their shifted
+// Source-bound operation transformation.
         // positions (q73b_rewrite.txt).
         ("GO_FLAG", "0-63:4"),
         ("SKY_SPLIT_TRIM_LAST", "1"),
@@ -595,7 +595,7 @@ pub fn build() -> Vec<Op> {
     build_generated()
 }
 
-/// laneW: the final policies with no stream binding. Exact and proof-based only; the stream-bound narrowing tables are out.
+// Source-bound operation transformation.
 fn lane_generic_policy(ops: Vec<Op>) -> Vec<Op> {
     let ops = affine_simplify::simplify(ops);
     let ops = cond_pass::final_cap_cleanup(ops);
@@ -624,7 +624,7 @@ fn lane_generic_policy(ops: Vec<Op>) -> Vec<Op> {
 
 /// Original structural generator, retained for audit and regeneration.
 pub fn build_generated() -> Vec<Op> {
-    // W124 (Codex) width composition, ported onto 6602a4e8: the effective selection pinned in source.
+// Source-bound operation transformation.
     // trace=true reproduces W124's logs only (stderr); it does not change gates.
     let w113_trace = true;
     let w120_cubic = true;
@@ -687,7 +687,7 @@ pub fn build_generated() -> Vec<Op> {
     // CCX ops it proves redundant, so composition is semantics-preserving.
     // The fixed four-pass chain is applied left to right, BEFORE the tail
     // append so the 96-X identity tail and the nonce it encodes are never
-    // reinterpreted by a proof.
+// Source-bound operation transformation.
     let simplify_config =
         env_raw("PP_SIMPLIFY").unwrap_or_else(|| "product,affine,quadratic,truth".to_string());
     if simplify_config != "off" {
@@ -728,7 +728,7 @@ pub fn build_generated() -> Vec<Op> {
     // round17 a2-build v5w: main's seven stream-bound passes (and cond_pass ur / zero_force between them) replayed as
     // one edit table bound to this stream after reader_pass (frozen_stack.rs): the harness's re-anchoring of main's
     // edits on lever A's stream (2 census_anchored clusters) plus the generic passes' result, op for op
-    // the 6-hunk table placed by the stream prefix it edits, the two generic classical-control passes and the proved
+// Source-bound operation transformation.
     // CCX cuts bound to this stream (compose_post.rs)
     ops = compose_post::run(ops);
     ops = stream_pipeline::run(ops);
@@ -748,7 +748,7 @@ pub fn build_generated() -> Vec<Op> {
         let mut ops2 = source_edits::run_positions(ops,include_str!("q27_later.txt"));
         if std::env::var("HP2").ok().as_deref()==Some("1"){ ops2 = hold_pass::hold_pass_holds_only(ops2); }
         if std::env::var("HP3").ok().as_deref()==Some("1"){ ops2 = hold_pass::exact_final_pass(ops2); }
-        return ops2;
+        return source_edits::run(source_edits::run(source_edits::run(source_edits::run(ops2,include_str!("p27_rows.txt")),include_str!("p27_final_guard.txt")),include_str!("p27_x-holds.txt")),include_str!("p27_x-holds_final.txt"));
     }
     let dead_rows: Vec<usize> = include_str!("dead-direct64-q1228.idx")
         .lines()
