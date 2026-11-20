@@ -55,7 +55,7 @@ fn fold_window(t: usize, rev: bool) -> usize {
     // round17 a2-build: the A ticks' fold windows (LFA2_FWIN forward, LFA2_RWIN reverse; default 57 both ways = v3w)
     if super::a2_on() && t >= 1 {
         let k = if rev { "LFA2_RWIN" } else { "LFA2_FWIN" };
-        let w=compare_window_knob("FOLD",rev,t,0,a_env(k).unwrap_or(57)); assert!((45..=80).contains(&w));
+        let w=compare_window_knob("FOLD",rev,t,0,a_env(k).unwrap_or(57)); let w=w.checked_add_signed(super::ll_band(if rev { "FW_RBAND" } else { "FW_FBAND" }, t)).expect("fwin band"); assert!((45..=80).contains(&w));
         // laneQ: K = 6 on a tail e <= 3 tick: the same headroom above bit 32 + K as the A fold's 57 at K = 8
         if super::lfq_e3(t) { return w - a_env("LFQ_E3WIN").unwrap_or(2); }
         return w;
@@ -2293,7 +2293,9 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     // y15-pack: the reverse fold gets W's low bits from the adds' kept carries (Y15_CORE_V2 with Y15_KEEP_LOW) or from
     // copies (Y15_REV_COPY); with both switched on, by the room of this tick-pass
     let keep_on = rev && Y15_CORE_V2 && Y15_KEEP_LOW != [0, 0, 0];
-    let copy_here = rev && Y15_REV_COPY && !(keep_on && cells::cap().saturating_sub(a_start as usize) >= Y15_KEEP_ROOM);
+    // R135 w2asym: the native reverse A tick reads W's low 8 bits from the adds' kept carries [7, 6, 5] (no copies)
+    let w2n = rev && W2_NATIVE.with(|x| x.get()).is_some();
+    let copy_here = !w2n && rev && Y15_REV_COPY && !(keep_on && cells::cap().saturating_sub(a_start as usize) >= Y15_KEEP_ROOM);
     // reverse: W (the rotated register) is in the clear here; its bits 2..5 are copied for the fold
     // y17-edge: on the ticks of Y17_LEAN no copy is taken; the fold builds its chains itself
     let lean_here = copy_here && lean_on(t);
@@ -2324,8 +2326,8 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     } else {
         Vec::new()
     };
-    let keep = if keep_on && !copy_here { Y15_KEEP_LOW } else { [0, 0, 0] };
-    assert!(keep[0] <= 5 && keep[1] <= 4 && keep[2] <= 3);
+    let keep = if w2n { W2_KEEP } else if keep_on && !copy_here { Y15_KEEP_LOW } else { [0, 0, 0] };
+    assert!(w2n || (keep[0] <= 5 && keep[1] <= 4 && keep[2] <= 3));
     // y17-edge: on reverse tick 0 the first two adds run in the other order (see [`rev_on`])
     let swap01 = rev && t == 0;
     assert!(!swap01 || (Y17_REV0 && Y15_CORE_V2 && Y15_JOINT_M));
@@ -2606,15 +2608,18 @@ fn body(c: &mut Builder, t: usize, s: [QubitId; 3], k1: QubitId, k2: QubitId, b:
     let room_fold_n = if rev { super::room_fold_begin(c) } else { 0 };
     let plan = if rev {
         // the reverse fold reads the source's low 6 bits as they are (b holds the source complemented by s[2])
-        for j in 0..6 {
+        let nlow = if w2n { 8 } else { 6 };
+        for j in 0..nlow {
             c.cx(s[2], b[j]);
         }
-        let plan = if Y15_CORE_V2 {
+        let plan = if let Some(k3) = W2_NATIVE.with(|x| x.get()).filter(|_| w2n) {
+            fold_rev_a(c, &tg[..fold_window(t, true)], [x256, x257, x258], s, k1, k2, k3, &b[..8], &kept)
+        } else if Y15_CORE_V2 {
             fold_rev_v2(c, &tg[..fold_window(t, true)], [x256, x257, x258], s, k1, k2, &b[..6], &kept, &wc, lean_here, if swap01 { [2, 0, 1] } else { [2, 1, 0] }, &yg, fin.min(2), drop_n)
         } else {
             fold_rev(c, &tg[..fold_window(t, true)], [x256, x257, x258], s, k1, k2, &b[..6], &wc)
         };
-        for j in 0..6 {
+        for j in 0..nlow {
             c.cx(s[2], b[j]);
         }
         for &q in &wc {
@@ -5790,3 +5795,5 @@ mod a_tests {
 include!("y15_fold_core.rs");
 // round17 a2-build (lever A end to end): see the file
 include!("y15_a2.rs");
+// R135 w2asym: the native reverse A tick
+include!("w2_native.rs");

@@ -564,6 +564,11 @@ pub(super) fn t3p1_unpack(c: &mut Builder) {
 // (R1226_PACK_REAL with R1226_PACK_CELLS=F).
 // ---------------------------------------------------------------------------------------------------------------------
 const R1227_PK_TICK: usize = 83;
+/// lane A17: per-walk env override of the pack constants (W_PK_<KEY>_DIV / _MUL); unset = the default.
+fn w_pk_env(key: &str, d: usize) -> usize {
+    let mul = Q62_WALK.with(|w| w.get()).unwrap_or(false);
+    std::env::var(format!("W_PK_{key}_{}", if mul { "MUL" } else { "DIV" })).ok().map(|v| v.trim().parse::<usize>().expect("W_PK value")).unwrap_or(d)
+}
 /// theta = ceil(n / 2) for the n flags of the pack (21 for the 41 flags of the 1226/1227 streams).
 const R1227_PK_THETA: usize = 0;
 thread_local! {
@@ -573,20 +578,21 @@ fn r1227_pk_cells(t: usize, skip: usize) -> Vec<QubitId> {
     // the flags only (pairs' F, raw ticks' f): density ~0.2, so 41 cells carry x* better than all 124 record cells
     let mut z = Vec::new();
     for u in 1..=t {
-        if !a2_tick(u) { continue; }
+        if u == skip || !a2_tick(u) { continue; }
         let p = a2_pair_partner(u);
         if a2_tick(p) {
-            if u > p || p > t || !a2_pair_is_packed(u) || u == skip { continue; }
+            if u > p || p > t || !a2_pair_is_packed(u) { continue; }
             if let Some(f) = A2_REC.with(|r| r.borrow().get(&u).and_then(|f| f[0])) { z.push(f); }
         } else if let Some(f) = A2_REC.with(|r| r.borrow().get(&u).and_then(|f| f[0])) { z.push(f); }
     }
     z
 }
 pub(super) fn r1227_pk_pack(c: &mut Builder, t: usize) {
-    if t != R1227_PK_TICK { return; }
+    if t != w_pk_env("TICK", R1227_PK_TICK) { return; }
+    if q62_pk_skip() { return; }
     let mut first = None;
     for u in (1..=t).rev() { if a2_tick(u) && a2_pair_partner(u) > u && a2_pair_partner(u) <= t && a2_tick(a2_pair_partner(u)) && a2_pair_is_packed(u) { first = Some(u); break; } }
-    let u = first.expect("r1227 pack: no committed pair");
+    let u = if w_pk_env("FIRST", 0) == 1 { assert!(a2_tick(1) && !a2_tick(a2_pair_partner(1)), "first pack flag must be raw"); 1 } else { first.expect("r1227 pack: no committed pair") };
     let f = A2_REC.with(|r| r.borrow().get(&u).and_then(|f| f[0])).expect("r1227 pack: F");
     let z = r1227_pk_cells(t, u);
     for &q in &z { c.cx(f, q); }
@@ -597,12 +603,14 @@ pub(super) fn r1227_pk_pack(c: &mut Builder, t: usize) {
     R1227_PK.with(|p| { assert!(p.borrow().is_none(), "r1227 pack: pack while a pack is out"); *p.borrow_mut() = Some((u, m, z)); });
 }
 pub(super) fn r1227_pk_unpack(c: &mut Builder, t: usize) {
-    if t != R1227_PK_TICK { return; }
+    if t != w_pk_env("TICK", R1227_PK_TICK) { return; }
+    if q62_pk_skip() { return; }
     let (u, m, z) = R1227_PK.with(|p| p.borrow_mut().take()).expect("r1227 pack: unpack without a pack");
     assert_eq!(z, r1227_pk_cells(t, u), "r1227 pack: the closed cells changed between pack and unpack");
     let n = z.len();
     assert!((30..=63).contains(&n), "r1227 pack: {n} flags is outside the range this code was priced for");
-    let theta = if R1227_PK_THETA > 0 { R1227_PK_THETA } else { (n + 1) / 2 };
+    let theta = if w_pk_env("THETA", R1227_PK_THETA) > 0 { w_pk_env("THETA", R1227_PK_THETA) } else { (n + 1) / 2 };
+    eprintln!("W_PK unpack walk={} t={t} u={u} n={n} theta={theta}", if Q62_WALK.with(|w| w.get()).unwrap_or(false) { "mul" } else { "div" });
     let k = (usize::BITS - (theta - 1).leading_zeros()) as usize;
     let pad = (1usize << k) - theta;
     assert!(n + pad < (1usize << (k + 1)), "r1227 pack: pad pushes the block past 2^(k+1)");
@@ -808,6 +816,11 @@ fn yp8_logic_a(c: &mut Builder, t2: &[QubitId], b: &[QubitId], s1: QubitId, ct: 
     let sp_wire = sp_pair.map(|(a, b)| and_new(c, a, b));
     let spent_owned = sp_wire.map_or_else(|| spent.clone(), |q| Lin::of(&[q]));
     let spent = &spent_owned;
+    // q62: spent = L1 * L2 + L0 on the (6,2) blocks (one AND around the decision); None off the code
+    let q62sp = q62_sp(tick);
+    let q62w = q62sp.as_ref().map(|(a, b)| lin_and(c, a, b));
+    let q62_spent_owned = q62w.map(|q| spent.x(&Lin::of(&[q])));
+    let spent = q62_spent_owned.as_ref().unwrap_or(spent);
     let need0 = w1_anchor(tick) <= w1_kt(tick);
     // full-index views: bit 0 (the constant 1 of an odd rail) is a wire only when the window reads it
     let mut tv: Vec<QubitId> = Vec::with_capacity(t2.len() + 1);
@@ -1100,6 +1113,7 @@ fn yp8_logic_a(c: &mut Builder, t2: &[QubitId], b: &[QubitId], s1: QubitId, ct: 
         }
     }
     if let (Some(q), Some((a, b))) = (sp_wire, sp_pair) { and_erase(c, q, a, b); }
+    if let (Some(q), Some((a, b))) = (q62w, q62sp.as_ref()) { lin_and_erase(c, q, a, b); }
     });
     assert!(rail_opt_peak as usize<=cells::cap(),"rail_opt reserve: tick{tick} peak{rail_opt_peak}");
     if std::env::var("RAIL_OPT_RESERVE").ok().as_deref()==Some("1") && false {c.z_if(t2[0],NO_BIT);}
@@ -1112,7 +1126,7 @@ fn yp8_reserve_a(tl: usize, bl: usize, t: usize, fwd: bool) -> usize {
     let pad = a2_emax(t) + 3;
     let old=yp8_reserve(tl, bl, t, fwd) + (a2_emax(t) - 2) + pad.saturating_sub((tl + 1).max(6)) + pad.saturating_sub((bl + 1).max(6));
     if std::env::var("RAIL_OPT_RESERVE").ok().as_deref()==Some("1") {
-        if a2_pair() { old - 3 + usize::from(a2_pair_second(t)) }
+        if a2_pair() { old - 3 + if q62_block(t) { q62_reserve(t) } else { usize::from(a2_pair_second(t)) } }
         else if a2_code() { if a2_pos(t) <= 2 || t == 4 { old - 3 } else { old - 1 } } else { old-(2+usize::from(a2_pos(t)==1||t==2)) }
     } else { old }
 }

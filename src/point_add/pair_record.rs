@@ -43,6 +43,7 @@ fn a2_pair_is_packed(t: usize) -> bool {
     A2_PAIR_PACKED.with(|v| v.borrow().contains(&a2_pair_start(t)))
 }
 fn a2_pair_spent(t: usize) -> Lin {
+    if q62_block(t) { return q62_spent(t); }
     if !a2_pair_second(t) { return Lin::k(false); }
     assert!(!a2_pair_is_packed(t), "pair quota read before pop / after commit");
     Lin::of(&[a2_field(a2_pair_partner(t))[0].expect("pair quota: prior raw flag")])
@@ -51,6 +52,7 @@ fn a2_pair_swap(c: &mut Builder, ctrl: QubitId, a: QubitId, b: QubitId) {
     c.cx(b,a); c.ccx(ctrl,a,b); c.cx(b,a);
 }
 fn a2_pair_commit(c: &mut Builder, t: usize, k3: QubitId) {
+    if q62_block(t) { return q62_commit(c, t, k3); }
     assert!(a2_emax(t)<=5, "pair record requires emax<=5");
     assert_eq!(a2_field(t)[0],Some(k3), "pair decision must write its dense field slot");
     if !a2_pair_second(t) { return; }
@@ -83,6 +85,7 @@ fn a2_pair_pop(c: &mut Builder, first: usize) {
     A2_REC.with(|v| v.borrow_mut().get_mut(&second).expect("pair second field")[0]=Some(g));
 }
 fn a2_pair_consume(c: &mut Builder, t: usize) -> QubitId {
+    if q62_block(t) { return q62_consume(c, t); }
     if a2_pair_is_packed(t) {
         assert!(a2_pair_second(t), "pair must be consumed in descending tick order");
         a2_pair_pop(c,a2_pair_partner(t));
@@ -93,6 +96,7 @@ fn a2_pair_consume(c: &mut Builder, t: usize) -> QubitId {
     f[0].expect("pair raw flag absent")
 }
 fn a2_pair_read(c: &mut Builder, t: usize) -> (QubitId,QubitId) {
+    if q62_block(t) { return q62_read(c, t); }
     if !a2_pair_is_packed(t) {
         let f=a2_field(t)[0].expect("pair raw read flag");
         let b=a2_cell(t).expect("pair raw read k2");
@@ -109,6 +113,7 @@ fn a2_pair_read(c: &mut Builder, t: usize) -> (QubitId,QubitId) {
     (q,u)
 }
 fn a2_pair_read_erase(c: &mut Builder, t: usize, q: QubitId, u: QubitId) {
+    if q62_block(t) { return q62_read_erase(c, t, q, u); }
     if !a2_pair_is_packed(t) {
         let f=a2_field(t)[0].expect("pair raw erase flag");
         let b=a2_cell(t).expect("pair raw erase k2");
@@ -125,3 +130,5 @@ fn a2_pair_read_erase(c: &mut Builder, t: usize, q: QubitId, u: QubitId) {
     // Every HMR coin is local and paid by a Clifford CZ before it is freed.
     and_erase(c,u,q,s); and_erase(c,q,f,r);
 }
+// round 116 q62build: the (6,2) record code (off unless Q62=1).
+include!("q62_record.rs");

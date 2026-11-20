@@ -120,7 +120,7 @@ pub(super) fn rot8_phase(c: &mut Builder, k: [QubitId; 3], v: &[QubitId], bits: 
 // inverse tick, fold^-1 before the subtractions).
 // ======================================================================================================================
 /// LFA2_EXT: extra window bits of the reverse tick's value compares over the forward's erase compares (default 2 = v3w).
-fn a2_ext(t:usize,kind:usize) -> usize {compare_window_knob("EXT",true,t,kind,a_env("LFA2_EXT").unwrap_or(2))}
+fn a2_ext(t:usize,kind:usize) -> usize {compare_window_knob("EXT",true,t,kind,a_env("LFA2_EXT").unwrap_or(2)).checked_add_signed(super::ll_band(if kind == 0 { "FW_EXT0" } else { "FW_EXT2" }, t)).expect("fwin ext")}
 /// LFA2_TICK=1: the builder's forward A ticks (LFA_FOLD=1) run [`a2_fwd_tick`] (rot8 and the IPK fold).
 pub(super) fn a2_tick_test() -> bool { std::env::var("LFA2_TICK").is_ok_and(|v| v == "1") }
 /// LFA2_REV=1: the builder's reverse one-fold ticks t in [1, LFA_TO) run [`a2_rev_tick`] (M6).
@@ -170,6 +170,10 @@ pub(super) fn a2_rev_tick_owned_k3(c: &mut Builder, t: usize, s: [QubitId; 3], k
     a2_rev_tick_k3_owner(c,t,s,k,emax,p,owned);
 }
 fn a2_rev_tick_k3_owner(c: &mut Builder, t: usize, s: [QubitId; 3], k: [QubitId; 3], emax: usize, p: &mut [Vec<QubitId>; 2], owns_k3: bool) {
+    // R135 w2asym: the native reverse A tick on its range
+    if w2_native_on(t) && emax <= 5 && k[2] != Q_E3_GHOST && k[2] != crate::circuit::NO_QUBIT {
+        return w2_native_a_rev_tick(c, t, s, k, emax, p, owns_k3);
+    }
     let [w, ..] = steps()[t];
     let (ti, si) = (t % 2, 1 - t % 2);
     let (_, proxy) = proxy_fold(w, true);

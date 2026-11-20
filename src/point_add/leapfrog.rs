@@ -4212,6 +4212,119 @@ fn fwd_tick(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut [Vec<
     resize(c, br, wn);
 }
 
+// Shared by the two directions. The natural first halving width must equal n1:
+// growing a shifted intermediate can sign-extend a wrapped value.
+fn r123_f4_enabled(t: usize) -> bool {
+    std::env::var("R123_FUSED4_MUL").is_ok_and(|v| v == "1")
+        && (6..=116).contains(&t)
+        && Q62_WALK.with(|w| w.get() == Some(true))
+        && a2_tick(t) && yp8().is_some() && lowrel() && tail_forced(t) == 2
+        && steps()[t][1] == steps()[t][2] + 1
+}
+
+// R134 fusediv: the same k=4 pair on the DIVIDE walk (forward pass with its live payload and kept y28 boundary
+// carries; reverse rails-only pass under Y28_USE). Same width rule as the multiply (n0 = n1 + 1, so ticks 1-5
+// with their early widening stay stock). R134_F4_DIV_LO/HI bound the band; R134_F4_DIV_SKIP lists ticks kept stock.
+fn r134_f4_div_enabled(t: usize) -> bool {
+    fn knob(k: &str, d: usize) -> usize {
+        std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+    }
+    std::env::var("R134_FUSED4_DIV").is_ok_and(|v| v == "1")
+        && t >= knob("R134_F4_DIV_LO", 6).max(6)
+        && t <= knob("R134_F4_DIV_HI", 1000)
+        && !std::env::var("R134_F4_DIV_SKIP").is_ok_and(|v| v.split(',').any(|x| x.trim().parse() == Ok(t)))
+        && Q62_WALK.with(|w| w.get() == Some(false))
+        && a2_tick(t) && yp8().is_some() && lowrel() && tail_forced(t) == 2
+        && steps()[t][1] == steps()[t][2] + 1
+}
+
+// R134 early widening (R134_F4_EARLY=1): ticks 1-4 have n1 = n0 (the target widens between the two rows). Both rails
+// enter in w = 257 signed bits and widen to n0 = 258, so the upper first-row output H fits n0 - 5 signed bits and
+// 8H + three low bits fits n1 - 1: one sign-copy wire before tail B supplies T1's top column (R123 desk check), and the
+// reverse drops it right after undoing tail B. Tick 5 (w = n0 = 257, full-width inputs) stays stock. Each walk only
+// with its own fused switch on.
+fn r134_f4_early(t: usize) -> bool {
+    let walk = Q62_WALK.with(|w| w.get());
+    let on = |k: &str| std::env::var(k).is_ok_and(|v| v == "1");
+    on("R134_F4_EARLY")
+        && (1..=4).contains(&t)
+        && match walk { Some(true) => on("R123_FUSED4_MUL"), Some(false) => on("R134_FUSED4_DIV"), None => false }
+        && a2_tick(t) && yp8().is_some() && lowrel() && tail_forced(t) == 2
+        && steps()[t][1] == steps()[t][2] && steps()[t][0] + 1 == steps()[t][1]
+}
+
+// R134 multiply tail (R134_F4_MUL_TAIL=1): multiply ticks 119-121 run in the N2 batch, rails-only in BOTH directions
+// (no payload, so no y17 late cells and no y28), n0 = n1 + 1: the R123 pair applies unchanged.
+fn r134_f4_mul_tail(t: usize) -> bool {
+    std::env::var("R134_F4_MUL_TAIL").is_ok_and(|v| v == "1")
+        && std::env::var("R123_FUSED4_MUL").is_ok_and(|v| v == "1")
+        && (119..=121).contains(&t)
+        && Q62_WALK.with(|w| w.get() == Some(true))
+        && a2_tick(t) && yp8().is_some() && lowrel() && tail_forced(t) == 2
+        && steps()[t][1] == steps()[t][2] + 1
+}
+
+// Both rails omit bit zero. Move physical target bits 1 and 2 to the tape
+// as s0 and s1. The remaining target begins with the final T2 bit 1 (S3).
+fn r123_f4_start(c: &mut Builder, b: &[QubitId], tr: &mut Vec<QubitId>) -> (QubitId, QubitId) {
+    // divide: LF_SIGNWIRE may hold the source at the next tick's width (its top wire is the sign; tail A's
+    // rail_add sign-extends it exactly as the stock row does)
+    assert!(tr.len() >= 6 && b.len() >= 4 && b.len() <= tr.len());
+    let s0 = tr.remove(0);
+    let s1 = tr.remove(0);
+    let (b1, b2, b3) = (b[0], b[1], b[2]);
+    c.cx(b1, s0);
+    c.cx(b2, s1);
+    let left = Lin::of(&[s0, s1, b1, b2]);
+    let right = Lin::of(&[b1, b2]);
+    let g0 = lin_and(c, &left, &right);
+    let a = Lin::of(&[b2, b3, g0]);
+    let g1 = lin_and(c, &a, &Lin::of(&[s0, tr[0], b2, g0]));
+    lin_xor_into(c, &a, tr[0]); // t3 -> S3
+    let carry_xor = Lin::of(&[s0, b2, g0]);
+    lin_xor_into(c, &carry_xor, g1); // g1 -> p
+    c.cx_all(s0, &b[3..]);
+    rail_add(c, &b[3..], &tr[1..], Some(g1));
+    c.cx_all(s0, &b[3..]);
+    // All cleanup factors survive tail A. Release both ANDs before opening
+    // the record or asking the native planner for room for the YP8 decision.
+    lin_xor_into(c, &carry_xor, g1);
+    lin_and_erase(c, g1, &a, &Lin::of(&[s0, tr[0], b3]));
+    lin_and_erase(c, g0, &left, &right);
+    (s0, s1)
+}
+
+fn r123_f4_finish(c: &mut Builder, s1: QubitId, b: &[QubitId], tr: &[QubitId],
+                  tick: usize, spent: &Lin, outs: (QubitId, QubitId, QubitId, QubitId)) {
+    assert!(b.len() >= 4 && b.len() <= tr.len() + 1);
+    let acc = &tr[1..]; // shortened upper ladder; tr[0] already holds S3
+    let reserve = yp8_reserve_a(tr.len(), b.len(), tick, true);
+    c.cx(s1, b[1]); // B2 -> q = s1 ^ B2, the original target bit 2
+    c.cx_all(s1, &b[2..]); // B3 and above supply tail B
+    rail_add_mid(c, &b[2..], acc, b[1], reserve, true, None, &mut |c, add, delta, carry| {
+        let flip = |c: &mut Builder| {
+            for (j, cj) in carry.iter().enumerate() {
+                for &q in &add[delta + j] {
+                    c.cx(q, acc[delta + j]);
+                }
+                if let Some(q) = *cj {
+                    c.cx(q, acc[delta + j]);
+                }
+            }
+        };
+        let ct = carry.last().copied().flatten().expect("k4 upper carry");
+        flip(c);
+        c.cx_all(s1, &b[2..]);
+        c.cx(s1, b[1]);
+        yp8_logic_a(c, tr, b, s1, ct, tick, spent, Some(outs));
+        c.cx(s1, b[1]);
+        c.cx_all(s1, &b[2..]);
+        flip(c);
+    });
+    c.cx_all(s1, &b[2..]);
+    c.cx(s1, b[1]);
+}
+
 /// [`fwd_tick`] on the fast rail path (`LF_FAST=1`); same letters and payload cells.
 fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut [Vec<QubitId>; 2]>) {
     let st = steps();
@@ -4265,12 +4378,27 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     let y15f = pay.is_some() && y15::fused_fwd_on(t);
     assert!(!y15f || (tail_forced(t) == 2 && t < tie_from() && t > 0), "y15 fused tick out of range");
     let mut y16_ops: Vec<(&'static str, usize, f64, f64, f64, f64)> = Vec::new();
+    let fused4_early = r134_f4_early(t);
+    let fused4_div = r134_f4_div_enabled(t) || (fused4_early && Q62_WALK.with(|w| w.get() == Some(false)));
+    let fused4 = r123_f4_enabled(t) || fused4_div || fused4_early || r134_f4_mul_tail(t);
+    let mut fused4_s1 = None;
+    if fused4 && !fused4_div {
+        assert!(pay.is_none() && !prefix_ready && !Y28_KEEP.with(|y| y.get()));
+    }
+    if fused4_div {
+        // the divide's forward: payload live (cells read only their letter), y28 keeps split carries under the
+        // same step keys (t*4: tail A, t*4+1: tail B) that the fused reverse fetches on the same target widths
+        assert!(!prefix_ready && !t0_plain(t));
+    }
     for (nk, nnext) in fsteps.into_iter().skip(if prefix_ready { 2 } else { 0 }) {
         if yp8_here && letter.len() == 1 {
             // LF_YP8: forced move 2's payload cell first (it reads only the letter), then the rail add with the
             // choice inside it
-            let s = c.alloc_qubit();
-            pp_sign_into1(c, tr[1 - o], br[1 - o], s);
+            let s = fused4_s1.unwrap_or_else(|| {
+                let q = c.alloc_qubit();
+                pp_sign_into1(c, tr[1 - o], br[1 - o], q);
+                q
+            });
             let q0 = pmark(c);
             if let Some(p) = pay.as_deref_mut().filter(|_| !y15f) {
                 let (pt, ps) = (p[ti].clone(), p[si].clone());
@@ -4286,7 +4414,9 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
             if pay.is_some() {
                 pacc(c, &format!("pc.fwd.t{t:03}"), q0);
             }
-            resize(c, tr, nk - o);
+            if !fused4 {
+                resize(c, tr, nk - o);
+            }
             resize(c, br, bw(nk) - o);
             let trio = (c.alloc_qubit(), c.alloc_qubit(), c.alloc_qubit());
             let q0 = pmark(c);
@@ -4300,7 +4430,18 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
                 let inf = a2_k3_slot(t);
                 let k3 = inf.unwrap_or_else(|| c.alloc_qubit());
                 let sp = a2_spent(t);
-                yp8_add_halve_forced_choice_a(c, s, br, tr, trio.0, trio.1, trio.2, k3, t, &sp);
+                if fused4 {
+                    let before = c.expected_total();
+                    if fused4_early {
+                        // early widening: T1's top column as a sign copy of H's top wire (n0 - 3 -> n1 - 2 wires)
+                        assert!(lr && tr.len() + 2 == nk - 1);
+                        resize(c, tr, nk - 2);
+                    }
+                    r123_f4_finish(c, s, br, tr, t, &sp, (trio.0, trio.1, trio.2, k3));
+                    eprintln!("{} {t} {:.3}", if fused4_early { "R134_F4E_FWD_B" } else if fused4_div { "R134_F4D_FWD_B" } else { "R123_F4_FWD_B" }, c.expected_total() - before);
+                } else {
+                    yp8_add_halve_forced_choice_a(c, s, br, tr, trio.0, trio.1, trio.2, k3, t, &sp);
+                }
                 if inf.is_none() && !a2_code() {
                     a2_write(c, t, k3);
                 }
@@ -4317,6 +4458,39 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
         }
         resize(c, tr, nk - o);
         resize(c, br, bw(nk) - o);
+        if fused4 {
+            assert!(letter.is_empty() && nk == n0);
+            let before = c.expected_total();
+            let q0 = pmark(c);
+            y28_key(t * 4);
+            let (s0, s1) = r123_f4_start(c, br, tr);
+            y28_key(usize::MAX);
+            pacc(c, &format!("fwd{fk}.rail_forced"), q0);
+            eprintln!("{} {t} {:.3}", if fused4_early { "R134_F4E_FWD_A" } else if fused4_div { "R134_F4D_FWD_A" } else { "R123_F4_FWD_A" }, c.expected_total() - before);
+            // divide: forced move 1's payload cell. It reads only s0 and the payload registers, so it commutes with
+            // the paused rail state. The target sits in the fused mid-state (n0 - 3 wires, one below the stock
+            // trimmed width), so LF_TRIM's resize is not applied; the source is already at bw(n0).
+            if fused4_div {
+                let q0 = pmark(c);
+                if let Some(p) = pay.as_deref_mut().filter(|_| !y15f) {
+                    let (pt, ps) = (p[ti].clone(), p[si].clone());
+                    let pads = lr_pad_c(c, 2 * o);
+                    let pr = tie_pred(c, t, s0, *tr.last().unwrap(), *br.last().unwrap());
+                    let y16_m = y16_mark(c, t, 0, 0);
+                    cells::with_tie(pr, || cells::with_cmp_shift(cmp_shift_at(t), || cells::add_halve(c, s0, &ps, &pt, fold, proxy)));
+                    y16_note(c, &mut y16_ops, "cell", y16_m);
+                    tie_unpred(c, pr, s0, *tr.last().unwrap(), *br.last().unwrap());
+                    lr_unpad(c, pads);
+                }
+                pacc(c, &format!("fwd{fk}.pay_cell"), q0);
+                if pay.is_some() {
+                    pacc(c, &format!("pc.fwd.t{t:03}"), q0);
+                }
+            }
+            letter.push(s0);
+            fused4_s1 = Some(s1);
+            continue;
+        }
         let s = c.alloc_qubit();
         pp_sign_into1(c, tr[1 - o], br[1 - o], s);
         let q0 = pmark(c);
@@ -4576,6 +4750,91 @@ fn fwd_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
     resize(c, br, wn - o);
 }
 
+/// Undo tail B with the original YP8 choice-letter measurement. T2's least stored
+/// bit is S3; the shortened ladder acts only on the rest of the register.
+fn r123_f4_reverse_b(
+    c: &mut Builder, t: &[QubitId], b: &[QubitId], s1: QubitId, tick: usize,
+    m: crate::circuit::BitId, spent: &Lin,
+) {
+    let upper = &t[1..];
+    let source = &b[2..]; // B3, B4, ... (B0 is implicit)
+    let cin = b[1]; // host q = B2 XOR s1 during the addition
+    let reserve = yp8_reserve_a(t.len(), b.len(), tick, false);
+    let room = cells::cap().saturating_sub(c.active_qubits() as usize);
+    let split = upper.len() > 3 && upper.len() - 1 + reserve > room;
+    // R134 divide: a kept tail-B boundary carry (key t*4+1) must get its Z on one whole, unconditioned carry sweep
+    // (as the stock yp8_double_sub_forced_erase_a requires); the room-short two-outcome branch cannot carry it
+    assert!(!(split && y28_pending()), "R134 fusediv: tick {tick}: kept tail-B carry on a room-short reverse");
+    let h = w1_anchor(tick).saturating_sub(w1_kt(tick));
+    // The original guarded split keeps k=emax+1 positions and its window starts
+    // at h-1. T2 bit 1 (S3) is now outside the ladder, so translate both by one.
+    let low = h.checked_sub(2).map(|lo| (a2_emax(tick), lo));
+
+    c.cx(s1, cin);
+    c.cx_all(s1, source);
+    c.x_all(upper);
+    if split {
+        let other = c.alloc_bit();
+        c.bit_store1(other);
+        c.bit_xor_into(other, m);
+        c.push_condition(other);
+        rail_add(c, source, upper, Some(cin));
+        c.pop_condition();
+        c.free_bit(other);
+        c.push_condition(m);
+    }
+    rail_add_mid(c, source, upper, cin, reserve, false, low, &mut |c, _, _, carry| {
+        let ct = carry.last().copied().flatten().expect("fused4 reverse top carry");
+        let mark = pmark(c);
+        if !split { c.push_condition(m); }
+        c.x_all(upper);
+        c.cx_all(s1, source);
+        c.cx(s1, cin);
+        yp8_logic_a(c, t, b, s1, ct, tick, spent, None);
+        c.cx(s1, cin);
+        c.cx_all(s1, source);
+        c.x_all(upper);
+        if !split { c.pop_condition(); }
+        pacc(c, "yp8.rev_logic", mark);
+    });
+    if split { c.pop_condition(); }
+    c.x_all(upper);
+    c.cx_all(s1, source);
+    c.cx(s1, cin);
+}
+
+/// Undo tail A on its original width and return the hosted letters to the rail.
+/// The forward pair erased its two low-block temporaries before it ran tail B.
+fn r123_f4_reverse_a(c: &mut Builder, t: &mut Vec<QubitId>, b: &[QubitId], s0: QubitId, s1: QubitId) {
+    let (b1, b2, b3) = (b[0], b[1], b[2]);
+    let t3 = t[0]; // S3 until the low-block output is undone
+    let g0_left = Lin::of(&[s0, s1, b1, b2]);
+    let g0_right = Lin::of(&[b1, b2]);
+    let g0 = lin_and(c, &g0_left, &g0_right);
+    let g1_left = Lin::of(&[b2, b3, g0]);
+    let p = lin_and(c, &g1_left, &Lin::of(&[s0, t3, b3]));
+    let offset = Lin::of(&[s0, b2, g0]);
+    lin_xor_into(c, &offset, p);
+
+    let upper = &t[1..];
+    let source = &b[3..]; // B4, B5, ...
+    c.cx_all(s0, source);
+    c.x_all(upper);
+    rail_add(c, source, upper, Some(p));
+    c.x_all(upper);
+    c.cx_all(s0, source);
+
+    lin_xor_into(c, &offset, p);
+    lin_xor_into(c, &Lin::of(&[b2, b3, g0]), t3);
+    // t3 again holds the input bit, so the original forward g1 operands are live.
+    lin_and_erase(c, p, &g1_left, &Lin::of(&[s0, t3, b2, g0]));
+    lin_and_erase(c, g0, &g0_left, &g0_right);
+    c.cx(b1, s0);
+    c.cx(b2, s1);
+    t.insert(0, s1);
+    t.insert(0, s0);
+}
+
 /// Exact inverse of [`fwd_tick_fast`].
 fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut [Vec<QubitId>; 2]>) {
     let st = steps();
@@ -4815,7 +5074,48 @@ fn rev_tick_fast(c: &mut Builder, wk: &mut Walk, t: usize, mut pay: Option<&mut 
         t0_m_off(c, m);
     }
     pacc(c, &format!("rev{fk}.choice_erase"), q0);
-    for (s, nk) in [(s1, n1), (s0, n0)].into_iter().skip(2 - nf) {
+    let fused4_early = r134_f4_early(t);
+    let fused4_div = r134_f4_div_enabled(t) || (fused4_early && Q62_WALK.with(|w| w.get() == Some(false)));
+    let fused4 = r123_f4_enabled(t) || fused4_div || fused4_early || r134_f4_mul_tail(t);
+    if r134_f4_mul_tail(t) {
+        assert!(pay.is_none(), "R134 multiply tail: the N2 reverse is rails-only");
+    }
+    if fused4 {
+        assert!(lr && nf == 2 && a2_tick(t) && (n1 + 1 == n0 || (fused4_early && n1 == n0)));
+        assert_eq!(y17_late, [false, false], "fused4 cutoff excludes late cells");
+        if fused4_div {
+            // the divide's reverse rail pass: no payload, Y28_USE on (kept carries are fetched by step key)
+            assert!(pay.is_none() && !Y28_KEEP.with(|v| v.get()));
+        } else {
+            assert!(!Y28_USE.with(|v| v.get()) && !Y28_KEEP.with(|v| v.get()));
+        }
+        let (tag_b, tag_a) = if fused4_early { ("R134_F4E_REV_B", "R134_F4E_REV_A") } else if fused4_div { ("R134_F4D_REV_B", "R134_F4D_REV_A") } else { ("R123_F4_REV_B", "R123_F4_REV_A") };
+        let m = yp8_m.expect("fused4 requires the YP8 choice measurement");
+        resize(c, tr, n1 - 2);
+        resize(c, br, bw(n1) - 1);
+        let q0 = pmark(c);
+        let spent = a2_spent(t);
+        let before = c.expected_total();
+        y28_key(t * 4 + 1);
+        r123_f4_reverse_b(c, tr, br, s1, t, m, &spent);
+        y28_key(usize::MAX);
+        c.free_bit(m);
+        pacc(c, &format!("rev{fk}.yp8_forced"), q0);
+        eprintln!("{tag_b} {t} {:.3}", c.expected_total() - before);
+        let q0 = pmark(c);
+        // early widening: drop T1's sign-copy top wire (no-op when n0 = n1 + 1)
+        resize(c, tr, n0 - 3);
+        resize(c, br, bw(n0) - 1);
+        let before = c.expected_total();
+        y28_key(t * 4);
+        r123_f4_reverse_a(c, tr, br, s0, s1);
+        y28_key(usize::MAX);
+        assert_eq!(tr.len(), n0 - 1);
+        pacc(c, &format!("rev{fk}.rail_forced"), q0);
+        eprintln!("{tag_a} {t} {:.3}", c.expected_total() - before);
+    }
+    let stock_rows = if fused4 { 0 } else { nf };
+    for (s, nk) in [(s1, n1), (s0, n0)].into_iter().skip(2 - stock_rows) {
         resize(c, tr, nk - 1 - o);
         resize(c, br, bw(nk) - o);
         // y17: a late cell (it touches the payload registers and reads only its letter, which is still live here)
@@ -6895,6 +7195,7 @@ pub(crate) fn divide_dbg(c: &mut Builder, y: &[QubitId], x: &[QubitId], keep_p1:
     pacc(c, "div.seed", q0);
     let mut wk = Walk { r, tape: Vec::new() };
     let ahead = lf_reorder(false);
+    a2_q62_walk(false);
     let t0f = t0_free(false);
     T0_PLAIN.with(|p| p.set(t0f));
     for t in 0..ahead {
@@ -7095,6 +7396,7 @@ pub fn multiply(c: &mut Builder, y: &[QubitId], x: &[QubitId]) {
     T0_PLAIN.with(|p| p.set(t0f));
     let loan = parity_loan() && !t0f;
     let ahead = lf_reorder(true);
+    a2_q62_walk(true);
     let mut loan_pad = None;
     let mut t0_bits = None;
     for t in 0..rounds() {
