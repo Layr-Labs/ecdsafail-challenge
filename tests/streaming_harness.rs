@@ -964,6 +964,27 @@ fn streaming_eval_does_not_deadlock_on_read_error_or_worker_panic() {
             .expect("fanout_chunks deadlocked after worker panic"),
         "fanout_chunks must return Err on worker panic"
     );
+
+    // 3. Mid-stream truncated zstd body in Pass 2 must return Err promptly (no hang)
+    let p2_path = dir.path().join("pass2_trunc.bin");
+    let ops4 = build_synthetic_4reg_circuit();
+    let mut w2 = OpsWriter::create(&p2_path).unwrap();
+    w2.extend(ops4).unwrap();
+    w2.finish().unwrap();
+    let (summary, mut xof, _f) = pass1_validate_and_hash(&p2_path).unwrap();
+    let points = generate_test_points(&mut xof, 128, 2);
+    let mut p2_bytes = fs::read(&p2_path).unwrap();
+    p2_bytes.truncate(p2_bytes.len() / 2);
+    fs::write(&p2_path, &p2_bytes).unwrap();
+    let (tx3, rx3) = mpsc::channel();
+    std::thread::spawn(move || {
+        let f = File::open(&p2_path).unwrap();
+        let _ = tx3.send(run_tests_streaming(f, &summary, &points, &mut xof, 16, 2, 2).is_err());
+    });
+    assert!(
+        rx3.recv_timeout(Duration::from_secs(5)).expect("Pass 2 hung on truncated file"),
+        "Pass 2 must return Err"
+    );
 }
 
 #[test]
