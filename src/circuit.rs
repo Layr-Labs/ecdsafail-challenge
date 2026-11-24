@@ -125,16 +125,25 @@ impl Op {
         }
     }
 
-    pub fn validate(&self) {
+    pub fn try_validate(&self) -> Result<(), String> {
         // Check for qubit aliasing.
         if self.q_target == self.q_control1 && self.q_target != NO_QUBIT {
-            panic!("kind={:?} and q_target==q_control1==q{}", self.kind, self.q_target.0);
+            return Err(format!(
+                "kind={:?} and q_target==q_control1==q{}",
+                self.kind, self.q_target.0
+            ));
         }
         if self.q_target == self.q_control2 && self.q_target != NO_QUBIT {
-            panic!("kind={:?} and q_target==q_control2==q{}", self.kind, self.q_target.0);
+            return Err(format!(
+                "kind={:?} and q_target==q_control2==q{}",
+                self.kind, self.q_target.0
+            ));
         }
         if self.q_control1 == self.q_control2 && self.q_control1 != NO_QUBIT {
-            panic!("kind={:?} and q_control1==q_control2==q{}", self.kind, self.q_control1.0);
+            return Err(format!(
+                "kind={:?} and q_control1==q_control2==q{}",
+                self.kind, self.q_control1.0
+            ));
         }
 
         const BANNED: u8 = 0;
@@ -149,13 +158,16 @@ impl Op {
         let mut c_condition_flag = BANNED;
 
         match self.kind {
-            OperationType::DebugPrint => return,
+            OperationType::DebugPrint => return Ok(()),
             OperationType::Register => {
                 r_target_flag = REQUIRED;
             }
             OperationType::AppendToRegister => {
                 if (self.q_target == NO_QUBIT) == (self.c_target == NO_BIT) {
-                    panic!("kind={:?} needs exactly one qubit target or bit target", self.kind);
+                    return Err(format!(
+                        "kind={:?} needs exactly one qubit target or bit target",
+                        self.kind
+                    ));
                 }
                 c_target_flag = ALLOWED;
                 q_target_flag = ALLOWED;
@@ -195,39 +207,47 @@ impl Op {
         }
 
         if c_condition_flag == REQUIRED && self.c_condition == NO_BIT {
-            panic!("kind={:?} but c_condition == NO_BIT", self.kind);
+            return Err(format!("kind={:?} but c_condition == NO_BIT", self.kind));
         } else if c_condition_flag == BANNED && self.c_condition != NO_BIT {
-            panic!("kind={:?} but c_condition != NO_BIT", self.kind);
+            return Err(format!("kind={:?} but c_condition != NO_BIT", self.kind));
         }
 
         if q_target_flag == REQUIRED && self.q_target == NO_QUBIT {
-            panic!("kind={:?} but q_target == NO_QUBIT", self.kind);
+            return Err(format!("kind={:?} but q_target == NO_QUBIT", self.kind));
         } else if q_target_flag == BANNED && self.q_target != NO_QUBIT {
-            panic!("kind={:?} but q_target != NO_QUBIT", self.kind);
+            return Err(format!("kind={:?} but q_target != NO_QUBIT", self.kind));
         }
 
         if q_control1_flag == REQUIRED && self.q_control1 == NO_QUBIT {
-            panic!("kind={:?} but q_control1 == NO_QUBIT", self.kind);
+            return Err(format!("kind={:?} but q_control1 == NO_QUBIT", self.kind));
         } else if q_control1_flag == BANNED && self.q_control1 != NO_QUBIT {
-            panic!("kind={:?} but q_control1 != NO_QUBIT", self.kind);
+            return Err(format!("kind={:?} but q_control1 != NO_QUBIT", self.kind));
         }
 
         if q_control2_flag == REQUIRED && self.q_control2 == NO_QUBIT {
-            panic!("kind={:?} but q_control2 == NO_QUBIT", self.kind);
+            return Err(format!("kind={:?} but q_control2 == NO_QUBIT", self.kind));
         } else if q_control2_flag == BANNED && self.q_control2 != NO_QUBIT {
-            panic!("kind={:?} but q_control2 != NO_QUBIT", self.kind);
+            return Err(format!("kind={:?} but q_control2 != NO_QUBIT", self.kind));
         }
 
         if c_target_flag == REQUIRED && self.c_target == NO_BIT {
-            panic!("kind={:?} but c_target == NO_BIT", self.kind);
+            return Err(format!("kind={:?} but c_target == NO_BIT", self.kind));
         } else if c_target_flag == BANNED && self.c_target != NO_BIT {
-            panic!("kind={:?} but c_target != NO_BIT", self.kind);
+            return Err(format!("kind={:?} but c_target != NO_BIT", self.kind));
         }
 
         if r_target_flag == REQUIRED && self.r_target == NO_REG {
-            panic!("kind={:?} but r_target == NO_REG", self.kind);
+            return Err(format!("kind={:?} but r_target == NO_REG", self.kind));
         } else if r_target_flag == BANNED && self.r_target != NO_REG {
-            panic!("kind={:?} but r_target != NO_REG", self.kind);
+            return Err(format!("kind={:?} but r_target != NO_REG", self.kind));
+        }
+
+        Ok(())
+    }
+
+    pub fn validate(&self) {
+        if let Err(msg) = self.try_validate() {
+            panic!("{msg}");
         }
     }
 
@@ -344,6 +364,85 @@ impl Circuit {
 
 
 
+
+/// Incremental op analyzer used by the streaming evaluator. Caps register count
+/// to prevent OOM on forged register indices without altering legacy `analyze_ops`.
+pub struct OpsAnalyzer {
+    registers: Vec<Vec<QubitOrBit>>,
+    num_qubits: u64,
+    num_bits: u64,
+    num_registers: u64,
+}
+
+impl Default for OpsAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OpsAnalyzer {
+    pub const MAX_REGISTERS: u64 = 1024;
+
+    pub fn new() -> Self {
+        Self {
+            registers: Vec::new(),
+            num_qubits: 0,
+            num_bits: 0,
+            num_registers: 0,
+        }
+    }
+
+    fn bump_max(cur: &mut u64, raw: u64, sentinel: u64, field: &str) -> Result<(), String> {
+        if raw != sentinel {
+            let next = raw
+                .checked_add(1)
+                .ok_or_else(|| format!("{field} overflows u64"))?;
+            *cur = (*cur).max(next);
+        }
+        Ok(())
+    }
+
+    pub fn observe(&mut self, native_op: &Op) -> Result<(), String> {
+        Self::bump_max(&mut self.num_qubits, native_op.q_control2.0, NO_QUBIT.0, "q_control2")?;
+        Self::bump_max(&mut self.num_qubits, native_op.q_control1.0, NO_QUBIT.0, "q_control1")?;
+        Self::bump_max(&mut self.num_qubits, native_op.q_target.0, NO_QUBIT.0, "q_target")?;
+        Self::bump_max(&mut self.num_bits, native_op.c_target.0, NO_BIT.0, "c_target")?;
+        Self::bump_max(&mut self.num_bits, native_op.c_condition.0, NO_BIT.0, "c_condition")?;
+        if native_op.r_target != NO_REG {
+            if native_op.r_target.0 >= Self::MAX_REGISTERS {
+                return Err(format!(
+                    "r_target {} exceeds cap {}",
+                    native_op.r_target.0,
+                    Self::MAX_REGISTERS
+                ));
+            }
+            Self::bump_max(&mut self.num_registers, native_op.r_target.0, NO_REG.0, "r_target")?;
+            let idx = native_op.r_target.0 as usize;
+            if self.registers.len() <= idx {
+                self.registers.resize_with(idx + 1, Vec::new);
+            }
+        }
+        if native_op.kind == OperationType::AppendToRegister {
+            let idx = native_op.r_target.0 as usize;
+            if native_op.q_target != NO_QUBIT {
+                self.registers[idx].push(QubitOrBit::Qubit(native_op.q_target));
+            }
+            if native_op.c_target != NO_BIT {
+                self.registers[idx].push(QubitOrBit::Bit(native_op.c_target));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn finish(self) -> (u64, u64, u64, Vec<Vec<QubitOrBit>>) {
+        (
+            self.num_qubits,
+            self.num_bits,
+            self.num_registers,
+            self.registers,
+        )
+    }
+}
 
 pub fn analyze_ops<'b>(ops: impl Iterator<Item = &'b Op>) -> (u64, u64, u64, Vec<Vec<QubitOrBit>>) {
     let mut registers: Vec<Vec<QubitOrBit>> = Vec::new();

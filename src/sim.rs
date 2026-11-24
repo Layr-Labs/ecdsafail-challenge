@@ -10,6 +10,28 @@ pub struct SimStats {
     pub toffoli_gates: u64,
 }
 
+/// Execution state carried across chunks of an op stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SimExecState {
+    condition_stack: Vec<u64>,
+    current_base_condition: u64,
+}
+
+impl Default for SimExecState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SimExecState {
+    pub fn new() -> Self {
+        Self {
+            condition_stack: Vec::new(),
+            current_base_condition: u64::MAX,
+        }
+    }
+}
+
 
 
 pub struct Simulator<'a, R: sha3::digest::XofReader> {
@@ -69,9 +91,13 @@ impl<'a, R: sha3::digest::XofReader> Simulator<'a, R> {
     }
 
     pub fn apply_iter<'b>(&mut self, ops: impl Iterator<Item = &'b Op>) {
+        let mut state = SimExecState::new();
+        self.apply_chunk(&mut state, ops);
+    }
 
-        let mut condition_stack = Vec::new();
-        let mut current_base_condition = u64::MAX;
+    pub fn apply_chunk<'b>(&mut self, state: &mut SimExecState, ops: impl Iterator<Item = &'b Op>) {
+        let condition_stack = &mut state.condition_stack;
+        let mut current_base_condition = state.current_base_condition;
 
         for op in ops {
             let mut cond = current_base_condition;
@@ -177,6 +203,7 @@ impl<'a, R: sha3::digest::XofReader> Simulator<'a, R> {
             }
         }
 
+        state.current_base_condition = current_base_condition;
     }
 
     /// Writes an integer into the qubits/bits of a register.
