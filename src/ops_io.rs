@@ -410,3 +410,75 @@ impl OpsReader {
         Ok(hr.into_inner_and_digest())
     }
 }
+
+/// Remove any pre-existing `ops.bin` and `ops.bin.tmp` before invoking
+/// `point_add::build()`. Stateless (does not touch `STREAM_STARTED`).
+pub fn clean_stale_ops(path: &Path) -> io::Result<()> {
+    for target in [path.to_path_buf(), tmp_path_for(path)] {
+        match fs::remove_file(&target) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// Finalize `build_circuit`'s output after `point_add::build()` returns.
+///
+/// - Case A (`!ops.is_empty()`, no file): write `ops` via `OpsWriter`.
+/// - Case B (`ops.is_empty()`, file exists): validate header of streamed file
+///   and clean any unexpected leftover `.bin.tmp`.
+/// - Case C (`ops.is_empty()`, no file): if `stream_started` or `.bin.tmp`
+///   exists, fail loudly (forgotten `OpsWriter::finish()`); otherwise write a
+///   0-op `ops.bin` (legacy behavior).
+/// - Case D (`!ops.is_empty()`, file exists): remove file and fail closed.
+pub fn finalize_build_output(
+    ops: &[Op],
+    path: &Path,
+    stream_started: bool,
+) -> Result<WriteSummary, String> {
+    let exists = path.exists();
+    let tmp = tmp_path_for(path);
+
+    match (ops.is_empty(), exists) {
+        (false, false) => {
+            let mut writer =
+                OpsWriter::create(path).map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+            for op in ops {
+                writer
+                    .push(op)
+                    .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+            }
+            writer
+                .finish()
+                .map_err(|e| format!("failed to write {}: {e}", path.display()))
+        }
+        (true, true) => {
+            let _ = fs::remove_file(&tmp);
+            let count = read_header(path)?;
+            Ok(WriteSummary::from_file_and_count(path, count))
+        }
+        (true, false) => {
+            let tmp_exists = tmp.exists();
+            if stream_started || tmp_exists {
+                let _ = fs::remove_file(&tmp);
+                return Err(format!(
+                    "OpsWriter was started without calling finish() before returning; {} was not finalized",
+                    path.display()
+                ));
+            }
+            OpsWriter::create(path)
+                .and_then(|w| w.finish())
+                .map_err(|e| format!("failed to write {}: {e}", path.display()))
+        }
+        (false, true) => {
+            let _ = fs::remove_file(path);
+            let _ = fs::remove_file(&tmp);
+            Err(format!(
+                "point_add::build() both wrote {} and returned non-empty Vec<Op>; return Vec::new() when streaming",
+                path.display()
+            ))
+        }
+    }
+}

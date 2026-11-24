@@ -3,8 +3,8 @@ use quantum_ecc::circuit::{
     NO_QUBIT, NO_REG,
 };
 use quantum_ecc::ops_io::{
-    reset_stream_started, take_stream_started, tmp_path_for, OpsReader, OpsWriter, DEFAULT_ZSTD_LEVEL,
-    MAGIC, MAX_OPS, OP_BYTES,
+    clean_stale_ops, finalize_build_output, reset_stream_started, take_stream_started,
+    tmp_path_for, OpsReader, OpsWriter, DEFAULT_ZSTD_LEVEL, MAGIC, MAX_OPS, OP_BYTES,
 };
 use quantum_ecc::sim::{SimExecState, Simulator};
 use sha3::{
@@ -527,4 +527,99 @@ fn ops_reader_rejects_malformed_inputs() {
     let p_trail = write_raw("trailing.bin", 5, &valid6);
     let mut r = OpsReader::open(&p_trail).unwrap();
     assert!(r.read_chunk(&mut buf, 16, true).is_err());
+}
+
+#[test]
+fn finalize_build_output_legacy_nonempty() {
+    let dir = TempDir::new("finalize-case-a");
+    let path = dir.path().join("out.bin");
+    let ops = sample_valid_ops(25);
+    let summary = finalize_build_output(&ops, &path, false).expect("Case A succeeds");
+    assert_eq!(summary.count, 25);
+    assert!(path.exists());
+    let mut r = OpsReader::open(&path).unwrap();
+    let mut buf = Vec::new();
+    assert_eq!(r.read_chunk(&mut buf, 64, true).unwrap(), 25);
+    assert_eq!(buf, ops);
+}
+
+#[test]
+fn finalize_build_output_streamed_empty_vec_cleans_leftover_tmp() {
+    let dir = TempDir::new("finalize-case-b");
+    let path = dir.path().join("out.bin");
+    let ops = sample_valid_ops(30);
+    let mut w = OpsWriter::create(&path).unwrap();
+    w.extend(ops).unwrap();
+    w.finish().unwrap();
+
+    // Plant an unexpected leftover tmp file; Case B must clean it.
+    let tmp = tmp_path_for(&path);
+    fs::write(&tmp, b"stale tmp").unwrap();
+    assert!(tmp.exists());
+
+    let summary = finalize_build_output(&[], &path, true).expect("Case B succeeds");
+    assert_eq!(summary.count, 30);
+    assert!(path.exists());
+    assert!(!tmp.exists(), "Case B must clean leftover .bin.tmp");
+}
+
+#[test]
+fn finalize_build_output_empty_vec_no_stream_writes_zero_ops() {
+    let dir = TempDir::new("finalize-case-c-empty");
+    let path = dir.path().join("out.bin");
+    let summary = finalize_build_output(&[], &path, false).expect("Case C empty succeeds");
+    assert_eq!(summary.count, 0);
+    assert!(path.exists());
+    let r = OpsReader::open(&path).unwrap();
+    assert_eq!(r.total_ops(), 0);
+}
+
+#[test]
+fn finalize_build_output_forgotten_finish_after_drop_fails_loudly() {
+    let dir = TempDir::new("finalize-case-c-dropped");
+    let path = dir.path().join("out.bin");
+    // Simulates OpsWriter dropped without finish(): Drop removed .bin.tmp, stream_started=true.
+    let err = finalize_build_output(&[], &path, true).expect_err("must fail loudly");
+    assert!(err.contains("finish()"), "unexpected error: {err}");
+    assert!(!path.exists());
+}
+
+#[test]
+fn finalize_build_output_leftover_tmp_fails_loudly() {
+    let dir = TempDir::new("finalize-case-c-tmp");
+    let path = dir.path().join("out.bin");
+    let tmp = tmp_path_for(&path);
+    fs::write(&tmp, b"partial").unwrap();
+    let err = finalize_build_output(&[], &path, false).expect_err("must fail on leftover tmp");
+    assert!(err.contains("finish()"), "unexpected error: {err}");
+    assert!(!path.exists());
+    assert!(!tmp.exists(), "must clean up leftover tmp on error");
+}
+
+#[test]
+fn finalize_build_output_conflict_deletes_file_and_errors() {
+    let dir = TempDir::new("finalize-case-d");
+    let path = dir.path().join("out.bin");
+    let ops = sample_valid_ops(12);
+    let mut w = OpsWriter::create(&path).unwrap();
+    w.extend(ops.iter().copied()).unwrap();
+    w.finish().unwrap();
+
+    let err = finalize_build_output(&ops, &path, true).expect_err("Case D conflict must fail");
+    assert!(err.contains("both wrote"), "unexpected error: {err}");
+    assert!(!path.exists(), "Case D must delete ops file to fail closed");
+}
+
+#[test]
+fn clean_stale_ops_removes_old_ops_and_tmp() {
+    let dir = TempDir::new("clean-stale");
+    let path = dir.path().join("out.bin");
+    let tmp = tmp_path_for(&path);
+    fs::write(&path, b"old ops").unwrap();
+    fs::write(&tmp, b"old tmp").unwrap();
+    clean_stale_ops(&path).expect("clean stale ops");
+    assert!(!path.exists());
+    assert!(!tmp.exists());
+    // Calling again when neither exists must also succeed.
+    clean_stale_ops(&path).expect("clean stale ops idempotent");
 }
