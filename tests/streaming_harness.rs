@@ -2,11 +2,111 @@ use quantum_ecc::circuit::{
     analyze_ops, BitId, Op, OperationType, OpsAnalyzer, QubitId, QubitOrBit, RegisterId, NO_BIT,
     NO_QUBIT, NO_REG,
 };
+use quantum_ecc::ops_io::{
+    reset_stream_started, take_stream_started, tmp_path_for, OpsReader, OpsWriter, DEFAULT_ZSTD_LEVEL,
+    MAGIC, MAX_OPS, OP_BYTES,
+};
 use quantum_ecc::sim::{SimExecState, Simulator};
 use sha3::{
     digest::{ExtendableOutput, Update},
     Shake256,
 };
+use std::fs::{self, File};
+use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+
+static STREAM_FLAG_LOCK: Mutex<()> = Mutex::new(());
+static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    fn new(prefix: &str) -> Self {
+        let id = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let path = std::env::temp_dir().join(format!("ecdsafail-test-{prefix}-{pid}-{id}"));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("create temp dir");
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn encode_op_record(op: &Op) -> [u8; OP_BYTES] {
+    let mut rec = [0u8; OP_BYTES];
+    rec[0..4].copy_from_slice(&(op.kind as u32).to_le_bytes());
+    rec[8..16].copy_from_slice(&op.q_control2.0.to_le_bytes());
+    rec[16..24].copy_from_slice(&op.q_control1.0.to_le_bytes());
+    rec[24..32].copy_from_slice(&op.q_target.0.to_le_bytes());
+    rec[32..40].copy_from_slice(&op.c_target.0.to_le_bytes());
+    rec[40..48].copy_from_slice(&op.c_condition.0.to_le_bytes());
+    rec[48..56].copy_from_slice(&op.r_target.0.to_le_bytes());
+    rec
+}
+
+fn write_legacy_ref(ops: &[Op], path: &Path) {
+    let mut w = BufWriter::new(File::create(path).expect("create legacy ref"));
+    w.write_all(MAGIC).unwrap();
+    w.write_all(&(ops.len() as u64).to_le_bytes()).unwrap();
+    let mut enc = zstd::stream::write::Encoder::new(w, DEFAULT_ZSTD_LEVEL).unwrap();
+    for op in ops {
+        enc.write_all(&encode_op_record(op)).unwrap();
+    }
+    let mut w = enc.finish().unwrap();
+    w.flush().unwrap();
+}
+
+fn sample_valid_ops(count: usize) -> Vec<Op> {
+    let mut ops = Vec::with_capacity(count);
+    for i in 0..count {
+        let op = match i % 5 {
+            0 => {
+                let mut o = mk_op(OperationType::X);
+                o.q_target = QubitId((i % 16) as u64);
+                o
+            }
+            1 => {
+                let mut o = mk_op(OperationType::CX);
+                o.q_control1 = QubitId((i % 8) as u64);
+                o.q_target = QubitId(8 + (i % 8) as u64);
+                o
+            }
+            2 => {
+                let mut o = mk_op(OperationType::CCX);
+                o.q_control2 = QubitId(0);
+                o.q_control1 = QubitId(1);
+                o.q_target = QubitId(2 + (i % 10) as u64);
+                o
+            }
+            3 => {
+                let mut o = mk_op(OperationType::Hmr);
+                o.q_target = QubitId((i % 16) as u64);
+                o.c_target = BitId((i % 8) as u64);
+                o
+            }
+            _ => {
+                let mut o = mk_op(OperationType::R);
+                o.q_target = QubitId((i % 16) as u64);
+                o
+            }
+        };
+        ops.push(op);
+    }
+    ops
+}
 
 fn mk_op(kind: OperationType) -> Op {
     let mut op = Op::empty();
@@ -232,4 +332,199 @@ fn apply_chunk_preserves_nested_condition_stack_across_arbitrary_splits() {
         assert_eq!(sim_c.phase, sim_ref.phase, "chunk_size={chunk_size}");
         assert_eq!(sim_c.stats, sim_ref.stats, "chunk_size={chunk_size}");
     }
+}
+
+#[test]
+fn ops_writer_byte_identical_to_legacy_framing() {
+    let dir = TempDir::new("writer-parity");
+    let ops = sample_valid_ops(512);
+    let legacy_path = dir.path().join("legacy.bin");
+    let stream_path = dir.path().join("stream.bin");
+
+    write_legacy_ref(&ops, &legacy_path);
+
+    let mut w = OpsWriter::create(&stream_path).expect("create OpsWriter");
+    for op in &ops {
+        w.push(op).expect("push op");
+    }
+    let summary = w.finish().expect("finish OpsWriter");
+    assert_eq!(summary.count, ops.len() as u64);
+
+    let legacy_bytes = fs::read(&legacy_path).unwrap();
+    let stream_bytes = fs::read(&stream_path).unwrap();
+    assert_eq!(stream_bytes, legacy_bytes);
+    assert_eq!(summary.on_disk_bytes, stream_bytes.len() as u64);
+}
+
+#[test]
+fn ops_writer_enforces_max_ops_via_injectable_limit() {
+    let dir = TempDir::new("writer-cap");
+    let path = dir.path().join("capped.bin");
+    let ops = sample_valid_ops(6);
+
+    let mut w = OpsWriter::create_with_max_ops(&path, 5).expect("create capped writer");
+    for op in &ops[..5] {
+        w.push(op).expect("push within cap");
+    }
+    assert_eq!(w.count(), 5);
+    assert!(w.push(&ops[5]).is_err());
+    assert_eq!(w.count(), 5);
+    let summary = w.finish().expect("finish after cap hit");
+    assert_eq!(summary.count, 5);
+}
+
+#[test]
+fn ops_writer_drop_without_finish_removes_tmp_and_sets_stream_started_only_for_ops_bin() {
+    let _guard = STREAM_FLAG_LOCK.lock().unwrap();
+    let dir = TempDir::new("writer-flag");
+    let ops = sample_valid_ops(10);
+
+    reset_stream_started();
+    let side_path = dir.path().join("side.bin");
+    {
+        let mut w = OpsWriter::create(&side_path).expect("create side writer");
+        for op in &ops {
+            w.push(op).unwrap();
+        }
+    }
+    assert!(!side_path.exists());
+    assert!(!tmp_path_for(&side_path).exists());
+    assert!(!take_stream_started(), "side file must not set STREAM_STARTED");
+
+    let ops_path = dir.path().join("ops.bin");
+    {
+        let mut w = OpsWriter::create(&ops_path).expect("create ops.bin writer");
+        for op in &ops {
+            w.push(op).unwrap();
+        }
+    }
+    assert!(!ops_path.exists());
+    assert!(!tmp_path_for(&ops_path).exists());
+    assert!(take_stream_started(), "ops.bin writer must set STREAM_STARTED");
+    assert!(!take_stream_started(), "take_stream_started clears the flag");
+}
+
+#[test]
+fn ops_reader_roundtrip_and_fd_rewind() {
+    let dir = TempDir::new("reader-roundtrip");
+    let path = dir.path().join("roundtrip.bin");
+    let ops = sample_valid_ops(1000);
+
+    let mut w = OpsWriter::create(&path).unwrap();
+    w.extend(ops.iter().copied()).unwrap();
+    w.finish().unwrap();
+
+    let mut file_and_digest = None;
+    for chunk_size in [1usize, 13, 256, 1000, 10_000] {
+        let mut reader = match file_and_digest.take() {
+            None => OpsReader::open(&path).expect("open reader"),
+            Some((f, _)) => OpsReader::from_file(f).expect("rewind reader"),
+        };
+        assert_eq!(reader.total_ops(), ops.len() as u64);
+        let mut read_back = Vec::new();
+        let mut buf = Vec::new();
+        loop {
+            let n = reader.read_chunk(&mut buf, chunk_size, true).expect("read chunk");
+            if n == 0 {
+                break;
+            }
+            read_back.extend_from_slice(&buf);
+        }
+        assert_eq!(read_back, ops, "chunk_size={chunk_size}");
+        let (f, digest) = reader.into_file_and_digest().expect("finalize digest");
+        if let Some((_, prev_digest)) = &file_and_digest {
+            assert_eq!(&digest, prev_digest);
+        }
+        file_and_digest = Some((f, digest));
+    }
+
+    // Also check exact-match digest across two independent passes and 0-op file
+    let (f, d1) = file_and_digest.unwrap();
+    let mut r2 = OpsReader::from_file(f).unwrap();
+    let mut buf = Vec::new();
+    let n = r2.read_chunk(&mut buf, ops.len(), true).unwrap();
+    assert_eq!(n, ops.len());
+    let (_, d2) = r2.into_file_and_digest().unwrap();
+    assert_eq!(d1, d2);
+
+    // 0-op stream
+    let empty_path = dir.path().join("empty.bin");
+    OpsWriter::create(&empty_path).unwrap().finish().unwrap();
+    let mut r_empty = OpsReader::open(&empty_path).unwrap();
+    assert_eq!(r_empty.total_ops(), 0);
+    assert_eq!(r_empty.read_chunk(&mut buf, 64, true).unwrap(), 0);
+    assert!(r_empty.into_file_and_digest().is_ok());
+}
+
+#[test]
+fn ops_reader_rejects_malformed_inputs() {
+    let dir = TempDir::new("reader-malformed");
+
+    // 1. Bad magic
+    let bad_magic = dir.path().join("bad_magic.bin");
+    fs::write(&bad_magic, b"BADMAGIC\x00\x00\x00\x00\x00\x00\x00\x00").unwrap();
+    assert!(OpsReader::open(&bad_magic).is_err());
+
+    // 2. Forged header count = MAX_OPS + 1
+    let too_many = dir.path().join("too_many.bin");
+    let mut hdr = Vec::new();
+    hdr.extend_from_slice(MAGIC);
+    hdr.extend_from_slice(&(MAX_OPS + 1).to_le_bytes());
+    fs::write(&too_many, &hdr).unwrap();
+    assert!(OpsReader::open(&too_many).is_err());
+
+    // Helper to write raw header + zstd-compressed raw records
+    let write_raw = |name: &str, claimed_n: u64, raw_recs: &[[u8; OP_BYTES]]| -> PathBuf {
+        let p = dir.path().join(name);
+        let mut w = BufWriter::new(File::create(&p).unwrap());
+        w.write_all(MAGIC).unwrap();
+        w.write_all(&claimed_n.to_le_bytes()).unwrap();
+        let mut enc = zstd::stream::write::Encoder::new(w, 1).unwrap();
+        for r in raw_recs {
+            enc.write_all(r).unwrap();
+        }
+        enc.finish().unwrap().flush().unwrap();
+        p
+    };
+
+    // 3. Invalid kind (18 and u32::MAX)
+    for bad_kind in [18u32, u32::MAX] {
+        let mut rec = [0u8; OP_BYTES];
+        rec[0..4].copy_from_slice(&bad_kind.to_le_bytes());
+        let p = write_raw(&format!("bad_kind_{bad_kind}.bin"), 1, &[rec]);
+        let mut r = OpsReader::open(&p).unwrap();
+        let mut buf = Vec::new();
+        assert!(r.read_chunk(&mut buf, 16, true).is_err());
+    }
+
+    // 4. Aliased CCX (q0 q0 q1)
+    let mut aliased = mk_op(OperationType::CCX);
+    aliased.q_control2 = QubitId(0);
+    aliased.q_control1 = QubitId(0);
+    aliased.q_target = QubitId(1);
+    let p_alias = write_raw("aliased.bin", 1, &[encode_op_record(&aliased)]);
+    let mut r = OpsReader::open(&p_alias).unwrap();
+    let mut buf = Vec::new();
+    assert!(r.read_chunk(&mut buf, 16, true).is_err());
+
+    // 5. Missing required operand: CCX with q_control2 == NO_QUBIT
+    let mut missing = mk_op(OperationType::CCX);
+    missing.q_control2 = NO_QUBIT;
+    missing.q_control1 = QubitId(0);
+    missing.q_target = QubitId(1);
+    let p_missing = write_raw("missing_op.bin", 1, &[encode_op_record(&missing)]);
+    let mut r = OpsReader::open(&p_missing).unwrap();
+    assert!(r.read_chunk(&mut buf, 16, true).is_err());
+
+    // 6. Truncated body (header claims 10, body has 5)
+    let valid5: Vec<[u8; OP_BYTES]> = sample_valid_ops(5).iter().map(encode_op_record).collect();
+    let p_trunc = write_raw("trunc.bin", 10, &valid5);
+    let mut r = OpsReader::open(&p_trunc).unwrap();
+    assert!(r.read_chunk(&mut buf, 16, true).is_err());
+
+    // 7. Trailing decompressed bytes (header claims 5, body has 6)
+    let valid6: Vec<[u8; OP_BYTES]> = sample_valid_ops(6).iter().map(encode_op_record).collect();
+    let p_trail = write_raw("trailing.bin", 5, &valid6);
+    let mut r = OpsReader::open(&p_trail).unwrap();
+    assert!(r.read_chunk(&mut buf, 16, true).is_err());
 }

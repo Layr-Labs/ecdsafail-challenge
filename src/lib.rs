@@ -23,6 +23,8 @@
 #[allow(dead_code)]
 pub mod circuit;
 #[allow(dead_code)]
+pub mod ops_io;
+#[allow(dead_code)]
 pub mod sim;
 #[allow(dead_code)]
 pub mod weierstrass_elliptic_curve;
