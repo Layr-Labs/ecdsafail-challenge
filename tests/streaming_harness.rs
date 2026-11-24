@@ -2,20 +2,25 @@ use quantum_ecc::circuit::{
     analyze_ops, BitId, Op, OperationType, OpsAnalyzer, QubitId, QubitOrBit, RegisterId, NO_BIT,
     NO_QUBIT, NO_REG,
 };
+use quantum_ecc::eval_stream::{
+    compute_wave_plan, fanout_chunks, generate_test_points, pass1_validate_and_hash,
+    run_tests_streaming, secp256k1, validate_registers, MAX_SIM_STATE_BYTES, MIN_SIM_STATE_BYTES,
+};
 use quantum_ecc::ops_io::{
     clean_stale_ops, finalize_build_output, reset_stream_started, take_stream_started,
     tmp_path_for, OpsReader, OpsWriter, DEFAULT_ZSTD_LEVEL, MAGIC, MAX_OPS, OP_BYTES,
 };
 use quantum_ecc::sim::{SimExecState, Simulator};
 use sha3::{
-    digest::{ExtendableOutput, Update},
+    digest::{ExtendableOutput, Update, XofReader},
     Shake256,
 };
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex};
+use std::time::Duration;
 
 static STREAM_FLAG_LOCK: Mutex<()> = Mutex::new(());
 static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -622,4 +627,487 @@ fn clean_stale_ops_removes_old_ops_and_tmp() {
     assert!(!tmp.exists());
     // Calling again when neither exists must also succeed.
     clean_stale_ops(&path).expect("clean stale ops idempotent");
+}
+
+fn build_synthetic_4reg_circuit() -> Vec<Op> {
+    let mut ops = Vec::new();
+    for r in 0..4u64 {
+        let mut reg = mk_op(OperationType::Register);
+        reg.r_target = RegisterId(r);
+        ops.push(reg);
+    }
+    for i in 0..256u64 {
+        let mut a0 = mk_op(OperationType::AppendToRegister);
+        a0.r_target = RegisterId(0);
+        a0.q_target = QubitId(i);
+        ops.push(a0);
+
+        let mut a1 = mk_op(OperationType::AppendToRegister);
+        a1.r_target = RegisterId(1);
+        a1.q_target = QubitId(256 + i);
+        ops.push(a1);
+
+        let mut a2 = mk_op(OperationType::AppendToRegister);
+        a2.r_target = RegisterId(2);
+        a2.c_target = BitId(i);
+        ops.push(a2);
+
+        let mut a3 = mk_op(OperationType::AppendToRegister);
+        a3.r_target = RegisterId(3);
+        a3.c_target = BitId(256 + i);
+        ops.push(a3);
+    }
+
+    // Add nested conditions, CCX, CX, CZ, X, Z, Hmr, R on ancillas & registers.
+    let anc0 = QubitId(512);
+    let anc1 = QubitId(513);
+    let scratch_b0 = BitId(512);
+    let scratch_b1 = BitId(513);
+
+    for step in 0..8u64 {
+        let mut p1 = mk_op(OperationType::PushCondition);
+        p1.c_condition = BitId(step);
+        ops.push(p1);
+
+        let mut x = mk_op(OperationType::X);
+        x.q_target = anc0;
+        ops.push(x);
+
+        let mut p2 = mk_op(OperationType::PushCondition);
+        p2.c_condition = BitId(256 + step);
+        ops.push(p2);
+
+        let mut ccx = mk_op(OperationType::CCX);
+        ccx.q_control2 = QubitId(step);
+        ccx.q_control1 = anc0;
+        ccx.q_target = anc1;
+        ops.push(ccx);
+
+        let mut cx = mk_op(OperationType::CX);
+        cx.q_control1 = anc1;
+        cx.q_target = QubitId(256 + step);
+        ops.push(cx);
+
+        let mut hmr = mk_op(OperationType::Hmr);
+        hmr.q_target = anc1;
+        hmr.c_target = scratch_b0;
+        ops.push(hmr);
+
+        let mut cz = mk_op(OperationType::CZ);
+        cz.q_control1 = QubitId(step);
+        cz.q_target = anc0;
+        cz.c_condition = scratch_b0;
+        ops.push(cz);
+
+        let mut r_op = mk_op(OperationType::R);
+        r_op.q_target = anc0;
+        ops.push(r_op);
+
+        let mut b_inv = mk_op(OperationType::BitInvert);
+        b_inv.c_target = scratch_b1;
+        ops.push(b_inv);
+
+        ops.push(mk_op(OperationType::PopCondition));
+        ops.push(mk_op(OperationType::PopCondition));
+    }
+
+    ops
+}
+
+fn ref_fiat_shamir(ops: &[Op]) -> sha3::Shake256Reader {
+    let mut hasher = Shake256::default();
+    hasher.update(b"quantum_ecc-fiat-shamir-v2");
+    hasher.update(&(ops.len() as u64).to_le_bytes());
+    for op in ops {
+        hasher.update(&[op.kind as u8]);
+        hasher.update(&op.q_control2.0.to_le_bytes());
+        hasher.update(&op.q_control1.0.to_le_bytes());
+        hasher.update(&op.q_target.0.to_le_bytes());
+        hasher.update(&op.c_target.0.to_le_bytes());
+        hasher.update(&op.c_condition.0.to_le_bytes());
+        hasher.update(&op.r_target.0.to_le_bytes());
+    }
+    hasher.finalize_xof()
+}
+
+fn ref_eval_sequential(ops: &[Op], target_shots: usize) -> quantum_ecc::eval_stream::SeedReport {
+    let (total_qubits, num_bits, _nr, layout_regs) = analyze_ops(ops.iter());
+    let mut xof = ref_fiat_shamir(ops);
+    let curve = secp256k1();
+
+    let mut targets = Vec::with_capacity(target_shots);
+    let mut offsets = Vec::with_capacity(target_shots);
+    let mut expected = Vec::with_capacity(target_shots);
+    for _ in 0..target_shots {
+        let mut rb = [[0u8; 32]; 2];
+        XofReader::read(&mut xof, &mut rb[0]);
+        XofReader::read(&mut xof, &mut rb[1]);
+        let k1 = alloy_primitives::U256::from_le_bytes(rb[0]);
+        let k2 = alloy_primitives::U256::from_le_bytes(rb[1]);
+        let t = curve.mul(curve.gx, curve.gy, k1);
+        let o = curve.mul(curve.gx, curve.gy, k2);
+        if t.0 == o.0
+            || (t.0.is_zero() && t.1.is_zero())
+            || (o.0.is_zero() && o.1.is_zero())
+        {
+            continue;
+        }
+        let e = curve.add(t.0, t.1, o.0, o.1);
+        targets.push(t);
+        offsets.push(o);
+        expected.push(e);
+    }
+    let n = targets.len();
+    let mut sim = Simulator::new(total_qubits as usize, num_bits as usize, &mut xof);
+    let mut ok = true;
+    let mut fail_reason: Option<String> = None;
+    let mut classical_failures = 0usize;
+    let mut phase_garbage_batches = 0usize;
+    let mut ancilla_garbage_batches = 0usize;
+
+    const BATCH: usize = 64;
+    let num_batches = n.div_ceil(BATCH);
+    for batch in 0..num_batches {
+        let bs = BATCH.min(n - batch * BATCH);
+        let cond_mask: u64 = if bs == 64 { u64::MAX } else { (1u64 << bs) - 1 };
+
+        sim.clear_for_shot();
+        for shot in 0..bs {
+            let i = batch * BATCH + shot;
+            sim.set_register(&layout_regs[0], targets[i].0, shot);
+            sim.set_register(&layout_regs[1], targets[i].1, shot);
+            sim.set_register(&layout_regs[2], offsets[i].0, shot);
+            sim.set_register(&layout_regs[3], offsets[i].1, shot);
+        }
+
+        sim.apply_iter(ops.iter());
+
+        for shot in 0..bs {
+            let i = batch * BATCH + shot;
+            let gx = sim.get_register(&layout_regs[0], shot);
+            let gy = sim.get_register(&layout_regs[1], shot);
+            if gx != expected[i].0 || gy != expected[i].1 {
+                classical_failures += 1;
+                if fail_reason.is_none() {
+                    fail_reason = Some(format!(
+                        "CLASSICAL MISMATCH shot {i}: got ({:#x},{:#x}) exp ({:#x},{:#x})",
+                        gx, gy, expected[i].0, expected[i].1
+                    ));
+                }
+                ok = false;
+            }
+        }
+
+        let phase = sim.phase & cond_mask;
+        if phase != 0 {
+            phase_garbage_batches += 1;
+            let msg = format!(
+                "PHASE GARBAGE: global_phase = {:#018x} across {} live shots (must be 0)",
+                phase, bs
+            );
+            if fail_reason.is_none() {
+                fail_reason = Some(msg);
+            }
+            ok = false;
+        }
+
+        for register in &layout_regs {
+            for qb in register {
+                if let QubitOrBit::Qubit(q) = *qb {
+                    *sim.qubit_mut(q) = 0;
+                }
+            }
+        }
+        let mut garbage_q: Option<u64> = None;
+        for q in 0..total_qubits {
+            let v = sim.qubit(QubitId(q)) & cond_mask;
+            if v != 0 {
+                garbage_q = Some(q);
+                break;
+            }
+        }
+        if let Some(q) = garbage_q {
+            ancilla_garbage_batches += 1;
+            let v = sim.qubit(QubitId(q)) & cond_mask;
+            let msg = format!(
+                "ANCILLA GARBAGE: qubit {} = {:#018x} (live shots) at end of forward; \
+                 every non-register qubit must be |0⟩ on every live shot",
+                q, v
+            );
+            if fail_reason.is_none() {
+                fail_reason = Some(msg);
+            }
+            ok = false;
+        }
+    }
+
+    let denom = n.max(1) as f64;
+    quantum_ecc::eval_stream::SeedReport {
+        ok,
+        avg_cliff: sim.stats.clifford_gates as f64 / denom,
+        avg_tof: sim.stats.toffoli_gates as f64 / denom,
+        tot_tof: sim.stats.toffoli_gates,
+        tot_cliff: sim.stats.clifford_gates,
+        n_shots: n,
+        classical_failures,
+        phase_garbage_batches,
+        ancilla_garbage_batches,
+        fail_reason,
+    }
+}
+
+#[test]
+fn streaming_eval_matches_reference_sequential_eval_bit_for_bit() {
+    let dir = TempDir::new("eval-parity");
+    let path = dir.path().join("circuit.bin");
+    let ops = build_synthetic_4reg_circuit();
+    let mut w = OpsWriter::create(&path).unwrap();
+    w.extend(ops.iter().copied()).unwrap();
+    w.finish().unwrap();
+
+    // 1. Small shot count with tiny chunk_ops & multi-wave fallback
+    let target_shots_small = 200;
+    let ref_small = ref_eval_sequential(&ops, target_shots_small);
+    for (chunk_ops, wave_size, workers) in [(7, 10, 4), (7, 2, 4), (1024, 1, 1), (13, 3, 3)] {
+        let (summary, mut xof, file) = pass1_validate_and_hash(&path).expect("pass1");
+        validate_registers(&summary.regs).expect("valid regs");
+        let points = generate_test_points(&mut xof, target_shots_small, 4);
+        let got = run_tests_streaming(file, &summary, &points, &mut xof, chunk_ops, wave_size, workers)
+            .expect("pass2");
+        assert_eq!(got.ok, ref_small.ok);
+        assert_eq!(got.tot_tof, ref_small.tot_tof);
+        assert_eq!(got.tot_cliff, ref_small.tot_cliff);
+        assert_eq!(got.avg_tof, ref_small.avg_tof);
+        assert_eq!(got.avg_cliff, ref_small.avg_cliff);
+        assert_eq!(got.n_shots, ref_small.n_shots);
+        assert_eq!(got.classical_failures, ref_small.classical_failures);
+        assert_eq!(got.phase_garbage_batches, ref_small.phase_garbage_batches);
+        assert_eq!(got.ancilla_garbage_batches, ref_small.ancilla_garbage_batches);
+        assert_eq!(got.fail_reason, ref_small.fail_reason);
+    }
+
+    // 2. Test non-dividing worker counts (31, 8, 140) on 141 synthetic batches
+    //    without spending time on 9,024 EC multiplications: clone 1 batch of points 141x.
+    let (summary, mut xof_base, _file) = pass1_validate_and_hash(&path).expect("pass1");
+    let seed_points = generate_test_points(&mut xof_base, 64, 4);
+    let mut targets_141 = Vec::with_capacity(141 * 64);
+    let mut offsets_141 = Vec::with_capacity(141 * 64);
+    let mut expected_141 = Vec::with_capacity(141 * 64);
+    for _ in 0..141 {
+        targets_141.extend_from_slice(&seed_points.targets);
+        offsets_141.extend_from_slice(&seed_points.offsets);
+        expected_141.extend_from_slice(&seed_points.expected);
+    }
+    let points_141 = quantum_ecc::eval_stream::TestPoints {
+        targets: targets_141,
+        offsets: offsets_141,
+        expected: expected_141,
+    };
+
+    let mut xof_ref = xof_base.clone();
+    let f_ref = File::open(&path).unwrap();
+    let baseline = run_tests_streaming(f_ref, &summary, &points_141, &mut xof_ref, 37, 141, 1)
+        .expect("1-worker 141-batch baseline");
+    for workers in [8usize, 31, 140] {
+        let mut xof_w = xof_base.clone();
+        let f_w = File::open(&path).unwrap();
+        let got = run_tests_streaming(f_w, &summary, &points_141, &mut xof_w, 37, 141, workers)
+            .expect("non-dividing worker run");
+        assert_eq!(got.tot_tof, baseline.tot_tof, "workers={workers}");
+        assert_eq!(got.tot_cliff, baseline.tot_cliff, "workers={workers}");
+        assert_eq!(got.classical_failures, baseline.classical_failures, "workers={workers}");
+        assert_eq!(got.phase_garbage_batches, baseline.phase_garbage_batches, "workers={workers}");
+        assert_eq!(got.ancilla_garbage_batches, baseline.ancilla_garbage_batches, "workers={workers}");
+        assert_eq!(got.fail_reason, baseline.fail_reason, "workers={workers}");
+    }
+}
+
+#[test]
+fn compute_wave_plan_dynamic_budget_and_overflow_guards() {
+    // 100M ops x 26M bits => stream_bytes = 5.6 GB, per_sim = ~208 MB => wave_size = 26 (NOT 141!)
+    let w_small = compute_wave_plan(
+        100_000_000,
+        1200,
+        26_000_000,
+        141,
+        MIN_SIM_STATE_BYTES,
+        MAX_SIM_STATE_BYTES,
+    )
+    .expect("valid dynamic wave");
+    assert_eq!(w_small, 26);
+
+    // 2B ops x 26M bits => wave_budget = 32 GiB => fits all 141 batches in 1 wave!
+    let w_large = compute_wave_plan(
+        2_000_000_000,
+        1200,
+        26_000_000,
+        141,
+        MIN_SIM_STATE_BYTES,
+        MAX_SIM_STATE_BYTES,
+    )
+    .expect("fits in 1 wave");
+    assert_eq!(w_large, 141);
+
+    // Overflow guard: u64::MAX - 2 qubits + 10 bits overflows u64
+    assert!(compute_wave_plan(
+        100,
+        u64::MAX - 2,
+        10,
+        141,
+        MIN_SIM_STATE_BYTES,
+        MAX_SIM_STATE_BYTES
+    )
+    .is_err());
+
+    // Oversized single simulator (> 32 GiB): 5B lanes * 8 = 40 GB > 32 GiB
+    assert!(compute_wave_plan(
+        100,
+        5_000_000_000,
+        0,
+        141,
+        MIN_SIM_STATE_BYTES,
+        MAX_SIM_STATE_BYTES
+    )
+    .is_err());
+}
+
+#[test]
+fn streaming_eval_rejects_pass2_corrupted_missing_operand_without_panicking() {
+    let dir = TempDir::new("eval-pass2-missing-op");
+    let valid_path = dir.path().join("valid.bin");
+    let ops = build_synthetic_4reg_circuit();
+    let mut w = OpsWriter::create(&valid_path).unwrap();
+    w.extend(ops.iter().copied()).unwrap();
+    w.finish().unwrap();
+
+    let (summary, mut xof, _file) = pass1_validate_and_hash(&valid_path).unwrap();
+    let points = generate_test_points(&mut xof, 8, 2);
+
+    // Craft a corrupted file of the same op count containing CCX with q_control2 == NO_QUBIT
+    let bad_path = dir.path().join("corrupted.bin");
+    let mut bad_ops = ops.clone();
+    let mut bad_ccx = mk_op(OperationType::CCX);
+    bad_ccx.q_control2 = NO_QUBIT;
+    bad_ccx.q_control1 = QubitId(0);
+    bad_ccx.q_target = QubitId(1);
+    *bad_ops.last_mut().unwrap() = bad_ccx;
+    write_legacy_ref(&bad_ops, &bad_path);
+
+    let bad_file = File::open(&bad_path).unwrap();
+    let err = run_tests_streaming(bad_file, &summary, &points, &mut xof, 16, 1, 2)
+        .expect_err("Pass 2 must reject missing required operand");
+    assert!(
+        err.contains("q_control2 == NO_QUBIT"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn streaming_eval_rejects_modified_ops_bin_between_passes() {
+    let dir = TempDir::new("eval-digest-mismatch");
+    let path1 = dir.path().join("ops1.bin");
+    let ops1 = build_synthetic_4reg_circuit();
+    let mut w1 = OpsWriter::create(&path1).unwrap();
+    w1.extend(ops1.iter().copied()).unwrap();
+    w1.finish().unwrap();
+
+    let (summary, mut xof, _file1) = pass1_validate_and_hash(&path1).unwrap();
+    let points = generate_test_points(&mut xof, 8, 2);
+
+    // Build a different valid circuit with the exact same op count and qubits/bits
+    let path2 = dir.path().join("ops2.bin");
+    let mut ops2 = ops1.clone();
+    let mut flipped = mk_op(OperationType::X);
+    flipped.q_target = QubitId(512);
+    // Replace the last op (PopCondition -> wait, keep condition stack balanced: replace an X target)
+    let x_pos = ops2
+        .iter()
+        .position(|o| o.kind == OperationType::X)
+        .unwrap();
+    flipped.q_target = QubitId(513);
+    ops2[x_pos] = flipped;
+    let mut w2 = OpsWriter::create(&path2).unwrap();
+    w2.extend(ops2.iter().copied()).unwrap();
+    w2.finish().unwrap();
+
+    let file2 = File::open(&path2).unwrap();
+    let err = run_tests_streaming(file2, &summary, &points, &mut xof, 16, 1, 2)
+        .expect_err("Pass 2 must reject file whose compressed bytes changed after Pass 1");
+    assert!(
+        err.contains("changed between Pass 1 and Pass 2"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn streaming_eval_does_not_deadlock_on_read_error_or_worker_panic() {
+    let dir = TempDir::new("eval-no-deadlock");
+
+    // 1. Mid-stream truncated zstd body in Pass 1 must return Err promptly (no hang)
+    let trunc_path = dir.path().join("truncated.bin");
+    let ops = sample_valid_ops(2000);
+    let mut w = OpsWriter::create(&trunc_path).unwrap();
+    w.extend(ops).unwrap();
+    w.finish().unwrap();
+    let mut bytes = fs::read(&trunc_path).unwrap();
+    bytes.truncate(bytes.len() / 2);
+    fs::write(&trunc_path, &bytes).unwrap();
+
+    let (tx1, rx1) = mpsc::channel();
+    let p1 = trunc_path.clone();
+    std::thread::spawn(move || {
+        let res = pass1_validate_and_hash(&p1);
+        let _ = tx1.send(res.is_err());
+    });
+    assert!(
+        rx1.recv_timeout(Duration::from_secs(5))
+            .expect("Pass 1 hung on truncated file"),
+        "Pass 1 must return Err"
+    );
+
+    // 2. Worker panic in fanout_chunks must return Err promptly (no deadlock!)
+    let (tx2, rx2) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut items: Vec<usize> = (0..10).collect();
+        let mut sent = 0usize;
+        let res = fanout_chunks(
+            &mut items,
+            4,
+            16,
+            |buf| {
+                if sent >= 20 {
+                    return Ok(0);
+                }
+                sent += 1;
+                buf.push(mk_op(OperationType::Neg));
+                Ok(1)
+            },
+            |slice, _chunk| {
+                if slice.contains(&5) {
+                    panic!("intentional test worker panic");
+                }
+            },
+        );
+        let _ = tx2.send(res.is_err());
+    });
+    assert!(
+        rx2.recv_timeout(Duration::from_secs(5))
+            .expect("fanout_chunks deadlocked after worker panic"),
+        "fanout_chunks must return Err on worker panic"
+    );
+}
+
+#[test]
+fn parallel_test_point_generation_matches_sequential_bit_for_bit() {
+    let mut h = Shake256::default();
+    h.update(b"parallel-points-test");
+    let xof_base = h.finalize_xof();
+
+    let mut x1 = xof_base.clone();
+    let mut x8 = xof_base.clone();
+    let seq = generate_test_points(&mut x1, 256, 1);
+    let par = generate_test_points(&mut x8, 256, 8);
+    assert_eq!(par.targets, seq.targets);
+    assert_eq!(par.offsets, seq.offsets);
+    assert_eq!(par.expected, seq.expected);
 }
