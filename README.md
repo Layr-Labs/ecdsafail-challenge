@@ -129,10 +129,32 @@ submodules, rewrite primitives, swap algorithms, refactor freely.
 
 You may **not** touch the harness:
 
-- `src/main.rs`, `src/circuit.rs`, `src/sim.rs`,
-  `src/weierstrass_elliptic_curve.rs` — these are the contract.
+- `src/main.rs`, `src/circuit.rs`, `src/sim.rs`, `src/ops_io.rs`,
+  `src/eval_stream.rs`, `src/weierstrass_elliptic_curve.rs` — these are the
+  contract.
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain` — no new dependencies.
 - `results.tsv` directly (the harness appends to it for you).
+
+### Streaming large circuits (>2B ops)
+
+The standard `pub fn build() -> Vec<Op>` entry point continues to work
+unchanged. For very large circuits (above ~2B ops, up to `MAX_OPS = 4e9`), you
+can avoid materializing a full `Vec<Op>` by streaming ops directly into
+`ops.bin` via `crate::ops_io::OpsWriter` (or `quantum_ecc::ops_io::OpsWriter`)
+and returning `Vec::new()`:
+
+```rust
+let mut writer = crate::ops_io::OpsWriter::create_default().expect("create ops.bin");
+for op in my_op_stream() {
+    writer.push(&op).expect("write op");
+}
+writer.finish().expect("finish ops.bin");
+Vec::new()
+```
+
+`build_circuit` fails closed if `ops.bin` is written **and** a non-empty
+`Vec<Op>` is also returned, or if an `OpsWriter` targeting `ops.bin` is created
+without calling `finish()` before `build()` returns.
 
 ### Memory notes
 
