@@ -439,6 +439,86 @@ struct BatchRunner<'a> {
     cond_mask: u64,
 }
 
+struct BatchVerifyAcc {
+    ok: bool,
+    fail_reason: Option<String>,
+    classical_failures: usize,
+    phase_garbage_batches: usize,
+    ancilla_garbage_batches: usize,
+    tot_tof: u64,
+    tot_cliff: u64,
+}
+
+fn verify_batch(
+    runner: &mut BatchRunner<'_>,
+    summary: &Pass1Summary,
+    points: &TestPoints,
+    acc: &mut BatchVerifyAcc,
+) {
+    let batch = runner.batch_idx;
+    let bs = runner.bs;
+    let cond_mask = runner.cond_mask;
+
+    acc.tot_tof += runner.sim.stats.toffoli_gates;
+    acc.tot_cliff += runner.sim.stats.clifford_gates;
+
+    for shot in 0..bs {
+        let i = batch * BATCH_SIZE + shot;
+        let gx = runner.sim.get_register(&summary.regs[0], shot);
+        let gy = runner.sim.get_register(&summary.regs[1], shot);
+        if gx != points.expected[i].0 || gy != points.expected[i].1 {
+            acc.classical_failures += 1;
+            if acc.fail_reason.is_none() {
+                acc.fail_reason = Some(format!(
+                    "CLASSICAL MISMATCH shot {i}: got ({:#x},{:#x}) exp ({:#x},{:#x})",
+                    gx, gy, points.expected[i].0, points.expected[i].1
+                ));
+            }
+            acc.ok = false;
+        }
+    }
+
+    let phase = runner.sim.phase & cond_mask;
+    if phase != 0 {
+        acc.phase_garbage_batches += 1;
+        if acc.fail_reason.is_none() {
+            acc.fail_reason = Some(format!(
+                "PHASE GARBAGE: global_phase = {:#018x} across {} live shots (must be 0)",
+                phase, bs
+            ));
+        }
+        acc.ok = false;
+    }
+
+    for register in &summary.regs {
+        for qb in register {
+            if let QubitOrBit::Qubit(q) = *qb {
+                *runner.sim.qubit_mut(q) = 0;
+            }
+        }
+    }
+    let mut garbage_q: Option<u64> = None;
+    for q in 0..summary.total_qubits {
+        let v = runner.sim.qubit(QubitId(q)) & cond_mask;
+        if v != 0 {
+            garbage_q = Some(q);
+            break;
+        }
+    }
+    if let Some(q) = garbage_q {
+        acc.ancilla_garbage_batches += 1;
+        let v = runner.sim.qubit(QubitId(q)) & cond_mask;
+        if acc.fail_reason.is_none() {
+            acc.fail_reason = Some(format!(
+                "ANCILLA GARBAGE: qubit {} = {:#018x} (live shots) at end of forward; \
+                 every non-register qubit must be |0⟩ on every live shot",
+                q, v
+            ));
+        }
+        acc.ok = false;
+    }
+}
+
 pub fn run_tests_streaming(
     mut file: File,
     summary: &Pass1Summary,
@@ -456,13 +536,15 @@ pub fn run_tests_streaming(
         .checked_mul(8)
         .ok_or_else(|| "rng_ops * 8 overflows u64".to_string())?;
 
-    let mut ok = true;
-    let mut fail_reason: Option<String> = None;
-    let mut classical_failures = 0usize;
-    let mut phase_garbage_batches = 0usize;
-    let mut ancilla_garbage_batches = 0usize;
-    let mut tot_tof = 0u64;
-    let mut tot_cliff = 0u64;
+    let mut acc = BatchVerifyAcc {
+        ok: true,
+        fail_reason: None,
+        classical_failures: 0,
+        phase_garbage_batches: 0,
+        ancilla_garbage_batches: 0,
+        tot_tof: 0,
+        tot_cliff: 0,
+    };
 
     let total_qubits = summary.total_qubits as usize;
     let num_bits = summary.num_bits as usize;
@@ -533,86 +615,22 @@ pub fn run_tests_streaming(
         }
         file = next_file;
 
-        // Evaluate every batch in deterministic ascending order.
         for runner in &mut runners {
-            let batch = runner.batch_idx;
-            let bs = runner.bs;
-            let cond_mask = runner.cond_mask;
-
-            tot_tof += runner.sim.stats.toffoli_gates;
-            tot_cliff += runner.sim.stats.clifford_gates;
-
-            for shot in 0..bs {
-                let i = batch * BATCH_SIZE + shot;
-                let gx = runner.sim.get_register(&summary.regs[0], shot);
-                let gy = runner.sim.get_register(&summary.regs[1], shot);
-                if gx != points.expected[i].0 || gy != points.expected[i].1 {
-                    classical_failures += 1;
-                    if fail_reason.is_none() {
-                        fail_reason = Some(format!(
-                            "CLASSICAL MISMATCH shot {i}: got ({:#x},{:#x}) exp ({:#x},{:#x})",
-                            gx, gy, points.expected[i].0, points.expected[i].1
-                        ));
-                    }
-                    ok = false;
-                }
-            }
-
-            let phase = runner.sim.phase & cond_mask;
-            if phase != 0 {
-                phase_garbage_batches += 1;
-                let msg = format!(
-                    "PHASE GARBAGE: global_phase = {:#018x} across {} live shots (must be 0)",
-                    phase, bs
-                );
-                if fail_reason.is_none() {
-                    fail_reason = Some(msg);
-                }
-                ok = false;
-            }
-
-            for register in &summary.regs {
-                for qb in register {
-                    if let QubitOrBit::Qubit(q) = *qb {
-                        *runner.sim.qubit_mut(q) = 0;
-                    }
-                }
-            }
-            let mut garbage_q: Option<u64> = None;
-            for q in 0..summary.total_qubits {
-                let v = runner.sim.qubit(QubitId(q)) & cond_mask;
-                if v != 0 {
-                    garbage_q = Some(q);
-                    break;
-                }
-            }
-            if let Some(q) = garbage_q {
-                ancilla_garbage_batches += 1;
-                let v = runner.sim.qubit(QubitId(q)) & cond_mask;
-                let msg = format!(
-                    "ANCILLA GARBAGE: qubit {} = {:#018x} (live shots) at end of forward; \
-                     every non-register qubit must be |0⟩ on every live shot",
-                    q, v
-                );
-                if fail_reason.is_none() {
-                    fail_reason = Some(msg);
-                }
-                ok = false;
-            }
+            verify_batch(runner, summary, points, &mut acc);
         }
     }
 
     let denom = n.max(1) as f64;
     Ok(SeedReport {
-        ok,
-        avg_cliff: tot_cliff as f64 / denom,
-        avg_tof: tot_tof as f64 / denom,
-        tot_tof,
-        tot_cliff,
+        ok: acc.ok,
+        avg_cliff: acc.tot_cliff as f64 / denom,
+        avg_tof: acc.tot_tof as f64 / denom,
+        tot_tof: acc.tot_tof,
+        tot_cliff: acc.tot_cliff,
         n_shots: n,
-        classical_failures,
-        phase_garbage_batches,
-        ancilla_garbage_batches,
-        fail_reason,
+        classical_failures: acc.classical_failures,
+        phase_garbage_batches: acc.phase_garbage_batches,
+        ancilla_garbage_batches: acc.ancilla_garbage_batches,
+        fail_reason: acc.fail_reason,
     })
 }

@@ -121,29 +121,16 @@ fn mk_op(kind: OperationType) -> Op {
 
 #[test]
 fn op_try_validate_accepts_valid_and_rejects_aliasing_and_bad_shape() {
-    let mut ccx = mk_op(OperationType::CCX);
-    ccx.q_control2 = QubitId(0);
-    ccx.q_control1 = QubitId(1);
-    ccx.q_target = QubitId(2);
-    assert!(ccx.try_validate().is_ok());
-
-    let mut hmr = mk_op(OperationType::Hmr);
-    hmr.q_target = QubitId(3);
-    hmr.c_target = BitId(1);
-    assert!(hmr.try_validate().is_ok());
-
-    let mut r = mk_op(OperationType::R);
-    r.q_target = QubitId(4);
-    assert!(r.try_validate().is_ok());
-
-    let mut push = mk_op(OperationType::PushCondition);
-    push.c_condition = BitId(2);
-    assert!(push.try_validate().is_ok());
-
-    let mut append_q = mk_op(OperationType::AppendToRegister);
-    append_q.r_target = RegisterId(0);
-    append_q.q_target = QubitId(5);
-    assert!(append_q.try_validate().is_ok());
+    let ccx = Op::from_text("CCX q0 q1 q2").unwrap();
+    for line in [
+        "CCX q0 q1 q2",
+        "HMR q3 b1",
+        "R q4",
+        "PUSH_CONDITION if b2",
+        "APPEND_TO_REGISTER q5 r0",
+    ] {
+        assert!(Op::from_text(line).unwrap().try_validate().is_ok());
+    }
 
     // Aliasing: CCX q1 q1 q2
     let mut aliased = ccx;
@@ -162,35 +149,22 @@ fn op_try_validate_accepts_valid_and_rejects_aliasing_and_bad_shape() {
     assert!(bad_push.try_validate().is_err());
 
     // Bad shape: AppendToRegister with both qubit and bit set
-    let mut bad_append = append_q;
+    let mut bad_append = Op::from_text("APPEND_TO_REGISTER q5 r0").unwrap();
     bad_append.c_target = BitId(0);
     assert!(bad_append.try_validate().is_err());
 }
 
 #[test]
 fn ops_analyzer_matches_analyze_ops_and_caps_registers() {
-    let mut ops = Vec::new();
-    for r in 0..4u64 {
-        let mut reg = mk_op(OperationType::Register);
-        reg.r_target = RegisterId(r);
-        ops.push(reg);
-    }
-    let mut app0 = mk_op(OperationType::AppendToRegister);
-    app0.r_target = RegisterId(0);
-    app0.q_target = QubitId(7);
-    ops.push(app0);
-
-    let mut app2 = mk_op(OperationType::AppendToRegister);
-    app2.r_target = RegisterId(2);
-    app2.c_target = BitId(11);
-    ops.push(app2);
-
-    let mut ccx = mk_op(OperationType::CCX);
-    ccx.q_control2 = QubitId(1);
-    ccx.q_control1 = QubitId(2);
-    ccx.q_target = QubitId(9);
-    ccx.c_condition = BitId(15);
-    ops.push(ccx);
+    let ops = parse_ops(&[
+        "REGISTER r0",
+        "REGISTER r1",
+        "REGISTER r2",
+        "REGISTER r3",
+        "APPEND_TO_REGISTER q7 r0",
+        "APPEND_TO_REGISTER b11 r2",
+        "CCX q1 q2 q9 if b15",
+    ]);
 
     let expected = analyze_ops(ops.iter());
     let mut analyzer = OpsAnalyzer::new();
@@ -208,8 +182,7 @@ fn ops_analyzer_matches_analyze_ops_and_caps_registers() {
     // OpsAnalyzer rejects r_target >= MAX_REGISTERS
     let mut big_reg = mk_op(OperationType::Register);
     big_reg.r_target = RegisterId(OpsAnalyzer::MAX_REGISTERS);
-    let mut capped = OpsAnalyzer::new();
-    assert!(capped.observe(&big_reg).is_err());
+    assert!(OpsAnalyzer::new().observe(&big_reg).is_err());
 
     // Legacy analyze_ops remains unchanged and accepts r_target = 2000 without panicking
     let mut legacy_reg = mk_op(OperationType::Register);
@@ -220,83 +193,32 @@ fn ops_analyzer_matches_analyze_ops_and_caps_registers() {
     let _ = NO_REG;
 }
 
+fn parse_ops(lines: &[&str]) -> Vec<Op> {
+    lines.iter().filter_map(|l| Op::from_text(l)).collect()
+}
+
 #[test]
 fn apply_chunk_preserves_nested_condition_stack_across_arbitrary_splits() {
-    let mut ops = Vec::new();
-
-    let mut push0 = mk_op(OperationType::PushCondition);
-    push0.c_condition = BitId(0);
-    ops.push(push0);
-
-    let mut x0 = mk_op(OperationType::X);
-    x0.q_target = QubitId(0);
-    ops.push(x0);
-
-    let mut push1 = mk_op(OperationType::PushCondition);
-    push1.c_condition = BitId(1);
-    ops.push(push1);
-
-    let mut ccx = mk_op(OperationType::CCX);
-    ccx.q_control2 = QubitId(0);
-    ccx.q_control1 = QubitId(1);
-    ccx.q_target = QubitId(2);
-    ccx.c_condition = BitId(2);
-    ops.push(ccx);
-
-    let mut push2 = mk_op(OperationType::PushCondition);
-    push2.c_condition = BitId(2);
-    ops.push(push2);
-
-    let mut hmr = mk_op(OperationType::Hmr);
-    hmr.q_target = QubitId(2);
-    hmr.c_target = BitId(3);
-    ops.push(hmr);
-
-    let mut cz = mk_op(OperationType::CZ);
-    cz.q_control1 = QubitId(0);
-    cz.q_target = QubitId(1);
-    cz.c_condition = BitId(3);
-    ops.push(cz);
-
-    let mut swp = mk_op(OperationType::Swap);
-    swp.q_control1 = QubitId(1);
-    swp.q_target = QubitId(3);
-    ops.push(swp);
-
-    let mut r_op = mk_op(OperationType::R);
-    r_op.q_target = QubitId(3);
-    ops.push(r_op);
-
-    let mut b_inv = mk_op(OperationType::BitInvert);
-    b_inv.c_target = BitId(4);
-    ops.push(b_inv);
-
-    let mut b_s1 = mk_op(OperationType::BitStore1);
-    b_s1.c_target = BitId(5);
-    ops.push(b_s1);
-
-    let mut b_s0 = mk_op(OperationType::BitStore0);
-    b_s0.c_target = BitId(4);
-    ops.push(b_s0);
-
-    let mut neg = mk_op(OperationType::Neg);
-    neg.c_condition = BitId(3);
-    ops.push(neg);
-
-    ops.push(mk_op(OperationType::PopCondition));
-
-    let mut cx = mk_op(OperationType::CX);
-    cx.q_control1 = QubitId(0);
-    cx.q_target = QubitId(1);
-    ops.push(cx);
-
-    ops.push(mk_op(OperationType::PopCondition));
-
-    let mut z = mk_op(OperationType::Z);
-    z.q_target = QubitId(1);
-    ops.push(z);
-
-    ops.push(mk_op(OperationType::PopCondition));
+    let ops = parse_ops(&[
+        "PUSH_CONDITION if b0",
+        "X q0",
+        "PUSH_CONDITION if b1",
+        "CCX q0 q1 q2 if b2",
+        "PUSH_CONDITION if b2",
+        "HMR q2 b3",
+        "CZ q0 q1 if b3",
+        "SWAP q1 q3",
+        "R q3",
+        "BIT_INVERT b4",
+        "BIT_STORE1 b5",
+        "BIT_STORE0 b4",
+        "NEG if b3",
+        "POP_CONDITION",
+        "CX q0 q1",
+        "POP_CONDITION",
+        "Z q1",
+        "POP_CONDITION",
+    ]);
 
     let mut hasher = Shake256::default();
     hasher.update(b"apply-chunk-test-seed");
@@ -630,87 +552,34 @@ fn clean_stale_ops_removes_old_ops_and_tmp() {
 }
 
 fn build_synthetic_4reg_circuit() -> Vec<Op> {
-    let mut ops = Vec::new();
+    let mut ops = Vec::with_capacity(1120);
     for r in 0..4u64 {
-        let mut reg = mk_op(OperationType::Register);
-        reg.r_target = RegisterId(r);
-        ops.push(reg);
+        ops.push(Op::from_text(&format!("REGISTER r{r}")).unwrap());
     }
     for i in 0..256u64 {
-        let mut a0 = mk_op(OperationType::AppendToRegister);
-        a0.r_target = RegisterId(0);
-        a0.q_target = QubitId(i);
-        ops.push(a0);
-
-        let mut a1 = mk_op(OperationType::AppendToRegister);
-        a1.r_target = RegisterId(1);
-        a1.q_target = QubitId(256 + i);
-        ops.push(a1);
-
-        let mut a2 = mk_op(OperationType::AppendToRegister);
-        a2.r_target = RegisterId(2);
-        a2.c_target = BitId(i);
-        ops.push(a2);
-
-        let mut a3 = mk_op(OperationType::AppendToRegister);
-        a3.r_target = RegisterId(3);
-        a3.c_target = BitId(256 + i);
-        ops.push(a3);
+        ops.push(Op::from_text(&format!("APPEND_TO_REGISTER q{i} r0")).unwrap());
+        ops.push(Op::from_text(&format!("APPEND_TO_REGISTER q{} r1", 256 + i)).unwrap());
+        ops.push(Op::from_text(&format!("APPEND_TO_REGISTER b{i} r2")).unwrap());
+        ops.push(Op::from_text(&format!("APPEND_TO_REGISTER b{} r3", 256 + i)).unwrap());
     }
-
-    // Add nested conditions, CCX, CX, CZ, X, Z, Hmr, R on ancillas & registers.
-    let anc0 = QubitId(512);
-    let anc1 = QubitId(513);
-    let scratch_b0 = BitId(512);
-    let scratch_b1 = BitId(513);
-
     for step in 0..8u64 {
-        let mut p1 = mk_op(OperationType::PushCondition);
-        p1.c_condition = BitId(step);
-        ops.push(p1);
-
-        let mut x = mk_op(OperationType::X);
-        x.q_target = anc0;
-        ops.push(x);
-
-        let mut p2 = mk_op(OperationType::PushCondition);
-        p2.c_condition = BitId(256 + step);
-        ops.push(p2);
-
-        let mut ccx = mk_op(OperationType::CCX);
-        ccx.q_control2 = QubitId(step);
-        ccx.q_control1 = anc0;
-        ccx.q_target = anc1;
-        ops.push(ccx);
-
-        let mut cx = mk_op(OperationType::CX);
-        cx.q_control1 = anc1;
-        cx.q_target = QubitId(256 + step);
-        ops.push(cx);
-
-        let mut hmr = mk_op(OperationType::Hmr);
-        hmr.q_target = anc1;
-        hmr.c_target = scratch_b0;
-        ops.push(hmr);
-
-        let mut cz = mk_op(OperationType::CZ);
-        cz.q_control1 = QubitId(step);
-        cz.q_target = anc0;
-        cz.c_condition = scratch_b0;
-        ops.push(cz);
-
-        let mut r_op = mk_op(OperationType::R);
-        r_op.q_target = anc0;
-        ops.push(r_op);
-
-        let mut b_inv = mk_op(OperationType::BitInvert);
-        b_inv.c_target = scratch_b1;
-        ops.push(b_inv);
-
-        ops.push(mk_op(OperationType::PopCondition));
-        ops.push(mk_op(OperationType::PopCondition));
+        let y = 256 + step;
+        for line in [
+            format!("PUSH_CONDITION if b{step}"),
+            "X q512".to_string(),
+            format!("PUSH_CONDITION if b{y}"),
+            format!("CCX q{step} q512 q513"),
+            format!("CX q513 q{y}"),
+            "HMR q513 b512".to_string(),
+            format!("CZ q{step} q512 if b512"),
+            "R q512".to_string(),
+            "BIT_INVERT b513".to_string(),
+            "POP_CONDITION".to_string(),
+            "POP_CONDITION".to_string(),
+        ] {
+            ops.push(Op::from_text(&line).unwrap());
+        }
     }
-
     ops
 }
 

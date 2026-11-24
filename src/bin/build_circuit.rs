@@ -12,8 +12,8 @@
 
 use quantum_ecc::circuit::Op;
 use quantum_ecc::ops_io::{
-    clean_stale_ops, finalize_build_output, reset_stream_started, take_stream_started, OpsWriter,
-    OPS_PATH,
+    clean_stale_ops, finalize_build_output, reset_stream_started, take_stream_started,
+    write_ops_file, OPS_PATH,
 };
 use std::path::Path;
 
@@ -45,11 +45,7 @@ fn zstd_level() -> i32 {
 
 #[allow(dead_code)]
 fn write_ops(ops: &[Op], path: &Path) -> std::io::Result<()> {
-    let mut writer = OpsWriter::create(path)?;
-    for op in ops {
-        writer.push(op)?;
-    }
-    writer.finish()?;
+    write_ops_file(ops, path)?;
     Ok(())
 }
 

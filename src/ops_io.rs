@@ -156,7 +156,13 @@ impl OpsWriter {
         file.write_all(&0u64.to_le_bytes())?;
 
         let buf_writer = BufWriter::with_capacity(WRITER_BUF_BYTES, file);
-        let enc = zstd::stream::write::Encoder::new(buf_writer, zstd_level())?;
+        let enc = match zstd::stream::write::Encoder::new(buf_writer, zstd_level()) {
+            Ok(enc) => enc,
+            Err(e) => {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(e);
+            }
+        };
 
         Ok(Self {
             enc: Some(enc),
@@ -411,6 +417,15 @@ impl OpsReader {
     }
 }
 
+/// Write a slice of ops to `path` via `OpsWriter`.
+pub fn write_ops_file(ops: &[Op], path: &Path) -> io::Result<WriteSummary> {
+    let mut writer = OpsWriter::create(path)?;
+    for op in ops {
+        writer.push(op)?;
+    }
+    writer.finish()
+}
+
 /// Remove any pre-existing `ops.bin` and `ops.bin.tmp` before invoking
 /// `point_add::build()`. Stateless (does not touch `STREAM_STARTED`).
 pub fn clean_stale_ops(path: &Path) -> io::Result<()> {
@@ -442,18 +457,8 @@ pub fn finalize_build_output(
     let tmp = tmp_path_for(path);
 
     match (ops.is_empty(), exists) {
-        (false, false) => {
-            let mut writer =
-                OpsWriter::create(path).map_err(|e| format!("failed to write {}: {e}", path.display()))?;
-            for op in ops {
-                writer
-                    .push(op)
-                    .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
-            }
-            writer
-                .finish()
-                .map_err(|e| format!("failed to write {}: {e}", path.display()))
-        }
+        (false, false) => write_ops_file(ops, path)
+            .map_err(|e| format!("failed to write {}: {e}", path.display())),
         (true, true) => {
             let _ = fs::remove_file(&tmp);
             let count = read_header(path)?;
@@ -468,8 +473,7 @@ pub fn finalize_build_output(
                     path.display()
                 ));
             }
-            OpsWriter::create(path)
-                .and_then(|w| w.finish())
+            write_ops_file(&[], path)
                 .map_err(|e| format!("failed to write {}: {e}", path.display()))
         }
         (false, true) => {

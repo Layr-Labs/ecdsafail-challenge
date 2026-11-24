@@ -392,47 +392,22 @@ impl OpsAnalyzer {
         }
     }
 
+    fn bump_max(cur: &mut u64, raw: u64, sentinel: u64, field: &str) -> Result<(), String> {
+        if raw != sentinel {
+            let next = raw
+                .checked_add(1)
+                .ok_or_else(|| format!("{field} overflows u64"))?;
+            *cur = (*cur).max(next);
+        }
+        Ok(())
+    }
+
     pub fn observe(&mut self, native_op: &Op) -> Result<(), String> {
-        if native_op.q_control2 != NO_QUBIT {
-            let next = native_op
-                .q_control2
-                .0
-                .checked_add(1)
-                .ok_or_else(|| "q_control2 overflows u64".to_string())?;
-            self.num_qubits = self.num_qubits.max(next);
-        }
-        if native_op.q_control1 != NO_QUBIT {
-            let next = native_op
-                .q_control1
-                .0
-                .checked_add(1)
-                .ok_or_else(|| "q_control1 overflows u64".to_string())?;
-            self.num_qubits = self.num_qubits.max(next);
-        }
-        if native_op.q_target != NO_QUBIT {
-            let next = native_op
-                .q_target
-                .0
-                .checked_add(1)
-                .ok_or_else(|| "q_target overflows u64".to_string())?;
-            self.num_qubits = self.num_qubits.max(next);
-        }
-        if native_op.c_target != NO_BIT {
-            let next = native_op
-                .c_target
-                .0
-                .checked_add(1)
-                .ok_or_else(|| "c_target overflows u64".to_string())?;
-            self.num_bits = self.num_bits.max(next);
-        }
-        if native_op.c_condition != NO_BIT {
-            let next = native_op
-                .c_condition
-                .0
-                .checked_add(1)
-                .ok_or_else(|| "c_condition overflows u64".to_string())?;
-            self.num_bits = self.num_bits.max(next);
-        }
+        Self::bump_max(&mut self.num_qubits, native_op.q_control2.0, NO_QUBIT.0, "q_control2")?;
+        Self::bump_max(&mut self.num_qubits, native_op.q_control1.0, NO_QUBIT.0, "q_control1")?;
+        Self::bump_max(&mut self.num_qubits, native_op.q_target.0, NO_QUBIT.0, "q_target")?;
+        Self::bump_max(&mut self.num_bits, native_op.c_target.0, NO_BIT.0, "c_target")?;
+        Self::bump_max(&mut self.num_bits, native_op.c_condition.0, NO_BIT.0, "c_condition")?;
         if native_op.r_target != NO_REG {
             if native_op.r_target.0 >= Self::MAX_REGISTERS {
                 return Err(format!(
@@ -441,12 +416,7 @@ impl OpsAnalyzer {
                     Self::MAX_REGISTERS
                 ));
             }
-            let next = native_op
-                .r_target
-                .0
-                .checked_add(1)
-                .ok_or_else(|| "r_target overflows u64".to_string())?;
-            self.num_registers = self.num_registers.max(next);
+            Self::bump_max(&mut self.num_registers, native_op.r_target.0, NO_REG.0, "r_target")?;
             let idx = native_op.r_target.0 as usize;
             if self.registers.len() <= idx {
                 self.registers.resize_with(idx + 1, Vec::new);
