@@ -750,7 +750,7 @@ pub fn build_generated() -> Vec<Op> {
         if std::env::var("HP3").ok().as_deref()==Some("1"){ ops2 = hold_pass::exact_final_pass(ops2); }
         if std::env::var("G1_EQUIV").ok().as_deref()==Some("1"){ ops2 = source_edits::run(ops2, include_str!("g1_equiv.txt")); }
         if std::env::var("E1_RARE").ok().as_deref()==Some("1"){ ops2 = source_edits::run(ops2, include_str!("e1_rare.txt")); }
-        return ops2;
+        return gate_fold::apply_terminal(ops2);
     }
     let dead_rows: Vec<usize> = include_str!("dead-direct64-q1228.idx")
         .lines()

@@ -28,6 +28,22 @@ fn commute(a: Op, b: Op) -> bool {
     !controls(a, b.q_target) && !controls(b, a.q_target)
 }
 
+fn corridor(a: Op, middle: Op) -> bool {
+    let touches = |q| q == a.q_target || controls(a, q);
+    let writes_guard = a.c_condition != NO_BIT && middle.c_target == a.c_condition;
+    match middle.kind {
+        K::X | K::CX | K::CCX => commute(a, middle),
+        K::Z | K::CZ | K::CCZ => {
+            middle.q_target != a.q_target && !controls(middle, a.q_target)
+        }
+        K::Swap => !touches(middle.q_target) && !touches(middle.q_control1),
+        K::R | K::Hmr => !touches(middle.q_target) && !writes_guard,
+        K::BitInvert | K::BitStore0 | K::BitStore1 => !writes_guard,
+        K::Neg => true,
+        K::PushCondition | K::PopCondition | K::Register | K::AppendToRegister | K::DebugPrint => false,
+    }
+}
+
 fn same_product(a: Op, b: Op) -> bool {
     controls(b, a.q_control1) && controls(b, a.q_control2)
 }
@@ -107,15 +123,20 @@ fn sandwich(b: Op, g: Op) -> Option<Op> {
 // Move the *original* first Toffoli right through commuting middle gates.
 // Its replacement is emitted only after the entire middle has been emitted.
 pub(super) fn lower(block: &[Op], mut emit: impl FnMut(Op), stats: &mut Counts) {
+    lower_in_scope::<false>(block, &mut emit, stats);
+}
+
+fn lower_in_scope<const GUARDED: bool>(block: &[Op], mut emit: impl FnMut(Op), stats: &mut Counts) {
     let mut expansion = block.len() / GROWTH_DIVISOR;
     let mut i = 0;
     'scan: while i < block.len() {
         let a = block[i];
-        if a.kind == K::CCX && plain(a) {
+        if a.kind == K::CCX && (GUARDED || plain(a)) {
             if i + 2 < block.len() {
                 let g = block[i + 1];
                 let b = block[i + 2];
-                if plain(g)
+                if plain(a)
+                    && plain(g)
                     && b.kind == K::CCX
                     && plain(b)
                     && a.q_target == b.q_target
@@ -133,10 +154,10 @@ pub(super) fn lower(block: &[Op], mut emit: impl FnMut(Op), stats: &mut Counts) 
             }
             for j in i + 1..block.len().min(i + 1 + LOOKAHEAD) {
                 let b = block[j];
-                if !plain(b) {
+                if !GUARDED && !plain(b) {
                     break;
                 }
-                if b.kind == K::CCX {
+                if b.kind == K::CCX && a.c_condition == b.c_condition {
                     let same_target = a.q_target == b.q_target;
                     let product = same_product(a, b);
                     if same_target && product {
@@ -189,7 +210,7 @@ pub(super) fn lower(block: &[Op], mut emit: impl FnMut(Op), stats: &mut Counts) 
                         }
                     }
                 }
-                if !commute(a, b) {
+                if !(if GUARDED { corridor(a, b) } else { commute(a, b) }) {
                     break;
                 }
             }
@@ -204,6 +225,15 @@ pub(super) fn lower(block: &[Op], mut emit: impl FnMut(Op), stats: &mut Counts) 
 /// max_prefix_growth bounds how far the preceding replay can run ahead of its
 /// raw input. lower can add at most floor(total replay length / 128) more.
 pub(super) fn apply_mapped(
+    ops: Vec<Op>,
+    replay_len: usize,
+    max_prefix_growth: usize,
+    replay_one: impl FnMut(Op, &mut Vec<Op>),
+) -> Vec<Op> {
+    apply_mapped_in_scope::<false>(ops, replay_len, max_prefix_growth, replay_one)
+}
+
+fn apply_mapped_in_scope<const GUARDED: bool>(
     mut ops: Vec<Op>,
     replay_len: usize,
     max_prefix_growth: usize,
@@ -231,7 +261,7 @@ pub(super) fn apply_mapped(
         replayed += block.len() - before;
         while block.len() >= BLOCK {
             let available = &mut ops[..gap + i + 1];
-            lower(
+            lower_in_scope::<GUARDED>(
                 &block[..BLOCK],
                 |op| {
                     available[written] = op;
@@ -245,7 +275,7 @@ pub(super) fn apply_mapped(
         }
     }
     assert_eq!(replayed, replay_len);
-    lower(
+    lower_in_scope::<GUARDED>(
         &block,
         |op| {
             ops[written] = op;
@@ -254,16 +284,23 @@ pub(super) fn apply_mapped(
         &mut stats,
     );
     ops.truncate(written);
-    eprintln!(
-        "NCT_FOLD {:?} raw={} replay={} output={} gap={} initial_capacity={}",
-        stats, raw_len, replay_len, written, gap, capacity
-    );
+    if !GUARDED {
+        eprintln!(
+            "NCT_FOLD {:?} raw={} replay={} output={} gap={} initial_capacity={}",
+            stats, raw_len, replay_len, written, gap, capacity
+        );
+    }
     ops
 }
 
 pub(super) fn apply(ops: Vec<Op>) -> Vec<Op> {
     let len = ops.len();
     apply_mapped(ops, len, 0, |op, block| block.push(op))
+}
+
+pub(super) fn apply_terminal(ops: Vec<Op>) -> Vec<Op> {
+    let len = ops.len();
+    apply_mapped_in_scope::<true>(ops, len, 0, |op, block| block.push(op))
 }
 
 /// The first pass follows the certified source-index replay. Each succeeding
